@@ -314,6 +314,7 @@ GITHUB_NOTES_PATH="$BUILD_DIR/github-release-notes-v$VERSION.md"
 
 **Homebrew (recommended):**
 \`\`\`
+brew tap 824zzy/agent-visor
 brew install --cask 824zzy/agent-visor/agent-visor
 \`\`\`
 

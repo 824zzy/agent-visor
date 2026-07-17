@@ -12,6 +12,18 @@ final class ReleaseProductCopyAuditTests: XCTestCase {
         XCTAssertFalse(readme.contains("Window mode: a dedicated app window"))
     }
 
+    func testInstallationCopyExplicitlyTapsTheHomebrewRepository() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let readme = try String(contentsOf: root.appendingPathComponent("README.md"))
+        let releaseScript = try String(contentsOf: root.appendingPathComponent("scripts/create-release.sh"))
+
+        for copy in [readme, releaseScript] {
+            XCTAssertTrue(copy.contains("brew tap 824zzy/agent-visor"))
+            XCTAssertTrue(copy.contains("brew install --cask 824zzy/agent-visor/agent-visor"))
+            XCTAssertFalse(copy.contains("\nbrew install --cask agent-visor\n"))
+        }
+    }
+
     func testDistributionFeedUsesOnlyAgentVisorReleaseIdentity() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let appcast = try String(contentsOf: root.appendingPathComponent("docs/appcast.xml"))

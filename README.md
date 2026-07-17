@@ -82,6 +82,7 @@ Status can be hook-driven or inferred from source transcripts. The inspector lab
 ### Homebrew (recommended)
 
 ```bash
+brew tap 824zzy/agent-visor
 brew install --cask 824zzy/agent-visor/agent-visor
 ```
 
