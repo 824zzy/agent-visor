@@ -12,14 +12,30 @@ final class ReleaseProductCopyAuditTests: XCTestCase {
         XCTAssertFalse(readme.contains("Window mode: a dedicated app window"))
     }
 
-    func testNewDistributionFeedDoesNotRewriteHistoricalReleases() throws {
+    func testDistributionFeedUsesOnlyAgentVisorReleaseIdentity() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let appcast = try String(contentsOf: root.appendingPathComponent("docs/appcast.xml"))
+        let cask = try String(contentsOf: root.appendingPathComponent("Casks/agent-visor.rb"))
+        let versionLine = try XCTUnwrap(cask.split(separator: "\n").first {
+            $0.contains("version \"")
+        })
+        let versionFragments = versionLine.split(separator: "\"")
+        let version = String(try XCTUnwrap(versionFragments.count > 1 ? versionFragments[1] : nil))
 
         XCTAssertTrue(appcast.contains("<title>Agent Visor Updates</title>"))
         XCTAssertTrue(appcast.contains("https://824zzy.github.io/agent-visor/appcast.xml"))
-        XCTAssertFalse(appcast.contains("<item>"))
-        XCTAssertFalse(appcast.contains("<sparkle:shortVersionString>"))
+        XCTAssertTrue(appcast.contains("<item>"))
+        XCTAssertTrue(appcast.contains(
+            "<sparkle:shortVersionString>\(version)</sparkle:shortVersionString>"
+        ))
+        XCTAssertTrue(appcast.contains(
+            "https://github.com/824zzy/agent-visor/releases/download/v\(version)/AgentVisor-v\(version).zip"
+        ))
+        let retiredFragments = ["claude", "visor"]
+        let integrationFragments = ["codex", "visor"]
+        XCTAssertFalse(appcast.localizedCaseInsensitiveContains(retiredFragments.joined()))
+        XCTAssertFalse(appcast.localizedCaseInsensitiveContains(retiredFragments.joined(separator: "-")))
+        XCTAssertFalse(appcast.localizedCaseInsensitiveContains(integrationFragments.joined(separator: "-")))
     }
 
     func testPublishedScreenshotsComeFromTheSyntheticFixture() throws {

@@ -5,5 +5,21 @@
     <link>https://824zzy.github.io/agent-visor/appcast.xml</link>
     <description>Agent Visor updates</description>
     <language>en</language>
+    <item>
+      <title>v2.4.4</title>
+      <pubDate>Fri, 17 Jul 2026 20:47:16 +0000</pubDate>
+      <sparkle:version>45</sparkle:version>
+      <sparkle:shortVersionString>2.4.4</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<h2>v2.4.4</h2>
+<ul><li>First Agent Visor release on its dedicated app and update identity.</li><li>Monitor and navigate Codex, Claude Code, Cursor, and terminal-hosted sessions from the menu bar.</li><li>Search all recent sessions with keyboard navigation and global shortcuts.</li><li>Improved multi-display and full-screen pill behavior, source-aware navigation, and Codex usage visibility.</li></ul>
+]]></description>
+      <enclosure
+        url="https://github.com/824zzy/agent-visor/releases/download/v2.4.4/AgentVisor-v2.4.4.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="PjJERevMHjo6Gy4cgEBPZlN3Vre7olG5SQfrEnAfksTWu36/Eli6YQ4x/1Y3+cFG3LhPWwps/f1L9vCJ/RBBDg=="
+        length="12450784"
+      />
+    </item>
   </channel>
 </rss>
