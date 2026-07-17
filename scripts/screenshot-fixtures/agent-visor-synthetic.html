@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Visor synthetic screenshots</title>
+<style>
+  :root {
+    color-scheme: light;
+    --ink: #555b78;
+    --muted: #8f95aa;
+    --line: #d8dce7;
+    --surface: #f4f6fb;
+    --selected: #dce4f7;
+    --green: #58b66b;
+    --orange: #e06b35;
+    --yellow: #e8ad35;
+    --recent: #73798f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+    color: var(--ink);
+    background: var(--surface);
+  }
+  #menubar, #browser { display: none; }
+  body.menubar #menubar, body.browser #browser { display: block; }
+
+  #menubar {
+    height: 84px;
+    padding: 0 22px;
+    color: #f7f7f8;
+    background: linear-gradient(180deg, #656666 0%, #565757 100%);
+    font-size: 17px;
+    font-weight: 600;
+  }
+  .menu-row { height: 84px; display: grid; grid-template-columns: 1fr 420px 1fr; align-items: start; }
+  .menu-left, .menu-right { height: 54px; display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .menu-left { justify-content: flex-end; padding-right: 16px; }
+  .menu-right { justify-content: flex-start; padding-left: 16px; }
+  .notch { width: 420px; height: 74px; border-radius: 0 0 24px 24px; background: #050505; }
+  .menu-app { position: absolute; left: 22px; height: 54px; display: flex; align-items: center; gap: 18px; }
+  .menu-app span:first-child { font-size: 19px; }
+  .pill {
+    height: 31px;
+    max-width: 188px;
+    padding: 0 13px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    overflow: hidden;
+    white-space: nowrap;
+    border-radius: 16px;
+    background: rgba(30, 31, 31, .58);
+    box-shadow: inset 0 1px rgba(255,255,255,.06);
+    font-size: 15px;
+    font-weight: 650;
+  }
+  .pill.utility { max-width: none; color: #e1e2e5; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .pill.overflow { min-width: 46px; justify-content: center; }
+  .dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--recent); }
+  .dot.ready { background: #79cf86; }
+  .dot.working { background: #ed7b4b; }
+  .dot.attention { background: #eabd50; }
+  .pill-label { overflow: hidden; text-overflow: ellipsis; }
+
+  #browser { width: 100%; height: 100%; background: #f1f3f9; }
+  .window-dots { position: absolute; top: 22px; left: 24px; display: flex; gap: 10px; }
+  .window-dots i { width: 16px; height: 16px; border-radius: 50%; display: block; }
+  .window-dots i:nth-child(1) { background: #ff5f57; }
+  .window-dots i:nth-child(2) { background: #febc2e; }
+  .window-dots i:nth-child(3) { background: #28c840; }
+  .browser-header { padding: 72px 46px 28px; border-bottom: 1px solid var(--line); }
+  .title-line { display: flex; align-items: flex-start; justify-content: space-between; }
+  h1 { margin: 0; font-size: 36px; line-height: 1.1; letter-spacing: -.7px; }
+  .subtitle { margin-top: 7px; color: var(--muted); font-size: 17px; font-weight: 500; }
+  .settings {
+    width: 45px; height: 45px; display: grid; place-items: center;
+    border-radius: 12px; background: #dde1eb; color: #727991; font-size: 23px;
+  }
+  .toolbar { margin-top: 26px; display: flex; gap: 18px; align-items: center; }
+  .search {
+    flex: 1; height: 54px; display: flex; align-items: center; gap: 14px;
+    border: 2px solid #5f83e8; border-radius: 14px; padding: 0 18px;
+    background: #e4e7ef; color: #777d91; font-size: 19px;
+  }
+  .search-icon { color: #3370d6; font-size: 23px; }
+  .shortcut { margin-left: auto; padding: 4px 8px; border-radius: 8px; background: #d5d9e3; font-size: 13px; }
+  .summary { display: flex; gap: 8px; }
+  .summary-chip {
+    height: 31px; padding: 0 12px; display: flex; align-items: center; gap: 7px;
+    border-radius: 16px; background: #d9dde7; color: #676d84; font-size: 14px; font-weight: 650;
+  }
+  .summary-chip .dot { width: 8px; height: 8px; }
+  .browser-list { height: calc(100% - 230px); padding: 18px 46px 50px; overflow: hidden; }
+  .scroll-track { position: absolute; top: 292px; right: 13px; width: 7px; height: 650px; border-radius: 4px; background: rgba(119,125,146,.08); }
+  .scroll-thumb { width: 7px; height: 260px; border-radius: 4px; background: rgba(94,100,118,.58); }
+  .section-title { height: 37px; display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: #6e748b; }
+  .count { min-width: 25px; height: 25px; padding: 0 7px; display: inline-flex; align-items: center; justify-content: center; border-radius: 13px; background: #d9dde7; }
+  .session-row {
+    height: 75px; display: grid; grid-template-columns: 18px 42px minmax(0, 1fr) 72px 30px;
+    align-items: center; gap: 13px; padding: 0 14px; border: 1px solid transparent; border-radius: 13px;
+  }
+  .session-row.selected { background: var(--selected); border-color: #86a5ef; }
+  .status-bar { width: 5px; height: 40px; border-radius: 3px; background: var(--recent); }
+  .status-bar.attention { background: var(--yellow); }
+  .status-bar.ready { background: var(--green); }
+  .status-bar.working { background: var(--orange); }
+  .brand {
+    width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center;
+    background: white; box-shadow: 0 1px 3px rgba(31,37,57,.18); overflow: hidden;
+  }
+  .brand img { width: 32px; height: 32px; object-fit: contain; }
+  .session-copy { min-width: 0; }
+  .session-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18px; font-weight: 700; color: #515773; }
+  .chip { height: 23px; padding: 0 9px; display: inline-flex; align-items: center; border-radius: 12px; background: #e0e7fb; color: #6381df; font-size: 13px; font-weight: 650; }
+  .chip.project { background: #d9dde8; color: #73798e; }
+  .chip.claude { background: #f4e5e1; color: #8b625b; }
+  .chip.cursor { background: #e3e8f6; color: #65738f; }
+  .preview { margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #7d839a; font-size: 15px; }
+  .age { justify-self: end; color: #777d92; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .info { justify-self: center; color: #6e748b; font-size: 20px; }
+</style>
+</head>
+<body>
+  <section id="menubar">
+    <div class="menu-app"><span>Agent Visor</span><span>File</span><span>Edit</span></div>
+    <div class="menu-row">
+      <div class="menu-left">
+        <div class="pill"><i class="dot attention"></i><span class="pill-label">Review checkout permissions</span></div>
+        <div class="pill"><i class="dot ready"></i><span class="pill-label">API migration plan</span></div>
+      </div>
+      <div class="notch"></div>
+      <div class="menu-right">
+        <div class="pill"><i class="dot working"></i><span class="pill-label">Trace flaky tests</span></div>
+        <div class="pill"><i class="dot"></i><span class="pill-label">Update launch checklist</span></div>
+        <div class="pill overflow">+5</div>
+        <div class="pill utility">5h 62% <span style="opacity:.45">|</span> 7d 81%</div>
+      </div>
+    </div>
+  </section>
+
+  <main id="browser">
+    <div class="window-dots"><i></i><i></i><i></i></div>
+    <div class="scroll-track"><div class="scroll-thumb"></div></div>
+    <header class="browser-header">
+      <div class="title-line">
+        <div><h1>Agent Sessions</h1><div class="subtitle">Find a session, then return to the app that owns it.</div></div>
+        <div class="settings">&#9881;</div>
+      </div>
+      <div class="toolbar">
+        <div class="search"><span class="search-icon">&#8981;</span><span>Search sessions</span><span class="shortcut">&#8984;F</span></div>
+        <div class="summary">
+          <div class="summary-chip"><i class="dot attention"></i>Attention 1</div>
+          <div class="summary-chip"><i class="dot ready"></i>Ready 3</div>
+          <div class="summary-chip"><i class="dot working"></i>Working 2</div>
+          <div class="summary-chip"><i class="dot"></i>Recent 5</div>
+        </div>
+      </div>
+    </header>
+    <div class="browser-list">
+      <div class="section-title">Needs attention <span class="count">1</span></div>
+      <div class="session-row">
+        <i class="status-bar attention"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCodex.imageset/AgentCodex@3x.png"></span>
+        <div class="session-copy"><div class="session-heading"><span class="session-title">Review checkout permissions</span><span class="chip">Codex</span><span class="chip project">sample-store</span></div><div class="preview">Approval required before running the deployment command.</div></div><span class="age">1m</span><span class="info">&#9432;</span>
+      </div>
+      <div class="section-title">Ready <span class="count">3</span></div>
+      <div class="session-row selected">
+        <i class="status-bar ready"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCodex.imageset/AgentCodex@3x.png"></span>
+        <div class="session-copy"><div class="session-heading"><span class="session-title">API migration plan</span><span class="chip">Codex</span><span class="chip project">api-service</span></div><div class="preview">The rollout plan is ready for review, including fallback steps.</div></div><span class="age">3m</span><span class="info">&#9432;</span>
+      </div>
+      <div class="session-row">
+        <i class="status-bar ready"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentClaude.imageset/AgentClaude@3x.png"></span>
+        <div class="session-copy"><div class="session-heading"><span class="session-title">Fix onboarding test</span><span class="chip claude">Claude Code</span><span class="chip project">web-app</span></div><div class="preview">All focused tests pass after updating the fixture lifecycle.</div></div><span class="age">5m</span><span class="info">&#9432;</span>
+      </div>
+      <div class="session-row">
+        <i class="status-bar ready"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCursor.imageset/AgentCursor@3x.png"></span>
+        <div class="session-copy"><div class="session-heading"><span class="session-title">Update schema documentation</span><span class="chip cursor">Cursor</span><span class="chip project">docs-site</span></div><div class="preview">The generated examples now match the current API response.</div></div><span class="age">9m</span><span class="info">&#9432;</span>
+      </div>
+      <div class="section-title">Working <span class="count">2</span></div>
+      <div class="session-row">
+        <i class="status-bar working"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCursor.imageset/AgentCursor@3x.png"></span>
+        <div class="session-copy"><div class="session-heading"><span class="session-title">Trace flaky integration test</span><span class="chip cursor">Cursor</span><span class="chip project">sample-store</span></div><div class="preview">Comparing the two failing CI traces and local timing evidence...</div></div><span class="age">now</span><span class="info">&#9432;</span>
+      </div>
+      <div class="session-row">
+        <i class="status-bar working"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentClaude.imageset/AgentClaude@3x.png"></span>
+        <div class="session-copy"><div class="session-heading"><span class="session-title">Refactor billing webhook</span><span class="chip claude">Claude Code</span><span class="chip project">api-service</span></div><div class="preview">Running the contract tests before applying the final cleanup.</div></div><span class="age">2m</span><span class="info">&#9432;</span>
+      </div>
+      <div class="section-title">Recent <span class="count">5</span></div>
+      <div class="session-row">
+        <i class="status-bar"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCodex.imageset/AgentCodex@3x.png"></span>
+        <div class="session-copy"><div class="session-heading"><span class="session-title">Update launch checklist</span><span class="chip">Codex</span><span class="chip project">docs-site</span></div><div class="preview">Release checks and owner handoff notes are complete.</div></div><span class="age">42m</span><span class="info">&#9432;</span>
+      </div>
+      <div class="session-row">
+        <i class="status-bar"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCodex.imageset/AgentCodex@3x.png"></span>
+        <div class="session-copy"><div class="session-heading"><span class="session-title">Investigate cache regression</span><span class="chip">Codex</span><span class="chip project">desktop-app</span></div><div class="preview">The issue was isolated to stale metadata after wake.</div></div><span class="age">2h</span><span class="info">&#9432;</span>
+      </div>
+    </div>
+  </main>
+<script>
+  document.body.className = location.hash === "#menubar" ? "menubar" : "browser";
+</script>
+</body>
+</html>

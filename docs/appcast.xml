@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Agent Visor Updates</title>
+    <link>https://824zzy.github.io/agent-visor/appcast.xml</link>
+    <description>Agent Visor updates</description>
+    <language>en</language>
+  </channel>
+</rss>

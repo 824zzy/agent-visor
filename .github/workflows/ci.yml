@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: xcodebuild -version
+      - name: Core tests
+        run: swift test --package-path AgentVisorCore
+      - name: Homebrew cask style
+        run: brew style Casks/agent-visor.rb
+      - name: Release build
+        run: AV_RELEASE_DERIVED="$RUNNER_TEMP/av-release-build" scripts/build.sh

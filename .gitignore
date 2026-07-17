@@ -1,0 +1,51 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# User-specific Xcode files
+xcuserdata/
+
+# Swift Package Manager
+.build/
+Packages/
+Package.resolved
+!AgentVisor.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+# CocoaPods
+Pods/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Temporary files
+*.swp
+*.swo
+*~
+
+# Extracted Codex/ChatGPT renderer chunks used for local investigation
+app-initial~*.js
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Sparkle signing keys (NEVER commit these!)
+.sparkle-keys/
+
+# Release artifacts
+releases/
+
+# Xcode backup
+*.xcodeproj.backup/
+CLAUDE.md
+AGENTS.md
+
+# Local-only notes (reddit/twitter drafts, etc.)
+drafts/
