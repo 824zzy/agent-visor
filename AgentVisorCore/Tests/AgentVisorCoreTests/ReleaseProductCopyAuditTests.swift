@@ -69,6 +69,22 @@ final class ReleaseProductCopyAuditTests: XCTestCase {
         ))
     }
 
+    func testSyntheticBrowserScreenshotMatchesTheCompactSearchFirstDesign() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let fixture = try String(contentsOf: root.appendingPathComponent(
+            "scripts/screenshot-fixtures/agent-visor-synthetic.html"
+        ))
+
+        XCTAssertTrue(fixture.contains("<span>Search all sessions</span>"))
+        XCTAssertTrue(fixture.contains("Needs you"))
+        XCTAssertTrue(fixture.contains("Ready to continue"))
+        XCTAssertTrue(fixture.contains("In progress"))
+        XCTAssertTrue(fixture.contains("History"))
+        XCTAssertTrue(fixture.contains("⌥⌘1-9"))
+        XCTAssertFalse(fixture.contains("<h1>Agent Sessions</h1>"))
+        XCTAssertFalse(fixture.contains("summary-chip"))
+    }
+
     private func repositoryRoot(from testFile: URL) -> URL {
         testFile
             .deletingLastPathComponent()

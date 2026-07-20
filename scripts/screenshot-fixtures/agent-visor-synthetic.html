@@ -71,15 +71,12 @@
   .window-dots i:nth-child(1) { background: #ff5f57; }
   .window-dots i:nth-child(2) { background: #febc2e; }
   .window-dots i:nth-child(3) { background: #28c840; }
-  .browser-header { padding: 72px 46px 28px; border-bottom: 1px solid var(--line); }
-  .title-line { display: flex; align-items: flex-start; justify-content: space-between; }
-  h1 { margin: 0; font-size: 36px; line-height: 1.1; letter-spacing: -.7px; }
-  .subtitle { margin-top: 7px; color: var(--muted); font-size: 17px; font-weight: 500; }
+  .browser-header { padding: 48px 46px 18px; border-bottom: 1px solid var(--line); }
   .settings {
     width: 45px; height: 45px; display: grid; place-items: center;
     border-radius: 12px; background: #dde1eb; color: #727991; font-size: 23px;
   }
-  .toolbar { margin-top: 26px; display: flex; gap: 18px; align-items: center; }
+  .toolbar { display: flex; gap: 18px; align-items: center; }
   .search {
     flex: 1; height: 54px; display: flex; align-items: center; gap: 14px;
     border: 2px solid #5f83e8; border-radius: 14px; padding: 0 18px;
@@ -87,23 +84,17 @@
   }
   .search-icon { color: #3370d6; font-size: 23px; }
   .shortcut { margin-left: auto; padding: 4px 8px; border-radius: 8px; background: #d5d9e3; font-size: 13px; }
-  .summary { display: flex; gap: 8px; }
-  .summary-chip {
-    height: 31px; padding: 0 12px; display: flex; align-items: center; gap: 7px;
-    border-radius: 16px; background: #d9dde7; color: #676d84; font-size: 14px; font-weight: 650;
-  }
-  .summary-chip .dot { width: 8px; height: 8px; }
-  .browser-list { height: calc(100% - 230px); padding: 18px 46px 50px; overflow: hidden; }
-  .scroll-track { position: absolute; top: 292px; right: 13px; width: 7px; height: 650px; border-radius: 4px; background: rgba(119,125,146,.08); }
-  .scroll-thumb { width: 7px; height: 260px; border-radius: 4px; background: rgba(94,100,118,.58); }
+  .browser-list { height: calc(100% - 166px); padding: 14px 46px 50px; overflow: hidden; }
+  .scroll-track { position: absolute; top: 132px; right: 13px; width: 7px; height: 810px; border-radius: 4px; background: rgba(119,125,146,.08); }
+  .scroll-thumb { width: 7px; height: 320px; border-radius: 4px; background: rgba(94,100,118,.58); }
   .section-title { height: 37px; display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: #6e748b; }
   .count { min-width: 25px; height: 25px; padding: 0 7px; display: inline-flex; align-items: center; justify-content: center; border-radius: 13px; background: #d9dde7; }
   .session-row {
-    height: 75px; display: grid; grid-template-columns: 18px 42px minmax(0, 1fr) 72px 30px;
+    height: 68px; display: grid; grid-template-columns: 14px 42px minmax(0, 1fr) 72px 30px;
     align-items: center; gap: 13px; padding: 0 14px; border: 1px solid transparent; border-radius: 13px;
   }
   .session-row.selected { background: var(--selected); border-color: #86a5ef; }
-  .status-bar { width: 5px; height: 40px; border-radius: 3px; background: var(--recent); }
+  .status-bar { width: 9px; height: 9px; border-radius: 50%; background: var(--recent); }
   .status-bar.attention { background: var(--yellow); }
   .status-bar.ready { background: var(--green); }
   .status-bar.working { background: var(--orange); }
@@ -122,6 +113,14 @@
   .preview { margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #7d839a; font-size: 15px; }
   .age { justify-self: end; color: #777d92; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .info { justify-self: center; color: #6e748b; font-size: 20px; }
+  .browser-footer {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 46px;
+    padding: 0 46px; display: flex; align-items: center; justify-content: space-between;
+    border-top: 1px solid var(--line); background: #f1f3f9;
+    color: #777d92; font-size: 13px; font-weight: 600;
+  }
+  .footer-group { display: flex; align-items: center; gap: 18px; }
+  .footer-keys { color: #656b82; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -146,27 +145,18 @@
     <div class="window-dots"><i></i><i></i><i></i></div>
     <div class="scroll-track"><div class="scroll-thumb"></div></div>
     <header class="browser-header">
-      <div class="title-line">
-        <div><h1>Agent Sessions</h1><div class="subtitle">Find a session, then return to the app that owns it.</div></div>
-        <div class="settings">&#9881;</div>
-      </div>
       <div class="toolbar">
-        <div class="search"><span class="search-icon">&#8981;</span><span>Search sessions</span><span class="shortcut">&#8984;F</span></div>
-        <div class="summary">
-          <div class="summary-chip"><i class="dot attention"></i>Attention 1</div>
-          <div class="summary-chip"><i class="dot ready"></i>Ready 3</div>
-          <div class="summary-chip"><i class="dot working"></i>Working 2</div>
-          <div class="summary-chip"><i class="dot"></i>Recent 5</div>
-        </div>
+        <div class="search"><span class="search-icon">&#8981;</span><span>Search all sessions</span><span class="shortcut">&#8984;F</span></div>
+        <div class="settings">&#9881;</div>
       </div>
     </header>
     <div class="browser-list">
-      <div class="section-title">Needs attention <span class="count">1</span></div>
+      <div class="section-title">Needs you <span class="count">1</span></div>
       <div class="session-row">
         <i class="status-bar attention"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCodex.imageset/AgentCodex@3x.png"></span>
         <div class="session-copy"><div class="session-heading"><span class="session-title">Review checkout permissions</span><span class="chip">Codex</span><span class="chip project">sample-store</span></div><div class="preview">Approval required before running the deployment command.</div></div><span class="age">1m</span><span class="info">&#9432;</span>
       </div>
-      <div class="section-title">Ready <span class="count">3</span></div>
+      <div class="section-title">Ready to continue <span class="count">3</span></div>
       <div class="session-row selected">
         <i class="status-bar ready"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCodex.imageset/AgentCodex@3x.png"></span>
         <div class="session-copy"><div class="session-heading"><span class="session-title">API migration plan</span><span class="chip">Codex</span><span class="chip project">api-service</span></div><div class="preview">The rollout plan is ready for review, including fallback steps.</div></div><span class="age">3m</span><span class="info">&#9432;</span>
@@ -179,7 +169,7 @@
         <i class="status-bar ready"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCursor.imageset/AgentCursor@3x.png"></span>
         <div class="session-copy"><div class="session-heading"><span class="session-title">Update schema documentation</span><span class="chip cursor">Cursor</span><span class="chip project">docs-site</span></div><div class="preview">The generated examples now match the current API response.</div></div><span class="age">9m</span><span class="info">&#9432;</span>
       </div>
-      <div class="section-title">Working <span class="count">2</span></div>
+      <div class="section-title">In progress <span class="count">2</span></div>
       <div class="session-row">
         <i class="status-bar working"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCursor.imageset/AgentCursor@3x.png"></span>
         <div class="session-copy"><div class="session-heading"><span class="session-title">Trace flaky integration test</span><span class="chip cursor">Cursor</span><span class="chip project">sample-store</span></div><div class="preview">Comparing the two failing CI traces and local timing evidence...</div></div><span class="age">now</span><span class="info">&#9432;</span>
@@ -188,7 +178,7 @@
         <i class="status-bar working"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentClaude.imageset/AgentClaude@3x.png"></span>
         <div class="session-copy"><div class="session-heading"><span class="session-title">Refactor billing webhook</span><span class="chip claude">Claude Code</span><span class="chip project">api-service</span></div><div class="preview">Running the contract tests before applying the final cleanup.</div></div><span class="age">2m</span><span class="info">&#9432;</span>
       </div>
-      <div class="section-title">Recent <span class="count">5</span></div>
+      <div class="section-title">History <span class="count">5</span></div>
       <div class="session-row">
         <i class="status-bar"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCodex.imageset/AgentCodex@3x.png"></span>
         <div class="session-copy"><div class="session-heading"><span class="session-title">Update launch checklist</span><span class="chip">Codex</span><span class="chip project">docs-site</span></div><div class="preview">Release checks and owner handoff notes are complete.</div></div><span class="age">42m</span><span class="info">&#9432;</span>
@@ -198,6 +188,10 @@
         <div class="session-copy"><div class="session-heading"><span class="session-title">Investigate cache regression</span><span class="chip">Codex</span><span class="chip project">desktop-app</span></div><div class="preview">The issue was isolated to stale metadata after wake.</div></div><span class="age">2h</span><span class="info">&#9432;</span>
       </div>
     </div>
+    <footer class="browser-footer">
+      <div class="footer-group"><span>&uarr;&darr; Navigate</span><span>&#8629; Open original</span><span>&#8997;&#8629; Inspect</span></div>
+      <div class="footer-group footer-keys"><span>⌥⌘1-9&nbsp; Open pills</span><span>⌥⌘0&nbsp; More sessions</span></div>
+    </footer>
   </main>
 <script>
   document.body.className = location.hash === "#menubar" ? "menubar" : "browser";

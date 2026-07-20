@@ -1,7 +1,7 @@
 # Product Surface Contract
 
 Status: Accepted
-Last reviewed: 2026-07-16
+Last reviewed: 2026-07-19
 
 ## Purpose
 
@@ -39,12 +39,13 @@ Permission setup and recovery are specified in [Permission Health](permission-he
 
 The Agent Sessions browser is the durable teaching surface for global session shortcuts. It must explain the configured shortcut family without adding a first-run modal, notification, or automatically presented menu-bar popover.
 
-- The browser header replaces generic purpose copy with a compact `Global shortcuts` line.
-- When shortcuts are enabled, the line shows the configured modifier family with `1-9` for opening numbered menu-bar pills and `0` for opening More Sessions. For the default Control-Command family, the rendered guidance is equivalent to `⌃⌘1-9  Open numbered pills` and `⌃⌘0  More Sessions`.
+- The browser footer keeps shortcut education visible without placing a second explanatory row above the primary search control.
+- When shortcuts are enabled, the footer shows the configured modifier family with `1-9` for opening numbered menu-bar pills and `0` for opening More Sessions. For the default Option-Command family, the rendered guidance is equivalent to `⌥⌘1-9  Open pills` and `⌥⌘0  More sessions`.
+- Changing the product default must not overwrite a modifier family that the user explicitly selected in Settings.
 - The guidance describes menu-bar targets explicitly. It must not imply that `1-9` indexes rows in the full browser.
 - When shortcuts are off, the same location says that global session shortcuts are off and directs the user to Settings.
 - Shortcut glyphs come from the effective persisted setting. Copy must not hard-code Control-Command, Option-Command, or any other family.
-- The browser footer is scoped to keyboard actions inside the browser: Up/Down navigates, Return opens the original owner, and Option-Return inspects.
+- The footer separates browser-local actions on the left from global shortcuts on the right: Up/Down navigates, Return opens the original owner, and Option-Return inspects.
 - Generic copy such as `Find a session, then return to the app that owns it.` and `Codex history included` is omitted. The browser structure, source chips, and history rows already communicate those facts.
 - Pill hover hints remain as contextual reinforcement for users who rarely open the browser.
 

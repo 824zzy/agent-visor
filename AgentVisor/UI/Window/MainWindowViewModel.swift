@@ -324,10 +324,6 @@ final class MainWindowViewModel: ObservableObject {
         browserSelection.orderedSessionIds.count
     }
 
-    func browserCount(for section: SessionBrowserSection) -> Int {
-        browserSelection.groups.first(where: { $0.section == section })?.sessionIds.count ?? 0
-    }
-
     func browserItem(_ sessionId: String) -> SessionBrowserItem? {
         browserItemsById[sessionId]
     }

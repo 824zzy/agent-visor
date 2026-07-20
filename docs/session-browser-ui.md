@@ -1,7 +1,7 @@
 # Sessions Browser UI Design
 
 Status: Accepted
-Last reviewed: 2026-07-16
+Last reviewed: 2026-07-19
 
 ## Purpose
 
@@ -11,7 +11,7 @@ The browser should feel like a focused macOS switcher: dense enough to scan quic
 
 ## Visual Principles
 
-1. **Search is the primary control.** The header establishes context, but the search field receives focus and visual priority.
+1. **Search is the primary control.** The browser opens directly into one compact search bar; it does not spend vertical space restating the window's identity.
 2. **Title first, metadata second.** Session titles get the first readable line. Source, project, and owner chips support identification without competing with the title.
 3. **State is visible but restrained.** Status uses a small semantic mark and section placement, not a full-row color wash.
 4. **Density without crowding.** Rows should expose enough context to distinguish sessions while preserving a steady scanning rhythm.
@@ -27,43 +27,38 @@ The browser should feel like a focused macOS switcher: dense enough to scan quic
 | Resizing | Fully resizable; preserve content during live resize |
 | Canvas | `ChatTheme.headerBg` across the browser |
 | Main content width | Results capped at `980` points and centered |
-| Header/footer width | Capped at `1060` points and centered |
+| Command bar/footer width | Capped at `980` points and centered |
 | Horizontal inset | `28` points |
 
-The browser must not use a hero-sized empty area. At the default window size, the first section header should begin within roughly `140` points of the content top.
+The browser must not use a hero-sized empty area. At the default window size, the first section header should begin within roughly `90` points of the content top when no permission warning is present.
 
 Wide windows keep the list centered instead of stretching rows indefinitely. Minimum-width windows must not introduce horizontal scrolling.
 
 ## Page Structure
 
-The browser has four vertical regions:
+The browser has three vertical regions:
 
-1. Compact header: title, configured global-shortcut guidance, loading state, and Settings.
-2. Search and summary row: search field first, state counts second.
-3. Scrollable session list: state sections and rows.
-4. Fixed footer: keyboard hints for the current browser only.
+1. Compact command bar: search, transient result count, loading state, and Settings.
+2. Scrollable session list: state sections and rows.
+3. Fixed footer: browser navigation hints plus configured global shortcuts.
 
 Dividers separate these regions using the semantic card-border token. The structure must remain visible in both light and dark appearance.
 
-## Header
+## Command Bar
 
-- Title: `Agent Sessions`, 25-point semibold.
-- Supporting content: a compact `Global shortcuts` line using 11- to 12-point secondary text and rounded key labels.
-- With shortcuts enabled, show the effective modifier family twice: once with `1-9` labeled `Open numbered pills`, and once with `0` labeled `More Sessions`.
-- With shortcuts disabled, show `Global session shortcuts are off` followed by `Configure in Settings` in the same footprint.
-- Do not use the generic purpose sentence `Find a session, then return to the app that owns it.`. The title, search field, and rows already establish that purpose.
-- Top padding: 22 points. Bottom padding: 18 points.
-- Internal vertical spacing: 16 points between title row and search row.
-- Settings uses a 34 x 30 point chrome button with an 8-point corner radius.
+- Do not render an in-content `Agent Sessions` title. The window and app already provide identity; the visible task begins with search.
+- Use a single horizontal row ordered as search, optional search-result count, historical loading, and Settings.
+- Top and bottom padding: 12 points.
+- Search expands to the available content width instead of preserving an empty summary area.
+- Settings uses a 34 x 34 point chrome button with an 8-point corner radius.
 - Historical loading uses a small progress indicator beside Settings; it must not replace or move the search field.
+- A permission-health warning may appear below the command row because it requires action. It is the only content allowed to expand this region vertically.
 
-The header is informational, not promotional. Do not add illustrations, large metrics cards, gradients, or workspace banners above the list.
-
-## Search And Summary
+Do not add illustrations, large metrics cards, state dashboards, gradients, shortcut teaching, or workspace banners above the list.
 
 ### Search Field
 
-- Maximum width: 680 points.
+- Placeholder: `Search all sessions`.
 - Height: 40 points.
 - Corner radius: 10 points.
 - Horizontal content inset: 13 points.
@@ -74,15 +69,17 @@ The header is informational, not promotional. Do not add illustrations, large me
 
 The trailing control area keeps a stable width so entering text does not move the field contents.
 
-### Summary
+### Search Result Count
 
-With an empty query, the trailing area shows only non-zero section counts. Each summary chip contains a 6-point state dot, a short label, and count. During search, the summary is replaced by a single result count.
-
-Summary information is secondary. When width is constrained, it disappears before the search field shrinks below a useful width.
+With an empty query, show no aggregate state counts. They duplicate the section headers and make the command bar read like a dashboard. During search, show one quiet result count between search and Settings.
 
 ## Section Headers
 
-- Order: `Needs attention`, `Ready`, `Working`, `Recent`.
+- Order and user-facing labels:
+  1. `Needs you` for structured approvals or questions.
+  2. `Ready to continue` for a completed turn or normal user input.
+  3. `In progress` for processing or compacting.
+  4. `History` for idle sessions retained for navigation.
 - Label: 12-point semibold secondary text.
 - Count: 10-point semibold rounded text in a quiet capsule.
 - Horizontal inset relative to the result column: 10 points.
@@ -147,10 +144,10 @@ Fixed slots prevent rows from moving when Cmd shortcuts appear or timestamps cha
 
 | State | Semantic token | Visual use |
 | --- | --- | --- |
-| Needs attention | `ChatTheme.statusPending` | State mark and summary dot |
-| Ready | `ChatTheme.statusSuccess` | State mark and summary dot |
-| Working | `ChatTheme.statusRunning` | State mark and summary dot |
-| Recent | `ChatTheme.tertiary` | Neutral state mark and summary dot |
+| Needs you | `ChatTheme.statusPending` | State mark |
+| Ready to continue | `ChatTheme.statusSuccess` | State mark |
+| In progress | `ChatTheme.statusRunning` | State mark |
+| History | `ChatTheme.tertiary` | Neutral state mark |
 
 Color never carries state alone. Section placement and accessibility text provide the same meaning. Chips use brand or metadata tints only as quiet identification, not status.
 
@@ -190,10 +187,11 @@ If saved history fails to load, keep current sessions usable and show a compact,
 
 - Height: 42 points.
 - Left: `Up/Down Navigate`, `Return Open original`, `Option+Return Inspect`.
-- Right: empty; do not repeat source or history scope already visible in the rows.
+- Right: configured global shortcuts using compact key labels: `1-9 Open pills` and `0 More sessions`.
+- When global shortcuts are disabled, the right side says `Global shortcuts off · Configure in Settings`.
 - Text: 10-point secondary and tertiary tiers.
 
-The footer remains quiet and fixed. It must not compete with the list or become a toolbar of secondary actions. Do not show `Codex history included`; source chips and historical row copy already expose that scope.
+The footer remains quiet and fixed. It is the durable teaching surface for keyboard acceleration without taking space from the primary search task. It must not become a toolbar of secondary actions. Do not show `Codex history included`; source chips and historical row copy already expose that scope.
 
 ## Inspector Presentation
 

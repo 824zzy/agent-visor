@@ -8,10 +8,10 @@ public enum SessionBrowserSection: Int, CaseIterable, Equatable, Sendable {
 
     public var displayTitle: String {
         switch self {
-        case .needsAttention: return "Needs attention"
-        case .ready: return "Ready"
-        case .working: return "Working"
-        case .recent: return "Recent"
+        case .needsAttention: return "Needs you"
+        case .ready: return "Ready to continue"
+        case .working: return "In progress"
+        case .recent: return "History"
         }
     }
 }

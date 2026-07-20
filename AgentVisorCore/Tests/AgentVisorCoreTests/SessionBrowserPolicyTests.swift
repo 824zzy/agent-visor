@@ -2,6 +2,13 @@ import XCTest
 @testable import AgentVisorCore
 
 final class SessionBrowserPolicyTests: XCTestCase {
+    func testBrowserSectionsUseActionOrientedLabels() {
+        XCTAssertEqual(SessionBrowserSection.needsAttention.displayTitle, "Needs you")
+        XCTAssertEqual(SessionBrowserSection.ready.displayTitle, "Ready to continue")
+        XCTAssertEqual(SessionBrowserSection.working.displayTitle, "In progress")
+        XCTAssertEqual(SessionBrowserSection.recent.displayTitle, "History")
+    }
+
     func testBlankQueryOrdersSectionsByActionabilityAndRowsByRecency() {
         let selection = SessionBrowserPolicy.select(
             candidates: [

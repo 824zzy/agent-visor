@@ -140,7 +140,7 @@ final class GlobalSessionShortcutWiringAuditTests: XCTestCase {
         XCTAssertTrue(settingsView.contains("ForEach(SessionShortcutModifierFamily.allCases"))
         XCTAssertTrue(settingsView.contains("GlobalSessionShortcutManager.shared.apply(newValue)"))
         XCTAssertTrue(settingsView.contains("or 0 to toggle More Sessions."))
-        XCTAssertTrue(settings.contains("return .controlCommand"))
+        XCTAssertTrue(settings.contains("return .defaultFamily"))
     }
 
     private func repoRoot(from testFile: URL) -> URL {

@@ -6,6 +6,8 @@ public enum SessionShortcutModifierFamily: String, CaseIterable, Sendable {
     case optionCommand
     case controlOptionCommand
 
+    public static let defaultFamily: Self = .optionCommand
+
     public var modifiers: ModifierMask {
         switch self {
         case .off: return []

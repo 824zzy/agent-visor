@@ -264,7 +264,7 @@ enum AppSettings {
         get {
             guard let raw = defaults.string(forKey: Keys.sessionShortcutModifierFamily),
                   let family = SessionShortcutModifierFamily(rawValue: raw) else {
-                return .controlCommand
+                return .defaultFamily
             }
             return family
         }

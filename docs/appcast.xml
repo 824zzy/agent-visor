@@ -6,6 +6,27 @@
     <description>Agent Visor updates</description>
     <language>en</language>
     <item>
+      <title>v2.4.5</title>
+      <pubDate>Mon, 20 Jul 2026 21:02:14 +0000</pubDate>
+      <sparkle:version>46</sparkle:version>
+      <sparkle:shortVersionString>2.4.5</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<h2>v2.4.5</h2>
+<ul>
+  <li>Streamlined Agent Sessions into a compact, search-first browser with clearer section names and denser rows.</li>
+  <li>Fresh installs now use Option-Command with 1-9 for visible pills and 0 for More Sessions. Existing shortcut choices are preserved.</li>
+  <li>Improved Accessibility setup and recovery by identifying the exact running app and separating Agent Visor Dev from the installed release.</li>
+  <li>Corrected Homebrew installation guidance and strengthened release-package verification.</li>
+</ul>
+]]></description>
+      <enclosure
+        url="https://github.com/824zzy/agent-visor/releases/download/v2.4.5/AgentVisor-v2.4.5.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="mYbTBU2oJUTF9sddAbVUsJV9e5xFmbdh77xGGNbDwd6BW3EL2unyxxDy+A7ySCHnIzMrpUqOkZf0y8gQd0OoBg=="
+        length="12472754"
+      />
+    </item>
+    <item>
       <title>v2.4.4</title>
       <pubDate>Fri, 17 Jul 2026 20:47:16 +0000</pubDate>
       <sparkle:version>45</sparkle:version>

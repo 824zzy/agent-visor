@@ -2,6 +2,10 @@ import XCTest
 @testable import AgentVisorCore
 
 final class GlobalSessionShortcutPolicyTests: XCTestCase {
+    func testDefaultFamilyUsesOptionCommandForOneHandedNumberAccess() {
+        XCTAssertEqual(SessionShortcutModifierFamily.defaultFamily, .optionCommand)
+    }
+
     func testRenderedPillsMapToShortcutPositionsInReadingOrder() {
         let snapshot = GlobalSessionShortcutSnapshot(
             leftVisibleSessionIDs: ["left-far", "left-near"],

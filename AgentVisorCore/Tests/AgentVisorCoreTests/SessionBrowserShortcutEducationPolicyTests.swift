@@ -7,10 +7,9 @@ final class SessionBrowserShortcutEducationPolicyTests: XCTestCase {
             for: .controlCommand
         )
 
-        XCTAssertEqual(presentation.title, "Global shortcuts")
         XCTAssertEqual(presentation.hints, [
-            SessionBrowserShortcutHint(keys: "⌃⌘1-9", label: "Open numbered pills"),
-            SessionBrowserShortcutHint(keys: "⌃⌘0", label: "More Sessions"),
+            SessionBrowserShortcutHint(keys: "⌃⌘1-9", label: "Open pills"),
+            SessionBrowserShortcutHint(keys: "⌃⌘0", label: "More sessions"),
         ])
         XCTAssertNil(presentation.disabledMessage)
     }
@@ -29,7 +28,7 @@ final class SessionBrowserShortcutEducationPolicyTests: XCTestCase {
         XCTAssertTrue(presentation.hints.isEmpty)
         XCTAssertEqual(
             presentation.disabledMessage,
-            "Global session shortcuts are off · Configure in Settings"
+            "Global shortcuts off · Configure in Settings"
         )
     }
 }

@@ -18,9 +18,16 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         let appDelegate = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/App/AppDelegate.swift"))
 
-        XCTAssertTrue(split.contains("Text(\"Agent Sessions\")"))
-        XCTAssertFalse(split.contains("Text(\"Sessions\")"))
-        XCTAssertTrue(split.contains("TextField(\"Search sessions\""))
+        XCTAssertFalse(
+            split.contains("Text(\"Agent Sessions\")"),
+            "The full browser should begin with its primary search task, not a hero title."
+        )
+        XCTAssertTrue(split.contains("TextField(\"Search all sessions\""))
+        XCTAssertFalse(
+            split.contains("summaryStrip"),
+            "Aggregate state chips duplicate the section headers and should not consume command-bar space."
+        )
+        XCTAssertFalse(split.contains("SessionBrowserSummaryChip"))
         XCTAssertTrue(split.contains("viewModel.openOriginal"))
         XCTAssertTrue(split.contains("viewModel.inspectSession"))
         XCTAssertTrue(split.contains(".sheet("))
@@ -71,14 +78,17 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         XCTAssertTrue(model.contains("browserScrollRequest"))
     }
 
-    func testHeaderTeachesConfiguredGlobalShortcutsAndFooterStaysBrowserScoped() throws {
+    func testCompactCommandBarAndFooterTeachConfiguredGlobalShortcuts() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let split = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
 
         XCTAssertTrue(split.contains("GlobalSessionShortcutManager.shared"))
         XCTAssertTrue(split.contains("SessionBrowserShortcutEducationPolicy.presentation("))
-        XCTAssertTrue(split.contains("shortcutEducationHint("))
+        XCTAssertTrue(split.contains("footerShortcutEducation"))
+        XCTAssertTrue(split.contains("footerShortcutHint("))
+        XCTAssertTrue(split.contains(".padding(.vertical, 12)"))
+        XCTAssertFalse(split.contains("private var shortcutEducation:"))
         XCTAssertFalse(split.contains("Find a session, then return to the app that owns it."))
         XCTAssertFalse(split.contains("Codex history included"))
     }

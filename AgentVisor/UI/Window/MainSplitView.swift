@@ -71,15 +71,16 @@ struct MainSplitView: View {
     }
 
     private var browserHeader: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Agent Sessions")
-                        .font(.system(size: 25, weight: .semibold))
-                        .foregroundColor(ChatTheme.primary)
-                    shortcutEducation
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
+                searchField
+                    .frame(maxWidth: .infinity)
+                if viewModel.browserSelection.isSearching {
+                    Text(resultCountLabel)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(ChatTheme.tertiary)
+                        .fixedSize()
                 }
-                Spacer(minLength: 20)
                 if viewModel.isLoadingHistoricalSessions {
                     ProgressView()
                         .controlSize(.small)
@@ -90,7 +91,7 @@ struct MainSplitView: View {
                 } label: {
                     Image(systemName: "gearshape")
                         .font(.system(size: 14, weight: .medium))
-                        .frame(width: 34, height: 30)
+                        .frame(width: 34, height: 34)
                 }
                 .buttonStyle(SessionBrowserChromeButtonStyle())
                 .help("Settings")
@@ -100,24 +101,10 @@ struct MainSplitView: View {
             if permissionHealth.health != .ready {
                 permissionHealthBanner
             }
-
-            HStack(alignment: .center, spacing: 12) {
-                searchField
-                    .frame(maxWidth: 680)
-                Spacer(minLength: 0)
-                if viewModel.browserSelection.isSearching {
-                    Text(resultCountLabel)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(ChatTheme.secondary)
-                } else {
-                    summaryStrip
-                }
-            }
         }
-        .frame(maxWidth: 1060, alignment: .leading)
+        .frame(maxWidth: 980, alignment: .leading)
         .padding(.horizontal, 28)
-        .padding(.top, 22)
-        .padding(.bottom, 18)
+        .padding(.vertical, 12)
         .frame(maxWidth: .infinity)
         .background(ChatTheme.headerBg)
     }
@@ -186,7 +173,7 @@ struct MainSplitView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(searchFocused ? ChatTheme.link : ChatTheme.tertiary)
-            TextField("Search sessions", text: $viewModel.searchQuery)
+            TextField("Search all sessions", text: $viewModel.searchQuery)
                 .textFieldStyle(.plain)
                 .font(.system(size: 14))
                 .foregroundColor(ChatTheme.primary)
@@ -226,23 +213,19 @@ struct MainSplitView: View {
         )
     }
 
-    private var shortcutEducation: some View {
+    private var footerShortcutEducation: some View {
         let presentation = SessionBrowserShortcutEducationPolicy.presentation(
             for: sessionShortcutManager.family
         )
 
-        return HStack(spacing: 10) {
-            Text(presentation.title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(ChatTheme.secondary)
-
+        return HStack(spacing: 12) {
             if let disabledMessage = presentation.disabledMessage {
                 Text(disabledMessage)
-                    .font(.system(size: 11))
+                    .font(.system(size: 10))
                     .foregroundColor(ChatTheme.tertiary)
             } else {
                 ForEach(Array(presentation.hints.enumerated()), id: \.offset) { _, hint in
-                    shortcutEducationHint(hint)
+                    footerShortcutHint(hint)
                 }
             }
         }
@@ -250,32 +233,14 @@ struct MainSplitView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func shortcutEducationHint(_ hint: SessionBrowserShortcutHint) -> some View {
+    private func footerShortcutHint(_ hint: SessionBrowserShortcutHint) -> some View {
         HStack(spacing: 5) {
             Text(hint.keys)
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .foregroundColor(ChatTheme.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Capsule().fill(ChatTheme.cardBorder.opacity(0.7)))
             Text(hint.label)
-                .font(.system(size: 11))
+                .font(.system(size: 10))
                 .foregroundColor(ChatTheme.tertiary)
-        }
-    }
-
-    private var summaryStrip: some View {
-        HStack(spacing: 8) {
-            ForEach(SessionBrowserSection.allCases, id: \.self) { section in
-                let count = viewModel.browserCount(for: section)
-                if count > 0 {
-                    SessionBrowserSummaryChip(
-                        title: section.shortTitle,
-                        count: count,
-                        tint: section.tint
-                    )
-                }
-            }
         }
     }
 
@@ -311,7 +276,7 @@ struct MainSplitView: View {
                     }
                     .frame(maxWidth: 980, alignment: .leading)
                     .padding(.horizontal, 28)
-                    .padding(.top, 14)
+                    .padding(.top, 10)
                     .padding(.bottom, 24)
                     .frame(maxWidth: .infinity)
                 }
@@ -394,8 +359,9 @@ struct MainSplitView: View {
             keyboardHint(keys: "↩", label: "Open original")
             keyboardHint(keys: "⌥↩", label: "Inspect")
             Spacer(minLength: 12)
+            footerShortcutEducation
         }
-        .frame(maxWidth: 1060)
+        .frame(maxWidth: 980)
         .padding(.horizontal, 28)
         .frame(height: 42)
         .frame(maxWidth: .infinity)
@@ -643,26 +609,6 @@ private struct BrowserChip: View {
     }
 }
 
-private struct SessionBrowserSummaryChip: View {
-    let title: String
-    let count: Int
-    let tint: Color
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Circle().fill(tint).frame(width: 6, height: 6)
-            Text(title)
-            Text("\(count)")
-                .foregroundColor(ChatTheme.primary)
-        }
-        .font(.system(size: 10, weight: .medium))
-        .foregroundColor(ChatTheme.secondary)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(Capsule().fill(ChatTheme.cardBg))
-    }
-}
-
 private struct SessionBrowserChromeButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -675,15 +621,6 @@ private struct SessionBrowserChromeButtonStyle: ButtonStyle {
 }
 
 private extension SessionBrowserSection {
-    var shortTitle: String {
-        switch self {
-        case .needsAttention: return "Attention"
-        case .ready: return "Ready"
-        case .working: return "Working"
-        case .recent: return "Recent"
-        }
-    }
-
     var tint: Color {
         switch self {
         case .needsAttention: return ChatTheme.statusPending
