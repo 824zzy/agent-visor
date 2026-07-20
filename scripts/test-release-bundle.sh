@@ -2,8 +2,8 @@
 set -euo pipefail
 
 APP_PATH="${1:?release app path is required}"
-HELPER="$APP_PATH/Contents/Helpers/AgentVisorCodexRuntime"
-LAUNCH_AGENT="$APP_PATH/Contents/Library/LaunchAgents/com.824zzy.AgentVisor.CodexRuntime.plist"
+HELPER="$APP_PATH/Contents/Helpers/AgentVisorDevCodexRuntime"
+LAUNCH_AGENT="$APP_PATH/Contents/Library/LaunchAgents/com.824zzy.AgentVisor.Dev.CodexRuntime.plist"
 EXECUTABLE="$APP_PATH/Contents/MacOS/Agent Visor"
 
 [[ -d "$APP_PATH" ]]

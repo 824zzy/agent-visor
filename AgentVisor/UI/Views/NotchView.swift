@@ -854,6 +854,11 @@ struct NotchView: View {
             menuBarVersion &+= 1
             menuLayoutCoordinator.probe(screenRect: viewModel.screenRect)
         }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .agentVisorAccessibilityRecovered)
+        ) { _ in
+            menuLayoutCoordinator.probe(screenRect: viewModel.screenRect)
+        }
         .onReceive(menuProbeTimer) { _ in
             // Re-probe only when pills are actually rendered. When the
             // notch is opened or there are no sessions, leftSafeWidth

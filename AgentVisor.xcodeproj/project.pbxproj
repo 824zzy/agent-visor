@@ -10,8 +10,8 @@
 		14BF0C442FBD1AD5005B5745 /* AgentVisorCore in Frameworks */ = {isa = PBXBuildFile; productRef = CC0000022F0000000000C002 /* AgentVisorCore */; };
 		C0D000012F10000000000001 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0D000052F10000000000005 /* main.swift */; };
 		C0D000022F10000000000002 /* AgentVisorCore in Frameworks */ = {isa = PBXBuildFile; productRef = C0D000142F10000000000014 /* AgentVisorCore */; };
-		C0D000032F10000000000003 /* AgentVisorCodexRuntime in Embed Runtime Helper */ = {isa = PBXBuildFile; fileRef = C0D000062F10000000000006 /* AgentVisorCodexRuntime */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		C0D000042F10000000000004 /* com.824zzy.AgentVisor.CodexRuntime.plist in Embed Runtime LaunchAgent */ = {isa = PBXBuildFile; fileRef = C0D000072F10000000000007 /* com.824zzy.AgentVisor.CodexRuntime.plist */; };
+		C0D000032F10000000000003 /* AgentVisorDevCodexRuntime in Embed Runtime Helper */ = {isa = PBXBuildFile; fileRef = C0D000062F10000000000006 /* AgentVisorDevCodexRuntime */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		C0D000042F10000000000004 /* com.824zzy.AgentVisor.Dev.CodexRuntime.plist in Embed Runtime LaunchAgent */ = {isa = PBXBuildFile; fileRef = C0D000072F10000000000007 /* com.824zzy.AgentVisor.Dev.CodexRuntime.plist */; };
 		FD0F42E72EE7ABA400980302 /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = FD0F42E62EE7ABA400980302 /* Mixpanel */; };
 		FD1A2B3C2F03000000980001 /* Highlightr in Frameworks */ = {isa = PBXBuildFile; productRef = FD1A2B3D2F03000000980002 /* Highlightr */; };
 		FDA49F7D2EE11E3C00F9612E /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = FD33FD722EDF32D7002A6548 /* Markdown */; };
@@ -36,7 +36,7 @@
 			dstPath = "$(AV_CODEX_RUNTIME_HELPER_DESTINATION)";
 			dstSubfolderSpec = 0;
 			files = (
-				C0D000032F10000000000003 /* AgentVisorCodexRuntime in Embed Runtime Helper */,
+				C0D000032F10000000000003 /* AgentVisorDevCodexRuntime in Embed Runtime Helper */,
 			);
 			name = "Embed Runtime Helper";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -47,7 +47,7 @@
 			dstPath = "$(AV_CODEX_RUNTIME_LAUNCH_AGENT_DESTINATION)";
 			dstSubfolderSpec = 0;
 			files = (
-				C0D000042F10000000000004 /* com.824zzy.AgentVisor.CodexRuntime.plist in Embed Runtime LaunchAgent */,
+				C0D000042F10000000000004 /* com.824zzy.AgentVisor.Dev.CodexRuntime.plist in Embed Runtime LaunchAgent */,
 			);
 			name = "Embed Runtime LaunchAgent";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -56,8 +56,8 @@
 
 /* Begin PBXFileReference section */
 		C0D000052F10000000000005 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		C0D000062F10000000000006 /* AgentVisorCodexRuntime */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = AgentVisorCodexRuntime; sourceTree = BUILT_PRODUCTS_DIR; };
-		C0D000072F10000000000007 /* com.824zzy.AgentVisor.CodexRuntime.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = com.824zzy.AgentVisor.CodexRuntime.plist; sourceTree = "<group>"; };
+		C0D000062F10000000000006 /* AgentVisorDevCodexRuntime */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = AgentVisorDevCodexRuntime; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0D000072F10000000000007 /* com.824zzy.AgentVisor.Dev.CodexRuntime.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = com.824zzy.AgentVisor.Dev.CodexRuntime.plist; sourceTree = "<group>"; };
 		FD33FD5D2EDF32D7002A6548 /* Agent Visor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Agent Visor.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -66,7 +66,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
-				"Resources/LaunchAgents/com.824zzy.AgentVisor.CodexRuntime.plist",
+				"Resources/LaunchAgents/com.824zzy.AgentVisor.Dev.CodexRuntime.plist",
 			);
 			target = FD33FD5C2EDF32D7002A6548 /* AgentVisor */;
 		};
@@ -119,7 +119,7 @@
 		C0D0000D2F1000000000000D /* LaunchAgents */ = {
 			isa = PBXGroup;
 			children = (
-				C0D000072F10000000000007 /* com.824zzy.AgentVisor.CodexRuntime.plist */,
+				C0D000072F10000000000007 /* com.824zzy.AgentVisor.Dev.CodexRuntime.plist */,
 			);
 			path = AgentVisor/Resources/LaunchAgents;
 			sourceTree = "<group>";
@@ -138,7 +138,7 @@
 			isa = PBXGroup;
 			children = (
 				FD33FD5D2EDF32D7002A6548 /* Agent Visor.app */,
-				C0D000062F10000000000006 /* AgentVisorCodexRuntime */,
+				C0D000062F10000000000006 /* AgentVisorDevCodexRuntime */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -161,8 +161,8 @@
 			packageProductDependencies = (
 				C0D000142F10000000000014 /* AgentVisorCore */,
 			);
-			productName = AgentVisorCodexRuntime;
-			productReference = C0D000062F10000000000006 /* AgentVisorCodexRuntime */;
+			productName = AgentVisorDevCodexRuntime;
+			productReference = C0D000062F10000000000006 /* AgentVisorDevCodexRuntime */;
 			productType = "com.apple.product-type.tool";
 		};
 		FD33FD5C2EDF32D7002A6548 /* AgentVisor */ = {
@@ -288,8 +288,8 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = com.824zzy.AgentVisor.CodexRuntime;
-				PRODUCT_NAME = AgentVisorCodexRuntime;
+				PRODUCT_BUNDLE_IDENTIFIER = com.824zzy.AgentVisor.Dev.CodexRuntime;
+				PRODUCT_NAME = AgentVisorDevCodexRuntime;
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -305,8 +305,8 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = com.824zzy.AgentVisor.CodexRuntime;
-				PRODUCT_NAME = AgentVisorCodexRuntime;
+				PRODUCT_BUNDLE_IDENTIFIER = com.824zzy.AgentVisor.Dev.CodexRuntime;
+				PRODUCT_NAME = AgentVisorDevCodexRuntime;
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -435,7 +435,7 @@
 		FD33FD692EDF32D8002A6548 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIconDev;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = AgentVisor/Resources/AgentVisor.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -457,8 +457,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 2.4.4;
-				PRODUCT_BUNDLE_IDENTIFIER = com.824zzy.AgentVisor;
-				PRODUCT_NAME = "Agent Visor";
+				PRODUCT_BUNDLE_IDENTIFIER = com.824zzy.AgentVisor.Dev;
+				PRODUCT_NAME = "Agent Visor Dev";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;

@@ -8,6 +8,7 @@ struct MainSplitView: View {
     @ObservedObject private var commandKey = CommandKeyMonitor.shared
     @ObservedObject private var sessionShortcutManager = GlobalSessionShortcutManager.shared
     @ObservedObject private var appearance = AppearanceSelector.shared
+    @ObservedObject private var permissionHealth = PermissionHealthMonitor.shared
     @AppStorage("chatFontScale") private var chatFontScaleStorage: Double = 1.0
     @FocusState private var searchFocused: Bool
     @State private var keyboardMonitor: Any?
@@ -96,6 +97,10 @@ struct MainSplitView: View {
                 .accessibilityLabel("Settings")
             }
 
+            if permissionHealth.health != .ready {
+                permissionHealthBanner
+            }
+
             HStack(alignment: .center, spacing: 12) {
                 searchField
                     .frame(maxWidth: 680)
@@ -115,6 +120,65 @@ struct MainSplitView: View {
         .padding(.bottom, 18)
         .frame(maxWidth: .infinity)
         .background(ChatTheme.headerBg)
+    }
+
+    private var permissionHealthBanner: some View {
+        let presentation = permissionHealth.presentation
+
+        return HStack(spacing: 10) {
+            if presentation.showsProgress {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(ChatTheme.statusPending)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(presentation.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(ChatTheme.primary)
+                Text(presentation.detail)
+                    .font(.system(size: 11))
+                    .foregroundColor(ChatTheme.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 12)
+
+            if let actionTitle = presentation.actionTitle {
+                VStack(alignment: .trailing, spacing: 5) {
+                    Button(actionTitle) {
+                        permissionHealth.performPrimarySetupAction()
+                    }
+                    .controlSize(.small)
+
+                    if permissionHealth.health == .needsAccessibility {
+                        HStack(spacing: 10) {
+                            Button("Open Settings") {
+                                permissionHealth.openAccessibilitySettings()
+                            }
+                            Button("Reveal App") {
+                                permissionHealth.revealRunningApp()
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(ChatTheme.link)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(ChatTheme.statusPending.opacity(0.10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(ChatTheme.statusPending.opacity(0.35), lineWidth: 0.7)
+                )
+        )
     }
 
     private var searchField: some View {

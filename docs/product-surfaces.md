@@ -11,6 +11,8 @@ The owning app remains the authoritative conversation surface. Agent Visor may s
 
 This document is the product-level contract. Detailed browser behavior is specified in the [interaction design](session-browser.md) and [UI design](session-browser-ui.md).
 
+Permission setup and recovery are specified in [Permission Health](permission-health.md).
+
 ## Principles
 
 1. **Original first.** The primary activation action returns to the session's owning app or terminal using the best routing that source supports.
@@ -31,6 +33,7 @@ This document is the product-level contract. Detailed browser behavior is specif
 | Session inspector | On-demand evidence and diagnostics | Status evidence, latest activity, context, and mirrored transcript when available | Inspect or open original | An implicitly authoritative chat |
 | Owning app | Canonical conversation and control | Native task, transcript, composer, tools, approvals, and source-specific UI | Continue work | Something Agent Visor attempts to duplicate wholesale |
 | Usage glance | Peripheral account-capacity awareness when supported | Available Codex 5-hour and 7-day limits | Open compact usage detail | A placeholder for unavailable provider data |
+| Permission health | Explain and repair blocked macOS capabilities | Verified Accessibility state and recovery action | Open the relevant setup path | A permanent warning or a proxy for transient layout evidence |
 
 ## Shortcut Education
 

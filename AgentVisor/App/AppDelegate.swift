@@ -9,6 +9,10 @@ import SwiftUI
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private static let logger = Logger(subsystem: AppBranding.loggerSubsystem, category: "AppDelegate")
+    private static let supportedBundleIdentifiers: Set<String> = [
+        "com.824zzy.AgentVisor",
+        "com.824zzy.AgentVisor.Dev",
+    ]
 
     private var windowManager: WindowManager?
     private var screenObserver: ScreenObserver?
@@ -174,35 +178,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         TransformProcessType(&psn, ProcessApplicationTransformState(kProcessTransformToForegroundApplication))
         NSApplication.shared.setActivationPolicy(.regular)
 
-        // Only reset TCC and re-prompt when AX is genuinely broken. The
-        // earlier version of this block also fired on every CDHash change
-        // (via binaryChanged()), which was correct for pure ad-hoc signing
-        // — TCC keys grants on CDHash, so a rebuild silently invalidated
-        // the grant and a reset was the only recovery. But with the stable
-        // dev cert from scripts/dev-build.sh (and any future Developer ID
-        // build), the designated requirement is keyed on the cert, not the
-        // CDHash, so the grant correctly survives rebuilds. Unconditionally
-        // resetting in that case wipes a perfectly valid grant on every
-        // launch and the global hotkey monitor silently no-ops until the
-        // user manually re-toggles Accessibility in System Settings. Trust
-        // AXIsProcessTrusted as the authoritative signal.
-        if !AXIsProcessTrusted() {
-            let bundleID = Bundle.main.bundleIdentifier ?? "com.824zzy.AgentVisor"
-            for service in ["Accessibility", "AppleEvents"] {
-                let task = Process()
-                task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
-                task.arguments = ["reset", service, bundleID]
-                task.standardOutput = FileHandle.nullDevice
-                task.standardError = FileHandle.nullDevice
-                try? task.run()
-                task.waitUntilExit()
-            }
-
-            let options: CFDictionary = [
-                kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true
-            ] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
+        PermissionHealthMonitor.shared.onReadyTransition = {
+            HotkeyManager.shared.rearmAfterAccessibilityRecovery()
         }
+        PermissionHealthMonitor.shared.start()
 
         windowManager = WindowManager()
         _ = windowManager?.setupNotchWindow()
@@ -300,6 +279,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await SpawnedSessionManager.shared.terminateAll() }
         Mixpanel.mainInstance().flush()
         updateCheckTimer?.invalidate()
+        PermissionHealthMonitor.shared.stop()
         screenObserver = nil
     }
 
@@ -387,13 +367,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func ensureSingleInstance() -> Bool {
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.824zzy.AgentVisor"
         let runningApps = NSWorkspace.shared.runningApplications.filter {
-            $0.bundleIdentifier == bundleID
+            Self.supportedBundleIdentifiers.contains($0.bundleIdentifier ?? "")
         }
 
         if runningApps.count > 1 {
             if let existingApp = runningApps.first(where: { $0.processIdentifier != getpid() }) {
+                Self.logger.notice(
+                    "Another Agent Visor variant is already running: \(existingApp.bundleIdentifier ?? "unknown", privacy: .public)"
+                )
                 existingApp.activate()
             }
             return false

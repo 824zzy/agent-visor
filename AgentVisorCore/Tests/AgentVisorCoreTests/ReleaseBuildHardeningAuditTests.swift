@@ -42,7 +42,7 @@ final class ReleaseBuildHardeningAuditTests: XCTestCase {
         XCTAssertTrue(buildScript.contains("test-release-bundle.sh"))
         XCTAssertTrue(verifier.contains("codesign --verify --deep --strict"))
         XCTAssertTrue(verifier.contains("com.apple.security.get-task-allow"))
-        XCTAssertTrue(verifier.contains("Contents/Helpers/AgentVisorCodexRuntime"))
+        XCTAssertTrue(verifier.contains("Contents/Helpers/AgentVisorDevCodexRuntime"))
         XCTAssertTrue(verifier.contains("Contents/Library/LaunchAgents"))
     }
 

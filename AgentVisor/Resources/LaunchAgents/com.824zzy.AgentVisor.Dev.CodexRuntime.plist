@@ -3,14 +3,14 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.824zzy.AgentVisor.CodexRuntime</string>
+	<string>com.824zzy.AgentVisor.Dev.CodexRuntime</string>
 	<key>BundleProgram</key>
-	<string>Contents/Helpers/AgentVisorCodexRuntime</string>
+	<string>Contents/Helpers/AgentVisorDevCodexRuntime</string>
 	<key>KeepAlive</key>
 	<true/>
 	<key>ProcessType</key>
 	<string>Standard</string>
 	<key>AssociatedBundleIdentifiers</key>
-	<string>com.824zzy.AgentVisor</string>
+	<string>com.824zzy.AgentVisor.Dev</string>
 </dict>
 </plist>

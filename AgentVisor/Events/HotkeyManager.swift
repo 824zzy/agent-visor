@@ -82,6 +82,16 @@ final class HotkeyManager {
         // explicitly would require exposing detector internals.
     }
 
+    func rearmAfterAccessibilityRecovery() {
+        guard trigger != .off else { return }
+        if trigger == .custom, customCombo == nil {
+            return
+        }
+        stop()
+        startMonitors()
+        Self.logger.info("Hotkey monitors rearmed after Accessibility recovery")
+    }
+
     // MARK: - Setup
 
     private func startMonitors() {

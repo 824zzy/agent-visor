@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "C0D0000E2F1000000000000E"
-               BuildableName = "AgentVisorCodexRuntime"
+               BuildableName = "AgentVisorDevCodexRuntime"
                BlueprintName = "AgentVisorCodexRuntime"
                ReferencedContainer = "container:AgentVisor.xcodeproj">
             </BuildableReference>

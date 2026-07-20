@@ -17,7 +17,7 @@ final class CodexSharedRuntimeServiceManager: @unchecked Sendable, CodexSharedRu
 
     init(
         service: SMAppService = .agent(
-            plistName: "com.824zzy.AgentVisor.CodexRuntime.plist"
+            plistName: "com.824zzy.AgentVisor.Dev.CodexRuntime.plist"
         )
     ) {
         self.service = service

@@ -5,7 +5,7 @@ import Foundation
 
 private func fail(_ message: String) -> Never {
     FileHandle.standardError.write(
-        Data("AgentVisorCodexRuntime: \(message)\n".utf8)
+        Data("AgentVisorDevCodexRuntime: \(message)\n".utf8)
     )
     Darwin.exit(EXIT_FAILURE)
 }

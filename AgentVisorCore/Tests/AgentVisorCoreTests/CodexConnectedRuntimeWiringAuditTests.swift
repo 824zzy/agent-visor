@@ -195,9 +195,9 @@ final class CodexConnectedRuntimeWiringAuditTests: XCTestCase {
         )
 
         XCTAssertTrue(devBuild.contains("test-codex-runtime-bundle.sh"))
-        XCTAssertTrue(verifier.contains("Contents/Helpers/AgentVisorCodexRuntime"))
+        XCTAssertTrue(verifier.contains("Contents/Helpers/AgentVisorDevCodexRuntime"))
         XCTAssertTrue(verifier.contains("codesign --verify --deep --strict"))
-        XCTAssertTrue(verifier.contains("com.824zzy.AgentVisor.CodexRuntime"))
+        XCTAssertTrue(verifier.contains("com.824zzy.AgentVisor.Dev.CodexRuntime"))
     }
 
     func testReleaseBuildOmitsExperimentalRuntimeBundle() throws {

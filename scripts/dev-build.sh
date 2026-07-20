@@ -14,12 +14,15 @@
 # Env overrides:
 #   AV_DEV_CERT   — keychain identity name (default: "AgentVisor Dev")
 #   AV_DERIVED    — derived-data path (default: /tmp/av-debug-build)
+#   AV_DEV_INSTALL_DIR — stable app destination (default: /Applications)
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 CERT_NAME="${AV_DEV_CERT:-AgentVisor Dev}"
 DERIVED="${AV_DERIVED:-/tmp/av-debug-build}"
+INSTALL_DIR="${AV_DEV_INSTALL_DIR:-/Applications}"
+INSTALLED_APP="$INSTALL_DIR/Agent Visor Dev.app"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
 cd "$PROJECT_DIR"
@@ -54,7 +57,7 @@ else
         build
 fi
 
-APP_PATH="$DERIVED/Build/Products/Debug/Agent Visor.app"
+APP_PATH="$DERIVED/Build/Products/Debug/Agent Visor Dev.app"
 if ! "$SCRIPT_DIR/test-codex-runtime-bundle.sh" "$APP_PATH"; then
     echo "==> Re-sealing app after incremental resource updates"
     codesign --force --sign "$SIGN_IDENTITY" \
@@ -66,3 +69,34 @@ fi
 
 echo
 echo "==> Built: $APP_PATH"
+
+# Launching from DerivedData or /tmp makes the development identity difficult
+# to locate in macOS permission choosers. Deploy one stable, visible copy and
+# always run that copy so TCC, LaunchServices, and the user agree on its path.
+STAGED_APP="$INSTALL_DIR/.Agent Visor Dev.installing.app"
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+echo "==> Deploying: $INSTALLED_APP"
+mkdir -p "$INSTALL_DIR"
+pkill -x "Agent Visor Dev" 2>/dev/null || true
+for _ in {1..50}; do
+    if ! pgrep -x "Agent Visor Dev" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.1
+done
+if pgrep -x "Agent Visor Dev" >/dev/null 2>&1; then
+    echo "ERROR: Agent Visor Dev did not quit before deployment." >&2
+    exit 1
+fi
+
+rm -rf "$STAGED_APP"
+ditto "$APP_PATH" "$STAGED_APP"
+"$SCRIPT_DIR/test-codex-runtime-bundle.sh" "$STAGED_APP"
+rm -rf "$INSTALLED_APP"
+mv "$STAGED_APP" "$INSTALLED_APP"
+"$LSREGISTER" -u "$APP_PATH" >/dev/null 2>&1 || true
+"$LSREGISTER" -f "$INSTALLED_APP"
+
+echo "==> Launching: $INSTALLED_APP"
+open -n "$INSTALLED_APP"

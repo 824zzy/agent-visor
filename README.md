@@ -127,11 +127,24 @@ swift test --package-path AgentVisorCore
 scripts/dev-build.sh
 ```
 
-The debug app is written to:
+The debug build product is written to:
 
 ```text
-/tmp/av-debug-build/Build/Products/Debug/Agent Visor.app
+/tmp/av-debug-build/Build/Products/Debug/Agent Visor Dev.app
 ```
+
+Do not launch or authorize that transient copy. The script deploys and launches
+the stable development app at:
+
+```text
+/Applications/Agent Visor Dev.app
+```
+
+Debug uses the distinct name, icon, and bundle identifier `com.824zzy.AgentVisor.Dev`.
+macOS therefore shows `Agent Visor Dev` separately from the installed
+`Agent Visor` in Accessibility and Full Disk Access. Grant permissions to the
+variant that is actually running. Set `AV_DEV_INSTALL_DIR` only when the
+development app cannot be installed in `/Applications`.
 
 For a distributable Release build, use the dedicated script and derived-data path:
 

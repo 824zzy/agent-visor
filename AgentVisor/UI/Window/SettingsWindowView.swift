@@ -17,7 +17,6 @@
 //  selected category.
 //
 
-import ApplicationServices
 import AgentVisorCore
 import ServiceManagement
 import SwiftUI
@@ -446,7 +445,7 @@ struct SettingsRow<Trailing: View>: View {
 private struct GeneralSection: View {
     @ObservedObject var windowViewModel: MainWindowViewModel
     @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
-    @State private var axTrusted: Bool = AXIsProcessTrusted()
+    @ObservedObject private var permissionHealth = PermissionHealthMonitor.shared
     @ObservedObject private var hotkeySelector = HotkeySelector.shared
     @ObservedObject private var updateManager = UpdateManager.shared
     @ObservedObject private var editorPreference = EditorPreferenceSelector.shared
@@ -489,18 +488,43 @@ private struct GeneralSection: View {
                 SettingsRow(
                     icon: "hand.raised",
                     title: "Accessibility",
-                    description: "Required to read terminal output and inject keystrokes for approval prompts"
+                    description: permissionHealth.presentation.detail
                 ) {
-                    if axTrusted {
+                    switch permissionHealth.health {
+                    case .ready:
                         Label("Granted", systemImage: "checkmark.circle.fill")
                             .labelStyle(.titleAndIcon)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Color.green)
-                    } else {
-                        Button("Open System Settings…") {
-                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                                NSWorkspace.shared.open(url)
+                    case .verifying:
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Verifying")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                    case .needsAccessibility:
+                        VStack(alignment: .trailing, spacing: 5) {
+                            Button(permissionHealth.presentation.actionTitle ?? "Enable Accessibility") {
+                                permissionHealth.performPrimarySetupAction()
                             }
+                            .controlSize(.small)
+
+                            HStack(spacing: 10) {
+                                Button("Open Settings") {
+                                    permissionHealth.openAccessibilitySettings()
+                                }
+                                Button("Reveal App") {
+                                    permissionHealth.revealRunningApp()
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(ChatTheme.link)
+                        }
+                    case .needsRepair:
+                        Button(permissionHealth.presentation.actionTitle ?? "Open System Settings…") {
+                            permissionHealth.performPrimarySetupAction()
                         }
                         .controlSize(.small)
                     }
@@ -546,9 +570,6 @@ private struct GeneralSection: View {
                     }
                 }
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            axTrusted = AXIsProcessTrusted()
         }
     }
 }
