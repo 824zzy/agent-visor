@@ -1,6 +1,6 @@
 cask "agent-visor" do
-  version "2.4.7"
-  sha256 "29879067af632d04adffd312107a75da3fd29aa15027e2645adf8f2378358734"
+  version "2.4.8"
+  sha256 "9e1e7b4c4a5a85dfdf902db070ccf49a95a0a6e04470133dd89ebe02a9792f74"
 
   url "https://github.com/824zzy/agent-visor/releases/download/v#{version}/AgentVisor-v#{version}.zip"
   name "Agent Visor"
@@ -18,16 +18,12 @@ cask "agent-visor" do
 
   app "Agent Visor.app"
 
-  # Version 2.4.7 is the one-time ad-hoc updater bridge. Preserve the historical
-  # install behavior for this release; 2.4.8 switches to the stable release
-  # identity and removes this re-signing step.
+  # Public releases use the pinned AgentVisor Release certificate. Remove
+  # quarantine while preserving the distributed signature so macOS keeps the
+  # same Accessibility identity across ordinary updates.
   postflight do
     system_command "/usr/bin/xattr",
                    args: ["-dr", "com.apple.quarantine", "#{appdir}/Agent Visor.app"]
-    system_command "/usr/bin/codesign",
-                   args: ["--force", "--deep", "--sign", "-",
-                          "--preserve-metadata=entitlements,flags",
-                          "#{appdir}/Agent Visor.app"]
   end
 
   # The hook file at ~/.claude/hooks/agent-visor-state.py is deliberately

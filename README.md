@@ -86,9 +86,9 @@ brew tap 824zzy/agent-visor
 brew install --cask 824zzy/agent-visor/agent-visor
 ```
 
-Version 2.4.7 is a one-time updater bridge. Homebrew removes quarantine and
-re-signs this transitional ad-hoc release during installation. Version 2.4.8
-adopts the long-lived release identity that later updates preserve.
+Homebrew removes quarantine while preserving Agent Visor's long-lived release
+identity. Version 2.4.8 is the first release using that identity; upgrading from
+an older ad-hoc release requires one final Accessibility grant.
 
 ### Direct download
 

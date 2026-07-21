@@ -8,8 +8,9 @@ Last reviewed: 2026-07-20
 Agent Visor supports public distribution without a paid Apple Developer ID.
 The release pipeline must preserve one long-lived code identity across public
 updates so macOS can continue to recognize the app after its executable
-changes. The target public contract uses a dedicated self-signed release
-certificate; Developer ID remains the preferred future distribution mode.
+changes. Beginning with 2.4.8, the public contract uses a dedicated self-signed
+release certificate; Developer ID remains the preferred future distribution
+mode.
 
 Accessibility authorization follows the running code identity, not merely the
 app name, bundle identifier, or enabled-looking row in System Settings. An
@@ -23,8 +24,8 @@ signature. An environment flag cannot relabel one mode as the other.
 
 ### Self-Signed Release
 
-Self-signed release signing is the target public distribution mode after the
-one-time 2.4.7 bridge.
+Self-signed release signing is the public distribution mode beginning with
+2.4.8. Version 2.4.7 remains the one-time bridge from the earlier ad-hoc updater.
 
 - Every public build is signed with the same `AgentVisor Release` certificate.
 - The certificate's public SHA-1 identity is pinned in the repository. The

@@ -6,6 +6,28 @@
     <description>Agent Visor updates</description>
     <language>en</language>
     <item>
+      <title>v2.4.8</title>
+      <pubDate>Tue, 21 Jul 2026 07:08:18 +0000</pubDate>
+      <sparkle:version>49</sparkle:version>
+      <sparkle:shortVersionString>2.4.8</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumUpdateVersion>48</sparkle:minimumUpdateVersion>
+      <description><![CDATA[<h2>v2.4.8</h2>
+<ul>
+  <li>Adopted a long-lived release identity so macOS can preserve Accessibility authorization across ordinary future updates.</li>
+  <li>Preserved the packaged signature through Sparkle updates and Homebrew installation.</li>
+  <li>Completed the ordered migration through the required 2.4.7 updater bridge.</li>
+</ul>
+<p>Upgrading from an older ad-hoc release requires one final Accessibility grant for the new identity.</p>
+]]></description>
+      <enclosure
+        url="https://github.com/824zzy/agent-visor/releases/download/v2.4.8/AgentVisor-v2.4.8.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="uELwNQE2UZL4US+a1fXjwT3l/VAOFu57mge4VK70DnED48TAKBFTxGJq/ukbWZVg3BQYsl8g7ghUunX8cwtEAg=="
+        length="12483432"
+      />
+    </item>
+    <item>
       <title>v2.4.7</title>
       <pubDate>Tue, 21 Jul 2026 05:16:57 +0000</pubDate>
       <sparkle:version>48</sparkle:version>
