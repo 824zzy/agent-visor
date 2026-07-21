@@ -9,6 +9,8 @@ for test_script in \
     test-release-build-wiring.sh \
     test-release-signing-policy.sh \
     test-release-signing-integration.sh \
+    test-release-identity-continuity-policy.sh \
+    test-release-sign-setup-wiring.sh \
     test-release-notarization-policy.sh \
     test-release-notarization-integration.sh \
     test-notarize-release-wiring.sh \

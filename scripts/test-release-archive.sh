@@ -31,6 +31,9 @@ case "$DISTRIBUTION_MODE" in
     ad-hoc)
         "$SCRIPT_DIR/test-homebrew-resign.sh" "$EXTRACTED_APP"
         ;;
+    self-signed)
+        "$SCRIPT_DIR/verify-stable-release-signature.sh" "$EXTRACTED_APP"
+        ;;
     developer-id)
         "$SCRIPT_DIR/verify-stable-release-signature.sh" "$EXTRACTED_APP"
         "$SCRIPT_DIR/verify-notarized-release.sh" "$EXTRACTED_APP"

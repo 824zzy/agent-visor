@@ -86,7 +86,9 @@ brew tap 824zzy/agent-visor
 brew install --cask 824zzy/agent-visor/agent-visor
 ```
 
-Homebrew removes quarantine and re-signs the distributed ad-hoc-signed app during installation.
+Version 2.4.7 is a one-time updater bridge. Homebrew removes quarantine and
+re-signs this transitional ad-hoc release during installation. Version 2.4.8
+adopts the long-lived release identity that later updates preserve.
 
 ### Direct download
 
@@ -100,7 +102,7 @@ xattr -dr com.apple.quarantine "/Applications/Agent Visor.app"
 
 1. Launch Agent Visor.
 2. Grant **Accessibility** when prompted. It is used for menu-bar geometry and supported app or terminal navigation.
-3. On macOS 15 or later, add Agent Visor under **System Settings > Privacy & Security > Full Disk Access**. This lets the ad-hoc-signed app read transcripts under `~/.claude`, `~/.codex`, and `~/.cursor`.
+3. On macOS 15 or later, add Agent Visor under **System Settings > Privacy & Security > Full Disk Access**. This lets the app read transcripts under `~/.claude`, `~/.codex`, and `~/.cursor`.
 4. Start or open a supported agent session. Agent Visor discovers it automatically when the source provides sufficient evidence.
 
 Without Full Disk Access on macOS 15, transcript reads can fail silently and the session list may be empty.

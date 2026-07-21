@@ -33,6 +33,8 @@ jobs:
           scripts/test-release-build-wiring.sh
           scripts/test-release-signing-policy.sh
           scripts/test-release-signing-integration.sh
+          scripts/test-release-identity-continuity-policy.sh
+          scripts/test-release-sign-setup-wiring.sh
           scripts/test-release-notarization-policy.sh
           scripts/test-release-notarization-integration.sh
           scripts/test-notarize-release-wiring.sh

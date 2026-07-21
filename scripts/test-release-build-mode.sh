@@ -15,6 +15,10 @@ assert_equal() {
 
 assert_equal "local-adhoc" "$(release_build_mode "" "")"
 
+assert_equal \
+    "self-signed" \
+    "$(release_build_mode "AgentVisor Release" "")"
+
 if release_build_mode "Developer ID Application: Agent Visor (ABCDE12345)" "" >/dev/null 2>&1; then
     echo "ERROR: signing identity without Team ID was accepted" >&2
     exit 1

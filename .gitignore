@@ -39,6 +39,9 @@ app-initial~*.js
 # Sparkle signing keys (NEVER commit these!)
 .sparkle-keys/
 
+# Self-signed release certificate and recovery secret (NEVER commit these!)
+.release-keys/
+
 # Release artifacts
 releases/
 

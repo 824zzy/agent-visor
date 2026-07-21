@@ -1,6 +1,6 @@
 cask "agent-visor" do
-  version "2.4.6"
-  sha256 "464896413bd8ae1156366a1cfd5cf94fe305ea88e8be2bb534311b19c30b5c78"
+  version "2.4.7"
+  sha256 "29879067af632d04adffd312107a75da3fd29aa15027e2645adf8f2378358734"
 
   url "https://github.com/824zzy/agent-visor/releases/download/v#{version}/AgentVisor-v#{version}.zip"
   name "Agent Visor"
@@ -18,9 +18,9 @@ cask "agent-visor" do
 
   app "Agent Visor.app"
 
-  # The app is ad-hoc signed (no Apple Developer ID). Without removing the
-  # quarantine xattr, macOS Gatekeeper shows a scary "malware" dialog on
-  # first launch. This postflight strips it so users can just open the app.
+  # Version 2.4.7 is the one-time ad-hoc updater bridge. Preserve the historical
+  # install behavior for this release; 2.4.8 switches to the stable release
+  # identity and removes this re-signing step.
   postflight do
     system_command "/usr/bin/xattr",
                    args: ["-dr", "com.apple.quarantine", "#{appdir}/Agent Visor.app"]

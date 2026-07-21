@@ -9,6 +9,11 @@ release_build_mode() {
         return 0
     fi
 
+    if [[ "$signing_identity" == "AgentVisor Release" && -z "$team_identifier" ]]; then
+        printf '%s\n' "self-signed"
+        return 0
+    fi
+
     if [[ -z "$signing_identity" || -z "$team_identifier" ]]; then
         echo "ERROR: AV_RELEASE_SIGN_IDENTITY and AV_RELEASE_TEAM_ID must be set together" >&2
         return 1

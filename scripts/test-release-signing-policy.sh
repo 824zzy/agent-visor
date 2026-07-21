@@ -20,6 +20,25 @@ if release_signature_is_stable "$DEVELOPMENT_INFO" "$DEVELOPMENT_REQUIREMENT" >/
     exit 1
 fi
 
+SELF_SIGNED_SHA1="0123456789ABCDEF0123456789ABCDEF01234567"
+SELF_SIGNED_INFO=$'Executable=/tmp/Agent Visor.app/Contents/MacOS/Agent Visor\nIdentifier=com.824zzy.AgentVisor\nAuthority=AgentVisor Release\nTeamIdentifier=not set'
+SELF_SIGNED_REQUIREMENT='designated => identifier "com.824zzy.AgentVisor" and certificate leaf = H"0123456789abcdef0123456789abcdef01234567"'
+
+release_signature_is_stable \
+    "$SELF_SIGNED_INFO" \
+    "$SELF_SIGNED_REQUIREMENT" \
+    "AgentVisor Release" \
+    "$SELF_SIGNED_SHA1"
+
+if release_signature_is_stable \
+    "$SELF_SIGNED_INFO" \
+    "$SELF_SIGNED_REQUIREMENT" \
+    "AgentVisor Release" \
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" >/dev/null 2>&1; then
+    echo "ERROR: self-signed release with an unpinned certificate leaf was accepted" >&2
+    exit 1
+fi
+
 DEVELOPER_ID_INFO=$'Executable=/tmp/Agent Visor.app/Contents/MacOS/Agent Visor\nIdentifier=com.824zzy.AgentVisor\nAuthority=Developer ID Application: Agent Visor LLC (A1B2C3D4E5)\nTeamIdentifier=A1B2C3D4E5'
 DEVELOPER_ID_REQUIREMENT='designated => anchor apple generic and identifier "com.824zzy.AgentVisor" and certificate leaf[subject.OU] = A1B2C3D4E5'
 

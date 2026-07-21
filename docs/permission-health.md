@@ -29,10 +29,11 @@ binary is still untrusted or while a dependent capability remains unavailable.
 5. **Disappear when healthy.** Permission UI is absent after verification
    succeeds. Settings retains the durable health summary.
 6. **Honest release identity.** Public releases use one bundle identifier and
-   `/Applications/Agent Visor.app` install path. The current ad-hoc mode can
-   require permission recovery after updates; optional Developer ID mode can
-   provide a stable signed identity. Both contracts are defined in
-   [Release Signing](release-signing.md).
+   `/Applications/Agent Visor.app` install path. Version 2.4.7 is the one-time
+   ad-hoc bridge; 2.4.8 adopts the pinned self-signed release certificate. That
+   migration can require a fresh grant; subsequent releases must preserve the
+   signed identity. Optional Developer ID mode remains the preferred future
+   path. Both contracts are defined in [Release Signing](release-signing.md).
 7. **Stable development location.** The development workflow builds in
    DerivedData but deploys and launches `/Applications/Agent Visor Dev.app`.
    Permission UI never asks a developer to browse hidden `/tmp` build output.
@@ -73,8 +74,8 @@ temporarily unavailable even when Accessibility is healthy.
 - `Needs Accessibility` explains that global shortcuts and terminal targeting
   are unavailable, names the running app path, and offers `Enable
   Accessibility`. It also explains that an enabled-looking row can refer to a
-  previous ad-hoc build and tells the user to remove that row, add the exact
-  running app again, and turn it on.
+  previous installed build and tells the user to remove that row, add the
+  exact running app again, and turn it on.
 - The native prompt is the primary action. `Open Accessibility Settings` and
   `Reveal This App` remain visible fallbacks because macOS may remember a prior
   denial or decline to show another prompt.
@@ -170,12 +171,13 @@ Release and development variants are not designed to run simultaneously.
 Development work should stop the installed release before launching Debug; the
 shared session hooks and menu-bar ownership remain single-owner resources.
 
-The current public release mode is ad-hoc. Homebrew removes quarantine and
-re-signs that app while preserving release entitlements. Because each build's
-code requirement can change, an update may invalidate the prior TCC grant. The
-UI must not claim that an enabled-looking System Settings row proves the current
-binary is trusted. The running process's `AXIsProcessTrusted()` result is
-authoritative, and recovery copy tells the user how to refresh the row.
+Version 2.4.7 remains ad-hoc only as the updater bridge. Starting with 2.4.8,
+public releases use the dedicated `AgentVisor Release` self-signed certificate.
+Homebrew then removes quarantine but preserves that distributed signature. The
+first release using this identity can invalidate the previous ad-hoc TCC grant;
+ordinary later updates should not. The UI must still use the running process's
+`AXIsProcessTrusted()` result as authoritative and provide recovery when macOS
+reports otherwise.
 
 An optional Developer ID and notarization mode is also supported by the release
 pipeline. When used, Homebrew must preserve the distributed signature instead

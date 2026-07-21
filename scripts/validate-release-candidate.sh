@@ -27,6 +27,16 @@ case "$DISTRIBUTION_MODE" in
         done
         "$SCRIPT_DIR/test-homebrew-resign.sh" "$APP_PATH"
         ;;
+    self-signed)
+        "$SCRIPT_DIR/verify-stable-release-signature.sh" "$APP_PATH"
+        for cask_path in "$@"; do
+            if [[ ! -f "$cask_path" ]]; then
+                echo "ERROR: Homebrew cask not found: $cask_path" >&2
+                exit 1
+            fi
+            release_cask_supports_self_signed_install "$(cat "$cask_path")"
+        done
+        ;;
     developer-id)
         "$SCRIPT_DIR/verify-stable-release-signature.sh" "$APP_PATH"
         "$SCRIPT_DIR/verify-notarized-release.sh" "$APP_PATH"

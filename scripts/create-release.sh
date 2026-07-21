@@ -53,6 +53,7 @@ BRANCH_PUSHED=false
 TAG_PUSHED=false
 
 source "$SCRIPT_DIR/lib/release-publication.sh"
+source "$PROJECT_DIR/config/release-signing.env"
 
 if [ "$#" -ne 0 ]; then
     echo "ERROR: create-release.sh does not accept a version argument."
@@ -293,7 +294,18 @@ fi
 echo ""
 
 echo "=== Step 1: Confirming Release Candidate ==="
+RELEASE_SIGNING_INFO="$(codesign -dvvv "$APP_PATH" 2>&1)"
+RELEASE_DISTRIBUTION_MODE="$(release_distribution_mode "$RELEASE_SIGNING_INFO")"
+ALLOW_ADHOC_BRIDGE="${AV_ALLOW_ADHOC_BRIDGE_RELEASE:-0}"
+release_distribution_mode_is_publishable \
+    "$RELEASE_DISTRIBUTION_MODE" \
+    "$ALLOW_ADHOC_BRIDGE" \
+    "$VERSION" \
+    "$BUILD" \
+    "$AGENT_VISOR_ADHOC_BRIDGE_VERSION" \
+    "$AGENT_VISOR_ADHOC_BRIDGE_BUILD"
 "$SCRIPT_DIR/validate-release-candidate.sh" "$APP_PATH" "${LOCAL_CASKS[@]}"
+echo "Public distribution mode: $RELEASE_DISTRIBUTION_MODE"
 echo ""
 
 mkdir -p "$BUILD_DIR" "$RELEASE_DIR"
@@ -520,6 +532,11 @@ echo "=== Step 7: Updating Appcast ==="
 
 PUBDATE=$(date -u "+%a, %d %b %Y %H:%M:%S +0000")
 APPCAST_ITEM_PATH="$BUILD_DIR/appcast-item-v$VERSION.xml"
+MINIMUM_UPDATE_VERSION_XML="$(
+    release_appcast_minimum_update_version_xml \
+        "$RELEASE_DISTRIBUTION_MODE" \
+        "$AGENT_VISOR_STABLE_MINIMUM_UPDATE_BUILD"
+)"
 
 cat > "$APPCAST_ITEM_PATH" <<EOF
     <item>
@@ -528,6 +545,7 @@ cat > "$APPCAST_ITEM_PATH" <<EOF
       <sparkle:version>$BUILD</sparkle:version>
       <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+$MINIMUM_UPDATE_VERSION_XML
       <description><![CDATA[<h2>v$VERSION</h2>
 $RELEASE_NOTES_HTML
 ]]></description>

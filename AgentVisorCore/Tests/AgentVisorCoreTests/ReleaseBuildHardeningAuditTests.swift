@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 
 final class ReleaseBuildHardeningAuditTests: XCTestCase {
@@ -71,11 +72,48 @@ final class ReleaseBuildHardeningAuditTests: XCTestCase {
         )
         XCTAssertFalse(
             releaseScript.contains("test-homebrew-resign.sh"),
-            "Publishing must never replace the stable Developer ID signature."
+            "Publishing must never replace the distributed release signature."
         )
         XCTAssertTrue(
             releaseScript.contains("\"$SCRIPT_DIR/test-release-archive.sh\" \"$ZIP_PATH\""),
             "Publishing must verify the exact archive that users will download."
+        )
+    }
+
+    func testSparkleUpdatePreservesTheDistributedReleaseSignature() throws {
+        let root = repoRoot(from: URL(fileURLWithPath: #filePath))
+        let updaterDelegate = try source(
+            at: root.appendingPathComponent(
+                "AgentVisor/Services/Update/SparkleQuarantineFix.swift"
+            )
+        )
+
+        XCTAssertTrue(updaterDelegate.contains("com.apple.quarantine"))
+        XCTAssertTrue(updaterDelegate.contains("com.apple.provenance"))
+        XCTAssertFalse(
+            updaterDelegate.contains("/usr/bin/codesign"),
+            "Sparkle must not replace the pinned release signature before relaunch."
+        )
+    }
+
+    func testSparkleSupportsTheMigrationUpdateFloor() throws {
+        let root = repoRoot(from: URL(fileURLWithPath: #filePath))
+        let resolvedURL = root.appendingPathComponent(
+            "AgentVisor.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+        )
+        let data = try Data(contentsOf: resolvedURL)
+        let document = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let pins = try XCTUnwrap(document["pins"] as? [[String: Any]])
+        let sparkle = try XCTUnwrap(pins.first { $0["identity"] as? String == "sparkle" })
+        let state = try XCTUnwrap(sparkle["state"] as? [String: Any])
+        let version = try XCTUnwrap(state["version"] as? String)
+
+        XCTAssertNotEqual(
+            version.compare("2.9.0", options: .numeric),
+            .orderedAscending,
+            "The migration floor is ignored by Sparkle releases older than 2.9."
         )
     }
 
@@ -214,6 +252,9 @@ final class ReleaseBuildHardeningAuditTests: XCTestCase {
 
     func testHomebrewMetadataDescribesTheNavigationProduct() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
+        let signingConfig = try source(
+            at: root.appendingPathComponent("config/release-signing.env")
+        )
         for name in ["agent-visor.rb"] {
             let cask = try source(at: root.appendingPathComponent("Casks/\(name)"))
             XCTAssertTrue(
@@ -230,18 +271,30 @@ final class ReleaseBuildHardeningAuditTests: XCTestCase {
                 "Homebrew must not offer the arm64-only app to Intel Macs."
             )
             XCTAssertTrue(
-                cask.contains("--preserve-metadata=entitlements,flags"),
-                "Homebrew's ad-hoc re-sign must preserve the app's hardened-runtime entitlements."
+                cask.contains("com.apple.quarantine"),
+                "The no-Developer-ID distribution still needs Homebrew quarantine recovery."
             )
+            if cask.contains("version \"2.4.7\"") {
+                XCTAssertTrue(
+                    signingConfig.contains("AGENT_VISOR_ADHOC_BRIDGE_VERSION=\"2.4.7\"")
+                )
+                XCTAssertTrue(cask.contains("/usr/bin/codesign"))
+                XCTAssertTrue(cask.contains("--preserve-metadata=entitlements,flags"))
+            } else {
+                XCTAssertFalse(
+                    cask.contains("/usr/bin/codesign"),
+                    "Homebrew must preserve the pinned self-signed release identity."
+                )
+            }
         }
     }
 
-    func testReleaseBuildExercisesTheHomebrewResignPath() throws {
+    func testCredentialFreeBuildExercisesTheHistoricalAdHocInstallPath() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let buildScript = try source(at: root.appendingPathComponent("scripts/build.sh"))
         let verifierURL = root.appendingPathComponent("scripts/test-homebrew-resign.sh")
         guard FileManager.default.fileExists(atPath: verifierURL.path) else {
-            XCTFail("Release verification must cover the Homebrew postflight signature.")
+            XCTFail("Local and CI verification must cover the historical ad-hoc install path.")
             return
         }
         let verifier = try source(at: verifierURL)

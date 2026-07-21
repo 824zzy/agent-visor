@@ -6,6 +6,27 @@
     <description>Agent Visor updates</description>
     <language>en</language>
     <item>
+      <title>v2.4.7</title>
+      <pubDate>Tue, 21 Jul 2026 05:16:57 +0000</pubDate>
+      <sparkle:version>48</sparkle:version>
+      <sparkle:shortVersionString>2.4.7</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+
+      <description><![CDATA[<h2>v2.4.7</h2>
+<ul>
+  <li>Prepared Agent Visor to keep one stable Accessibility identity across future updates.</li>
+  <li>Updated the in-app updater so it preserves the signature delivered by release packaging.</li>
+  <li>Added release checks that prevent older installations from skipping the required signing migration.</li>
+</ul>
+]]></description>
+      <enclosure
+        url="https://github.com/824zzy/agent-visor/releases/download/v2.4.7/AgentVisor-v2.4.7.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="084OFCxYYZum7qNr3H/YTOae2n5mphMIBiAhFtjssh8f24j5HO1mUYtdd4DZ+N9DaoTGbqxo/vJSAhKaOTB1Ag=="
+        length="12475961"
+      />
+    </item>
+    <item>
       <title>v2.4.6</title>
       <pubDate>Tue, 21 Jul 2026 02:56:35 +0000</pubDate>
       <sparkle:version>47</sparkle:version>
