@@ -6,6 +6,25 @@
     <description>Agent Visor updates</description>
     <language>en</language>
     <item>
+      <title>v2.4.6</title>
+      <pubDate>Tue, 21 Jul 2026 02:56:35 +0000</pubDate>
+      <sparkle:version>47</sparkle:version>
+      <sparkle:shortVersionString>2.4.6</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<h2>v2.4.6</h2>
+<ul>
+  <li>Accessibility recovery now explains how to replace an enabled-looking stale permission entry with the exact running Agent Visor app.</li>
+  <li>Release validation now supports the current ad-hoc distribution path and an optional Developer ID and notarization path without confusing the two.</li>
+</ul>
+]]></description>
+      <enclosure
+        url="https://github.com/824zzy/agent-visor/releases/download/v2.4.6/AgentVisor-v2.4.6.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="SouW8SVeAk8NYcgzdu3bZktFdQjmqi0P+MEnF/kT32rvY+pfgQnE3qTaIu330yo8OWLL/9sjgkVlOaz2QhbYBg=="
+        length="12472958"
+      />
+    </item>
+    <item>
       <title>v2.4.5</title>
       <pubDate>Mon, 20 Jul 2026 21:02:14 +0000</pubDate>
       <sparkle:version>46</sparkle:version>

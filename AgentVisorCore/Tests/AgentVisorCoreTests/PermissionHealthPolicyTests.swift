@@ -69,6 +69,19 @@ final class PermissionHealthPolicyTests: XCTestCase {
         XCTAssertFalse(presentation.showsProgress)
     }
 
+    func testAccessibilityBlockerExplainsHowToRefreshAnEnabledLookingRow() {
+        let presentation = PermissionHealthPresentationPolicy.presentation(
+            for: .needsAccessibility,
+            appName: "Agent Visor",
+            appPath: "/Applications/Agent Visor.app"
+        )
+
+        XCTAssertTrue(presentation.detail.contains("already appears enabled"))
+        XCTAssertTrue(presentation.detail.contains("remove Agent Visor"))
+        XCTAssertTrue(presentation.detail.contains("add this exact app again"))
+        XCTAssertTrue(presentation.detail.contains("/Applications/Agent Visor.app"))
+    }
+
     func testDevelopmentBuildNamesTheExactAccessibilityRow() {
         let presentation = PermissionHealthPresentationPolicy.presentation(
             for: .needsAccessibility,

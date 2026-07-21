@@ -1,13 +1,13 @@
 #!/bin/bash
-# Build Agent Visor for release.
+# Build Agent Visor.
 #
-# The distributed app is ad-hoc signed. Homebrew removes quarantine and
-# re-signs after install; direct-download users can remove quarantine
-# manually as documented in README.md.
+# With AV_RELEASE_SIGN_IDENTITY and AV_RELEASE_TEAM_ID, this creates a
+# Developer ID release candidate. Without them, it creates the existing local
+# and CI ad-hoc release candidate used by the current distribution path.
 #
 # Keep Release derived data out of Xcode's default DerivedData so local
 # daily-driver TCC grants are not disturbed by release packaging builds.
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -15,9 +15,36 @@ BUILD_DIR="$PROJECT_DIR/build"
 EXPORT_PATH="$BUILD_DIR/export"
 DERIVED="${AV_RELEASE_DERIVED:-/tmp/av-release-build}"
 APP_NAME="Agent Visor.app"
+SIGNING_IDENTITY="${AV_RELEASE_SIGN_IDENTITY:-}"
+TEAM_IDENTIFIER="${AV_RELEASE_TEAM_ID:-}"
+
+source "$SCRIPT_DIR/lib/release-build-mode.sh"
+BUILD_MODE="$(release_build_mode "$SIGNING_IDENTITY" "$TEAM_IDENTIFIER")"
+
+if [[ "$BUILD_MODE" == "developer-id" ]]; then
+    if ! security find-identity -v -p codesigning | grep -Fq "$SIGNING_IDENTITY"; then
+        echo "ERROR: Developer ID identity is not installed in the active keychain:" >&2
+        echo "       $SIGNING_IDENTITY" >&2
+        exit 1
+    fi
+    XCODE_SIGNING_ARGS=(
+        CODE_SIGN_STYLE=Manual
+        "CODE_SIGN_IDENTITY=$SIGNING_IDENTITY"
+        "DEVELOPMENT_TEAM=$TEAM_IDENTIFIER"
+        CODE_SIGNING_REQUIRED=YES
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
+    )
+else
+    XCODE_SIGNING_ARGS=(
+        CODE_SIGN_IDENTITY=-
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
+        CODE_SIGNING_REQUIRED=NO
+    )
+fi
 
 echo "=== Building Agent Visor Release ==="
 echo "Derived data: $DERIVED"
+echo "Signing mode: $BUILD_MODE"
 echo ""
 
 rm -rf "$BUILD_DIR"
@@ -31,9 +58,7 @@ xcodebuild \
     -configuration Release \
     -derivedDataPath "$DERIVED" \
     -onlyUsePackageVersionsFromResolvedFile \
-    CODE_SIGN_IDENTITY=- \
-    CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
-    CODE_SIGNING_REQUIRED=NO \
+    "${XCODE_SIGNING_ARGS[@]}" \
     build
 
 APP_PATH="$DERIVED/Build/Products/Release/$APP_NAME"
@@ -44,10 +69,21 @@ fi
 
 ditto "$APP_PATH" "$EXPORT_PATH/$APP_NAME"
 "$SCRIPT_DIR/test-release-bundle.sh" "$EXPORT_PATH/$APP_NAME"
-"$SCRIPT_DIR/test-homebrew-resign.sh" "$EXPORT_PATH/$APP_NAME"
+
+if [[ "$BUILD_MODE" == "developer-id" ]]; then
+    "$SCRIPT_DIR/verify-stable-release-signature.sh" "$EXPORT_PATH/$APP_NAME"
+    echo "Developer ID candidate built. Run scripts/notarize-release.sh before publishing."
+else
+    "$SCRIPT_DIR/test-homebrew-resign.sh" "$EXPORT_PATH/$APP_NAME"
+    echo "Ad-hoc release candidate built and publishable through the matching Homebrew contract."
+fi
 
 echo ""
 echo "=== Build Complete ==="
 echo "App exported to: $EXPORT_PATH/$APP_NAME"
 echo ""
-echo "Next: Run ./scripts/create-release.sh to create the release ZIP and appcast item"
+if [[ "$BUILD_MODE" == "developer-id" ]]; then
+    echo "Next: Run ./scripts/notarize-release.sh, then ./scripts/create-release.sh"
+else
+    echo "Next: Run ./scripts/create-release.sh"
+fi

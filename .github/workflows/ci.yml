@@ -27,5 +27,18 @@ jobs:
         run: swift test --package-path AgentVisorCore
       - name: Homebrew cask style
         run: brew style Casks/agent-visor.rb
+      - name: Release policy tests
+        run: |
+          scripts/test-release-build-mode.sh
+          scripts/test-release-build-wiring.sh
+          scripts/test-release-signing-policy.sh
+          scripts/test-release-signing-integration.sh
+          scripts/test-release-notarization-policy.sh
+          scripts/test-release-notarization-integration.sh
+          scripts/test-notarize-release-wiring.sh
+          scripts/test-release-publication-policy.sh
+          scripts/test-release-candidate-integration.sh
+          scripts/test-release-publication-wiring.sh
+          scripts/test-ci-release-policy-wiring.sh
       - name: Release build
         run: AV_RELEASE_DERIVED="$RUNNER_TEMP/av-release-build" scripts/build.sh

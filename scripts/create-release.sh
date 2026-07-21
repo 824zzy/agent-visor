@@ -8,6 +8,7 @@
 #
 # Requires:
 #   - scripts/build.sh already run (produces $EXPORT_PATH/Agent Visor.app)
+#   - for Developer ID candidates only, scripts/notarize-release.sh already run
 #   - A Sparkle EdDSA private key at $PROJECT_DIR/.sparkle-keys/eddsa_private_key
 #   - gh CLI authenticated against 824zzy/agent-visor
 set -e
@@ -50,6 +51,8 @@ REMOTE_HEAD_SHA=""
 BRANCH_PUSH_NEEDED=false
 BRANCH_PUSHED=false
 TAG_PUSHED=false
+
+source "$SCRIPT_DIR/lib/release-publication.sh"
 
 if [ "$#" -ne 0 ]; then
     echo "ERROR: create-release.sh does not accept a version argument."
@@ -289,6 +292,10 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 echo ""
 
+echo "=== Step 1: Confirming Release Candidate ==="
+"$SCRIPT_DIR/validate-release-candidate.sh" "$APP_PATH" "${LOCAL_CASKS[@]}"
+echo ""
+
 mkdir -p "$BUILD_DIR" "$RELEASE_DIR"
 
 if [ "$DRY_RUN" != "1" ]; then
@@ -330,17 +337,6 @@ EOF
 
 echo "Release notes loaded."
 echo "GitHub notes: $GITHUB_NOTES_PATH"
-echo ""
-
-# ============================================
-# Step 1: Confirm ad-hoc release app
-# ============================================
-echo "=== Step 1: Confirming App ==="
-echo "Using ad-hoc release app at: $APP_PATH"
-"$SCRIPT_DIR/test-release-bundle.sh" "$APP_PATH"
-"$SCRIPT_DIR/test-homebrew-resign.sh" "$APP_PATH"
-echo "Homebrew removes quarantine and re-signs after install; direct-download users follow README.md."
-
 echo ""
 
 # ============================================

@@ -51,14 +51,27 @@ final class ReleaseBuildHardeningAuditTests: XCTestCase {
         let releaseScript = try source(
             at: root.appendingPathComponent("scripts/create-release.sh")
         )
+        let candidateVerifier = try source(
+            at: root.appendingPathComponent("scripts/validate-release-candidate.sh")
+        )
 
         XCTAssertTrue(
-            releaseScript.contains("\"$SCRIPT_DIR/test-release-bundle.sh\" \"$APP_PATH\""),
+            releaseScript.contains("\"$SCRIPT_DIR/validate-release-candidate.sh\""),
+            "Publishing must run the complete release-candidate gate before archiving."
+        )
+        XCTAssertTrue(
+            candidateVerifier.contains("test-release-bundle.sh"),
             "Publishing must reject an app that changed after scripts/build.sh completed."
         )
         XCTAssertTrue(
-            releaseScript.contains("\"$SCRIPT_DIR/test-homebrew-resign.sh\" \"$APP_PATH\""),
-            "Publishing must recheck the installation signature path used by the casks."
+            candidateVerifier.contains("verify-stable-release-signature.sh")
+        )
+        XCTAssertTrue(
+            candidateVerifier.contains("verify-notarized-release.sh")
+        )
+        XCTAssertFalse(
+            releaseScript.contains("test-homebrew-resign.sh"),
+            "Publishing must never replace the stable Developer ID signature."
         )
         XCTAssertTrue(
             releaseScript.contains("\"$SCRIPT_DIR/test-release-archive.sh\" \"$ZIP_PATH\""),
@@ -78,7 +91,10 @@ final class ReleaseBuildHardeningAuditTests: XCTestCase {
         XCTAssertTrue(verifier.contains("__MACOSX"))
         XCTAssertTrue(verifier.contains(".DS_Store"))
         XCTAssertTrue(verifier.contains("test-release-bundle.sh"))
+        XCTAssertTrue(verifier.contains("release_distribution_mode"))
         XCTAssertTrue(verifier.contains("test-homebrew-resign.sh"))
+        XCTAssertTrue(verifier.contains("verify-stable-release-signature.sh"))
+        XCTAssertTrue(verifier.contains("verify-notarized-release.sh"))
     }
 
     func testCIRunsCoreTestsAndReleasePackaging() throws {

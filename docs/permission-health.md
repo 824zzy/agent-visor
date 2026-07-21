@@ -1,7 +1,7 @@
 # Permission Health
 
 Status: Accepted
-Last reviewed: 2026-07-19
+Last reviewed: 2026-07-20
 
 ## Purpose
 
@@ -28,8 +28,11 @@ binary is still untrusted or while a dependent capability remains unavailable.
    reinstalls permission-dependent monitors and reprobes menu geometry.
 5. **Disappear when healthy.** Permission UI is absent after verification
    succeeds. Settings retains the durable health summary.
-6. **Stable release identity.** Public releases use one stable bundle identity,
-   signature, and `/Applications/Agent Visor.app` install path.
+6. **Honest release identity.** Public releases use one bundle identifier and
+   `/Applications/Agent Visor.app` install path. The current ad-hoc mode can
+   require permission recovery after updates; optional Developer ID mode can
+   provide a stable signed identity. Both contracts are defined in
+   [Release Signing](release-signing.md).
 7. **Stable development location.** The development workflow builds in
    DerivedData but deploys and launches `/Applications/Agent Visor Dev.app`.
    Permission UI never asks a developer to browse hidden `/tmp` build output.
@@ -69,7 +72,9 @@ temporarily unavailable even when Accessibility is healthy.
   non-ready state.
 - `Needs Accessibility` explains that global shortcuts and terminal targeting
   are unavailable, names the running app path, and offers `Enable
-  Accessibility`.
+  Accessibility`. It also explains that an enabled-looking row can refer to a
+  previous ad-hoc build and tells the user to remove that row, add the exact
+  running app again, and turn it on.
 - The native prompt is the primary action. `Open Accessibility Settings` and
   `Reveal This App` remain visible fallbacks because macOS may remember a prior
   denial or decline to show another prompt.
@@ -165,12 +170,17 @@ Release and development variants are not designed to run simultaneously.
 Development work should stop the installed release before launching Debug; the
 shared session hooks and menu-bar ownership remain single-owner resources.
 
-The release pipeline must eventually use a Developer ID signature and
-notarization so the designated requirement remains stable across updates.
+The current public release mode is ad-hoc. Homebrew removes quarantine and
+re-signs that app while preserving release entitlements. Because each build's
+code requirement can change, an update may invalidate the prior TCC grant. The
+UI must not claim that an enabled-looking System Settings row proves the current
+binary is trusted. The running process's `AXIsProcessTrusted()` result is
+authoritative, and recovery copy tells the user how to refresh the row.
 
-Until stable release signing is available, the health monitor remains necessary
-because an update can invalidate an ad-hoc TCC grant. The UI must not claim that
-an enabled-looking System Settings row proves the current binary is trusted.
+An optional Developer ID and notarization mode is also supported by the release
+pipeline. When used, Homebrew must preserve the distributed signature instead
+of replacing it. The two modes and their validation rules are defined in
+[Release Signing](release-signing.md).
 
 ## Non-Goals
 

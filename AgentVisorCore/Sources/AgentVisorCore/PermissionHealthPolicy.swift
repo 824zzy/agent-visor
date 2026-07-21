@@ -95,7 +95,7 @@ public enum PermissionHealthPresentationPolicy {
         case .needsAccessibility:
             return PermissionHealthPresentation(
                 title: "Enable \(appName) in Accessibility",
-                detail: "In System Settings, turn on \(appName). Running app: \(appPath). This enables global shortcuts, terminal targeting, and pill placement.",
+                detail: "In System Settings, turn on \(appName). If it already appears enabled, remove \(appName), add this exact app again, and turn it on: \(appPath). This enables global shortcuts, terminal targeting, and pill placement.",
                 actionTitle: "Enable Accessibility",
                 showsSetupIndicator: true,
                 showsProgress: false
