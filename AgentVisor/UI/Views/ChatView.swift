@@ -355,15 +355,13 @@ struct ChatView: View {
                     .animation(.spring(response: 0.35, dampingFraction: 0.85), value: isWaitingForApproval)
                 }
 
-                // Ghostty-style status bar under the input. Cycle action is
-                // wired only when the session has a TTY — the cycler writes
-                // OSC 7 markers and queries pane indices via AppleScript,
-                // both of which require a terminal pane. For editor hosts
-                // (Cursor / VS Code extension) the status bar shows mode as
-                // a static label; the user cycles via `Shift+Tab` inside
-                // their IDE's chat input instead.
+                // Ghostty-style status bar under the input. Claude's cycle
+                // action is wired only for terminal-owned Claude sessions.
+                // Editor-hosted Claude modes stay visible but read-only;
+                // Pi and other providers hide the segment entirely because
+                // their terminal keys have different semantics.
                 ChatStatusBar(
-                    modelName: session.modelName,
+                    modelDisplayName: session.displayModelName,
                     // Status bar's "location" slot — the working directory.
                     // Earlier this bound to `session.displayTitle`, which
                     // resolves to `sessionName` first (e.g. "agent-visor-dev"
@@ -374,15 +372,13 @@ struct ChatView: View {
                     // tildified so a long absolute path fits.
                     projectName: ChatStatusLocationFormatter.displayPath(session.cwd),
                     contextTokens: session.lastContextTokens,
-                    contextWindow: session.contextWindowTokens > 0
-                        ? session.contextWindowTokens
-                        : ModelContextWindow.tokens(for: session.modelName),
+                    contextWindow: ModelContextWindow.tokens(for: session),
                     effortLevel: session.effortLevel,
                     useGlobalEffort: session.agentID != .codex,
-                    permissionMode: session.permissionMode,
-                    onCycleMode: session.tty == nil ? nil : {
-                        Task { await PermissionModeCycler.cycle(session: session) }
-                    }
+                    permissionMode: session.permissionModeSurfaceDecision.displayMode,
+                    onCycleMode: session.permissionModeSurfaceDecision.canCycle
+                        ? { Task { await PermissionModeCycler.cycle(session: session) } }
+                        : nil
                 )
             }
         }
@@ -586,6 +582,13 @@ struct ChatView: View {
             // any Shift+Tab the user makes directly in the terminal.
             startModeProbe()
         }
+        .onChange(of: session.permissionModeSurfaceDecision.shouldProbe) { _, shouldProbe in
+            if shouldProbe {
+                startModeProbe()
+            } else {
+                stopModeProbe()
+            }
+        }
         .onDisappear {
             // Persist unsent text + attachments so close/reopen preserves the
             // draft. An empty draft deletes any prior entry, so sending (which
@@ -612,6 +615,7 @@ struct ChatView: View {
     }
 
     private func startModeProbe() {
+        guard session.permissionModeSurfaceDecision.shouldProbe else { return }
         guard modeProbeTimer == nil else { return }
         let capturedSessionId = sessionId
         let chatLogger = Logger(subsystem: AppBranding.loggerSubsystem, category: "ChatView")
@@ -625,19 +629,12 @@ struct ChatView: View {
                     chatLogger.info("probe-tick: no live session for \(capturedSessionId.prefix(8), privacy: .public)")
                     return
                 }
-                // Skip tmux sessions — JSONL is authoritative there because
-                // the cycle path is direct.
-                if live.isInTmux {
-                    chatLogger.info("probe-tick: skip tmux session \(capturedSessionId.prefix(8), privacy: .public)")
-                    return
-                }
-                // Skip sessions without a controlling TTY (Cursor's Claude Code
-                // extension, headless launchd runs, etc.). The AX probe scrapes
-                // a terminal app's scrollback for the mode chevron; without a
-                // TTY there's no terminal pane to scrape. JSONL `permission-mode`
-                // lines drive the chip for these sessions instead.
-                if live.tty == nil {
-                    chatLogger.info("probe-tick: skip non-tty session \(capturedSessionId.prefix(8), privacy: .public)")
+                // Re-evaluate the provider capability every tick because a
+                // session can be replaced while this view remains mounted.
+                // This also prevents generic Pi prompt glyphs from reaching
+                // Claude's mode parser.
+                guard live.permissionModeSurfaceDecision.shouldProbe else {
+                    chatLogger.info("probe-tick: skip unsupported session \(capturedSessionId.prefix(8), privacy: .public)")
                     return
                 }
                 DispatchQueue.global(qos: .utility).async {
@@ -1072,7 +1069,9 @@ struct ChatView: View {
     /// Placeholder text for the input box. All session origins use
     /// the same prompt now that AX silent-send covers `.cursorObserved`.
     private var composerPlaceholder: String {
-        canSendMessages ? "Message Claude (↵ to send)…" : "No terminal connected"
+        guard canSendMessages else { return "No terminal connected" }
+        let agentName = AgentRegistry.provider(for: session.agentID)?.displayName ?? "agent"
+        return "Message \(agentName) (↵ to send)…"
     }
 
     private var attachmentStrip: some View {
@@ -1091,6 +1090,7 @@ struct ChatView: View {
     }
 
     private func handleImagePaste(_ image: NSImage) {
+        guard session.imageSubmissionRoute != .unavailable else { return }
         guard let url = ImagePasteSender.savePNG(image) else { return }
         let thumbnail = Self.makeThumbnail(from: image, maxSize: 80)
         attachments.append(ImageAttachment(id: UUID(), url: url, thumbnail: thumbnail))
@@ -1131,9 +1131,9 @@ struct ChatView: View {
                 isEnabled: canSendMessages,
                 onSubmit: { sendMessage() },
                 onImagePasted: { image in handleImagePaste(image) },
-                onCycleMode: session.tty == nil ? nil : {
-                    Task { await PermissionModeCycler.cycle(session: session) }
-                },
+                onCycleMode: session.permissionModeSurfaceDecision.canCycle
+                    ? { Task { await PermissionModeCycler.cycle(session: session) } }
+                    : nil,
                 onCancelQuery: isProcessing ? { cancelQuery() } : nil,
                 onTextChanged: { newText in
                     slashController.update(composerText: newText)
@@ -1418,8 +1418,11 @@ struct ChatView: View {
     }
 
     private func scheduleAttachmentCleanup(_ attachments: [ImageAttachment]) {
-        guard !attachments.isEmpty else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
+        guard !attachments.isEmpty,
+              let delay = ImageAttachmentRetentionPolicy.cleanupDelay(
+                for: session.imageSubmissionRoute
+              ) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             for attachment in attachments {
                 try? FileManager.default.removeItem(at: attachment.url)
             }
@@ -1496,7 +1499,8 @@ struct TimelineRow: Identifiable, Equatable {
 /// "Show assistant messages" on — the row would render a blank space.
 nonisolated func shouldRenderHistoryItem(
     _ item: ChatHistoryItem,
-    rules: ChatVisibilityRules
+    rules: ChatVisibilityRules,
+    agentID: AgentID = .claudeCode
 ) -> Bool {
     switch item.type {
     case .assistant(let text), .thinking(let text):
@@ -1527,7 +1531,7 @@ nonisolated func shouldRenderHistoryItem(
          .compactBoundary, .localCommandOutput:
         break
     }
-    let kind = ChatItemKindProjector.kind(for: item.type)
+    let kind = ChatItemKindProjector.kind(for: item.type, agentID: agentID)
     return ChatVisibilityFilter.shouldShow(kind, rules: rules)
 }
 
@@ -1536,7 +1540,10 @@ nonisolated func shouldRenderHistoryItem(
 /// `ChatVisibilityFilter` can decide visibility without knowing about
 /// SwiftUI / AppKit / agent-specific tool names.
 enum ChatItemKindProjector {
-    nonisolated static func kind(for type: ChatHistoryItemType) -> ChatItemKind {
+    nonisolated static func kind(
+        for type: ChatHistoryItemType,
+        agentID: AgentID = .claudeCode
+    ) -> ChatItemKind {
         switch type {
         case .user, .image: return .userMessage
         case .assistant: return .assistantMessage
@@ -1547,13 +1554,7 @@ enum ChatItemKindProjector {
         case .compactBoundary: return .compactBoundary
         case .localCommandOutput: return .localCommandOutput
         case .toolCall(let tool):
-            // The agent that produced this row isn't tracked on the
-            // ChatHistoryItem — the legacy chat path is claude-code-only,
-            // and Codex uses a parallel renderer. Mapping via
-            // `.claudeCode` is safe; raw names that don't match its
-            // table fall through to `.generic`, which the filter routes
-            // through `showOtherTools`.
-            let canonical = ToolNameMapper.canonical(for: tool.name, agent: .claudeCode)
+            let canonical = ToolNameMapper.canonical(for: tool.name, agent: agentID)
             return .toolCall(canonical)
         }
     }
@@ -1569,14 +1570,19 @@ func isTurnDetailItem(_ item: ChatHistoryItem) -> Bool {
 }
 
 @MainActor
-func groupedTimelineRows(from history: [ChatHistoryItem]) -> [TimelineRow] {
+func groupedTimelineRows(
+    from history: [ChatHistoryItem],
+    agentID: AgentID = .claudeCode
+) -> [TimelineRow] {
     // Snapshot the visibility rules ONCE per rebuild so the predicate
     // applied to each item is a plain value-type read, not a global
     // singleton dereference. Streaming rebuilds at 5-10 Hz × 10k items
     // would otherwise dispatch to the @MainActor singleton 50k+ times
     // per second — measurable CPU climb on big sessions.
     let rules = ChatVisibilitySelector.shared.rules
-    let items = history.filter { shouldRenderHistoryItem($0, rules: rules) }
+    let items = history.filter {
+        shouldRenderHistoryItem($0, rules: rules, agentID: agentID)
+    }
     var rows: [TimelineRow] = []
     var index = 0
 
@@ -1746,6 +1752,119 @@ func codexGroupedTimelineRows(from history: [ChatHistoryItem], sessionIsProcessi
     return rows
 }
 
+/// Prompt-bounded Pi grouping. Reasoning is kept separate from ordinary
+/// work so the renderer can place it behind one nested disclosure; only
+/// trailing prose in a completed turn remains a top-level final answer.
+@MainActor
+func piGroupedTimelineRows(
+    from history: [ChatHistoryItem],
+    sessionIsProcessing: Bool
+) -> [TimelineRow] {
+    guard !history.isEmpty else { return [] }
+    let rules = ChatVisibilitySelector.shared.rules
+
+    var itemsById: [String: ChatHistoryItem] = [:]
+    itemsById.reserveCapacity(history.count)
+    let descriptors: [PiTurnGrouper.ItemDescriptor] = history.map { item in
+        itemsById[item.id] = item
+        return PiTurnGrouper.ItemDescriptor(
+            id: item.id,
+            category: piTurnCategory(for: item.type)
+        )
+    }
+
+    let grouped = PiTurnGrouper.group(
+        descriptors,
+        sessionIsProcessing: sessionIsProcessing
+    )
+
+    var rows: [TimelineRow] = []
+    rows.reserveCapacity(grouped.count)
+    for row in grouped {
+        if row.detailIds.isEmpty && row.reasoningIds.isEmpty {
+            guard let parent = itemsById[row.parentId] else { continue }
+            if shouldRenderHistoryItem(parent, rules: rules, agentID: .pi) {
+                rows.append(TimelineRow(item: parent, children: []))
+            }
+            continue
+        }
+
+        let visibleDetails = row.detailIds
+            .compactMap { itemsById[$0] }
+            .filter { shouldRenderHistoryItem($0, rules: rules, agentID: .pi) }
+        let visibleReasoning = row.reasoningIds
+            .compactMap { itemsById[$0] }
+            .filter { shouldRenderHistoryItem($0, rules: rules, agentID: .pi) }
+        var children = visibleDetails
+        if !visibleReasoning.isEmpty {
+            children.append(makePiReasoningGroup(from: visibleReasoning))
+        }
+        guard !children.isEmpty else { continue }
+
+        let seconds: Int
+        if row.isLive {
+            seconds = ClaudeLiveTurnSentinel.seconds
+        } else {
+            let dates = children.map(\.timestamp)
+            if let first = dates.min(), let last = dates.max() {
+                seconds = max(0, Int(last.timeIntervalSince(first)))
+            } else {
+                seconds = 0
+            }
+        }
+        let header = ChatHistoryItem(
+            id: row.parentId,
+            type: .turnDuration(seconds: seconds),
+            timestamp: children[0].timestamp
+        )
+        rows.append(TimelineRow(item: header, children: children))
+    }
+    return rows
+}
+
+private func makePiReasoningGroup(
+    from reasoning: [ChatHistoryItem]
+) -> ChatHistoryItem {
+    let markdown = reasoning.compactMap { item -> String? in
+        guard case .thinking(let text) = item.type else { return nil }
+        return text
+    }.joined(separator: "\n\n")
+    let sentinel = ToolCallItem(
+        name: PiReasoningGroupView.sentinelToolName,
+        input: ["count": "\(reasoning.count)"],
+        status: .success,
+        result: markdown,
+        structuredResult: nil,
+        subagentTools: []
+    )
+    return ChatHistoryItem(
+        id: reasoning[0].id + "-reasoning-group",
+        type: .toolCall(sentinel),
+        timestamp: reasoning[0].timestamp
+    )
+}
+
+private func piTurnCategory(for type: ChatHistoryItemType) -> PiTurnGrouper.ItemCategory {
+    switch type {
+    case .user, .image:
+        return .prompt
+    case .assistant:
+        return .assistantText
+    case .thinking:
+        return .reasoning
+    case .toolCall(let tool):
+        // Waiting calls are still tool invocations: count them as actions.
+        // The table pins them visibly when the surrounding work is collapsed.
+        return .action(hasError: tool.status == .error || tool.status == .interrupted)
+    case .localCommandOutput:
+        return .supportingWork(hasError: false)
+    case .interrupted:
+        return .supportingWork(hasError: true)
+    case .turnDuration, .recap, .compactBoundary:
+        return .sessionLevel
+    }
+}
+
 /// Project a `ChatHistoryItemType` onto the Codex grouper's coarse
 /// category. Mirrors `claudeTurnCategory` — Codex commentary lands as
 /// `.thinking` (→ `.work`, folded), so it collapses for free.
@@ -1839,6 +1958,17 @@ private enum ChatStatusLocationFormatter {
 struct MessageItemView: View {
     let item: ChatHistoryItem
     let sessionId: String
+    let agentID: AgentID
+
+    init(
+        item: ChatHistoryItem,
+        sessionId: String,
+        agentID: AgentID = .claudeCode
+    ) {
+        self.item = item
+        self.sessionId = sessionId
+        self.agentID = agentID
+    }
 
     var body: some View {
         switch item.type {
@@ -1853,8 +1983,18 @@ struct MessageItemView: View {
         case .toolCall(let tool):
             if tool.name == CodexActivitySummaryView.sentinelToolName {
                 CodexActivitySummaryView(summary: tool.input["summary"] ?? "")
+            } else if tool.name == PiReasoningGroupView.sentinelToolName {
+                PiReasoningGroupView(
+                    count: Int(tool.input["count"] ?? "") ?? 0,
+                    markdown: tool.result ?? ""
+                )
             } else {
-                ToolCallView(tool: tool, sessionId: sessionId, historyItemId: item.id)
+                ToolCallView(
+                    tool: tool,
+                    sessionId: sessionId,
+                    historyItemId: item.id,
+                    agentID: agentID
+                )
             }
         case .thinking(let text):
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1898,6 +2038,45 @@ struct CodexActivitySummaryView: View {
     }
 }
 
+/// One nested disclosure for all visible Pi reasoning in a turn. The outer
+/// Worked/Working disclosure must be expanded before this row appears.
+struct PiReasoningGroupView: View {
+    static let sentinelToolName = "PiReasoningGroup"
+
+    let count: Int
+    let markdown: String
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(ChatTheme.tertiary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    Text("Reasoning (\(count))")
+                        .chatScaledFont(size: 11, weight: .medium)
+                        .foregroundColor(ChatTheme.tertiary)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded, !markdown.isEmpty {
+                MarkdownText(markdown, color: ChatTheme.tertiary, fontSize: 11)
+                    .padding(.leading, 15)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
 // MARK: - User Message
 
 struct UserMessageView: View {
@@ -1919,22 +2098,33 @@ struct UserMessageView: View {
         } else {
             HStack {
                 Spacer(minLength: 60)
-                VStack(alignment: .trailing, spacing: 6) {
-                    if !p.attachments.isEmpty {
-                        attachmentChips(p.attachments)
-                    }
-                    if !p.plainText.isEmpty {
-                        MarkdownText(p.plainText, color: Catppuccin.text, fontSize: 13)
-                    }
+                // Prefer the bubble's natural width. When it cannot fit,
+                // ViewThatFits selects the wrapping candidate constrained
+                // by the shared content rail and this role's leading space.
+                ViewThatFits(in: .horizontal) {
+                    userMessageBubble(p)
+                        .fixedSize(horizontal: true, vertical: false)
+                    userMessageBubble(p)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 18)
-                        .fill(ChatTheme.bubbleUser)
-                )
             }
         }
+    }
+
+    private func userMessageBubble(_ message: ParsedUserMessage) -> some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            if !message.attachments.isEmpty {
+                attachmentChips(message.attachments)
+            }
+            if !message.plainText.isEmpty {
+                MarkdownText(message.plainText, color: Catppuccin.text, fontSize: 13)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(ChatTheme.bubbleUser)
+        )
     }
 
     @ViewBuilder
@@ -2064,8 +2254,7 @@ struct AssistantMessageView: View {
                 .padding(.top, 5)
 
             MarkdownText(text, color: Catppuccin.text, fontSize: 13)
-
-            Spacer(minLength: 60)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -2116,14 +2305,21 @@ struct ToolCallView: View {
     /// Id of the wrapping ChatHistoryItem. Used as the key for drill-down
     /// presentation, since ToolCallItem itself has no id.
     let historyItemId: String
+    let agentID: AgentID
 
     @State private var pulseOpacity: Double = 0.6
     @Environment(\.openToolDetail) private var openToolDetail
 
-    init(tool: ToolCallItem, sessionId: String, historyItemId: String) {
+    init(
+        tool: ToolCallItem,
+        sessionId: String,
+        historyItemId: String,
+        agentID: AgentID = .claudeCode
+    ) {
         self.tool = tool
         self.sessionId = sessionId
         self.historyItemId = historyItemId
+        self.agentID = agentID
     }
 
     private var statusColor: Color {
@@ -2201,12 +2397,34 @@ struct ToolCallView: View {
         return attr
     }
 
-    /// Display name matching Claude Code (Edit→Update/Create, Grep/Glob→Search, Task→Agent)
-    private var displayName: String {
-        MCPToolFormatter.contextualToolName(tool.name, input: tool.input)
+    private var canonicalTool: CanonicalTool {
+        ToolNameMapper.canonical(for: tool.name, agent: agentID)
     }
 
-    /// Input summary shown in parens after tool name
+    private var providerPresentation: ToolPresentation {
+        ToolPresentationPolicy.presentation(
+            rawName: tool.name,
+            input: tool.input,
+            agent: agentID
+        )
+    }
+
+    /// Display name matching the owning provider's vocabulary.
+    private var displayName: String {
+        if agentID == .pi { return providerPresentation.title }
+        return MCPToolFormatter.contextualToolName(tool.name, input: tool.input)
+    }
+
+    private var isBashTool: Bool {
+        tool.name == "Bash" || tool.name == "Shell" || canonicalTool == .bash
+    }
+
+    private var mutationFilePath: String? {
+        guard canonicalTool == .edit || canonicalTool == .write else { return nil }
+        return tool.input["file_path"] ?? tool.input["path"]
+    }
+
+    /// Input summary shown after the tool name.
     private var inputSummary: String {
         // AgentOutputTool: use agent description from ChatHistoryManager
         if tool.name == "AgentOutputTool" {
@@ -2217,6 +2435,7 @@ struct ToolCallView: View {
                 return blocking ? "Waiting: \(desc)" : desc
             }
         }
+        if agentID == .pi { return providerPresentation.detail }
         return toolInputSummary(for: tool)
     }
 
@@ -2252,7 +2471,7 @@ struct ToolCallView: View {
                     .foregroundColor(ChatTheme.primary)
                     .fixedSize()
 
-                if tool.name == "Bash" || tool.name == "Shell",
+                if isBashTool,
                    let cmd = tool.input["command"], !cmd.isEmpty {
                     // Rich-render the truncated first line. The helper
                     // builds an `AttributedString` from scratch (no
@@ -2273,8 +2492,7 @@ struct ToolCallView: View {
                     Text(bashHeaderAttributed(cmd))
                         .chatScaledFont(size: 10, design: .monospaced)
                         .fixedSize(horizontal: false, vertical: true)
-                } else if (tool.name == "Edit" || tool.name == "MultiEdit" || tool.name == "Write"),
-                          let filePath = tool.input["file_path"], !filePath.isEmpty {
+                } else if let filePath = mutationFilePath, !filePath.isEmpty {
                     // File-mutating tools render their filename as a
                     // clickable link (Codex parity) — clicking opens
                     // the file in the user's default editor.
@@ -2851,6 +3069,10 @@ struct ThinkingView: View {
         text.count > 80
     }
 
+    private var markdownText: AttributedString {
+        (try? AttributedString(markdown: text)) ?? AttributedString(text)
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
             Circle()
@@ -2858,10 +3080,9 @@ struct ThinkingView: View {
                 .frame(width: 6, height: 6)
                 .padding(.top, 4)
 
-            Text(isExpanded ? text : String(text.prefix(80)) + (canExpand ? "..." : ""))
+            Text(markdownText)
                 .chatScaledFont(size: 11)
                 .foregroundColor(ChatTheme.tertiary)
-                .italic()
                 .lineLimit(isExpanded ? nil : 1)
                 .multilineTextAlignment(.leading)
 
@@ -4593,11 +4814,11 @@ struct PendingEditContext: Equatable {
     let newString: String
 }
 
-private struct OpenToolDetailKey: EnvironmentKey {
+struct OpenToolDetailKey: EnvironmentKey {
     static let defaultValue: (String) -> Void = { _ in }
 }
 
-private struct OpenPendingEditKey: EnvironmentKey {
+struct OpenPendingEditKey: EnvironmentKey {
     static let defaultValue: (PendingEditContext) -> Void = { _ in }
 }
 

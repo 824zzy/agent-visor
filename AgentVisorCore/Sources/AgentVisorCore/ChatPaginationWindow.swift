@@ -78,6 +78,28 @@ public struct ChatPaginationWindow: Equatable, Sendable {
         return start..<totalItems
     }
 
+    /// Extends the ordinary suffix window backward to the prompt that opened
+    /// the partially visible turn. The safety cap remains authoritative: one
+    /// pathological mega-turn must not restore the unbounded rendering cost
+    /// this pagination type exists to prevent.
+    public func sliceAlignedToPrompt(
+        totalItems: Int,
+        promptIndices: [Int],
+        safetyCap: Int = ChatPaginationWindow.safetyCap
+    ) -> Range<Int> {
+        let base = slice(totalItems: totalItems)
+        guard base.lowerBound > 0,
+              let prompt = promptIndices
+                .filter({ $0 >= 0 && $0 <= base.lowerBound })
+                .max() else {
+            return base
+        }
+        guard base.upperBound - prompt <= max(0, safetyCap) else {
+            return base
+        }
+        return prompt..<base.upperBound
+    }
+
     /// True when the slice starts at index > 0, i.e. there is at
     /// least one earlier item not currently rendered. UI uses this
     /// to decide whether to show the "Load earlier messages" button.

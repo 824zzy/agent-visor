@@ -21,6 +21,29 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
         )
     }
 
+    func testPillLabelsStayOnSessionIdentityInsteadOfRunningActivity() throws {
+        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let start = try XCTUnwrap(source.range(of: "static func sessionLabel(_ session: SessionState) -> String"))
+        let end = try XCTUnwrap(
+            source.range(
+                of: "private static func truncate",
+                range: start.upperBound..<source.endIndex
+            )
+        )
+        let labelFunction = String(source[start.lowerBound..<end.lowerBound])
+
+        XCTAssertTrue(
+            labelFunction.contains("MenuBarPillTitlePolicy.title"),
+            "Pills should derive their label from stable session identity."
+        )
+        for activityField in ["pendingToolName", "toolTracker", "lastToolName", "lastMessage"] {
+            XCTAssertFalse(
+                labelFunction.contains(activityField),
+                "Running activity (\(activityField)) belongs in status/hover detail, not the pill title."
+            )
+        }
+    }
+
     func testPillBarUsesHybridSurfacePolicyInsteadOfProjectRoundRobin() throws {
         let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
@@ -52,8 +75,8 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
         XCTAssertTrue(source.contains("static let height: CGFloat = 24"))
         XCTAssertEqual(
             source.components(separatedBy: "height: MenuBarPillMetrics.height").count - 1,
-            3,
-            "Session, overflow, and usage pills should share the same fixed height."
+            4,
+            "Session, overflow, Codex-usage, and Claude-usage pills should share the same fixed height."
         )
     }
 
@@ -62,20 +85,81 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
 
         XCTAssertTrue(source.contains("static let sessionFontSize: CGFloat = 11"))
         XCTAssertTrue(source.contains("static let usageFontSize: CGFloat = 10.5"))
-        XCTAssertTrue(source.contains("static let horizontalPadding: CGFloat = 7"))
+        XCTAssertTrue(source.contains("static let standardHorizontalPadding: CGFloat = 7"))
+        XCTAssertTrue(source.contains("static let pressureHorizontalPadding: CGFloat = 5"))
         XCTAssertTrue(source.contains("static let statusDotDiameter: CGFloat = 6"))
         XCTAssertGreaterThanOrEqual(
             source.components(separatedBy: "MenuBarPillMetrics.sessionFontSize").count - 1,
             3,
             "Session rendering, overflow rendering, and width measurement must share the font size."
         )
+        XCTAssertTrue(source.contains(".padding(.horizontal, horizontalPadding)"))
         XCTAssertGreaterThanOrEqual(
-            source.components(separatedBy: "MenuBarPillMetrics.horizontalPadding").count - 1,
-            3,
-            "Session rendering and width estimates must use the same metric."
+            source.components(separatedBy: "+ (2 * horizontalPadding)").count - 1,
+            2,
+            "Session and overflow width estimates must use the selected plan padding."
         )
-        XCTAssertTrue(source.contains("width: PillBarCoordinator.overflowPillWidth(count: count)"))
+        XCTAssertTrue(source.contains("OverflowPillButton(count: overflowCount, width: overflowPillWidth)"))
         XCTAssertTrue(source.contains("MenuBarPillMetrics.usageFontSize"))
+    }
+
+    func testPackingPlanOwnsPressureGeometryForRenderingAndHitTesting() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let sideContent = try String(contentsOf: notchSideContentURL(from: testFile))
+        let notchView = try String(contentsOf: notchViewURL(from: testFile))
+
+        XCTAssertTrue(sideContent.contains("let density: PillBarPacker.Density"))
+        XCTAssertTrue(sideContent.contains("let pillSpacing: CGFloat"))
+        XCTAssertTrue(sideContent.contains("let horizontalPadding: CGFloat"))
+        XCTAssertTrue(sideContent.contains("let renderedWidth: CGFloat"))
+        XCTAssertTrue(sideContent.contains(".padding(.horizontal, horizontalPadding)"))
+        XCTAssertTrue(sideContent.contains("HStack(spacing: pillSpacing)"))
+        XCTAssertTrue(sideContent.contains("OverflowPillButton(count: overflowCount, width: overflowPillWidth)"))
+
+        XCTAssertTrue(notchView.contains("width: pill.renderedWidth"))
+        XCTAssertTrue(notchView.contains("leftOverflowWidth: pack.leftOverflowWidth"))
+        XCTAssertTrue(notchView.contains("rightOverflowWidth: pack.rightOverflowWidth"))
+        XCTAssertTrue(notchView.contains("pillSpacing: pack.pillSpacing"))
+        XCTAssertTrue(notchView.contains("horizontalPadding: pack.horizontalPadding"))
+    }
+
+    func testPillBarsUseExactlyOneNotchEdgePaddingLayer() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let sideContent = try String(contentsOf: notchSideContentURL(from: testFile))
+        let notchView = try String(contentsOf: notchViewURL(from: testFile))
+
+        XCTAssertFalse(
+            sideContent.contains(".padding(\n                side == .left ? .trailing : .leading"),
+            "NotchPillBar must not add a second notch-edge padding layer."
+        )
+        XCTAssertTrue(sideContent.contains("let leftUsable = max(0, leftMax)"))
+        XCTAssertTrue(sideContent.contains("usableWidth: Double(max(0, rightMax))"))
+        XCTAssertTrue(
+            notchView.contains("let leftAnchor = pillLeftEdge - PillBarCoordinator.edgePadding")
+        )
+        XCTAssertTrue(
+            notchView.contains("let rightAnchor = pillRightEdge + PillBarCoordinator.edgePadding")
+        )
+        XCTAssertFalse(notchView.contains("2 * PillBarCoordinator.edgePadding"))
+        XCTAssertTrue(notchView.contains("leftBarWidth: leftSafeWidth,"))
+        XCTAssertTrue(notchView.contains("rightBarWidth: rightSafeWidth,"))
+    }
+
+    func testPackingPlanCarriesFullCompactAndTightLabelTiers() throws {
+        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+
+        XCTAssertTrue(source.contains("let labelTier: PillBarPacker.LabelTier"))
+        XCTAssertTrue(source.contains("let compactLabel: String"))
+        XCTAssertTrue(source.contains("let tightLabel: String"))
+        XCTAssertTrue(source.contains("compactWidth: compactWidth"))
+        XCTAssertTrue(source.contains("let labelTier = result.labelTier(for: id)"))
+        XCTAssertTrue(source.contains("switch labelTier"))
+        XCTAssertTrue(source.contains("case .compact:"))
+        XCTAssertTrue(source.contains("entry.compactLabel"))
+        XCTAssertTrue(source.contains("case .tight:"))
+        XCTAssertTrue(source.contains("entry.tightLabel"))
+        XCTAssertTrue(source.contains("static func tightLabel(from label: String)"))
+        XCTAssertFalse(source.contains("result.shortenedIds.contains(id)"))
     }
 
     func testPillOverflowCountsAllNonVisibleWorkspaceSessions() throws {

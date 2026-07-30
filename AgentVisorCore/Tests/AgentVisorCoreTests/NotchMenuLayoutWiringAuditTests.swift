@@ -25,17 +25,21 @@ final class NotchMenuLayoutWiringAuditTests: XCTestCase {
         XCTAssertTrue(coordinator.contains(".localOwner(edge: edge"))
     }
 
-    func testPeriodicProbeDoesNotResolveOwnerAgainForWindowMovement() throws {
+    func testPeriodicProbeReevaluatesOwnerWhenWindowTopologyChanges() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let coordinator = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/Services/MenuBar/NotchMenuLayoutCoordinator.swift"))
 
         XCTAssertTrue(coordinator.contains("let frontmostPid: pid_t?"))
+        XCTAssertTrue(coordinator.contains("let observedContext = resolveContext"))
         XCTAssertTrue(coordinator.contains("NotchMenuContextRefreshPolicy.shouldResolveOwner"))
         XCTAssertTrue(coordinator.contains("contextFrontmostPid: context?.frontmostPid"))
         XCTAssertTrue(coordinator.contains("observedFrontmostPid: observedFrontmostPid"))
         XCTAssertTrue(coordinator.contains("contextTargetScreenID: context?.targetScreenID"))
         XCTAssertTrue(coordinator.contains("observedTargetScreenID: observedTargetScreenID"))
+        XCTAssertTrue(coordinator.contains("contextOwnerPid: context?.ownerPid"))
+        XCTAssertTrue(coordinator.contains("observedOwnerPid: observedContext.ownerPid"))
+        XCTAssertTrue(coordinator.contains("observedOwnerIsResolved: observedContext.ownerIsResolved"))
         XCTAssertTrue(coordinator.contains("contextOwnerIsResolved: context?.ownerIsResolved ?? false"))
     }
 

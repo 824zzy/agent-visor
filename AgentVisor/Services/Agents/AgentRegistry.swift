@@ -17,6 +17,7 @@ enum AgentRegistry {
         AuggieAgentProvider(),
         CodexAgentProvider(),
         CursorAgentProvider(),
+        PiAgentProvider(),
     ]
 
     /// Provider for a specific agent id, or nil if unsupported.

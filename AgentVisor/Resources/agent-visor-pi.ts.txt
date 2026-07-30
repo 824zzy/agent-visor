@@ -1,0 +1,108 @@
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { existsSync } from "node:fs";
+import { createConnection } from "node:net";
+import { execFileSync } from "node:child_process";
+
+const SOCKET_PATH = "/tmp/agent-visor.sock";
+const SOCKET_TIMEOUT_MS = 100;
+const HEARTBEAT_INTERVAL_MS = 10_000;
+
+function controllingTTY(): string | undefined {
+  try {
+    const value = execFileSync("/usr/bin/tty", [], {
+      encoding: "utf8",
+      stdio: ["inherit", "pipe", "ignore"],
+      timeout: 100,
+    }).trim();
+    if (!value || value === "not a tty") return undefined;
+    return value.replace(/^\/dev\//, "");
+  } catch {
+    return undefined;
+  }
+}
+
+const tty = controllingTTY();
+
+function report(
+  ctx: ExtensionContext,
+  lifecycleEvent: string,
+  status: string,
+  tool?: string,
+  toolUseId?: string,
+): void {
+  if (ctx.mode !== "tui" || !existsSync(SOCKET_PATH)) return;
+
+  const payload = {
+    session_id: ctx.sessionManager.getSessionId(),
+    session_file: ctx.sessionManager.getSessionFile(),
+    cwd: ctx.cwd,
+    event: lifecycleEvent,
+    status,
+    pid: process.pid,
+    tty,
+    tool,
+    tool_use_id: toolUseId,
+    agent: "pi",
+  };
+
+  const socket = createConnection(SOCKET_PATH);
+  socket.setTimeout(SOCKET_TIMEOUT_MS);
+  socket.on("connect", () => socket.end(JSON.stringify(payload)));
+  socket.on("timeout", () => socket.destroy());
+  socket.on("error", () => socket.destroy());
+  socket.unref();
+}
+
+export default function (pi: ExtensionAPI) {
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+  function stopHeartbeat(): void {
+    if (heartbeatTimer === undefined) return;
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = undefined;
+  }
+
+  function startHeartbeat(ctx: ExtensionContext): void {
+    stopHeartbeat();
+    if (ctx.mode !== "tui") return;
+    heartbeatTimer = setInterval(() => {
+      report(ctx, "SessionHeartbeat", "alive");
+    }, HEARTBEAT_INTERVAL_MS);
+    heartbeatTimer.unref();
+  }
+
+  pi.on("session_start", (_event, ctx) => {
+    report(ctx, "SessionStart", "idle");
+    startHeartbeat(ctx);
+  });
+
+  pi.on("agent_start", (_event, ctx) => {
+    report(ctx, "AgentStart", "processing");
+  });
+
+  pi.on("tool_execution_start", (event, ctx) => {
+    report(ctx, "PreToolUse", "running_tool", event.toolName, event.toolCallId);
+  });
+
+  pi.on("tool_execution_end", (event, ctx) => {
+    report(ctx, "PostToolUse", "processing", event.toolName, event.toolCallId);
+  });
+
+  pi.on("session_before_compact", (_event, ctx) => {
+    report(ctx, "PreCompact", "compacting");
+  });
+
+  // agent_end is intentionally not a completion signal: Pi may still retry,
+  // compact, or run queued follow-ups. agent_settled is the user-visible
+  // Ready boundary.
+  pi.on("agent_settled", (_event, ctx) => {
+    report(ctx, "Stop", "waiting_for_input");
+  });
+
+  pi.on("session_shutdown", (event, ctx) => {
+    stopHeartbeat();
+    if (event.reason !== "reload") {
+      report(ctx, "SessionEnd", "ended");
+    }
+  });
+}

@@ -29,6 +29,11 @@ struct MainSplitView: View {
                 .opacity(viewModel.mode == .sessions ? 1 : 0)
                 .allowsHitTesting(viewModel.mode == .sessions)
 
+            if viewModel.mode == .chat {
+                chatDestination
+                    .transition(.opacity)
+            }
+
             if viewModel.mode == .settings {
                 SettingsWindowView(windowViewModel: viewModel)
                     .transition(.opacity)
@@ -38,15 +43,18 @@ struct MainSplitView: View {
         }
         .environment(\.chatFontScale, CGFloat(chatFontScaleStorage))
         .preferredColorScheme(preferredScheme)
-        .sheet(isPresented: inspectorBinding) {
-            inspectorSheet
-        }
         .onAppear {
             installKeyboardMonitor()
             viewModel.refreshHistoricalSessions()
-            DispatchQueue.main.async { searchFocused = true }
+            if viewModel.mode == .sessions {
+                DispatchQueue.main.async { searchFocused = true }
+            }
+        }
+        .onChange(of: viewModel.mode) { _, mode in
+            DispatchQueue.main.async { searchFocused = mode == .sessions }
         }
         .onChange(of: viewModel.searchFocusRequest) { _, _ in
+            guard viewModel.mode == .sessions else { return }
             DispatchQueue.main.async { searchFocused = true }
         }
         .onDisappear { removeKeyboardMonitor() }
@@ -68,6 +76,45 @@ struct MainSplitView: View {
             browserFooter
         }
         .background(ChatTheme.headerBg)
+    }
+
+    @ViewBuilder
+    private var chatDestination: some View {
+        if let id = viewModel.selectedSessionId,
+           let item = viewModel.browserItem(id),
+           item.canEnterChat {
+            SessionChatWorkspace(
+                sessionId: id,
+                ownerName: item.ownerName,
+                canOpenOriginal: item.canOpenOriginal,
+                onBack: { viewModel.leaveChat() },
+                onOpenOriginal: { viewModel.openOriginal(id) }
+            )
+            .id(id)
+        } else {
+            VStack(spacing: 0) {
+                HStack {
+                    Button {
+                        viewModel.leaveChat()
+                    } label: {
+                        Label("Sessions", systemImage: "chevron.left")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(ChatTheme.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .frame(height: 58)
+                Divider().overlay(ChatTheme.cardBorder)
+                ContentUnavailableView(
+                    "Chat unavailable",
+                    systemImage: "message.slash",
+                    description: Text("This session no longer has renderable Chat content.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .background(ChatTheme.headerBg)
+        }
     }
 
     private var browserHeader: some View {
@@ -102,10 +149,8 @@ struct MainSplitView: View {
                 permissionHealthBanner
             }
         }
-        .frame(maxWidth: 980, alignment: .leading)
-        .padding(.horizontal, 28)
         .padding(.vertical, 12)
-        .frame(maxWidth: .infinity)
+        .mainContentRail(alignment: .leading)
         .background(ChatTheme.headerBg)
     }
 
@@ -274,11 +319,9 @@ struct MainSplitView: View {
                             }
                         }
                     }
-                    .frame(maxWidth: 980, alignment: .leading)
-                    .padding(.horizontal, 28)
                     .padding(.top, 10)
                     .padding(.bottom, 24)
-                    .frame(maxWidth: .infinity)
+                    .mainContentRail(alignment: .leading)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .dimmedScroller()
@@ -303,6 +346,10 @@ struct MainSplitView: View {
             let hotkeyPosition = viewModel.visibleBrowserSessionIds
                 .prefix(9)
                 .firstIndex(of: sessionId)
+            let primaryAction = SessionBrowserPrimaryActionPolicy.action(
+                canEnterChat: item.canEnterChat,
+                canOpenOriginal: item.canOpenOriginal
+            )
             SessionBrowserRow(
                 item: item,
                 displaySection: section ?? item.section,
@@ -310,8 +357,14 @@ struct MainSplitView: View {
                 isHighlighted: isHighlighted,
                 hotkeyPosition: hotkeyPosition,
                 isCommandHeld: hotkeyPosition != nil && commandKey.isCommandHeld,
-                onOpen: { viewModel.openOriginal(sessionId) },
-                onInspect: { viewModel.inspectSession(sessionId) },
+                primaryAction: primaryAction,
+                onActivate: {
+                    viewModel.activateSession(
+                        sessionId
+                    )
+                },
+                onEnterChat: { viewModel.enterChat(sessionId) },
+                onOpenOriginal: { viewModel.openOriginal(sessionId) },
                 onHide: { viewModel.hideBrowserItem(sessionId) }
             )
             .id(sessionId)
@@ -354,21 +407,43 @@ struct MainSplitView: View {
     }
 
     private var browserFooter: some View {
-        HStack(spacing: 16) {
+        let primaryAction = footerAction(alternate: false)
+        let alternateAction = footerAction(alternate: true)
+        return HStack(spacing: 16) {
             keyboardHint(keys: "↑↓", label: "Navigate")
-            keyboardHint(keys: "↩", label: "Open original")
-            keyboardHint(keys: "⌥↩", label: "Inspect")
+            keyboardHint(keys: "↩", label: footerLabel(for: primaryAction))
+            if alternateAction != primaryAction, alternateAction != .none {
+                keyboardHint(keys: "⇧↩", label: footerLabel(for: alternateAction))
+            }
             Spacer(minLength: 12)
             footerShortcutEducation
         }
-        .frame(maxWidth: 980)
-        .padding(.horizontal, 28)
+        .mainContentRail()
         .frame(height: 42)
-        .frame(maxWidth: .infinity)
         .background(ChatTheme.headerBg)
         .overlay(alignment: .top) {
             Divider().overlay(ChatTheme.cardBorder.opacity(0.8))
         }
+    }
+
+    private func footerAction(alternate: Bool) -> SessionBrowserPrimaryAction {
+        guard let sessionId = viewModel.keyboardCursorSessionId,
+              let item = viewModel.browserItem(sessionId) else {
+            return SessionBrowserPrimaryActionPolicy.action(
+                canEnterChat: true,
+                canOpenOriginal: true,
+                alternate: alternate
+            )
+        }
+        return SessionBrowserPrimaryActionPolicy.action(
+            canEnterChat: item.canEnterChat,
+            canOpenOriginal: item.canOpenOriginal,
+            alternate: alternate
+        )
+    }
+
+    private func footerLabel(for action: SessionBrowserPrimaryAction) -> String {
+        SessionBrowserPrimaryActionPolicy.footerLabel(for: action) ?? "Unavailable"
     }
 
     private func keyboardHint(keys: String, label: String) -> some View {
@@ -382,42 +457,13 @@ struct MainSplitView: View {
         }
     }
 
-    private var inspectorBinding: Binding<Bool> {
-        Binding(
-            get: { viewModel.selectedSessionId != nil },
-            set: { isPresented in
-                if !isPresented { viewModel.dismissInspector() }
-            }
-        )
-    }
-
-    @ViewBuilder
-    private var inspectorSheet: some View {
-        if let id = viewModel.selectedSessionId,
-           let item = viewModel.browserItem(id) {
-            if viewModel.sessionsById[id] != nil {
-                SessionWorkspaceDetail(sessionId: id)
-                    .frame(minWidth: 760, minHeight: 560)
-            } else {
-                HistoricalSessionInspector(
-                    item: item,
-                    onOpen: { viewModel.openOriginal(id) }
-                )
-                .frame(minWidth: 680, minHeight: 440)
-            }
-        } else {
-            EmptyView()
-        }
-    }
-
     private func installKeyboardMonitor() {
         guard keyboardMonitor == nil else { return }
         keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let semantic: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
             let modifiers = event.modifierFlags.intersection(semantic)
 
-            guard viewModel.mode == .sessions,
-                  viewModel.selectedSessionId == nil else { return event }
+            guard viewModel.mode == .sessions else { return event }
 
             if modifiers == .command,
                let characters = event.charactersIgnoringModifiers,
@@ -434,10 +480,14 @@ struct MainSplitView: View {
                 DispatchQueue.main.async { viewModel.moveKeyboardCursor(by: -1) }
                 return nil
             case 36 where modifiers.isEmpty:
-                DispatchQueue.main.async { viewModel.openKeyboardCursor() }
+                DispatchQueue.main.async {
+                    viewModel.activateKeyboardCursor()
+                }
                 return nil
-            case 36 where modifiers == .option:
-                DispatchQueue.main.async { viewModel.inspectKeyboardCursor() }
+            case 36 where modifiers == .shift:
+                DispatchQueue.main.async {
+                    viewModel.activateKeyboardCursor(alternate: true)
+                }
                 return nil
             case 3 where modifiers == .command:
                 DispatchQueue.main.async { searchFocused = true }
@@ -469,14 +519,16 @@ private struct SessionBrowserRow: View {
     let isHighlighted: Bool
     let hotkeyPosition: Int?
     let isCommandHeld: Bool
-    let onOpen: () -> Void
-    let onInspect: () -> Void
+    let primaryAction: SessionBrowserPrimaryAction
+    let onActivate: () -> Void
+    let onEnterChat: () -> Void
+    let onOpenOriginal: () -> Void
     let onHide: () -> Void
     @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            Button(action: onOpen) {
+        HStack(spacing: 8) {
+            Button(action: onActivate) {
                 HStack(spacing: 13) {
                     statusMark
                     AgentBrandLogo(agent: item.agentID, size: 28)
@@ -510,6 +562,9 @@ private struct SessionBrowserRow: View {
                             .frame(minWidth: 28, alignment: .trailing)
                     }
                     hotkeyBadge
+                    if item.canEnterChat {
+                        chatDisclosureChevron
+                    }
                 }
                 .padding(.leading, 12)
                 .padding(.trailing, 8)
@@ -517,17 +572,19 @@ private struct SessionBrowserRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(accessibilityLabel)
+            .disabled(!item.canEnterChat && !item.canOpenOriginal)
+            .accessibilityLabel(primaryAccessibilityLabel)
 
-            Button(action: onInspect) {
-                Image(systemName: "info.circle")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(isHovered || isHighlighted ? ChatTheme.secondary : ChatTheme.tertiary)
-                    .frame(width: 38, height: 42)
+            if item.canOpenOriginal {
+                SessionBrowserOwnerAction(
+                    fullTitle: "Open in \(item.ownerName)",
+                    compactTitle: item.ownerName,
+                    action: onOpenOriginal
+                )
+                .frame(width: 138, alignment: .trailing)
+                .padding(.trailing, 8)
+                .accessibilityLabel("Open \(item.title) in \(item.ownerName)")
             }
-            .buttonStyle(.plain)
-            .help("Inspect session")
-            .accessibilityLabel("Inspect \(item.title)")
         }
         .background(rowBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -539,8 +596,12 @@ private struct SessionBrowserRow: View {
             isHovered = hovering
         }
         .contextMenu {
-            Button("Open in \(item.ownerName)", action: onOpen)
-            Button("Inspect session", action: onInspect)
+            if item.canEnterChat {
+                Button("Enter Chat", action: onEnterChat)
+            }
+            if item.canOpenOriginal {
+                Button("Open in \(item.ownerName)", action: onOpenOriginal)
+            }
             Divider()
             Button("Hide session", action: onHide)
         }
@@ -589,8 +650,62 @@ private struct SessionBrowserRow: View {
         .frame(width: 35, height: 24)
     }
 
-    private var accessibilityLabel: String {
-        "\(item.title), \(displaySection.displayTitle), \(item.sourceName), \(item.projectName)"
+    private var chatDisclosureChevron: some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(isHovered ? ChatTheme.link : ChatTheme.tertiary)
+            .frame(width: 28, height: 32)
+            .accessibilityHidden(true)
+    }
+
+    private var primaryAccessibilityLabel: String {
+        let action: String
+        switch primaryAction {
+        case .enterChat:
+            action = "Enter Chat"
+        case .openOriginal:
+            action = "Open in \(item.ownerName)"
+        case .none:
+            action = "No available action"
+        }
+        return "\(item.title), \(displaySection.displayTitle), \(item.sourceName), \(item.projectName), \(action)"
+    }
+}
+
+private struct SessionBrowserOwnerAction: View {
+    let fullTitle: String
+    let compactTitle: String
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            ViewThatFits(in: .horizontal) {
+                actionLabel(fullTitle)
+                actionLabel(compactTitle)
+                Image(systemName: "arrow.up.forward.app")
+                    .frame(width: 28, height: 32)
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(isHovered ? ChatTheme.link : ChatTheme.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32, alignment: .trailing)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isHovered ? ChatTheme.link.opacity(0.08) : Color.clear)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .onHover { isHovered = $0 }
+        .help(fullTitle)
+    }
+
+    private func actionLabel(_ title: String) -> some View {
+        Label(title, systemImage: "arrow.up.forward.app")
+            .fixedSize(horizontal: true, vertical: false)
     }
 }
 

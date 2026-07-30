@@ -45,7 +45,10 @@ actor CodexConversationSummary {
         }
 
         let parsed = summary.transcript
-        let info = CodexConversationInfoBuilder.build(from: parsed)
+        let info = CodexConversationInfoBuilder.build(
+            from: parsed,
+            modelDisplayName: CodexModelCatalogReader.displayName(for: parsed.modelName)
+        )
         cache[sessionId] = CachedInfo(
             signature: signature,
             info: info,

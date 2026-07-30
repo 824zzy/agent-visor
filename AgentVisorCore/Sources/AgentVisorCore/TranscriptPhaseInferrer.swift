@@ -20,10 +20,11 @@ public enum LastEntryRole: Equatable, Sendable {
     case none
 }
 
-/// Phase inferred purely from transcript shape, for OBSERVED agents that
-/// expose no hook seam (Codex.app GUI threads, Cursor IDE Agents Window).
-/// Hooked agents (claude-code, codex CLI) get their phase from hook
-/// events and never go through this path.
+/// Phase inferred purely from transcript shape. It is authoritative for
+/// observed agents that expose no hook seam (Codex.app GUI threads, Cursor
+/// IDE Agents Window), and may be used as a guarded completion fallback by
+/// hybrid sources such as Claude Desktop. Hooked terminal agents keep their
+/// lifecycle events and source metadata authoritative.
 public enum InferredPhase: Equatable, Sendable {
     case processing
     case waitingForInput

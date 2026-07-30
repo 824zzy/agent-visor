@@ -21,7 +21,7 @@ final class CodexUsageGlanceWiringAuditTests: XCTestCase {
         XCTAssertTrue(bridge.contains("CodexUsageMonitor.shared.handleNotification"))
     }
 
-    func testUsagePillIsFixedWidthReservedAndUsesRenderSnapshotHitRouting() throws {
+    func testUsagePillReservesItsSnapshotShapeAndUsesRenderSnapshotHitRouting() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let sideContent = try source(
             root.appendingPathComponent("AgentVisor/UI/Components/NotchSideContent.swift")
@@ -31,9 +31,11 @@ final class CodexUsageGlanceWiringAuditTests: XCTestCase {
         )
 
         XCTAssertTrue(sideContent.contains("struct CodexUsagePillButton"))
-        XCTAssertTrue(sideContent.contains("CodexUsageGlancePolicy.fixedWidth"))
+        XCTAssertTrue(sideContent.contains("codexWidth: codexUsagePresentation?.width"))
+        XCTAssertTrue(sideContent.contains("codexUsagePresentation?.width"))
         XCTAssertTrue(sideContent.contains("struct CodexUsagePopover"))
-        XCTAssertTrue(notchView.contains("includeUsage: codexUsageMonitor.showsPill"))
+        XCTAssertTrue(notchView.contains("codexUsagePresentation: codexUsagePresentation"))
+        XCTAssertFalse(notchView.contains("includeUsage: codexUsageMonitor.showsPill"))
         XCTAssertFalse(notchView.contains("includeUsage: AppSettings.codexUsageGlanceEnabled"))
         XCTAssertFalse(notchView.contains("codexUsageMonitor.enabled"))
         XCTAssertTrue(notchView.contains("rightUsageWidth:"))
@@ -41,7 +43,7 @@ final class CodexUsageGlanceWiringAuditTests: XCTestCase {
         XCTAssertTrue(notchView.contains("showCodexUsagePopover = willShowUsagePopover"))
     }
 
-    func testUsagePillShowsBothWindowsWithoutASessionStatusDot() throws {
+    func testUsagePillRendersOnlyRecognizedMenuBarWindowsWithoutAStatusDot() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let sideContent = try source(
             root.appendingPathComponent("AgentVisor/UI/Components/NotchSideContent.swift")
@@ -53,10 +55,13 @@ final class CodexUsageGlanceWiringAuditTests: XCTestCase {
         ))
         let usagePill = String(sideContent[start.lowerBound..<end.lowerBound])
 
-        XCTAssertTrue(usagePill.contains("presentation.fiveHour"))
-        XCTAssertTrue(usagePill.contains("presentation.sevenDay"))
+        XCTAssertTrue(usagePill.contains("CodexUsageGlancePolicy.menuBarPresentation"))
+        XCTAssertTrue(usagePill.contains("ForEach(Array(presentation.windows.enumerated())"))
+        XCTAssertTrue(usagePill.contains("width: CGFloat(presentation.width)"))
         XCTAssertTrue(usagePill.contains("CodexUsagePillValue"))
         XCTAssertTrue(usagePill.contains("switch presentation.tone"))
+        XCTAssertFalse(usagePill.contains("presentation.fiveHour"))
+        XCTAssertFalse(usagePill.contains("presentation.sevenDay"))
         XCTAssertFalse(usagePill.contains("Circle()"))
         XCTAssertFalse(usagePill.contains("private var accent"))
     }

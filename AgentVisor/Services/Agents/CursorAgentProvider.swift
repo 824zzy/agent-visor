@@ -31,6 +31,7 @@ struct CursorAgentProvider: AgentProvider {
     nonisolated let id: AgentID = .cursor
     nonisolated let displayName: String = "Cursor"
     nonisolated let processNameFilter: String = "cursor-agent"
+    nonisolated let canRenderChat = true
 
     nonisolated init() {}
 

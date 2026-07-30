@@ -10,7 +10,7 @@
 //  NSScrollView → ChatStackDocumentView (custom flipped NSView) →
 //  one persistent NSHostingView per row. The document view does its
 //  own vertical layout: it walks its children, sets each child's
-//  frame to the document's content width (minus horizontal padding)
+//  frame to the document's resolved centered content rail
 //  FIRST, then asks the child for its `fittingSize.height` AFTER the
 //  width is established, and sets the frame's height accordingly.
 //
@@ -77,6 +77,10 @@ import SwiftUI
 struct FlatChatRow: Equatable, Identifiable {
     let id: String
     let item: ChatHistoryItem
+    let agentID: AgentID
+    /// Original tool rows represented by this row when adjacent Pi actions
+    /// are batched. Empty for ordinary rows.
+    let batchedItems: [ChatHistoryItem]
     let groupingDepth: Int  // 0 = parent, 1 = child of turn-duration parent
     /// Number of collapsible child steps under this row (0 unless this
     /// is a turn-duration parent that has children). Drives the
@@ -89,9 +93,12 @@ struct FlatChatRow: Equatable, Identifiable {
     /// tool call — drives the warning glyph on the collapsed header so a
     /// mid-turn failure isn't buried. False for non-parent rows.
     let turnHasError: Bool
-    /// Count of work steps folded under this turn (for the "· N steps"
-    /// header label). 0 for non-parent rows.
+    /// Count of work steps folded under this turn. For Pi this is the
+    /// action count (tool invocations only); reasoning does not inflate it.
     let turnStepCount: Int
+    /// Provider-specific count copy such as "10 actions". Empty preserves
+    /// the existing Claude/Codex header treatment.
+    let turnCountLabel: String
     /// Content-aware summary of the turn's work ("Edited 3 files · Ran 1
     /// command"), built from the folded children's canonical tools. Empty
     /// for non-parent rows.
@@ -99,20 +106,26 @@ struct FlatChatRow: Equatable, Identifiable {
 
     init(
         item: ChatHistoryItem,
+        agentID: AgentID = .claudeCode,
+        batchedItems: [ChatHistoryItem] = [],
         groupingDepth: Int = 0,
         turnChildCount: Int = 0,
         isTurnExpanded: Bool = false,
         turnHasError: Bool = false,
         turnStepCount: Int = 0,
+        turnCountLabel: String = "",
         turnActivityLabel: String = ""
     ) {
         self.id = item.id
         self.item = item
+        self.agentID = agentID
+        self.batchedItems = batchedItems
         self.groupingDepth = groupingDepth
         self.turnChildCount = turnChildCount
         self.isTurnExpanded = isTurnExpanded
         self.turnHasError = turnHasError
         self.turnStepCount = turnStepCount
+        self.turnCountLabel = turnCountLabel
         self.turnActivityLabel = turnActivityLabel
     }
 
@@ -131,8 +144,11 @@ struct FlatChatRow: Equatable, Identifiable {
         var childCountByParent: [String: Int] = [:]
         var errorByParent: [String: Bool] = [:]
         var stepsByParent: [String: Int] = [:]
+        var countLabelByParent: [String: String] = [:]
         var activityLabelByParent: [String: String] = [:]
+        var piAlwaysVisibleIssueIds: Set<String> = []
         let isCodex = agentID == .codex
+        let isPi = agentID == .pi
         let groups: [TurnCollapsePlanner.RowGroup] = rows.map { row in
             itemsById[row.item.id] = row.item
             for child in row.children { itemsById[child.id] = child }
@@ -150,11 +166,20 @@ struct FlatChatRow: Equatable, Identifiable {
             var activity = ClaudeTurnActivity()        // Claude path
             var codexExplored = 0                       // Codex path
             var codexRan = 0
+            var piRawToolNames: [String] = []
             for child in row.children {
                 switch child.type {
                 case .toolCall(let tool):
+                    if tool.name == PiReasoningGroupView.sentinelToolName {
+                        continue
+                    }
                     steps += 1
-                    if tool.status == .error || tool.status == .interrupted { hasError = true }
+                    let isFailure = tool.status == .error || tool.status == .interrupted
+                    let isBlocking = tool.status == .waitingForApproval
+                    if isFailure { hasError = true }
+                    if isPi && (isFailure || isBlocking) {
+                        piAlwaysVisibleIssueIds.insert(child.id)
+                    }
                     if isCodex {
                         if tool.name == "Shell",
                            CodexToolActivitySummarizer.category(forCommand: tool.input["command"] ?? "") == .explore {
@@ -162,15 +187,18 @@ struct FlatChatRow: Equatable, Identifiable {
                         } else {
                             codexRan += 1
                         }
+                    } else if isPi {
+                        piRawToolNames.append(tool.name)
                     } else {
                         let canonical = ToolNameMapper.canonical(for: tool.name, agent: .claudeCode)
                         ClaudeTurnActivitySummarizer.accumulate(canonical, into: &activity)
                     }
                 case .thinking, .localCommandOutput:
-                    steps += 1
+                    if !isPi { steps += 1 }
                 case .interrupted:
-                    steps += 1
+                    if !isPi { steps += 1 }
                     hasError = true
+                    if isPi { piAlwaysVisibleIssueIds.insert(child.id) }
                 default:
                     break
                 }
@@ -184,6 +212,13 @@ struct FlatChatRow: Equatable, Identifiable {
                 activityLabelByParent[row.item.id] = (codexExplored + codexRan) > 0
                     ? CodexToolActivity(exploredCount: codexExplored, ranCount: codexRan).summary
                     : ""
+            } else if isPi {
+                let summary = PiTurnActivitySummarizer.summarize(
+                    rawToolNames: piRawToolNames
+                )
+                stepsByParent[row.item.id] = summary.actionCount
+                countLabelByParent[row.item.id] = summary.countLabel
+                activityLabelByParent[row.item.id] = summary.activityLabel
             } else {
                 activityLabelByParent[row.item.id] = activity.label(maxClauses: 2)
             }
@@ -193,7 +228,11 @@ struct FlatChatRow: Equatable, Identifiable {
             )
         }
 
-        let plan = TurnCollapsePlanner.plan(groups: groups, expanded: expanded)
+        let plan = TurnCollapsePlanner.plan(
+            groups: groups,
+            expanded: expanded,
+            alwaysVisibleChildren: isPi ? piAlwaysVisibleIssueIds : []
+        )
         var out: [FlatChatRow] = []
         out.reserveCapacity(plan.count)
         for planned in plan {
@@ -201,15 +240,57 @@ struct FlatChatRow: Equatable, Identifiable {
             let childCount = planned.depth == 0 ? (childCountByParent[planned.id] ?? 0) : 0
             out.append(FlatChatRow(
                 item: item,
+                agentID: agentID ?? .claudeCode,
                 groupingDepth: planned.depth,
                 turnChildCount: childCount,
                 isTurnExpanded: childCount > 0 && expanded.contains(planned.id),
                 turnHasError: planned.depth == 0 ? (errorByParent[planned.id] ?? false) : false,
                 turnStepCount: planned.depth == 0 ? (stepsByParent[planned.id] ?? 0) : 0,
+                turnCountLabel: planned.depth == 0 ? (countLabelByParent[planned.id] ?? "") : "",
                 turnActivityLabel: planned.depth == 0 ? (activityLabelByParent[planned.id] ?? "") : ""
             ))
         }
-        return out
+        return isPi ? coalescingPiToolRows(out) : out
+    }
+
+    private static func coalescingPiToolRows(
+        _ rows: [FlatChatRow]
+    ) -> [FlatChatRow] {
+        let descriptors = rows.map { row -> PiToolBatchPlanner.ItemDescriptor in
+            guard row.groupingDepth == 1,
+                  case .toolCall(let tool) = row.item.type,
+                  tool.name != PiReasoningGroupView.sentinelToolName else {
+                return .init(id: row.id, tool: nil, isBatchable: false)
+            }
+            return .init(
+                id: row.id,
+                tool: ToolNameMapper.canonical(for: tool.name, agent: .pi),
+                isBatchable: tool.status == .success
+            )
+        }
+        let groups = PiToolBatchPlanner.groups(descriptors)
+        var rowsById: [String: FlatChatRow] = [:]
+        rowsById.reserveCapacity(rows.count)
+        for row in rows { rowsById[row.id] = row }
+
+        return groups.compactMap { group in
+            guard let firstId = group.ids.first,
+                  let first = rowsById[firstId] else { return nil }
+            guard group.ids.count > 1 else { return first }
+            let items = group.ids.compactMap { rowsById[$0]?.item }
+            return FlatChatRow(
+                item: first.item,
+                agentID: first.agentID,
+                batchedItems: items,
+                groupingDepth: first.groupingDepth,
+                turnChildCount: first.turnChildCount,
+                isTurnExpanded: first.isTurnExpanded,
+                turnHasError: first.turnHasError,
+                turnStepCount: first.turnStepCount,
+                turnCountLabel: first.turnCountLabel,
+                turnActivityLabel: first.turnActivityLabel
+            )
+        }
     }
 }
 
@@ -219,12 +300,24 @@ struct ChatTableView: NSViewRepresentable {
     let rows: [FlatChatRow]
     let sessionId: String
     let streamTick: Int
+
+    /// Every table row is an independent NSHostingController, so custom
+    /// SwiftUI environment values do not cross that hosting boundary unless
+    /// this bridge forwards them explicitly.
+    @Environment(\.openToolDetail) private var openToolDetail
+    @Environment(\.openPendingEdit) private var openPendingEdit
+    @Environment(\.chatFontScale) private var chatFontScale
     /// Called after the view mounts so the host can keep the proxy
     /// for explicit re-pinning on composer-height-changed, etc.
     var onMount: ((ChatTableProxy) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(sessionId: sessionId)
+        Coordinator(
+            sessionId: sessionId,
+            openToolDetail: openToolDetail,
+            openPendingEdit: openPendingEdit,
+            chatFontScale: chatFontScale
+        )
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -278,6 +371,11 @@ struct ChatTableView: NSViewRepresentable {
         // after makeNSView returns.
         DimmedScroller.install(on: scroll)
         context.coordinator.streamTick = streamTick
+        context.coordinator.updateEnvironment(
+            openToolDetail: openToolDetail,
+            openPendingEdit: openPendingEdit,
+            chatFontScale: chatFontScale
+        )
         context.coordinator.applyDiff(newRows: rows)
     }
 
@@ -306,6 +404,9 @@ struct ChatTableView: NSViewRepresentable {
         var controllersById: [String: NSHostingController<ChatTableCellContent>] = [:]
         var orderedIds: [String] = []
         private var rowsById: [String: FlatChatRow] = [:]
+        private var openToolDetail: (String) -> Void
+        private var openPendingEdit: (PendingEditContext) -> Void
+        private var chatFontScale: CGFloat
 
         /// Tail-pin gate: how far the user has scrolled up from the
         /// document bottom.
@@ -339,8 +440,16 @@ struct ChatTableView: NSViewRepresentable {
         /// half-themed chat the user reported in [Image #16].
         private var appearanceCancellable: AnyCancellable?
 
-        init(sessionId: String) {
+        init(
+            sessionId: String,
+            openToolDetail: @escaping (String) -> Void,
+            openPendingEdit: @escaping (PendingEditContext) -> Void,
+            chatFontScale: CGFloat
+        ) {
             self.sessionId = sessionId
+            self.openToolDetail = openToolDetail
+            self.openPendingEdit = openPendingEdit
+            self.chatFontScale = chatFontScale
             super.init()
             // dropFirst skips the launch-time replay (each Coordinator
             // is created fresh per ChatTableView mount, so the initial
@@ -353,6 +462,22 @@ struct ChatTableView: NSViewRepresentable {
                 .sink { [weak self] _ in
                     self?.handleAppearanceFlip()
                 }
+        }
+
+        func updateEnvironment(
+            openToolDetail: @escaping (String) -> Void,
+            openPendingEdit: @escaping (PendingEditContext) -> Void,
+            chatFontScale: CGFloat
+        ) {
+            self.openToolDetail = openToolDetail
+            self.openPendingEdit = openPendingEdit
+            guard self.chatFontScale != chatFontScale else { return }
+            self.chatFontScale = chatFontScale
+            for (id, controller) in controllersById {
+                guard let row = rowsById[id] else { continue }
+                controller.rootView = cellContent(for: row)
+            }
+            documentView?.invalidateLayoutAndRedisplay()
         }
 
         /// Force every mounted cell to re-render against the new
@@ -372,8 +497,7 @@ struct ChatTableView: NSViewRepresentable {
             // layout pass.
             for (id, controller) in controllersById {
                 guard let row = rowsById[id] else { continue }
-                controller.rootView = ChatTableCellContent(
-                    row: row, sessionId: sessionId)
+                controller.rootView = cellContent(for: row)
             }
             documentView.needsLayout = true
             documentView.layoutSubtreeIfNeeded()
@@ -459,8 +583,7 @@ struct ChatTableView: NSViewRepresentable {
                     // expand/collapse — which changes isTurnExpanded but
                     // not item — re-renders its "Worked for X" chevron.
                     if rowsById[row.id] != row {
-                        controller.rootView = ChatTableCellContent(
-                            row: row, sessionId: sessionId)
+                        controller.rootView = cellContent(for: row)
                     }
                 } else {
                     controller = makeController(for: row)
@@ -481,8 +604,7 @@ struct ChatTableView: NSViewRepresentable {
             for row in newRows {
                 guard let controller = controllersById[row.id] else { continue }
                 if rowsById[row.id] != row {
-                    controller.rootView = ChatTableCellContent(
-                        row: row, sessionId: sessionId)
+                    controller.rootView = cellContent(for: row)
                     rowsById[row.id] = row
                     changed = true
                 }
@@ -490,9 +612,18 @@ struct ChatTableView: NSViewRepresentable {
             return changed
         }
 
+        private func cellContent(for row: FlatChatRow) -> ChatTableCellContent {
+            ChatTableCellContent(
+                row: row,
+                sessionId: sessionId,
+                openToolDetail: openToolDetail,
+                openPendingEdit: openPendingEdit,
+                chatFontScale: chatFontScale
+            )
+        }
+
         private func makeController(for row: FlatChatRow) -> NSHostingController<ChatTableCellContent> {
-            let content = ChatTableCellContent(row: row, sessionId: sessionId)
-            let controller = NSHostingController(rootView: content)
+            let controller = NSHostingController(rootView: cellContent(for: row))
             // Frame-based: the document view sets the controller's
             // view frame explicitly during `layout()`. No Auto Layout
             // for the SwiftUI host.
@@ -648,10 +779,11 @@ struct ChatTableView: NSViewRepresentable {
 /// Flipped NSView that lays out a vertical column of NSHostingViews.
 ///
 /// Layout algorithm:
-///   1. Resolve content width = bounds.width - 2*horizontalPadding
+///   1. Resolve the centered shared content rail (28pt minimum insets,
+///      capped at 980pt) from the document bounds.
 ///   2. For each ordered host, in order top→bottom:
-///        a. Set host.frame.size.width to content width (this width
-///           is now visible to SwiftUI inside the host).
+///        a. Set host.frame to that rail (its width is now visible to
+///           SwiftUI inside the host).
 ///        b. Pump SwiftUI: `layoutSubtreeIfNeeded()` makes the host
 ///           recompute its fitted size at the new width.
 ///        c. Read `host.fittingSize.height` — the SwiftUI content's
@@ -772,12 +904,11 @@ final class ChatStackDocumentView: NSView {
     }
 
     private func layoutRows() {
-        let hPad = ChatTableHorizontalPadding.value
-        let contentWidth = max(0, bounds.width - hPad * 2)
-        guard contentWidth > 0 else { return }
+        let rail = MainContentRailLayout.resolve(containerWidth: bounds.width)
+        guard rail.width > 0 else { return }
 
         var y: CGFloat = topInset
-        let proposedSize = CGSize(width: contentWidth, height: .greatestFiniteMagnitude)
+        let proposedSize = CGSize(width: rail.width, height: .greatestFiniteMagnitude)
         for (idx, controller) in orderedControllers.enumerated() {
             // Variable leading gap (turn vs. cluster) so a turn's
             // narration and the tools it triggered read as one block.
@@ -793,9 +924,9 @@ final class ChatStackDocumentView: NSView {
             let fitted = controller.sizeThatFits(in: proposedSize)
             let rowHeight = max(ceil(fitted.height), 0)
             controller.view.frame = NSRect(
-                x: hPad,
+                x: rail.leading,
                 y: y,
-                width: contentWidth,
+                width: rail.width,
                 height: rowHeight
             )
             // Gaps are applied as LEADING insets (top of `for`), so
@@ -839,15 +970,7 @@ final class ChatStackDocumentView: NSView {
     }
 }
 
-// MARK: - Cell content + padding constant
-
-enum ChatTableHorizontalPadding {
-    /// Horizontal padding applied to each row. Originally 16pt to
-    /// match the legacy SwiftUI ScrollView path; bumped to 28pt so
-    /// chat content has more breathing room from the window chrome
-    /// on either side.
-    static let value: CGFloat = 28
-}
+// MARK: - Cell content
 
 /// SwiftUI cell content. The legacy `MessageItemView` — markdown,
 /// code blocks, math, tool cards, plan cards all reuse the existing
@@ -856,8 +979,14 @@ enum ChatTableHorizontalPadding {
 struct ChatTableCellContent: View {
     let row: FlatChatRow
     let sessionId: String
+    let openToolDetail: (String) -> Void
+    let openPendingEdit: (PendingEditContext) -> Void
+    let chatFontScale: CGFloat
 
     private var item: ChatHistoryItem { row.item }
+    private var workIndent: CGFloat {
+        row.agentID == .pi && row.groupingDepth == 1 ? 18 : 0
+    }
     /// Each row is its own SwiftUI graph (per-cell NSHostingController),
     /// so the parent's `AppearanceSelector` observation can't invalidate
     /// row bodies — when the user flips Light/Dark, the cached row
@@ -886,6 +1015,10 @@ struct ChatTableCellContent: View {
         // cached subtree, taking the same path a session-switch
         // would take.
         cellBody
+            .environment(\.openToolDetail, openToolDetail)
+            .environment(\.openPendingEdit, openPendingEdit)
+            .environment(\.chatFontScale, chatFontScale)
+            .padding(.leading, workIndent)
             .id(appearance.resolvedAppearance)
             .frame(maxWidth: .infinity, alignment: .leading)
             // Per-cell isolation makes `.textSelection(.enabled)` safe
@@ -916,6 +1049,7 @@ struct ChatTableCellContent: View {
                 childCount: row.turnChildCount,
                 isExpanded: row.isTurnExpanded,
                 stepCount: row.turnStepCount,
+                countLabel: row.turnCountLabel,
                 activityLabel: row.turnActivityLabel,
                 hasError: row.turnHasError,
                 onToggle: {
@@ -924,9 +1058,92 @@ struct ChatTableCellContent: View {
                     )
                 }
             )
+        } else if row.batchedItems.count > 1 {
+            PiToolBatchView(
+                items: row.batchedItems,
+                sessionId: sessionId,
+                agentID: row.agentID
+            )
         } else {
-            MessageItemView(item: item, sessionId: sessionId)
+            MessageItemView(
+                item: item,
+                sessionId: sessionId,
+                agentID: row.agentID
+            )
         }
+    }
+}
+
+/// Collapsed batch for adjacent successful Pi actions of the same canonical
+/// kind. Expanding restores every original tool row and its normal result
+/// drill-down, so batching changes density rather than information access.
+private struct PiToolBatchView: View {
+    let items: [ChatHistoryItem]
+    let sessionId: String
+    let agentID: AgentID
+
+    @State private var isExpanded = false
+
+    private var title: String {
+        guard let first = items.first,
+              case .toolCall(let tool) = first.type else {
+            return "\(items.count) actions"
+        }
+        let canonical = ToolNameMapper.canonical(for: tool.name, agent: agentID)
+        switch canonical {
+        case .read:
+            return "Read \(items.count) files"
+        case .bash, .bashOutput, .killShell:
+            return "Ran \(items.count) commands"
+        case .edit, .write:
+            return "Changed \(items.count) files"
+        case .grep, .glob:
+            return "Ran \(items.count) searches"
+        default:
+            let presentation = ToolPresentationPolicy.presentation(
+                rawName: tool.name,
+                input: tool.input,
+                agent: agentID
+            )
+            return "\(presentation.title) · \(items.count) actions"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(ChatTheme.tertiary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    Text(title)
+                        .chatScaledFont(size: 11, weight: .medium)
+                        .foregroundColor(ChatTheme.secondary)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(items) { item in
+                        MessageItemView(
+                            item: item,
+                            sessionId: sessionId,
+                            agentID: agentID
+                        )
+                    }
+                }
+                .padding(.leading, 15)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -941,6 +1158,9 @@ struct CollapsibleTurnHeader: View {
     /// Number of work steps folded under this turn. Drives the
     /// chevron's presence; the visible label prefers `activityLabel`.
     let stepCount: Int
+    /// Provider-specific count copy such as "10 actions". Empty preserves
+    /// the established Claude/Codex presentation.
+    let countLabel: String
     /// Content-aware summary of the turn's work ("Edited 3 files · Ran 1
     /// command"). Empty for the live turn (counts still settling) or when
     /// nothing categorized — falls back to "N steps".
@@ -987,12 +1207,20 @@ struct CollapsibleTurnHeader: View {
                     .chatScaledFont(size: 11, weight: .medium)
                     .foregroundColor(labelColor)
 
+                if !countLabel.isEmpty {
+                    Text("·")
+                        .chatScaledFont(size: 11)
+                        .foregroundColor(ChatTheme.tertiary.opacity(0.6))
+                    Text(countLabel)
+                        .chatScaledFont(size: 10, design: .monospaced)
+                        .foregroundColor(ChatTheme.tertiary)
+                }
+
                 // Content-aware summary ("Edited 3 files · Ran 1 command")
-                // — the high-signal part. Falls back to a bare step count
-                // when nothing categorized. Hidden for the live turn while
-                // counts are still settling (the spinner already says
-                // "active").
-                if !isLive, !activityLabel.isEmpty {
+                // — the high-signal part. Pi shows it beside the action count;
+                // existing providers retain their previous completed-only
+                // behavior.
+                if !activityLabel.isEmpty && (!isLive || !countLabel.isEmpty) {
                     Text("·")
                         .chatScaledFont(size: 11)
                         .foregroundColor(ChatTheme.tertiary.opacity(0.6))
@@ -1000,7 +1228,7 @@ struct CollapsibleTurnHeader: View {
                         .chatScaledFont(size: 11)
                         .foregroundColor(isHovered ? ChatTheme.secondary : ChatTheme.tertiary)
                         .lineLimit(1)
-                } else if isLive, stepCount > 0 {
+                } else if isLive, countLabel.isEmpty, stepCount > 0 {
                     Text("\(stepCount) step\(stepCount == 1 ? "" : "s")")
                         .chatScaledFont(size: 10, design: .monospaced)
                         .foregroundColor(ChatTheme.tertiary)

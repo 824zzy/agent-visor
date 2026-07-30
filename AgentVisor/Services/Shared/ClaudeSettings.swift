@@ -9,6 +9,7 @@
 
 import Foundation
 import Combine
+import AgentVisorCore
 
 @MainActor
 final class ClaudeSettings: ObservableObject {
@@ -56,6 +57,12 @@ final class ClaudeSettings: ObservableObject {
 /// Everything else (Haiku 4.5, Sonnet 4.5 default, Opus 4.5, Opus 4.1, and
 /// older models) is 200K.
 enum ModelContextWindow {
+    static func tokens(for session: SessionState) -> Int {
+        if session.contextWindowTokens > 0 { return session.contextWindowTokens }
+        if session.agentID == .pi { return 0 }
+        return tokens(for: session.modelName)
+    }
+
     static func tokens(for modelId: String?) -> Int {
         guard let id = modelId?.lowercased() else { return 200_000 }
         if id.contains("[1m]") { return 1_000_000 }

@@ -34,6 +34,7 @@ struct ConversationInfo: Equatable {
     // Lightweight metadata extracted from the tail — allows bootstrap to
     // populate session chips without a full incremental parse.
     let lastModelName: String?
+    let lastModelDisplayName: String?
     let lastContextTokens: Int?
     let lastContextWindowTokens: Int?
     let lastEffortLevel: String?
@@ -52,6 +53,7 @@ struct ConversationInfo: Equatable {
         lastCwd: String?,
         customTitle: String? = nil,
         lastModelName: String?,
+        lastModelDisplayName: String? = nil,
         lastContextTokens: Int?,
         lastContextWindowTokens: Int? = nil,
         lastEffortLevel: String? = nil,
@@ -69,6 +71,7 @@ struct ConversationInfo: Equatable {
         self.lastCwd = lastCwd
         self.customTitle = customTitle
         self.lastModelName = lastModelName
+        self.lastModelDisplayName = lastModelDisplayName
         self.lastContextTokens = lastContextTokens
         self.lastContextWindowTokens = lastContextWindowTokens
         self.lastEffortLevel = lastEffortLevel

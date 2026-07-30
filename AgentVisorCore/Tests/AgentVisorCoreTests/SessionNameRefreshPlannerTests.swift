@@ -3,6 +3,18 @@ import XCTest
 @testable import AgentVisorCore
 
 final class SessionNameRefreshPlannerTests: XCTestCase {
+    func testAuthoritativeTranscriptRenameReplacesEarlierName() {
+        XCTAssertEqual(
+            SessionTranscriptTitlePolicy.preferredName(
+                sessionId: "019fa556-b906-7880-b4a6-0554728756e7",
+                currentName: "pi-misc",
+                transcriptTitle: "improve-review-skill",
+                authority: .authoritative
+            ),
+            "improve-review-skill"
+        )
+    }
+
     func testTranscriptTitleDoesNotReplaceResolvedProcessName() {
         XCTAssertEqual(
             SessionTranscriptTitlePolicy.preferredName(

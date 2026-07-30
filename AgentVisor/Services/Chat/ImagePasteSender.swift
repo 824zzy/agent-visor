@@ -2,12 +2,12 @@
 //  ImagePasteSender.swift
 //  AgentVisor
 //
-//  Writes user-pasted images to a temp file and delivers them to a Claude
-//  Code session using the terminal's bracketed-paste protocol, matching
-//  what Claude Code expects when a user pastes an image file path into its
-//  input box.
+//  Stores user-pasted images in an Agent Visor-owned temporary directory.
+//  `savePNG` is provider-neutral: Codex sends the resulting local path as an
+//  app-server image, Pi includes it in one native-equivalent path prompt, and
+//  Claude Code uses the attachment-aware terminal delivery below.
 //
-//  Two transports:
+//  Claude terminal attachment transports:
 //    - Tmux: `tmux load-buffer ... | tmux paste-buffer -p` so tmux itself
 //      wraps the path with bracketed-paste markers the inner pane requested.
 //    - Direct Ghostty/any pty: write `ESC[200~<path>ESC[201~` straight to
@@ -26,9 +26,9 @@ import os.log
 enum ImagePasteSender {
     static let logger = Logger(subsystem: AppBranding.loggerSubsystem, category: "ImagePaste")
 
-    /// Directory for transit PNG files. Claude Code reads from this path and
-    /// caches the bytes under ~/.claude/image-cache, so the temp copy is only
-    /// needed for the brief window between paste and Claude Code's file read.
+    /// Directory for transit PNG files. Claude Code caches these quickly;
+    /// Pi path prompts retain them longer because a queued turn may not read
+    /// the path immediately.
     static let tempDir: URL = {
         let base = FileManager.default.temporaryDirectory
             .appendingPathComponent(AppPaths.pasteTempDirName, isDirectory: true)
@@ -57,7 +57,9 @@ enum ImagePasteSender {
     /// Remove temp files older than 5 minutes. Called on app launch.
     static func cleanupStaleFiles() {
         let fm = FileManager.default
-        let cutoff = Date().addingTimeInterval(-5 * 60)
+        let cutoff = Date().addingTimeInterval(
+            -ImageAttachmentRetentionPolicy.staleFileAge
+        )
         guard let files = try? fm.contentsOfDirectory(
             at: tempDir,
             includingPropertiesForKeys: [.contentModificationDateKey]

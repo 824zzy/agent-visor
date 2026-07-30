@@ -7,6 +7,17 @@
 
 import AppKit
 import AgentVisorCore
+import SwiftUI
+
+extension View {
+    /// Places primary window content in the same responsive rail used by
+    /// the AppKit-backed Chat document view.
+    func mainContentRail(alignment: Alignment = .center) -> some View {
+        frame(maxWidth: MainContentRailLayout.maximumWidth, alignment: alignment)
+            .padding(.horizontal, MainContentRailLayout.horizontalInset)
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+}
 
 final class MainWindow: NSWindow {
     /// First-launch and "small persisted frame" recovery size.

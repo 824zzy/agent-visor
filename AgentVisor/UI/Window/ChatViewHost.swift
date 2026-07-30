@@ -45,8 +45,8 @@ struct ChatViewHost: View {
         // row primitives the notch's ChatView uses (MessageItemView,
         // groupedTimelineRows, ToolResultDetailView, …) so chat
         // content renders identically: markdown, code blocks, LaTeX,
-        // tool cards, plan cards, edit hunks, drilldown overlay. No
-        // composer / approval bar yet — those land in a follow-up.
+        // tool cards, plan cards, edit hunks, drilldown overlay, composer,
+        // approvals, and source-specific read-only fallbacks.
         WindowChatView(sessionId: sessionId)
     }
 }

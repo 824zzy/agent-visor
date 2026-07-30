@@ -70,6 +70,20 @@ final class ToolNameMapperTests: XCTestCase {
         )
     }
 
+    func testPiBuiltinsMapToCanonicalTools() {
+        let expected: [(String, CanonicalTool)] = [
+            ("read", .read),
+            ("edit", .edit),
+            ("write", .write),
+            ("bash", .bash),
+            ("grep", .grep),
+            ("find", .glob),
+        ]
+        for (raw, want) in expected {
+            XCTAssertEqual(ToolNameMapper.canonical(for: raw, agent: .pi), want)
+        }
+    }
+
     func testMCPToolWithMultipleUnderscoresInToolName() {
         // The tool portion can contain underscores (e.g. `get_file_contents`)
         // and we must not lose them. Only the first `__` separator splits

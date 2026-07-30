@@ -79,6 +79,15 @@ public struct CodexUsageGlancePresentation: Equatable, Sendable {
     }
 }
 
+public struct CodexUsageMenuBarPresentation: Equatable, Sendable {
+    public let windows: [CodexUsageWindowPresentation]
+    public let width: Double
+
+    public var label: String {
+        windows.map(\.text).joined(separator: " | ")
+    }
+}
+
 public struct CodexUsagePillReservation: Equatable, Sendable {
     public let showsUsage: Bool
     public let sessionUsableWidth: Double
@@ -98,6 +107,7 @@ public enum CodexUsageAvailability: Equatable, Sendable {
 
 public enum CodexUsageGlancePolicy {
     public static let fixedWidth = 114.0
+    public static let compactWidth = 64.0
 
     public static func availability(
         preferenceEnabled: Bool,
@@ -128,6 +138,20 @@ public enum CodexUsageGlancePolicy {
         snapshot.flatMap { presentation(for: $0) } ?? CodexUsageGlancePresentation(
             fiveHour: placeholder(label: "5h"),
             sevenDay: placeholder(label: "7d")
+        )
+    }
+
+    public static func menuBarPresentation(
+        for snapshot: CodexUsageSnapshot
+    ) -> CodexUsageMenuBarPresentation? {
+        guard let presentation = presentation(for: snapshot) else { return nil }
+        let windows = [presentation.fiveHour, presentation.sevenDay].filter {
+            $0.remainingPercent != nil
+        }
+        guard !windows.isEmpty else { return nil }
+        return CodexUsageMenuBarPresentation(
+            windows: windows,
+            width: windows.count == 1 ? compactWidth : fixedWidth
         )
     }
 
@@ -199,6 +223,27 @@ public enum CodexUsageGlancePolicy {
             return "\(minutes / 60)h"
         }
         return "\(minutes)m"
+    }
+
+    public static func reserveRightSide(
+        usableWidth: Double,
+        spacing: Double,
+        presentation: CodexUsageMenuBarPresentation?
+    ) -> CodexUsagePillReservation {
+        let width = max(0, usableWidth)
+        guard let presentation, width >= presentation.width else {
+            return CodexUsagePillReservation(
+                showsUsage: false,
+                sessionUsableWidth: width
+            )
+        }
+        return CodexUsagePillReservation(
+            showsUsage: true,
+            sessionUsableWidth: max(
+                0,
+                width - presentation.width - max(0, spacing)
+            )
+        )
     }
 
     public static func reserveRightSide(

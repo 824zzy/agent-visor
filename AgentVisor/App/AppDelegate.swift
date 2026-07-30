@@ -153,6 +153,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // The app-server process itself is spawned lazily on first send.
         CodexAppServerApprovalBridge.shared.install()
         CodexUsageMonitor.shared.start()
+        ClaudeUsageMonitor.shared.start()
 #if DEBUG
         Task { @MainActor in
             await CodexConnectedRuntimeCoordinator.shared.resumePersistedIntent()

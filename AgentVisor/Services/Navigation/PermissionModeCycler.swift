@@ -47,6 +47,8 @@ enum PermissionModeCycler {
     /// Send Shift+Tab to the session.
     @discardableResult
     static func cycle(session: SessionState) async -> Bool {
+        guard session.permissionModeSurfaceDecision.canCycle else { return false }
+
         let now = Date()
         if now.timeIntervalSince(lastCycleAt) < cooldownInterval {
             return false

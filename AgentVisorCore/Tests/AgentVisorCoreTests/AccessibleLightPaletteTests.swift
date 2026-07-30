@@ -47,7 +47,9 @@ final class AccessibleLightPaletteWiringAuditTests: XCTestCase {
         XCTAssertTrue(status.contains("AccessibleLightPalette.statusRunning"))
         XCTAssertTrue(status.contains("AccessibleLightPalette.statusPending"))
         XCTAssertTrue(status.contains("AccessibleLightPalette.statusSuccess"))
-        XCTAssertTrue(detail.contains("ChatTheme.chipForeground(tint)"))
+        XCTAssertTrue(detail.contains("ChatTheme.headerBg"))
+        XCTAssertTrue(detail.contains("ChatTheme.primary"))
+        XCTAssertTrue(detail.contains("ChatTheme.secondary"))
     }
 
     private func repoRoot(from testFile: URL) -> URL {

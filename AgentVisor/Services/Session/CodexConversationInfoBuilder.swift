@@ -10,7 +10,10 @@ import Foundation
 import AgentVisorCore
 
 enum CodexConversationInfoBuilder {
-    nonisolated static func build(from parsed: CodexParsedTranscript) -> ConversationInfo {
+    nonisolated static func build(
+        from parsed: CodexParsedTranscript,
+        modelDisplayName: String?
+    ) -> ConversationInfo {
         let firstUser = parsed.messages.first { $0.role == .user }
             .map(textContent(from:))
         let lastRenderable = parsed.messages.last
@@ -41,6 +44,7 @@ enum CodexConversationInfoBuilder {
             lastActivityDate: lastRenderable?.timestamp,
             lastCwd: parsed.metadata?.cwd,
             lastModelName: parsed.modelName,
+            lastModelDisplayName: modelDisplayName,
             lastContextTokens: parsed.contextTokens,
             lastContextWindowTokens: parsed.contextWindowTokens,
             lastEffortLevel: parsed.effortLevel,

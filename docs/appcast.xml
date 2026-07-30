@@ -6,6 +6,31 @@
     <description>Agent Visor updates</description>
     <language>en</language>
     <item>
+      <title>v2.5.0</title>
+      <pubDate>Thu, 30 Jul 2026 09:16:04 +0000</pubDate>
+      <sparkle:version>50</sparkle:version>
+      <sparkle:shortVersionString>2.5.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumUpdateVersion>48</sparkle:minimumUpdateVersion>
+      <description><![CDATA[<h2>v2.5.0</h2>
+<ul>
+  <li>Added zero-configuration Pi support for live and saved sessions, lifecycle recovery, searchable Chat history, and exact-terminal navigation and continuation.</li>
+  <li>Added safe Pi image submission: thumbnails are preserved in Agent Visor and ordered image paths plus optional text are delivered to the owning Pi terminal as one prompt without changing the clipboard.</li>
+  <li>Reworked Sessions into a responsive in-window Chat workspace with grouped turns, collapsible work details, whole-turn pagination, a compact header, stable owner actions, and preserved search and scroll state.</li>
+  <li>Improved menu-bar packing so the highest-priority session prefix fits safely around application menus, the notch, system status items, and provider usage glances without reordering sessions.</li>
+  <li>Added read-only Claude subscription usage alongside capability-aware Codex usage, and standardized model names using each provider's passive local catalog metadata.</li>
+  <li>Hardened session identity and lifecycle handling across Pi, Claude Code, Codex, Cursor, terminal hosts, restarts, resumed sessions, and delayed metadata.</li>
+</ul>
+<p>Pi integration installs only Agent Visor's bundled metadata-only lifecycle extension after Pi is detected. It does not change Pi settings, models, packages, or unrelated extensions, and it does not send conversation content over the network.</p>
+]]></description>
+      <enclosure
+        url="https://github.com/824zzy/agent-visor/releases/download/v2.5.0/AgentVisor-v2.5.0.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="8JFFIWbDks3nhmhUI/eUBE4YFhphtx/JKZg0Gq/4JSov/1n3suHU5gIJcmUWdP9Zth93o2Ql7aTgasLYt/fKDw=="
+        length="12656208"
+      />
+    </item>
+    <item>
       <title>v2.4.8</title>
       <pubDate>Tue, 21 Jul 2026 07:08:18 +0000</pubDate>
       <sparkle:version>49</sparkle:version>

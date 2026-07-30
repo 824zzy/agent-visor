@@ -7,6 +7,10 @@ import XCTest
 @testable import AgentVisorCore
 
 final class ChatVisibilityRulesTests: XCTestCase {
+    func testPiTurnGroupingDefaultsOn() {
+        XCTAssertTrue(ChatVisibilityRules.defaults.collapsePiTurns)
+    }
+
     func testDefaultsShowEverything() {
         let r = ChatVisibilityRules.defaults
         let allKinds: [ChatItemKind] = [
@@ -129,6 +133,7 @@ final class ChatVisibilityRulesTests: XCTestCase {
         XCTAssertTrue(decoded.showMCP)
         XCTAssertTrue(decoded.showWebFetch)
         XCTAssertTrue(decoded.showAssistantMessage)
+        XCTAssertTrue(decoded.collapsePiTurns)
     }
 
     func testEqualityIsValueBased() {

@@ -28,11 +28,26 @@ final class ModelDisplayNameTests: XCTestCase {
         XCTAssertNil(ModelDisplayName.format(""))
     }
 
-    func testNonClaudeIdPassesThroughWhenUnparseable() {
-        XCTAssertEqual(ModelDisplayName.format("gpt-4"), "gpt-4")
+    func testGPTWithoutVariantPreservesBrand() {
+        XCTAssertEqual(ModelDisplayName.format("gpt-4"), "GPT-4")
     }
 
-    func testNonClaudePrefixedThreePart() {
-        XCTAssertEqual(ModelDisplayName.format("gpt-4-turbo"), "Gpt 4.turbo")
+    func testGPTFallbackPreservesBrandVersionAndVariantWords() {
+        XCTAssertEqual(ModelDisplayName.format("gpt-5.6-sol"), "GPT-5.6 Sol")
+        XCTAssertEqual(ModelDisplayName.format("gpt-5.3-codex-spark"), "GPT-5.3 Codex Spark")
+    }
+
+    func testUnknownIdentifierRemainsUnchanged() {
+        XCTAssertEqual(ModelDisplayName.format("vendor-ultra-2026"), "vendor-ultra-2026")
+    }
+
+    func testProviderCatalogDisplayNameWinsVerbatim() {
+        XCTAssertEqual(
+            ModelDisplayName.resolve(
+                modelID: "gpt-5.6-sol",
+                catalogDisplayName: "GPT-5.6 Sol"
+            ),
+            "GPT-5.6 Sol"
+        )
     }
 }

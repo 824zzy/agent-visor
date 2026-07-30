@@ -92,6 +92,11 @@ protocol AgentProvider: Sendable {
     /// false in the protocol extension.
     nonisolated var canSpawnSession: Bool { get }
 
+    /// Whether this provider has a verified transcript adapter suitable for
+    /// the shared Agent Visor Chat surface. Input capability remains a
+    /// separate runtime decision rendered by WindowChatView.
+    nonisolated var canRenderChat: Bool { get }
+
     // MARK: - On-disk locations
 
     /// Per-agent config root (e.g. `~/.claude`, `~/.augment`).
@@ -133,6 +138,12 @@ protocol AgentProvider: Sendable {
 
     /// Remove our hook entries and script. Leaves other entries alone.
     nonisolated func uninstallHooks()
+
+    /// Whether this agent is present on the machine. Providers should use
+    /// read-only evidence and must not create config directories while
+    /// answering. Settings uses this to distinguish unavailable agents from
+    /// available-but-not-connected integrations.
+    nonisolated func isAvailable() -> Bool
 
     /// Whether our hooks are currently wired into this agent's settings.
     nonisolated func isInstalled() -> Bool
@@ -214,6 +225,12 @@ protocol AgentProvider: Sendable {
 
     // MARK: - Metadata application
 
+    /// Whether a non-empty transcript title is merely a fallback or the
+    /// owning agent's canonical session-name store. Most providers resolve a
+    /// stronger name from process metadata or an external index; Pi overrides
+    /// this because its active-branch `session_info.name` is authoritative.
+    nonisolated var transcriptTitleAuthority: SessionTranscriptTitlePolicy.Authority { get }
+
     /// Best-known user-set name for this session, looked up in
     /// whatever index the agent uses (claude-code's per-pid metadata
     /// file, codex's sqlite threads table, etc.). Returns nil when no
@@ -259,6 +276,15 @@ extension AgentProvider {
     /// Most agents can't be spawned by the app (observe-only). The two
     /// that can — codex, claude-code — override this to true.
     nonisolated var canSpawnSession: Bool { false }
+
+    /// Providers opt in only after their transcript format is verified.
+    nonisolated var canRenderChat: Bool { false }
+
+    /// Existing providers predate explicit availability reporting. Their
+    /// installation methods already own source-specific detection, so they
+    /// remain available by default; Pi overrides this to guarantee that an
+    /// absent installation never creates ~/.pi.
+    nonisolated func isAvailable() -> Bool { true }
 
     nonisolated func discoverLiveSessions() -> [DiscoveredSession] { [] }
 
@@ -324,6 +350,8 @@ extension AgentProvider {
     }
 
     nonisolated func skipsPidDedup(for session: SessionState) -> Bool { false }
+
+    nonisolated var transcriptTitleAuthority: SessionTranscriptTitlePolicy.Authority { .fallback }
 
     nonisolated func resolveSessionName(sessionId: String, pid: Int?) -> String? { nil }
 

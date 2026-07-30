@@ -36,11 +36,11 @@ public enum SessionBrowserShortcutEducationPolicy {
             hints: [
                 SessionBrowserShortcutHint(
                     keys: "\(modifiers)1-9",
-                    label: "Open pills"
+                    label: "Switch sessions"
                 ),
                 SessionBrowserShortcutHint(
                     keys: "\(modifiers)0",
-                    label: "More sessions"
+                    label: "Session menu"
                 ),
             ],
             disabledMessage: nil

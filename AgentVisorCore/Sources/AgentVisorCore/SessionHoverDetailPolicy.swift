@@ -59,6 +59,7 @@ public enum SessionHoverDetailPolicy {
         case .auggie: agentName = "Auggie"
         case .codex: agentName = "Codex"
         case .cursor: agentName = "Cursor"
+        case .pi: agentName = "Pi"
         }
 
         guard let terminalHost, terminalHost != .unknown else {

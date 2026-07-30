@@ -13,6 +13,36 @@ final class SessionHoverDetailWiringAuditTests: XCTestCase {
         XCTAssertTrue(source.contains(".frame(width: 300"))
     }
 
+    func testPillHoverCardOwnsAnOpaquePaletteMatchedSurface() throws {
+        let source = try String(contentsOf: repositoryRoot(from: URL(fileURLWithPath: #filePath))
+            .appendingPathComponent("AgentVisor/UI/Components/SessionDetailPopover.swift"))
+
+        let frameRange = try XCTUnwrap(source.range(of: ".frame(width: 300"))
+        let surfaceRange = try XCTUnwrap(source.range(of: ".background(Catppuccin.base)"))
+
+        XCTAssertLessThan(frameRange.lowerBound, surfaceRange.lowerBound)
+        XCTAssertFalse(source.contains(".thinMaterial"))
+        XCTAssertFalse(source.contains(".regularMaterial"))
+        XCTAssertFalse(source.contains(".ultraThinMaterial"))
+    }
+
+    func testPiSurfacesDoNotUseClaudeContextWindowFallback() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let settings = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/Services/Shared/ClaudeSettings.swift"))
+        let surfacePaths = [
+            "AgentVisor/UI/Components/SessionDetailPopover.swift",
+            "AgentVisor/UI/Views/ChatView.swift",
+            "AgentVisor/UI/Window/WindowChatView.swift",
+        ]
+
+        XCTAssertTrue(settings.contains("if session.agentID == .pi { return 0 }"))
+        for path in surfacePaths {
+            let source = try String(contentsOf: root.appendingPathComponent(path))
+            XCTAssertTrue(source.contains("ModelContextWindow.tokens(for: session)"), path)
+        }
+    }
+
     func testPillHoverCardShowsTheConfiguredShortcutForItsRenderedSlot() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let popover = try String(contentsOf: root

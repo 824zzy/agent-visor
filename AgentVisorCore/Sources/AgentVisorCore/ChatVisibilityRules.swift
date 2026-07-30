@@ -91,6 +91,10 @@ public struct ChatVisibilityRules: Equatable, Codable, Sendable {
     /// legacy consecutive-tool-run coalescing.
     public var collapseCodexTurns: Bool
 
+    /// Prompt-bounded Pi turn collapsing. ON presents prompt → grouped work
+    /// → final answer; OFF preserves the raw chronological activity stream.
+    public var collapsePiTurns: Bool
+
     public static let defaults = ChatVisibilityRules(
         showUserMessage: true,
         showAssistantMessage: true,
@@ -117,7 +121,8 @@ public struct ChatVisibilityRules: Equatable, Codable, Sendable {
         showMCP: true,
         showOtherTools: true,
         collapseClaudeTurns: true,
-        collapseCodexTurns: true
+        collapseCodexTurns: true,
+        collapsePiTurns: true
     )
 
     public init(
@@ -146,7 +151,8 @@ public struct ChatVisibilityRules: Equatable, Codable, Sendable {
         showMCP: Bool,
         showOtherTools: Bool,
         collapseClaudeTurns: Bool,
-        collapseCodexTurns: Bool
+        collapseCodexTurns: Bool,
+        collapsePiTurns: Bool
     ) {
         self.showUserMessage = showUserMessage
         self.showAssistantMessage = showAssistantMessage
@@ -174,6 +180,7 @@ public struct ChatVisibilityRules: Equatable, Codable, Sendable {
         self.showOtherTools = showOtherTools
         self.collapseClaudeTurns = collapseClaudeTurns
         self.collapseCodexTurns = collapseCodexTurns
+        self.collapsePiTurns = collapsePiTurns
     }
 
     // MARK: - Codable with default-tolerant decoding
@@ -192,6 +199,7 @@ public struct ChatVisibilityRules: Equatable, Codable, Sendable {
         case showPlanMode, showMCP, showOtherTools
         case collapseClaudeTurns
         case collapseCodexTurns
+        case collapsePiTurns
     }
 
     public init(from decoder: Decoder) throws {
@@ -223,6 +231,7 @@ public struct ChatVisibilityRules: Equatable, Codable, Sendable {
         self.showOtherTools = (try? c.decode(Bool.self, forKey: .showOtherTools)) ?? d.showOtherTools
         self.collapseClaudeTurns = (try? c.decode(Bool.self, forKey: .collapseClaudeTurns)) ?? d.collapseClaudeTurns
         self.collapseCodexTurns = (try? c.decode(Bool.self, forKey: .collapseCodexTurns)) ?? d.collapseCodexTurns
+        self.collapsePiTurns = (try? c.decode(Bool.self, forKey: .collapsePiTurns)) ?? d.collapsePiTurns
     }
 }
 

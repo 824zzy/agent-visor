@@ -16,4 +16,8 @@ public enum AgentID: String, Codable, Sendable, CaseIterable {
     /// at `~/.cursor/projects/<projectKey>/agent-transcripts/<id>/<id>.jsonl`
     /// and surface chat history without intercepting tool calls.
     case cursor
+    /// Pi's interactive terminal coding-agent harness. Baseline support
+    /// observes its versioned session JSONL; a bundled Pi extension adds
+    /// exact lifecycle evidence without becoming a hard dependency.
+    case pi
 }

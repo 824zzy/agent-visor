@@ -4,7 +4,7 @@
   <p><strong>See every coding-agent session. Return to the right one instantly.</strong></p>
   <p>
     Agent Visor is a macOS menu-bar status and navigation layer for Codex,
-    Claude Code, Cursor, and terminal-hosted agents.
+    Claude Code, Pi, Cursor, and terminal-hosted agents.
   </p>
   <p>
     <a href="https://github.com/824zzy/agent-visor/releases/latest"><img src="https://img.shields.io/github/v/release/824zzy/agent-visor?style=for-the-badge&label=Download&color=brightgreen" alt="Download" /></a>
@@ -31,9 +31,9 @@ Agent Visor answers three questions without becoming another chat client:
 
 - **What needs me?** Needs attention and unseen Ready sessions lead, followed by Working, seen Ready, and Recent work.
 - **Where was I?** Recent work stays searchable even when it no longer fits in the menu bar.
-- **How do I get back?** A click or keyboard shortcut returns to the owning app or terminal.
+- **How do I continue?** Enter the mirrored Chat in Agent Visor or open the canonical owning app or terminal with one click.
 
-The owning app remains the authoritative conversation and control surface. Agent Visor can show status evidence, latest activity, and mirrored transcript details, but it does not claim to replace Codex, Claude Code, Cursor, or a terminal.
+The owning app remains the authoritative conversation and control surface. Agent Visor can provide a shared Chat experience where source evidence and transport allow it, but it does not claim to replace Codex, Claude Code, Cursor, Pi, or a terminal.
 
 ## Main surfaces
 
@@ -43,13 +43,13 @@ The menu bar is the ambient status strip. Each pill shows a session title and st
 
 - Click to return to the original owner.
 - Opening a Ready session acknowledges that completion and moves its pill behind Working without changing its Ready status.
-- Option-click to inspect the session in Agent Visor.
+- Option-click to enter the session's Chat in Agent Visor.
 - Hover for full title, source, model, reasoning effort, execution policy, context usage, path, and freshness when the source provides them.
 - Hold the configured shortcut modifiers to reveal 1-9, then press a number to jump directly.
 
 ### Agent Sessions browser
 
-The browser is the complete searchable workspace. It groups sessions by state, preserves source and project context, supports arrow-key navigation, and opens the selected session in its owning app. The info action opens a compact inspector instead of a replacement chat.
+The browser is the complete searchable workspace. It groups sessions by state, preserves source and project context, and supports arrow-key navigation. For Chat-capable sessions, row click and Return enter Agent Visor Chat; Shift-Return and the always-visible **Open in <owner>** action return to the canonical owner. The quiet disclosure chevron belongs to the row's Chat target rather than acting as a competing button. Owner-only history rows safely open their owner. Back returns to the preserved browser state, while optional technical metadata stays under **Details**.
 
 ### Codex usage glance
 
@@ -63,6 +63,7 @@ When Codex exposes a recognized limit, an optional fixed menu-bar pill shows `5h
 | Codex CLI | Process, TTY, and rollout evidence | Focus the owning terminal pane |
 | Claude Code CLI | Hook and transcript evidence | Focus Ghostty, iTerm2, Cursor, Zed, or another detected host |
 | Claude Code Desktop | Transcript-backed sessions | Focus Claude Desktop |
+| Pi CLI | Process and tree-shaped session transcript evidence, enhanced by an automatic local lifecycle integration | Focus the exact owning terminal pane |
 | Cursor and Zed | Transcript-backed hosted sessions | Focus the owning editor |
 | Auggie | Hook-backed sessions when installed | Focus the detected host |
 
@@ -75,7 +76,7 @@ Agent Visor deliberately rejects metadata-only rows when there is no transcript 
 3. **Working**: the agent is processing or compacting.
 4. **Recent**: no turn is active, but the session remains useful for navigation.
 
-Status can be hook-driven or inferred from source transcripts. The inspector labels freshness and evidence so a disk-derived state is not presented as stronger than it is.
+Status can be hook-driven or inferred from source transcripts. Hover detail labels freshness and evidence so a disk-derived state is not presented as stronger than it is.
 
 ## Installation
 
@@ -102,8 +103,10 @@ xattr -dr com.apple.quarantine "/Applications/Agent Visor.app"
 
 1. Launch Agent Visor.
 2. Grant **Accessibility** when prompted. It is used for menu-bar geometry and supported app or terminal navigation.
-3. On macOS 15 or later, add Agent Visor under **System Settings > Privacy & Security > Full Disk Access**. This lets the app read transcripts under `~/.claude`, `~/.codex`, and `~/.cursor`.
+3. On macOS 15 or later, add Agent Visor under **System Settings > Privacy & Security > Full Disk Access**. This lets the app read transcripts under `~/.claude`, `~/.codex`, `~/.cursor`, and `~/.pi`.
 4. Start or open a supported agent session. Agent Visor discovers it automatically when the source provides sufficient evidence.
+
+Pi requires no manual setup. After Pi is detected, Agent Visor installs its bundled metadata-only integration as `~/.pi/agent/extensions/agent-visor.ts`; existing Pi processes keep working through transcript and process observation until they reload it. Agent Visor does not modify Pi's settings or other extensions.
 
 Without Full Disk Access on macOS 15, transcript reads can fail silently and the session list may be empty.
 
@@ -116,7 +119,7 @@ Without Full Disk Access on macOS 15, transcript reads can fail silently and the
 
 ## Privacy
 
-Conversation data and file paths stay on the Mac. Agent Visor reads local agent transcripts and communicates with supported local app or terminal interfaces.
+Conversation data and file paths stay on the Mac. Agent Visor reads local agent transcripts and communicates with supported local app or terminal interfaces. Its Pi extension has no network access and sends only local session, process, path, and lifecycle metadata to Agent Visor's Unix socket; it never sends conversation content.
 
 The app sends limited product analytics through Mixpanel: launches, app/build/macOS versions, detected Claude Code version, and session-start events. It does not send conversation text or file paths.
 

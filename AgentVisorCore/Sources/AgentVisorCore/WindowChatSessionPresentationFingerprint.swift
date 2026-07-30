@@ -6,6 +6,7 @@ public struct WindowChatSessionPresentationFingerprint: Equatable, Sendable {
     public let phaseTag: String
     public let permissionMode: String?
     public let modelName: String?
+    public let modelDisplayName: String?
     public let contextWindowTokens: Int
     public let contextTokenBucket: Int
     public let effortLevel: String?
@@ -22,6 +23,7 @@ public struct WindowChatSessionPresentationFingerprint: Equatable, Sendable {
         phaseTag: String,
         permissionMode: String?,
         modelName: String?,
+        modelDisplayName: String?,
         contextWindowTokens: Int,
         contextTokenBucket: Int,
         effortLevel: String?,
@@ -37,6 +39,7 @@ public struct WindowChatSessionPresentationFingerprint: Equatable, Sendable {
         self.phaseTag = phaseTag
         self.permissionMode = permissionMode
         self.modelName = modelName
+        self.modelDisplayName = modelDisplayName
         self.contextWindowTokens = contextWindowTokens
         self.contextTokenBucket = contextTokenBucket
         self.effortLevel = effortLevel

@@ -17,15 +17,21 @@ public struct PillBarPacker {
     public struct Candidate: Equatable {
         public let id: String
         public let pillWidth: CGFloat
-        /// Optional smaller width that the packer may try when full-width
-        /// labels would hide sessions. The packer shortens lower-priority
-        /// suffixes first, preserving higher-priority labels when possible.
-        /// When `nil`, this candidate is never shortened.
+        /// Optional intermediate and minimum widths for recognizable compact
+        /// and tight labels. The packer first uses stronger tiers to improve
+        /// visibility, then restores any independently affordable label detail.
+        public let compactWidth: CGFloat?
         public let minimumWidth: CGFloat?
 
-        public init(id: String, pillWidth: CGFloat, minimumWidth: CGFloat? = nil) {
+        public init(
+            id: String,
+            pillWidth: CGFloat,
+            compactWidth: CGFloat? = nil,
+            minimumWidth: CGFloat? = nil
+        ) {
             self.id = id
             self.pillWidth = pillWidth
+            self.compactWidth = compactWidth
             self.minimumWidth = minimumWidth
         }
     }
@@ -33,6 +39,33 @@ public struct PillBarPacker {
     public enum OverflowSide: Equatable {
         case left
         case right
+    }
+
+    public enum Density: Equatable {
+        case standard
+        case pressure
+    }
+
+    public enum LabelTier: Int, Equatable, Sendable {
+        case full = 0
+        case compact = 1
+        case tight = 2
+    }
+
+    public struct PackingProfile: Equatable {
+        public let density: Density
+        public let pillSpacing: CGFloat
+        public let widthReduction: CGFloat
+
+        public init(
+            density: Density,
+            pillSpacing: CGFloat,
+            widthReduction: CGFloat
+        ) {
+            self.density = density
+            self.pillSpacing = max(0, pillSpacing)
+            self.widthReduction = max(0, widthReduction)
+        }
     }
 
     public struct PackResult: Equatable {
@@ -43,10 +76,122 @@ public struct PillBarPacker {
         /// Only meaningful when `hiddenCount > 0`. Defaults to `.right` when
         /// no overflow pill renders.
         public let overflowSide: OverflowSide
-        /// IDs the packer placed using their `minimumWidth` instead of the
-        /// default `pillWidth`. The caller is expected to render these with
-        /// a shorter label so the visual width matches.
-        public let shortenedIds: Set<String>
+        public let compactedIds: Set<String>
+        public let minimizedIds: Set<String>
+        public var shortenedIds: Set<String> { compactedIds.union(minimizedIds) }
+        public let density: Density
+
+        public func labelTier(for id: String) -> LabelTier {
+            if minimizedIds.contains(id) { return .tight }
+            if compactedIds.contains(id) { return .compact }
+            return .full
+        }
+
+        init(
+            leftVisibleIds: [String],
+            rightVisibleIds: [String],
+            hiddenIds: [String],
+            overflowSide: OverflowSide,
+            compactedIds: Set<String> = [],
+            minimizedIds: Set<String> = [],
+            density: Density = .standard
+        ) {
+            self.leftVisibleIds = leftVisibleIds
+            self.rightVisibleIds = rightVisibleIds
+            self.hiddenIds = hiddenIds
+            self.overflowSide = overflowSide
+            self.compactedIds = compactedIds
+            self.minimizedIds = minimizedIds
+            self.density = density
+        }
+
+        fileprivate func assigningDensity(_ density: Density) -> PackResult {
+            PackResult(
+                leftVisibleIds: leftVisibleIds,
+                rightVisibleIds: rightVisibleIds,
+                hiddenIds: hiddenIds,
+                overflowSide: overflowSide,
+                compactedIds: compactedIds,
+                minimizedIds: minimizedIds,
+                density: density
+            )
+        }
+    }
+
+    public static func pack(
+        candidates: [Candidate],
+        leftMax: CGFloat,
+        rightMax: CGFloat,
+        standardProfile: PackingProfile,
+        pressureProfile: PackingProfile,
+        currentDensity: Density = .standard,
+        releaseHeadroom: CGFloat = 8,
+        overflowPillWidthFor: (Int) -> CGFloat
+    ) -> PackResult {
+        let standard = pack(
+            candidates: candidates,
+            leftMax: leftMax,
+            rightMax: rightMax,
+            profile: standardProfile,
+            overflowPillWidthFor: overflowPillWidthFor
+        )
+        let pressure = pack(
+            candidates: candidates,
+            leftMax: leftMax,
+            rightMax: rightMax,
+            profile: pressureProfile,
+            overflowPillWidthFor: overflowPillWidthFor
+        )
+        if pressure.hiddenCount < standard.hiddenCount {
+            return pressure
+        }
+        guard currentDensity == .pressure,
+              pressure.hiddenCount == standard.hiddenCount else {
+            return standard
+        }
+
+        let margin = max(0, releaseHeadroom)
+        let standardWithHeadroom = pack(
+            candidates: candidates,
+            leftMax: max(0, leftMax - margin),
+            rightMax: max(0, rightMax - margin),
+            profile: standardProfile,
+            overflowPillWidthFor: overflowPillWidthFor
+        )
+        return standardWithHeadroom.hiddenCount <= pressure.hiddenCount
+            ? standard
+            : pressure
+    }
+
+    private static func pack(
+        candidates: [Candidate],
+        leftMax: CGFloat,
+        rightMax: CGFloat,
+        profile: PackingProfile,
+        overflowPillWidthFor: (Int) -> CGFloat
+    ) -> PackResult {
+        let adjusted = candidates.map { candidate in
+            Candidate(
+                id: candidate.id,
+                pillWidth: max(0, candidate.pillWidth - profile.widthReduction),
+                compactWidth: candidate.compactWidth.map {
+                    max(0, $0 - profile.widthReduction)
+                },
+                minimumWidth: candidate.minimumWidth.map {
+                    max(0, $0 - profile.widthReduction)
+                }
+            )
+        }
+        let result = pack(
+            candidates: adjusted,
+            leftMax: leftMax,
+            rightMax: rightMax,
+            pillSpacing: profile.pillSpacing,
+            overflowPillWidthFor: { count in
+                max(0, overflowPillWidthFor(count) - profile.widthReduction)
+            }
+        )
+        return result.assigningDensity(profile.density)
     }
 
     public static func pack(
@@ -65,8 +210,9 @@ public struct PillBarPacker {
             overflowPillWidthFor: overflowPillWidthFor
         )
 
+        let selected: PackResult
         if initial.hiddenCount > 0,
-           let compressed = bestCompressedPack(
+           let compressed = bestVariantPack(
             initial: initial,
             candidates: candidates,
             leftMax: leftMax,
@@ -74,46 +220,23 @@ public struct PillBarPacker {
             pillSpacing: pillSpacing,
             overflowPillWidthFor: overflowPillWidthFor
            ) {
-            return compressed
-        }
-
-        // No-empty-side rebalance. When the left bar ended up empty AND
-        // sessions overflowed, try shrinking the highest-priority candidate
-        // (index 0) to its `minimumWidth` and re-pack. Adopt only if the
-        // retry actually puts something on the left — that's the symptom
-        // we're trying to fix.
-        if initial.leftVisibleIds.isEmpty,
-           initial.hiddenCount > 0,
-           let first = candidates.first,
-           let minWidth = first.minimumWidth,
-           minWidth <= leftMax
-        {
-            var modified = candidates
-            modified[0] = Candidate(id: first.id, pillWidth: minWidth, minimumWidth: nil)
-            let retried = packStrict(
-                candidates: modified,
+            selected = compressed
+        } else {
+            selected = balanced(
+                initial,
+                candidates: candidates,
+                compactedIds: [],
+                minimizedIds: [],
                 leftMax: leftMax,
                 rightMax: rightMax,
                 pillSpacing: pillSpacing,
                 overflowPillWidthFor: overflowPillWidthFor
             )
-            if !retried.leftVisibleIds.isEmpty {
-                return balanced(
-                    retried,
-                    candidates: candidates,
-                    shortenedIds: [first.id],
-                    leftMax: leftMax,
-                    rightMax: rightMax,
-                    pillSpacing: pillSpacing,
-                    overflowPillWidthFor: overflowPillWidthFor
-                )
-            }
         }
 
-        return balanced(
-            initial,
+        return restoringAffordableLabelDetail(
+            in: selected,
             candidates: candidates,
-            shortenedIds: [],
             leftMax: leftMax,
             rightMax: rightMax,
             pillSpacing: pillSpacing,
@@ -121,7 +244,7 @@ public struct PillBarPacker {
         )
     }
 
-    private static func bestCompressedPack(
+    private static func bestVariantPack(
         initial: PackResult,
         candidates: [Candidate],
         leftMax: CGFloat,
@@ -131,48 +254,118 @@ public struct PillBarPacker {
     ) -> PackResult? {
         guard !candidates.isEmpty else { return nil }
 
-        var best: (result: PackResult, shortenedIds: Set<String>)?
+        typealias VariantResult = (
+            result: PackResult,
+            compactedIds: Set<String>,
+            minimizedIds: Set<String>
+        )
+        var best: VariantResult?
 
-        for start in stride(from: candidates.count - 1, through: 0, by: -1) {
-            var modified = candidates
-            var shortenedIds = Set<String>()
+        func tier(
+            for id: String,
+            compactedIds: Set<String>,
+            minimizedIds: Set<String>
+        ) -> LabelTier {
+            if minimizedIds.contains(id) { return .tight }
+            if compactedIds.contains(id) { return .compact }
+            return .full
+        }
 
-            for index in start..<candidates.count {
-                let candidate = candidates[index]
-                guard let minimumWidth = candidate.minimumWidth,
-                      minimumWidth < candidate.pillWidth else {
-                    continue
-                }
-                modified[index] = Candidate(
-                    id: candidate.id,
-                    pillWidth: minimumWidth,
-                    minimumWidth: nil
-                )
-                shortenedIds.insert(candidate.id)
+        func isBetter(_ candidate: VariantResult, than current: VariantResult) -> Bool {
+            if candidate.result.hiddenCount != current.result.hiddenCount {
+                return candidate.result.hiddenCount < current.result.hiddenCount
             }
 
-            guard !shortenedIds.isEmpty else { continue }
-
-            let result = packStrict(
-                candidates: modified,
-                leftMax: leftMax,
-                rightMax: rightMax,
-                pillSpacing: pillSpacing,
-                overflowPillWidthFor: overflowPillWidthFor
-            )
-
-            let improvesHiddenCount = result.hiddenCount < initial.hiddenCount
-            let fixesEmptyLeft = initial.leftVisibleIds.isEmpty && !result.leftVisibleIds.isEmpty
-            guard improvesHiddenCount || fixesEmptyLeft else { continue }
-
-            if let currentBest = best {
-                if result.hiddenCount < currentBest.result.hiddenCount ||
-                    (result.hiddenCount == currentBest.result.hiddenCount &&
-                     shortenedIds.count < currentBest.shortenedIds.count) {
-                    best = (result, shortenedIds)
+            let visibleIds = candidate.result.leftVisibleIds + candidate.result.rightVisibleIds
+            for id in visibleIds {
+                let candidateTier = tier(
+                    for: id,
+                    compactedIds: candidate.compactedIds,
+                    minimizedIds: candidate.minimizedIds
+                )
+                let currentTier = tier(
+                    for: id,
+                    compactedIds: current.compactedIds,
+                    minimizedIds: current.minimizedIds
+                )
+                if candidateTier != currentTier {
+                    return candidateTier.rawValue < currentTier.rawValue
                 }
-            } else {
-                best = (result, shortenedIds)
+            }
+
+            let candidateSeverity = visibleIds.reduce(0) { severity, id in
+                severity + tier(
+                    for: id,
+                    compactedIds: candidate.compactedIds,
+                    minimizedIds: candidate.minimizedIds
+                ).rawValue
+            }
+            let currentSeverity = visibleIds.reduce(0) { severity, id in
+                severity + tier(
+                    for: id,
+                    compactedIds: current.compactedIds,
+                    minimizedIds: current.minimizedIds
+                ).rawValue
+            }
+            return candidateSeverity < currentSeverity
+        }
+
+        let count = candidates.count
+        for compactStart in stride(from: count, through: 0, by: -1) {
+            for tightStart in stride(from: count, through: compactStart, by: -1) {
+                var modified = candidates
+                var compactedIds = Set<String>()
+                var minimizedIds = Set<String>()
+
+                if compactStart < count {
+                    for index in compactStart..<count {
+                        let candidate = candidates[index]
+                        let compactWidth = candidate.compactWidth.flatMap {
+                            $0 < candidate.pillWidth ? $0 : nil
+                        }
+                        let tightWidth = candidate.minimumWidth.flatMap {
+                            $0 < (compactWidth ?? candidate.pillWidth) ? $0 : nil
+                        }
+
+                        if index >= tightStart, let tightWidth {
+                            modified[index] = Candidate(
+                                id: candidate.id,
+                                pillWidth: tightWidth
+                            )
+                            minimizedIds.insert(candidate.id)
+                        } else if let compactWidth {
+                            modified[index] = Candidate(
+                                id: candidate.id,
+                                pillWidth: compactWidth
+                            )
+                            compactedIds.insert(candidate.id)
+                        }
+                    }
+                }
+
+                guard !compactedIds.isEmpty || !minimizedIds.isEmpty else { continue }
+
+                let result = packStrict(
+                    candidates: modified,
+                    leftMax: leftMax,
+                    rightMax: rightMax,
+                    pillSpacing: pillSpacing,
+                    overflowPillWidthFor: overflowPillWidthFor
+                )
+                let improvesHiddenCount = result.hiddenCount < initial.hiddenCount
+                let fixesEmptyLeft = initial.leftVisibleIds.isEmpty
+                    && !result.leftVisibleIds.isEmpty
+                guard improvesHiddenCount || fixesEmptyLeft else { continue }
+
+                let visibleIds = Set(result.leftVisibleIds + result.rightVisibleIds)
+                let candidate: VariantResult = (
+                    result,
+                    compactedIds.intersection(visibleIds),
+                    minimizedIds.intersection(visibleIds)
+                )
+                if best == nil || isBetter(candidate, than: best!) {
+                    best = candidate
+                }
             }
         }
 
@@ -180,7 +373,8 @@ public struct PillBarPacker {
         return balanced(
             best.result,
             candidates: candidates,
-            shortenedIds: best.shortenedIds,
+            compactedIds: best.compactedIds,
+            minimizedIds: best.minimizedIds,
             leftMax: leftMax,
             rightMax: rightMax,
             pillSpacing: pillSpacing,
@@ -188,17 +382,17 @@ public struct PillBarPacker {
         )
     }
 
-    /// Re-split the already-chosen visible set into a width-balanced
-    /// contiguous partition so the pills flank the notch on both sides
-    /// instead of all clustering on the left. The visible set, hidden
-    /// count, and overflow side are preserved exactly — only WHICH side
-    /// each visible pill lands on changes. Reading order is kept
-    /// (left bar = higher-priority prefix, right bar = the rest), so the
-    /// row still reads left-to-right across the notch.
+    /// Re-split the already-chosen visible set into a capacity-balanced
+    /// contiguous partition. The visible set, hidden count, and overflow
+    /// side are preserved exactly — only WHICH side each visible pill lands
+    /// on changes. Reading order is kept (left bar = higher-priority prefix,
+    /// right bar = the rest), so the row still reads left-to-right across
+    /// the notch.
     private static func balanced(
         _ result: PackResult,
         candidates: [Candidate],
-        shortenedIds: Set<String>,
+        compactedIds: Set<String>,
+        minimizedIds: Set<String>,
         leftMax: CGFloat,
         rightMax: CGFloat,
         pillSpacing: CGFloat,
@@ -207,12 +401,19 @@ public struct PillBarPacker {
         let visible = result.leftVisibleIds + result.rightVisibleIds
         guard !visible.isEmpty else { return result }
 
-        // Rendered width per visible id (shortened ids render narrower).
+        // Rendered width per visible id at the selected label tier.
         var widthByID: [String: CGFloat] = [:]
-        for c in candidates { widthByID[c.id] = c.pillWidth }
-        for id in shortenedIds {
-            if let c = candidates.first(where: { $0.id == id }), let mw = c.minimumWidth {
-                widthByID[id] = mw
+        for candidate in candidates { widthByID[candidate.id] = candidate.pillWidth }
+        for id in compactedIds {
+            if let candidate = candidates.first(where: { $0.id == id }),
+               let compactWidth = candidate.compactWidth {
+                widthByID[id] = compactWidth
+            }
+        }
+        for id in minimizedIds {
+            if let candidate = candidates.first(where: { $0.id == id }),
+               let minimumWidth = candidate.minimumWidth {
+                widthByID[id] = minimumWidth
             }
         }
 
@@ -232,20 +433,29 @@ public struct PillBarPacker {
             return w
         }
 
-        // Search split points high→low so that on a width tie the bigger
-        // left bar wins (a lone pill stays on the left, matching the
-        // single-bar intuition). Pick the feasible split with the
-        // smallest left/right width imbalance.
-        var best: (k: Int, imbalance: CGFloat)?
+        // Search split points high→low. Safe capacities are often highly
+        // asymmetric after app menus and the right-side usage slot are
+        // reserved, so equal rendered bar widths are the wrong objective.
+        // Minimize the largest unused safe region first, then the difference
+        // between residuals. A complete tie keeps the earlier (larger-left)
+        // split because the loop descends from the highest k.
+        var best: (k: Int, largestResidual: CGFloat, residualImbalance: CGFloat)?
         for k in stride(from: visible.count, through: 0, by: -1) {
             let left = visible[0..<k]
             let right = visible[k...]
             let lw = barWidth(left, withOverflow: hasOverflow && result.overflowSide == .left)
             let rw = barWidth(right, withOverflow: hasOverflow && result.overflowSide == .right)
             guard lw <= leftMax, rw <= rightMax else { continue }
-            let imbalance = abs(lw - rw)
-            if best == nil || imbalance < best!.imbalance {
-                best = (k, imbalance)
+
+            let leftResidual = max(0, leftMax - lw)
+            let rightResidual = max(0, rightMax - rw)
+            let largestResidual = max(leftResidual, rightResidual)
+            let residualImbalance = abs(leftResidual - rightResidual)
+            if best == nil
+                || largestResidual < best!.largestResidual
+                || (largestResidual == best!.largestResidual
+                    && residualImbalance < best!.residualImbalance) {
+                best = (k, largestResidual, residualImbalance)
             }
         }
 
@@ -257,12 +467,115 @@ public struct PillBarPacker {
             rightVisibleIds: Array(visible[split.k...]),
             hiddenIds: result.hiddenIds,
             overflowSide: result.overflowSide,
-            shortenedIds: shortenedIds
+            compactedIds: compactedIds,
+            minimizedIds: minimizedIds
+        )
+    }
+
+    /// Restores label detail without changing the selected visible prefix or
+    /// side split. Candidates are visited in global priority order. If a
+    /// higher-priority label cannot afford its next tier, its unused fragment
+    /// remains available to any lower-priority label on the same side.
+    private static func restoringAffordableLabelDetail(
+        in result: PackResult,
+        candidates: [Candidate],
+        leftMax: CGFloat,
+        rightMax: CGFloat,
+        pillSpacing: CGFloat,
+        overflowPillWidthFor: (Int) -> CGFloat
+    ) -> PackResult {
+        let visibleIds = result.leftVisibleIds + result.rightVisibleIds
+        guard !visibleIds.isEmpty else { return result }
+
+        let candidateByID = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
+        var tierByID = Dictionary(uniqueKeysWithValues: visibleIds.map {
+            ($0, result.labelTier(for: $0))
+        })
+
+        func variants(for candidate: Candidate) -> [(tier: LabelTier, width: CGFloat)] {
+            var variants: [(LabelTier, CGFloat)] = [(.full, candidate.pillWidth)]
+            if let compactWidth = candidate.compactWidth,
+               compactWidth < candidate.pillWidth {
+                variants.append((.compact, compactWidth))
+            }
+            if let minimumWidth = candidate.minimumWidth,
+               minimumWidth < variants.last!.1 {
+                variants.append((.tight, minimumWidth))
+            }
+            return variants
+        }
+
+        var widthByID: [String: CGFloat] = [:]
+        for id in visibleIds {
+            guard let candidate = candidateByID[id],
+                  let tier = tierByID[id],
+                  let variant = variants(for: candidate).first(where: { $0.tier == tier }) else {
+                continue
+            }
+            widthByID[id] = variant.width
+        }
+
+        let hasOverflow = result.hiddenCount > 0
+        let overflowWidth = hasOverflow ? overflowPillWidthFor(result.hiddenCount) : 0
+        func usedWidth(_ ids: [String], overflowSide: OverflowSide) -> CGFloat {
+            var width: CGFloat = 0
+            for (index, id) in ids.enumerated() {
+                width += (index == 0 ? 0 : pillSpacing) + (widthByID[id] ?? 0)
+            }
+            if hasOverflow && result.overflowSide == overflowSide {
+                width += (ids.isEmpty ? 0 : pillSpacing) + overflowWidth
+            }
+            return width
+        }
+
+        let leftIDs = Set(result.leftVisibleIds)
+        var leftUsed = usedWidth(result.leftVisibleIds, overflowSide: .left)
+        var rightUsed = usedWidth(result.rightVisibleIds, overflowSide: .right)
+
+        for id in visibleIds {
+            guard let candidate = candidateByID[id],
+                  let currentTier = tierByID[id],
+                  let currentWidth = widthByID[id] else {
+                continue
+            }
+            let available = variants(for: candidate)
+            guard let currentIndex = available.firstIndex(where: { $0.tier == currentTier }),
+                  currentIndex > 0 else {
+                continue
+            }
+
+            let isLeft = leftIDs.contains(id)
+            let maximum = isLeft ? leftMax : rightMax
+            let used = isLeft ? leftUsed : rightUsed
+            for improved in available[..<currentIndex] {
+                let delta = improved.width - currentWidth
+                guard used + delta <= maximum else { continue }
+                tierByID[id] = improved.tier
+                widthByID[id] = improved.width
+                if isLeft {
+                    leftUsed += delta
+                } else {
+                    rightUsed += delta
+                }
+                break
+            }
+        }
+
+        let compactedIds = Set(visibleIds.filter { tierByID[$0] == .compact })
+        let minimizedIds = Set(visibleIds.filter { tierByID[$0] == .tight })
+        return PackResult(
+            leftVisibleIds: result.leftVisibleIds,
+            rightVisibleIds: result.rightVisibleIds,
+            hiddenIds: result.hiddenIds,
+            overflowSide: result.overflowSide,
+            compactedIds: compactedIds,
+            minimizedIds: minimizedIds,
+            density: result.density
         )
     }
 
     /// Greedy left-then-right pass with no rebalancing. Internal — the public
-    /// `pack` wraps this with a no-empty-side retry.
+    /// `pack` wraps this with adaptive label variants and capacity balancing.
     private static func packStrict(
         candidates: [Candidate],
         leftMax: CGFloat,
@@ -327,7 +640,8 @@ public struct PillBarPacker {
             rightVisibleIds: right,
             hiddenIds: hiddenIds,
             overflowSide: overflowSide,
-            shortenedIds: []
+            compactedIds: [],
+            minimizedIds: []
         )
     }
 }

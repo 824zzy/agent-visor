@@ -219,6 +219,7 @@ final class ApprovalNotifier: NSObject {
         case .codex:      return "Codex"
         case .cursor:     return "Cursor"
         case .auggie:     return "Auggie"
+        case .pi:         return "Pi"
         }
     }
 

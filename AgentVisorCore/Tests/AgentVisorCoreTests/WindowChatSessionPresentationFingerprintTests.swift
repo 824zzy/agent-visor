@@ -16,8 +16,16 @@ final class WindowChatSessionPresentationFingerprintTests: XCTestCase {
         )
     }
 
+    func testCatalogDisplayNameChangeInvalidatesChatPresentation() {
+        XCTAssertNotEqual(
+            makeFingerprint(capability: .connected, modelDisplayName: nil),
+            makeFingerprint(capability: .connected, modelDisplayName: "GPT-5.6-Sol")
+        )
+    }
+
     private func makeFingerprint(
-        capability: CodexControlCapability
+        capability: CodexControlCapability,
+        modelDisplayName: String? = "GPT-5.6"
     ) -> WindowChatSessionPresentationFingerprint {
         WindowChatSessionPresentationFingerprint(
             displayTitle: "Thread",
@@ -25,6 +33,7 @@ final class WindowChatSessionPresentationFingerprintTests: XCTestCase {
             phaseTag: "waitingForInput",
             permissionMode: nil,
             modelName: "gpt-5.6",
+            modelDisplayName: modelDisplayName,
             contextWindowTokens: 200_000,
             contextTokenBucket: 12,
             effortLevel: "high",

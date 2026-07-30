@@ -39,10 +39,8 @@ class SessionFileWatcher {
     init(sessionId: String, cwd: String, agentID: AgentID = .claudeCode) {
         self.sessionId = sessionId
         self.cwd = cwd
-        if agentID == .codex, let path = CodexThreadStore.thread(id: sessionId)?.rolloutPath {
-            self.filePath = path
-        } else if agentID == .cursor {
-            self.filePath = CursorAgentProvider().transcriptURL(sessionId: sessionId, cwd: cwd).path
+        if let provider = AgentRegistry.provider(for: agentID) {
+            self.filePath = provider.transcriptURL(sessionId: sessionId, cwd: cwd).path
         } else {
             let projectDir = ConversationParser.projectDirName(from: cwd)
             self.filePath = NSHomeDirectory() + "/.claude/projects/" + projectDir + "/" + sessionId + ".jsonl"

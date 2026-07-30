@@ -87,7 +87,18 @@ struct SessionState: Equatable, Identifiable, Sendable {
 
     // MARK: - Model & Usage Stats
 
+    /// Raw provider model identifier used for matching and usage metadata.
     var modelName: String?
+    /// Canonical human-facing name supplied by the owning provider's catalog.
+    var modelDisplayName: String?
+
+    nonisolated var displayModelName: String? {
+        ModelDisplayName.resolve(
+            modelID: modelName,
+            catalogDisplayName: modelDisplayName
+        )
+    }
+
     var totalInputTokens: Int = 0
     var totalOutputTokens: Int = 0
 
@@ -96,6 +107,18 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// future modes render gracefully (UI maps known values via
     /// `PermissionMode.from(raw:)`).
     var permissionMode: String?
+
+    /// One provider-aware decision shared by every permission-mode surface.
+    /// A stale or falsely probed Claude mode remains invisible and inert for
+    /// Pi, Codex, Cursor, and other providers.
+    nonisolated var permissionModeSurfaceDecision: PermissionModeSurfaceDecision {
+        PermissionModeSurfacePolicy.decision(
+            agentID: agentID,
+            rawMode: permissionMode,
+            hasTTY: tty != nil,
+            isInTmux: isInTmux
+        )
+    }
 
     /// Tokens in the most recent assistant message's context window
     /// (input + cache_read + cache_creation). Used to display current
@@ -201,6 +224,21 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.sessionName = Self.readSessionName(pid: pid)
     }
 
+    nonisolated mutating func applyModelMetadata(
+        modelID: String,
+        catalogDisplayName: String? = nil
+    ) {
+        guard !modelID.isEmpty, !modelID.hasPrefix("<") else { return }
+        if modelName != modelID {
+            modelName = modelID
+            modelDisplayName = nil
+        }
+        if let catalogDisplayName,
+           !catalogDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            modelDisplayName = catalogDisplayName
+        }
+    }
+
     @discardableResult
     nonisolated mutating func setPhase(
         _ newPhase: SessionPhase,
@@ -215,6 +253,28 @@ struct SessionState: Equatable, Identifiable, Sendable {
             didChange = true
         }
         didChange = markPhaseEvidence(evidenceSource, observedAt: observedAt) || didChange
+        return didChange
+    }
+
+    /// Restore a demonstrably live attachment without pretending the
+    /// liveness signal observed a user-visible lifecycle phase. Clearing old
+    /// evidence lets transcript inference resume instead of treating a stale
+    /// SessionEnd hook as current after Agent Visor relaunches.
+    @discardableResult
+    nonisolated mutating func reattachAsIdleWithoutPhaseEvidence(
+        changedAt: Date = Date()
+    ) -> Bool {
+        var didChange = false
+        if phase != .idle {
+            phase = .idle
+            phaseChangedAt = changedAt
+            didChange = true
+        }
+        if phaseObservedAt != nil || phaseEvidenceSource != nil {
+            phaseObservedAt = nil
+            phaseEvidenceSource = nil
+            didChange = true
+        }
         return didChange
     }
 
@@ -423,6 +483,17 @@ struct SessionState: Equatable, Identifiable, Sendable {
         case .codexAppServer:  return true
         case .observed:        return false
         }
+    }
+
+    /// Provider semantics for image input are independent from ordinary
+    /// text sendability. In particular, Pi consumes one local-path prompt
+    /// while Claude's terminal TUI recognizes attachment-aware pastes.
+    nonisolated var imageSubmissionRoute: ImageSubmissionRoute {
+        ImageSubmissionRoutePolicy.route(
+            agent: agentID,
+            canSend: supportsSilentSend,
+            hasTTY: tty != nil
+        )
     }
 }
 

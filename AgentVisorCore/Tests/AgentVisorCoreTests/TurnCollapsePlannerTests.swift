@@ -45,6 +45,19 @@ final class TurnCollapsePlannerTests: XCTestCase {
         XCTAssertEqual(plan, [.init(id: "turn", depth: 0)])
     }
 
+    func testCollapsedTurnKeepsIssueChildrenVisibleInChronologicalOrder() {
+        let plan = TurnCollapsePlanner.plan(
+            groups: [group("turn", ["success", "failure", "approval"])],
+            expanded: [],
+            alwaysVisibleChildren: ["failure", "approval"]
+        )
+        XCTAssertEqual(plan, [
+            .init(id: "turn", depth: 0),
+            .init(id: "failure", depth: 1),
+            .init(id: "approval", depth: 1),
+        ])
+    }
+
     func testExpandedTurnIncludesChildrenAtDepthOne() {
         let plan = TurnCollapsePlanner.plan(
             groups: [group("turn", ["s1", "s2", "s3"])],

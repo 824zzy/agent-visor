@@ -45,7 +45,7 @@ public enum CursorWorkspaceResolver {
             return sessionCwd
         case .claudeCode:
             return longestPrefixMatch(sessionCwd: sessionCwd, candidateFolders: candidateFolders)
-        case .codex, .auggie:
+        case .codex, .auggie, .pi:
             return nil
         }
     }

@@ -1,7 +1,7 @@
 # Sessions Browser UI Design
 
 Status: Accepted
-Last reviewed: 2026-07-19
+Last reviewed: 2026-07-30
 
 ## Purpose
 
@@ -15,7 +15,7 @@ The browser should feel like a focused macOS switcher: dense enough to scan quic
 2. **Title first, metadata second.** Session titles get the first readable line. Source, project, and owner chips support identification without competing with the title.
 3. **State is visible but restrained.** Status uses a small semantic mark and section placement, not a full-row color wash.
 4. **Density without crowding.** Rows should expose enough context to distinguish sessions while preserving a steady scanning rhythm.
-5. **No false selection.** Hover, keyboard cursor, and inspector state have distinct visual treatments. None should look like a persistent chat selection.
+5. **No false selection.** Hover and keyboard cursor have distinct visual treatments. Entering Chat replaces the list rather than leaving a misleading selected row behind it.
 6. **Stable geometry.** Hover, modifier keys, status changes, and relative-time updates must not resize or move rows.
 
 ## Window And Canvas
@@ -28,11 +28,12 @@ The browser should feel like a focused macOS switcher: dense enough to scan quic
 | Canvas | `ChatTheme.headerBg` across the browser |
 | Main content width | Results capped at `980` points and centered |
 | Command bar/footer width | Capped at `980` points and centered |
+| Chat content rail | Capped at the same `980` points and centered |
 | Horizontal inset | `28` points |
 
 The browser must not use a hero-sized empty area. At the default window size, the first section header should begin within roughly `90` points of the content top when no permission warning is present.
 
-Wide windows keep the list centered instead of stretching rows indefinitely. Minimum-width windows must not introduce horizontal scrolling.
+Wide windows keep the list and Chat rail centered instead of stretching rows indefinitely. Minimum-width windows use the available width after the 28-point insets and must not introduce horizontal scrolling.
 
 ## Page Structure
 
@@ -98,9 +99,10 @@ Left to right:
 3. Text and metadata column.
 4. Relative age in a fixed trailing slot.
 5. Keyboard shortcut slot with stable geometry.
-6. Inspector button in a 38 x 42 point target.
+6. A quiet 28-point Chat disclosure chevron inside the primary row target when Chat is supported.
+7. A fixed 138-point trailing accessory containing `Open in <owner>` when owner routing is supported.
 
-The main content uses 13 points between the logo/status area and text. The primary button covers the full row except the dedicated inspector target.
+The main content uses 13 points between the logo/status area and text. Activating a Chat-capable row enters Agent Visor Chat, exactly like Return. The disclosure chevron communicates that destination but is not a second button. The canonical owner remains an always-visible, disjoint action; it never inherits the row action. Owner-only rows omit the chevron and use the owner as their capability-safe row fallback. Do not repeat Chat as a high-emphasis `Enter Chat` button on every row.
 
 ### First Line
 
@@ -120,7 +122,7 @@ When horizontal space is constrained, preserve information in this order:
 3. Project chip.
 4. Owner chip.
 
-Hide the owner chip first, then the project chip. Do not squeeze the title to a few ambiguous characters merely to preserve every chip. Full metadata remains available in the inspector and accessibility label.
+Hide the owner chip first, then the project chip. Do not squeeze the title to a few ambiguous characters merely to preserve every chip. Full metadata remains available from the optional Chat-header Details menu and the accessibility label.
 
 ### Second Line
 
@@ -136,9 +138,14 @@ The preview must not render raw markdown structure, tool payloads, or multiline 
 
 - Relative age: 11-point medium rounded text, minimum 28-point slot, tertiary color.
 - Shortcut badge: fixed 35 x 24 point slot whether visible or hidden.
-- Inspector glyph: 13-point medium.
+- Chat disclosure: a quiet 28-point trailing chevron inside the primary row button. It is decorative for accessibility because the row itself exposes `Enter Chat for <title>`; it must not create a neighboring Chat hit target that can be confused with the owner action.
+- Owner accessory: fixed 138-point slot when present, disjoint from the row button.
+- Owner action: 32 points high, 11-point semibold secondary text, transparent with no border at rest. Hover or press may add a low-opacity semantic-link surface and link-colored text without changing geometry.
+- At constrained widths, the owner label may compact from `Open in <owner>` to the owner name and then to its app/terminal icon plus the external-open symbol. Its accessibility label always keeps the full action name.
+- Metadata-only rows omit the Chat chevron and use the owner as their primary row destination without inserting a disabled placeholder.
+- Chat-only rows omit the unavailable owner slot rather than presenting dead or misleading chrome.
 
-Fixed slots prevent rows from moving when Cmd shortcuts appear or timestamps change width.
+The fixed owner accessory prevents rows from moving when Cmd shortcuts appear, timestamps change width, or labels compact. Capability changes may add or remove the whole explicit owner destination rather than leave a control whose label and action disagree.
 
 ## State Color
 
@@ -159,9 +166,9 @@ A freshly completed, unacknowledged `Ready` turn may pulse for at most seven min
 | --- | --- | --- | --- |
 | Default | Transparent | None | Resting list row |
 | Hover | `ChatTheme.cardBg` at reduced opacity | None | Pointer feedback only |
-| Keyboard cursor | `ChatTheme.cardBg` | 1-point semantic link border at reduced opacity | Target for Return and Option+Return |
+| Keyboard cursor | `ChatTheme.cardBg` | 1-point semantic link border at reduced opacity | Target for Return and Shift+Return |
 | Pressed | Slightly stronger surface contrast | Existing geometry | No scale or position change |
-| Inspector open | Browser row unchanged | Browser row unchanged | Sheet owns inspector emphasis |
+| Chat open | Browser retained but hidden | Browser retained but hidden | Full-window Chat owns presentation |
 
 Hover must not look stronger than the keyboard cursor. Do not animate row size, padding, logo size, or chip visibility between states.
 
@@ -186,31 +193,53 @@ If saved history fails to load, keep current sessions usable and show a compact,
 ## Footer
 
 - Height: 42 points.
-- Left: `Up/Down Navigate`, `Return Open original`, `Option+Return Inspect`.
-- Right: configured global shortcuts using compact key labels: `1-9 Open pills` and `0 More sessions`.
+- Left: `Up/Down Navigate`, then capability-aware Return and Shift-Return labels. A Chat-capable owner-routable row reads `Return Enter Chat` and `Shift+Return Continue in source app`. The footer remains provider-neutral and stable; the row-level owner action names the exact Codex, terminal, or editor destination. When only one destination is supported, show that action once rather than teaching a duplicate shortcut.
+- Right: configured global shortcuts using intent-first labels: `1-9 Switch sessions` and `0 Session menu`. Numbered shortcuts still follow menu-bar pill reading order, while zero toggles the menu-bar session overflow; the teaching copy must not expose “pill” or “more sessions” implementation language.
 - When global shortcuts are disabled, the right side says `Global shortcuts off · Configure in Settings`.
 - Text: 10-point secondary and tertiary tiers.
 
 The footer remains quiet and fixed. It is the durable teaching surface for keyboard acceleration without taking space from the primary search task. It must not become a toolbar of secondary actions. Do not show `Codex history included`; source chips and historical row copy already expose that scope.
 
-## Inspector Presentation
+## In-Window Agent Visor Chat
 
-Inspection is an explicit modal sheet, not a permanent right pane.
+Chat is a full-content destination in the existing main window. It is not a modal sheet and not a permanent split pane.
 
-- Current-session inspector minimum: `760 x 560` points.
-- Historical-session inspector minimum: `680 x 440` points.
-- The sheet shows status evidence, latest activity, context, and mirrored history only when available.
-- Closing the inspector restores the exact browser query, keyboard cursor, and viewport.
+- The Sessions browser remains mounted but hidden so its query, keyboard cursor, and scroll position survive without reconstruction.
+- The header is a compact, single-line navigation toolbar between 44 and 48 points high. From left to right it contains the labeled `Back to Sessions` action, a compact status glyph plus the stable session title, a quiet always-visible `Open in <owner>` action when routing is available, and an overflow menu containing optional technical `Details`.
+- The toolbar does not repeat the provider logo, source/project subtitle, or a decorative vertical separator. `Open in <owner>` uses a secondary system treatment rather than a filled accent treatment, and the Details overflow uses an ellipsis instead of a competing labeled control.
+- The session title is the toolbar's only flexible item and truncates before navigation or actions become unusable. The status glyph has a phase-specific tooltip and accessibility label, so color is not its only available meaning.
+- The conversation begins immediately below the header; no status summary, latest-result card, or session-context card precedes it.
+- Chat reuses the existing Claude Code desktop conversation presentation: messages, tools, pagination, composer, approvals, and status bar.
+- Chat has one responsive content rail shared with the Sessions browser. The rail is at most 980 points wide and centered; below that width it uses all space remaining after the 28-point window insets.
+- Header controls, history rows, work disclosures and expanded tools, pagination and processing affordances, composer or approval controls, and status content align to that rail. The canvas, section backgrounds, dividers, scrolling viewport, and drill-down overlays remain full-bleed.
+- The status bar presents the session's provider-resolved model display name. Pi catalog metadata therefore renders `gpt-5.6-sol` as `GPT-5.6 Sol`; raw identifiers remain available only through optional technical Details when they differ. Status, hover detail, and Details must not implement separate model-name formatting rules.
+- The bottom status bar shares geometry across providers, not capabilities. Claude Code's permission-mode segment (`default`, `accept edits`, `plan`, and observed optional modes) appears only for Claude Code sessions. A terminal-owned Claude session may cycle it; a non-terminal Claude owner may show the latest mode read-only.
+- Pi, Codex, Cursor, and every other non-Claude provider hide Claude permission modes even if stale or falsely probed mode metadata exists. Their Chat composers do not expose or forward Claude's Shift-Tab mode action. Rendering, terminal probing, optimistic state, Details, and keystroke delivery consume the same provider-capability decision so no layer can reintroduce the control independently.
+- Assistant prose uses the rail width remaining after its status glyph. It has no independent readable-width frame and no decorative trailing spacer.
+- User prompts are trailing, content-hugging bubbles inside the rail. Short prompts keep balanced horizontal insets around their content; long prompts wrap only when the rail and the role-separating leading space require it. The rounded background never expands merely because the rail has spare width.
+- Pi uses the same view. Its provider owns active-branch parsing. A live exactly routed Pi terminal accepts the shared image composer: Agent Visor saves each image locally, shows the existing thumbnail, and submits one ordered path-plus-text prompt through Pi's provider-aware terminal route. Historical or owner-only Pi rows remain read-only, and image submission never mutates the system clipboard or changes the bundled lifecycle extension.
+- Technical metadata lives in the optional overflow `Details` menu and never becomes an intermediate destination.
+- Historical or ended content that cannot accept input is titled `Chat history` and carries a visible `Read only` label.
+- Metadata-only rows omit the Chat disclosure and fall back to `Open in <owner>` rather than exposing disabled or fabricated Chat.
+- Opening the browser does not parse conversation content; parsing begins only after an explicit Chat request.
 
-The browser behind the sheet must not change visual selection to imply that the inspected row is now the canonical active session.
+### TDD Implementation Record — Provider-Isolated Bottom Bar Modes
+
+Status: Implemented, signed-deployed, and included in the regenerated local v2.5.0 release candidate on 2026-07-30. The user accepted the live Pi presentation with no Claude permission-mode chip and explicitly skipped the optional live Claude cycle; automated Claude terminal, editor, and tmux coverage passed.
+
+- **RED — capability:** A captured `019f88a3` Pi fixture failed because no shared provider decision existed; the live symptom was a false Claude `default` chip beside Pi's `GPT-5.6 Sol` model label.
+- **GREEN — capability:** `PermissionModeSurfacePolicy` now resolves display, cycle, probe, and state-update capability from provider ownership, TTY availability, and tmux routing. Claude terminal, tmux, editor, unknown-mode, Pi, Codex, Cursor, and Auggie cases are covered.
+- **RED/GREEN — wiring:** Focused audits first failed, then proved that SessionStore hydration and live updates, both Chat variants, both composers, hover Details, presentation fingerprints, probe timers, and the final keystroke boundary consume that decision. Non-Claude mode metadata is invisible and inert even if stale state or a generic prompt-glyph probe reports `default`.
+- **REFACTOR:** Probe start/stop follows live capability changes so a late Claude TTY attachment remains supported without leaving a timer active for Pi or another provider.
+- **Validation:** 27 focused mode regressions and the complete 1,764-test Core suite passed; ad-hoc and pinned signed builds passed; the signed development app relaunched as one process with Accessibility Ready; release identity continuity, archive, cask, appcast, Sparkle signature, Homebrew push dry-run, and all release-policy gates passed. No tag, push, publication, or production-app launch occurred.
 
 ## Appearance And Accessibility
 
 - Use `ChatTheme` semantic tokens; do not introduce raw light/dark colors in browser components.
 - Small text and status tokens target at least 4.5:1 contrast against the browser canvas in light mode.
 - Brand logos use the shared high-resolution source policy at all rendered sizes.
-- Every row accessibility label includes title, state, source, and project.
-- The inspector button has a minimum 38 x 42 point target and a specific label.
+- Every row accessibility label includes title, state, source, project, and the stable action its activation will perform.
+- A Chat-capable row exposes `Enter Chat`; its disclosure chevron is accessibility-hidden as part of that same button. `Open in <owner>` has its own specific label and remains visible without hover.
 - Keyboard focus and pointer hover remain independently perceivable.
 - Reduced Motion disables optional fades. Core navigation never depends on animation.
 
@@ -223,7 +252,7 @@ Permitted motion is limited to short opacity or color transitions. The following
 - phase changes;
 - relative age updates;
 - search result count changes;
-- inspector-button emphasis.
+- owner-action/disclosure emphasis.
 
 Background updates may reorder rows according to the interaction contract, but must not create a decorative shuffle animation.
 
@@ -239,10 +268,10 @@ Review the browser at:
 - owner equal to source and owner different from source;
 - all four state sections;
 - Cmd shortcut badges hidden and visible;
-- hover, keyboard cursor, and inspector-open states;
+- hover, keyboard cursor, Sessions-to-Chat, and Chat-to-Sessions states;
 - large session counts and rapid status changes.
 
-For each case, verify that titles remain the dominant text, logos are sharp, chips stay subordinate, rows do not move on hover or modifier changes, no horizontal scrollbar appears, and the first section begins without excessive empty space.
+For each case, verify that titles remain the dominant text, logos are sharp, chips stay subordinate, the owner action does not read as disabled or compete with the row, rows do not move on hover or modifier changes, no horizontal scrollbar appears, and the first section begins without excessive empty space.
 
 ## Change Control
 

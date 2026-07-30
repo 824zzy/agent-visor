@@ -2,7 +2,7 @@
 //  ImageAttachment.swift
 //  AgentVisor
 //
-//  An image the user has pasted into the notch chat input but not yet sent.
+//  An image the user has pasted into an Agent Visor Chat composer but not yet sent.
 //
 
 import AppKit

@@ -17,7 +17,45 @@ final class SessionRebindCandidatePolicyTests: XCTestCase {
         XCTAssertFalse(
             SessionRebindCandidatePolicy.shouldResurrectEndedSessionFromHook(
                 currentPid: 1234,
-                eventPid: 1234
+                eventPid: 1234,
+                evidence: .ordinary
+            )
+        )
+    }
+
+    func testPiSessionStartIsExactRebindEvidence() {
+        XCTAssertEqual(
+            SessionRebindCandidatePolicy.evidence(
+                agentID: .pi,
+                lifecycleEvent: "SessionStart"
+            ),
+            .exactSessionStart
+        )
+    }
+
+    func testExactSessionStartAllowsSamePidAfterEnded() {
+        XCTAssertTrue(
+            SessionRebindCandidatePolicy.shouldResurrectEndedSessionFromHook(
+                currentPid: 1234,
+                eventPid: 1234,
+                evidence: .exactSessionStart
+            )
+        )
+    }
+
+    func testPiHeartbeatIsPhaseNeutralRebindEvidence() {
+        XCTAssertEqual(
+            SessionRebindCandidatePolicy.evidence(
+                agentID: .pi,
+                lifecycleEvent: "SessionHeartbeat"
+            ),
+            .sessionHeartbeat
+        )
+        XCTAssertFalse(
+            SessionRebindCandidatePolicy.shouldResurrectEndedSessionFromHook(
+                currentPid: 1234,
+                eventPid: 1234,
+                evidence: .sessionHeartbeat
             )
         )
     }
@@ -26,7 +64,8 @@ final class SessionRebindCandidatePolicyTests: XCTestCase {
         XCTAssertTrue(
             SessionRebindCandidatePolicy.shouldResurrectEndedSessionFromHook(
                 currentPid: 1234,
-                eventPid: 5678
+                eventPid: 5678,
+                evidence: .ordinary
             )
         )
     }
@@ -35,7 +74,8 @@ final class SessionRebindCandidatePolicyTests: XCTestCase {
         XCTAssertFalse(
             SessionRebindCandidatePolicy.shouldResurrectEndedSessionFromHook(
                 currentPid: 1234,
-                eventPid: nil
+                eventPid: nil,
+                evidence: .ordinary
             )
         )
     }

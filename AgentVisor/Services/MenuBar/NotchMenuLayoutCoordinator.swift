@@ -115,16 +115,23 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
             ? frontmost?.processIdentifier
             : nil
         let observedTargetScreenID = Self.screenID(for: screenRect)
+        let observedContext = resolveContext(
+            frontmostPid: observedFrontmostPid,
+            screenRect: screenRect
+        )
         if NotchMenuContextRefreshPolicy.shouldResolveOwner(
             hasContext: context != nil,
             contextFrontmostPid: context?.frontmostPid,
             observedFrontmostPid: observedFrontmostPid,
             contextTargetScreenID: context?.targetScreenID,
             observedTargetScreenID: observedTargetScreenID,
+            contextOwnerPid: context?.ownerPid,
+            observedOwnerPid: observedContext.ownerPid,
+            observedOwnerIsResolved: observedContext.ownerIsResolved,
             contextOwnerIsResolved: context?.ownerIsResolved ?? false
         ) {
             establishContext(
-                frontmostPid: observedFrontmostPid,
+                observedContext,
                 screenRect: screenRect,
                 forceNewGeneration: true
             )
@@ -205,6 +212,18 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
         forceNewGeneration: Bool
     ) {
         let newContext = resolveContext(frontmostPid: frontmostPid, screenRect: screenRect)
+        establishContext(
+            newContext,
+            screenRect: screenRect,
+            forceNewGeneration: forceNewGeneration
+        )
+    }
+
+    private func establishContext(
+        _ newContext: Context,
+        screenRect: CGRect,
+        forceNewGeneration: Bool
+    ) {
         guard forceNewGeneration || newContext != context else { return }
 
         generation &+= 1

@@ -10,7 +10,7 @@ import AppKit
 import SwiftUI
 
 struct ChatStatusBar: View {
-    let modelName: String?
+    let modelDisplayName: String?
     let projectName: String
     let contextTokens: Int
     let contextWindow: Int
@@ -107,7 +107,7 @@ struct ChatStatusBar: View {
 
     @ViewBuilder
     private var modelChip: some View {
-        if let display = displayModel {
+        if let display = modelDisplayName {
             HStack(spacing: 0) {
                 Text(display)
                     .foregroundColor(Catppuccin.green)
@@ -129,24 +129,6 @@ struct ChatStatusBar: View {
                 .chatScaledFont(size: 10, weight: .medium, design: .monospaced)
                 .lineLimit(1)
         }
-    }
-
-    /// Pretty-printed model name. Returns nil when we don't have a real
-    /// Claude model id yet — the chip is hidden in that case rather than
-    /// showing a placeholder string.
-    private var displayModel: String? {
-        guard let raw = modelName, !raw.isEmpty else { return nil }
-        // Synthetic / non-claude entries come from internal Claude Code
-        // bookkeeping and aren't worth showing.
-        if raw.hasPrefix("<") { return nil }
-        // claude-opus-4-7 -> Opus 4.7, claude-sonnet-4-6 -> Sonnet 4.6, etc.
-        let cleaned = raw.replacingOccurrences(of: "claude-", with: "")
-        let parts = cleaned.split(separator: "-")
-        guard parts.count >= 3 else { return raw }
-        let family = parts[0].capitalized
-        let major = parts[1]
-        let minor = parts[2].split(separator: "[").first ?? parts[2]
-        return "\(family) \(major).\(minor)"
     }
 
     private var divider: some View {

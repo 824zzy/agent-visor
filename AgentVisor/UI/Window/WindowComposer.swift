@@ -121,7 +121,9 @@ struct WindowComposer: View {
     }
 
     private var composerPlaceholder: String {
-        canSendMessages ? "Message Claude (↵ to send)…" : "No terminal connected"
+        guard canSendMessages else { return "No terminal connected" }
+        let agentName = AgentRegistry.provider(for: session.agentID)?.displayName ?? "agent"
+        return "Message \(agentName) (↵ to send)…"
     }
 
     var body: some View {
@@ -145,9 +147,9 @@ struct WindowComposer: View {
                 isEnabled: canSendMessages,
                 onSubmit: { sendMessage() },
                 onImagePasted: { image in handleImagePaste(image) },
-                onCycleMode: session.tty == nil ? nil : {
-                    Task { await PermissionModeCycler.cycle(session: session) }
-                },
+                onCycleMode: session.permissionModeSurfaceDecision.canCycle
+                    ? { Task { await PermissionModeCycler.cycle(session: session) } }
+                    : nil,
                 onCancelQuery: isProcessing ? { cancelQuery() } : nil,
                 onTextChanged: { newText in
                     slashController.update(composerText: newText)
@@ -343,6 +345,7 @@ struct WindowComposer: View {
     }
 
     private func handleImagePaste(_ image: NSImage) {
+        guard session.imageSubmissionRoute != .unavailable else { return }
         guard let url = ImagePasteSender.savePNG(image) else { return }
         let thumbnail = Self.makeThumbnail(from: image, maxSize: 80)
         attachments.append(ImageAttachment(id: UUID(), url: url, thumbnail: thumbnail))
@@ -377,14 +380,22 @@ struct WindowComposer: View {
         slashController.close()
 
         // Optimistic local echo. JSONL syncs 1-2 s after send (TTY ↔
-        // Claude Code roundtrip), which reads as "the app ate my
-        // message" if the bubble doesn't appear immediately. Push the
-        // user's text into PendingEchoStore so WindowChatViewModel
-        // can merge it into the visible timeline NOW; the echo
-        // self-evicts once the real JSONL row arrives (matched by
-        // trimmed text) or after a 30s TTL backstop.
-        if !text.isEmpty {
-            PendingEchoStore.shared.push(sessionId: session.sessionId, text: text)
+        // agent roundtrip), which reads as "the app ate my message" if
+        // the bubble doesn't appear immediately. Pi's canonical user row
+        // contains the composed paths, so echo that exact payload for
+        // image-only visibility and deterministic transcript reconciliation.
+        let pendingEchoText: String?
+        switch session.imageSubmissionRoute {
+        case .terminalPathPrompt:
+            pendingEchoText = PiImagePromptComposer.compose(
+                text: text,
+                imagePaths: currentAttachments.map { $0.url.path }
+            )
+        case .appServerLocalImage, .terminalAttachment, .unavailable:
+            pendingEchoText = text.isEmpty ? nil : text
+        }
+        if let pendingEchoText {
+            PendingEchoStore.shared.push(sessionId: session.sessionId, text: pendingEchoText)
         }
 
         NotificationCenter.default.post(
@@ -405,8 +416,11 @@ struct WindowComposer: View {
     }
 
     private func scheduleAttachmentCleanup(_ attachments: [ImageAttachment]) {
-        guard !attachments.isEmpty else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
+        guard !attachments.isEmpty,
+              let delay = ImageAttachmentRetentionPolicy.cleanupDelay(
+                for: session.imageSubmissionRoute
+              ) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             for attachment in attachments {
                 try? FileManager.default.removeItem(at: attachment.url)
             }

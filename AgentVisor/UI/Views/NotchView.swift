@@ -165,6 +165,7 @@ final class PillBarSnapshotStore {
     var rightPills: [VisiblePill] = []
     var overflowSnapshot: SidebarSessionListSnapshot?
     var navigatorSnapshot: SidebarSessionListSnapshot?
+    var density: PillBarPacker.Density = .standard
     var pillsInReadingOrder: [VisiblePill] { leftPills + rightPills }
     /// Diagnostic-only: actual rendered pill frames in `.global`
     /// (screen) coordinates, captured via `PillFramesPreferenceKey`.
@@ -224,6 +225,7 @@ struct NotchView: View {
     @ObservedObject private var updateManager = UpdateManager.shared
     @ObservedObject private var navigationRecencyStore = SessionNavigationRecencyStore.shared
     @ObservedObject private var codexUsageMonitor = CodexUsageMonitor.shared
+    @ObservedObject private var claudeUsageMonitor = ClaudeUsageMonitor.shared
     @ObservedObject private var fullScreenPolicy = FullScreenPolicySelector.shared
     @ObservedObject private var sessionShortcutManager = GlobalSessionShortcutManager.shared
     @StateObject private var menuLayoutCoordinator = NotchMenuLayoutCoordinator()
@@ -266,7 +268,15 @@ struct NotchView: View {
     /// change. 1.4s caps the worst-case overlap window for those
     /// no-activation cases without burning meaningful CPU on
     /// `CGWindowListCopyWindowInfo` and AX round-trips.
-    private let menuProbeTimer = Timer.publish(every: 1.4, on: .main, in: .common).autoconnect()
+    // Re-measures the owner app's live menu-title edge. App *switches* are
+    // caught immediately by the activation handler + its 0.1/0.4/1.0s retry
+    // burst; this periodic probe is the only path that catches a *same-app*
+    // menu-width change (e.g. opening an Outlook compose/event window adds
+    // menus, widening past the cached edge). 0.5s bounds that transient
+    // instead of the previous 1.4s, so the left pills re-contract before the
+    // overlap is noticeable. Probe only runs while pills are rendered (see
+    // the guarded onReceive), so the added cost is negligible.
+    private let menuProbeTimer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     @Namespace private var activityNamespace
 
@@ -424,11 +434,10 @@ struct NotchView: View {
 
     /// Safe width for left side content (avoids app menus).
     ///
-    /// The coordinator binds every measurement and cache entry to the menu
-    /// owner resolved at the latest app activation. Periodic probes remeasure
-    /// that owner without rerouting merely because its window crosses a
-    /// display boundary. Unknown ownership hides pills until reliable
-    /// evidence arrives rather than guessing.
+    /// The coordinator binds every measurement and cache entry to the current
+    /// target-screen menu owner. Periodic probes also refresh that owner when
+    /// a window crosses displays without causing a new app activation. Unknown
+    /// ownership keeps the last reliable boundary rather than guessing.
     private var leftSafeWidth: CGFloat {
         menuLayoutCoordinator.safeWidth(available: pillLeftEdge)
     }
@@ -451,7 +460,7 @@ struct NotchView: View {
     /// `status != .closed` — now needs to render unconditionally.
     /// `.full` keeps its original "show pills while closed" semantics.
     private var hasPillContent: Bool {
-        guard !sessionMonitor.instances.isEmpty || codexUsageMonitor.showsPill else {
+        guard !sessionMonitor.instances.isEmpty || codexUsageMonitor.showsPill || claudeUsageMonitor.showsPill else {
             return false
         }
         switch displayMode {
@@ -460,6 +469,13 @@ struct NotchView: View {
         case .pillsOnlyOpenState:
             return true
         }
+    }
+
+    private var codexUsagePresentation: CodexUsageMenuBarPresentation? {
+        guard codexUsageMonitor.showsPill, let snapshot = codexUsageMonitor.snapshot else {
+            return nil
+        }
+        return CodexUsageGlancePolicy.menuBarPresentation(for: snapshot)
     }
 
     private var pillsAreVisible: Bool {
@@ -514,7 +530,9 @@ struct NotchView: View {
                     sessions: navigatorPillSessions,
                     leftMax: leftSafeWidth,
                     rightMax: rightSafeWidth,
-                    includeUsage: codexUsageMonitor.showsPill
+                    codexUsagePresentation: codexUsagePresentation,
+                    includeClaudeUsage: claudeUsageMonitor.showsPill,
+                    currentDensity: pillSnapshotStore.density
                 )
                 let liveOverflowSnapshot = SidebarSessionListBuilder.build(
                     from: pack.overflowSessions,
@@ -577,36 +595,51 @@ struct NotchView: View {
                     .id(menuBarVersion)  // Force re-render when frontmost app changes or tray shifts
                     .overlay(alignment: .trailing) {
                         // Left bar: right-aligned to pill left edge.
-                        HStack(spacing: PillBarCoordinator.pillSpacing) {
+                        HStack(spacing: pack.pillSpacing) {
                             NotchPillBar(
                                 side: .left,
                                 visiblePills: pack.leftPills,
                                 overflowCount: pack.leftOverflowCount,
+                                overflowPillWidth: pack.leftOverflowWidth,
                                 maxWidth: leftSafeWidth,
+                                pillSpacing: pack.pillSpacing,
+                                horizontalPadding: pack.horizontalPadding,
                                 overflowPopover: overflowPopover,
                                 usagePopover: nil
                             )
                         }
                         .frame(maxWidth: leftSafeWidth, alignment: .trailing)
                         .clipped()
-                        .padding(.trailing, viewModel.screenRect.width - pillLeftEdge + 8)
+                        .padding(
+                            .trailing,
+                            viewModel.screenRect.width - pillLeftEdge
+                                + PillBarCoordinator.edgePadding
+                        )
                     }
                     .overlay(alignment: .leading) {
                         // Right bar: left-aligned from pill right edge.
                         // Same session-pill semantics as the left bar.
-                        HStack(spacing: PillBarCoordinator.pillSpacing) {
+                        HStack(spacing: pack.pillSpacing) {
                             NotchPillBar(
                                 side: .right,
                                 visiblePills: pack.rightPills,
                                 overflowCount: pack.rightOverflowCount,
+                                overflowPillWidth: pack.rightOverflowWidth,
                                 maxWidth: rightSafeWidth,
+                                pillSpacing: pack.pillSpacing,
+                                horizontalPadding: pack.horizontalPadding,
                                 overflowPopover: overflowPopover,
-                                usagePopover: usagePopover
+                                usagePopover: usagePopover,
+                                showsCodexUsage: pack.showsCodexUsagePill,
+                                showsClaudeUsage: pack.showsClaudeUsagePill
                             )
                         }
                         .frame(maxWidth: rightSafeWidth, alignment: .leading)
                         .clipped()
-                        .padding(.leading, pillRightEdge + 8)
+                        .padding(
+                            .leading,
+                            pillRightEdge + PillBarCoordinator.edgePadding
+                        )
                     }
                     // Diagnostic: collect actual rendered pill frames
                     // for click-time width comparison. Doesn't drive
@@ -809,8 +842,13 @@ struct NotchView: View {
             handleProcessingChange()
             handleWaitingForInputChange(instances)
         }
-        .onChange(of: codexUsageMonitor.showsPill) { _, showsPill in
-            if !showsPill {
+        .onChange(of: codexUsageMonitor.showsPill) { _, _ in
+            if !codexUsageMonitor.showsPill && !claudeUsageMonitor.showsPill {
+                showCodexUsagePopover = false
+            }
+        }
+        .onChange(of: claudeUsageMonitor.showsPill) { _, _ in
+            if !codexUsageMonitor.showsPill && !claudeUsageMonitor.showsPill {
                 showCodexUsagePopover = false
             }
         }
@@ -864,7 +902,7 @@ struct NotchView: View {
             // notch is opened or there are no sessions, leftSafeWidth
             // isn't displayed and the probe traffic is wasted.
             guard viewModel.status == .closed,
-                  (!sessionMonitor.instances.isEmpty || codexUsageMonitor.showsPill) else { return }
+                  (!sessionMonitor.instances.isEmpty || codexUsageMonitor.showsPill || claudeUsageMonitor.showsPill) else { return }
             menuLayoutCoordinator.probe(screenRect: viewModel.screenRect)
         }
         // Legacy notch-panel notifications (.notchClickOutside,
@@ -903,6 +941,7 @@ struct NotchView: View {
         pillSnapshotStore.rightPills = pack.rightPills
         pillSnapshotStore.overflowSnapshot = overflowSnapshot
         pillSnapshotStore.navigatorSnapshot = navigatorSnapshot
+        pillSnapshotStore.density = pack.density
         pillSnapshotStore.snapshot = renderedSnapshot
 
         #if DEBUG
@@ -910,7 +949,7 @@ struct NotchView: View {
             let leftIds = pack.leftPills.map { String($0.session.sessionId.prefix(8)) }.joined(separator: ",")
             let rightIds = pack.rightPills.map { String($0.session.sessionId.prefix(8)) }.joined(separator: ",")
             let mode = displayMode == .full ? "full" : "stripOpen"
-            pillRaceLog.notice("render mode=\(mode, privacy: .public) leftSafe=\(Int(self.leftSafeWidth)) rightSafe=\(Int(self.rightSafeWidth)) left=[\(leftIds, privacy: .public)] right=[\(rightIds, privacy: .public)]")
+            pillRaceLog.notice("render mode=\(mode, privacy: .public) leftSafe=\(Int(self.leftSafeWidth)) rightSafe=\(Int(self.rightSafeWidth)) density=\(String(describing: pack.density), privacy: .public) spacing=\(Int(pack.pillSpacing)) padding=\(Int(pack.horizontalPadding)) usage=\(Int(pack.usageSlotWidth)) hidden=\(pack.overflowSessions.count) left=[\(leftIds, privacy: .public)] right=[\(rightIds, privacy: .public)]")
         }
         #endif
         return true
@@ -932,45 +971,36 @@ struct NotchView: View {
         let leftSlots = pack.leftPills.reversed().map { pill in
             PillBarHitTest.PillSlot(
                 id: pill.session.stableId,
-                width: PillBarCoordinator.pillWidth(forLabel: pill.label)
+                width: pill.renderedWidth
             )
         }
         let rightSlots = pack.rightPills.map { pill in
             PillBarHitTest.PillSlot(
                 id: pill.session.stableId,
-                width: PillBarCoordinator.pillWidth(forLabel: pill.label)
+                width: pill.renderedWidth
             )
         }
-        let leftOverflowWidth: CGFloat? = pack.leftOverflowCount > 0
-            ? PillBarCoordinator.overflowPillWidth(count: pack.leftOverflowCount)
-            : nil
-        let rightOverflowWidth: CGFloat? = pack.rightOverflowCount > 0
-            ? PillBarCoordinator.overflowPillWidth(count: pack.rightOverflowCount)
-            : nil
         let rightUsageWidth: CGFloat? = pack.showsUsagePill
-            ? CGFloat(CodexUsageGlancePolicy.fixedWidth)
+            ? pack.usageSlotWidth
             : nil
 
-        // Bar anchors stack TWO paddings — the OUTER overlay padding plus
-        // the INNER `NotchPillBar.padding`. So pill[0]'s notch-facing edge
-        // sits at `pillLeftEdge - 2 * edgePadding` (left) or `pillRightEdge
-        // + 2 * edgePadding` (right). Earlier this was off by one
-        // `edgePadding` — clicks on a pill's notch-facing half resolved
-        // to the next pill ("nearby session" bug).
-        let leftAnchor = pillLeftEdge - 2 * PillBarCoordinator.edgePadding
-        let rightAnchor = pillRightEdge + 2 * PillBarCoordinator.edgePadding
+        // Rendering owns one outer notch-edge padding layer. Snapshot anchors
+        // use that same offset so a click resolves against the exact pill the
+        // user saw rather than the adjacent session.
+        let leftAnchor = pillLeftEdge - PillBarCoordinator.edgePadding
+        let rightAnchor = pillRightEdge + PillBarCoordinator.edgePadding
 
         return PillBarHitTest.PillBarSnapshot(
             leftSlots: leftSlots,
             rightSlots: rightSlots,
-            leftOverflowWidth: leftOverflowWidth,
-            rightOverflowWidth: rightOverflowWidth,
+            leftOverflowWidth: pack.leftOverflowWidth,
+            rightOverflowWidth: pack.rightOverflowWidth,
             rightUsageWidth: rightUsageWidth,
             leftAnchorX: leftAnchor,
             rightAnchorX: rightAnchor,
-            leftBarWidth: leftSafeWidth + PillBarCoordinator.edgePadding,
-            rightBarWidth: rightSafeWidth + PillBarCoordinator.edgePadding,
-            pillSpacing: PillBarCoordinator.pillSpacing,
+            leftBarWidth: leftSafeWidth,
+            rightBarWidth: rightSafeWidth,
+            pillSpacing: pack.pillSpacing,
             minY: menuBarInteractionYRange.lowerBound,
             maxY: menuBarInteractionYRange.upperBound
         )
@@ -1025,17 +1055,18 @@ struct NotchView: View {
         let frames = Dictionary(uniqueKeysWithValues: pillSnapshotStore.renderedFrames.map { ($0.id, $0) })
         return allPills.map { pill in
             let sid = stableIdSidPrefix8(pill.session.stableId)
-            let mathW = Int(PillBarCoordinator.pillWidth(forLabel: pill.label))
+            let mathW = Int(pill.renderedWidth)
             // Strip non-printable from label for log safety; truncate.
             let labelTrimmed = pill.label.replacingOccurrences(of: "\"", with: "'")
             let labelShort = labelTrimmed.count > 24 ? String(labelTrimmed.prefix(24)) + "…" : labelTrimmed
+            let tier = String(describing: pill.labelTier)
             if let f = frames[pill.session.stableId] {
                 let renderW = Int(f.frame.width)
                 let minX = Int(f.frame.minX)
                 let maxX = Int(f.frame.maxX)
-                return "\(sid):\"\(labelShort)\" math=\(mathW) render=\(minX)..\(maxX)(\(renderW))"
+                return "\(sid):\"\(labelShort)\" tier=\(tier) math=\(mathW) render=\(minX)..\(maxX)(\(renderW))"
             } else {
-                return "\(sid):\"\(labelShort)\" math=\(mathW) render=missing"
+                return "\(sid):\"\(labelShort)\" tier=\(tier) math=\(mathW) render=missing"
             }
         }.joined(separator: " | ")
     }
@@ -1380,6 +1411,7 @@ struct NotchView: View {
             let willShowUsagePopover = !showCodexUsagePopover
             if willShowUsagePopover {
                 Task { await CodexUsageMonitor.shared.refresh() }
+                Task { await ClaudeUsageMonitor.shared.refresh() }
             }
             showSessionNavigatorPopover = false
             frozenOverflowSnapshot = nil
@@ -1440,9 +1472,16 @@ struct NotchView: View {
             menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
         case .usage:
             let menu = NSMenu()
-            menu.addItem(actionItem("Refresh Codex Usage") {
-                Task { await CodexUsageMonitor.shared.refresh() }
-            })
+            if codexUsageMonitor.showsPill {
+                menu.addItem(actionItem("Refresh Codex Usage") {
+                    Task { await CodexUsageMonitor.shared.refresh() }
+                })
+            }
+            if claudeUsageMonitor.showsPill {
+                menu.addItem(actionItem("Refresh Claude Usage") {
+                    Task { await ClaudeUsageMonitor.shared.refresh() }
+                })
+            }
             menu.addItem(.separator())
             menu.addItem(actionItem("Pill Settings...") {
                 AppDelegate.shared?.openSettings()

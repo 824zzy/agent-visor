@@ -11,9 +11,18 @@ import SwiftUI
 
 struct ModelChip: View {
     let modelName: String?
+    let modelDisplayName: String?
+
+    init(modelName: String?, modelDisplayName: String? = nil) {
+        self.modelName = modelName
+        self.modelDisplayName = modelDisplayName
+    }
 
     var body: some View {
-        if let label = ModelDisplayName.format(modelName) {
+        if let label = ModelDisplayName.resolve(
+            modelID: modelName,
+            catalogDisplayName: modelDisplayName
+        ) {
             Text(label)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundColor(Catppuccin.green)

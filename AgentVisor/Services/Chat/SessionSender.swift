@@ -24,9 +24,9 @@ import os.log
 enum SessionSender {
     nonisolated private static let logger = Logger(subsystem: AppBranding.loggerSubsystem, category: "SessionSender")
 
-    /// Send `text` to the session, plus optional images. Codex app-server
-    /// receives images as `localImage` input items; terminal-backed agents
-    /// receive images through the TTY paste helper.
+    /// Send `text` plus optional images through provider-specific semantics.
+    /// Codex receives local-image input items, Claude's terminal TUI receives
+    /// attachment-aware path pastes, and Pi receives one ordered path prompt.
     static func send(
         text: String,
         attachments: [ImageAttachment] = [],
@@ -34,26 +34,61 @@ enum SessionSender {
         keepFocusOnHost: Bool = true,
         onEscDuringSend: @MainActor @escaping () -> Void = {}
     ) async {
-        if session.agentID == .codex,
-           CodexSendRoutePolicy.route(for: session.codexControlCapability) != .unavailable {
+        switch session.imageSubmissionRoute {
+        case .appServerLocalImage:
+            guard session.agentID == .codex,
+                  CodexSendRoutePolicy.route(
+                    for: session.codexControlCapability
+                  ) != .unavailable else { return }
             await sendCodexTurn(text: text, attachments: attachments, to: session)
-            return
-        }
 
-        // Image-paste path is TTY-only. Cursor's CC extension sessions
-        // have no TTY; we skip image attachments for them.
-        if session.tty != nil {
-            for attachment in attachments {
-                _ = await ImagePasteSender.sendPaste(path: attachment.url.path, session: session)
-                try? await Task.sleep(for: .milliseconds(120))
+        case .terminalPathPrompt:
+            guard let prompt = PiImagePromptComposer.compose(
+                text: text,
+                imagePaths: attachments.map { $0.url.path }
+            ) else { return }
+            let delivered = await sendTextOnly(
+                prompt,
+                to: session,
+                keepFocusOnHost: keepFocusOnHost,
+                onEscDuringSend: onEscDuringSend
+            )
+            if !delivered, !attachments.isEmpty {
+                postImageDeliveryFailure(for: session)
             }
-        }
 
-        if !text.isEmpty {
-            await sendTextOnly(text, to: session, keepFocusOnHost: keepFocusOnHost, onEscDuringSend: onEscDuringSend)
-        } else if !attachments.isEmpty, session.tty != nil {
-            // Image-only — pastes left placeholder text in the TUI; press Enter.
-            _ = await ImagePasteSender.sendEnter(session: session)
+        case .terminalAttachment:
+            if session.tty != nil {
+                for attachment in attachments {
+                    _ = await ImagePasteSender.sendPaste(
+                        path: attachment.url.path,
+                        session: session
+                    )
+                    try? await Task.sleep(for: .milliseconds(120))
+                }
+            }
+
+            if !text.isEmpty {
+                _ = await sendTextOnly(
+                    text,
+                    to: session,
+                    keepFocusOnHost: keepFocusOnHost,
+                    onEscDuringSend: onEscDuringSend
+                )
+            } else if !attachments.isEmpty, session.tty != nil {
+                // Image-only — the attachment-aware TUI has already consumed
+                // each path; submit the remaining placeholder input.
+                _ = await ImagePasteSender.sendEnter(session: session)
+            }
+
+        case .unavailable:
+            guard !text.isEmpty else { return }
+            _ = await sendTextOnly(
+                text,
+                to: session,
+                keepFocusOnHost: keepFocusOnHost,
+                onEscDuringSend: onEscDuringSend
+            )
         }
     }
 
@@ -99,23 +134,26 @@ enum SessionSender {
         to session: SessionState,
         keepFocusOnHost: Bool,
         onEscDuringSend: @MainActor @escaping () -> Void
-    ) async {
+    ) async -> Bool {
         // visor-spawned: silent pty write.
         if session.origin == .visorSpawned {
             do {
-                try await SpawnedSessionManager.shared.writeMessage(text, to: session.sessionId)
+                try await SpawnedSessionManager.shared.writeMessage(
+                    text,
+                    to: session.sessionId
+                )
+                return true
             } catch {
                 logger.error("visor-spawn writeMessage failed: \(error.localizedDescription, privacy: .public)")
+                return false
             }
-            return
         }
 
         // tmux: send-keys via the resolved target.
         if let tty = session.tty,
            session.isInTmux,
            let target = await findTmuxTarget(tty: tty) {
-            _ = await ToolApprovalHandler.shared.sendMessage(text, to: target)
-            return
+            return await ToolApprovalHandler.shared.sendMessage(text, to: target)
         }
 
         // ESC catch-net only registered for the notch caller.
@@ -140,7 +178,7 @@ enum SessionSender {
         // Background-dispatch the AppleScript path (1-2s), surface the
         // result via os_log.
         let sessionCopy = session
-        await withCheckedContinuation { continuation in
+        let delivered: Bool = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let ok: Bool
                 let route: String
@@ -159,7 +197,7 @@ enum SessionSender {
                 } else {
                     Self.logger.error("submit FAILED route=\(route, privacy: .public) sid=\(sessionCopy.sessionId.prefix(8), privacy: .public) len=\(text.count, privacy: .public) tty=\(sessionCopy.tty ?? "nil", privacy: .public)")
                 }
-                continuation.resume()
+                continuation.resume(returning: ok)
             }
         }
 
@@ -170,6 +208,20 @@ enum SessionSender {
         // so the existing call sites don't need updating; a follow-up
         // pass can drop both it and the dead helpers below.
         _ = keepFocusOnHost
+        return delivered
+    }
+
+    private static func postImageDeliveryFailure(for session: SessionState) {
+        logger.error(
+            "image submit FAILED sid=\(session.sessionId.prefix(8), privacy: .public) agent=\(session.agentID.rawValue, privacy: .public)"
+        )
+        NotificationCenter.default.post(
+            name: .cvShowToast,
+            object: nil,
+            userInfo: [
+                "text": "Couldn’t send the image to Pi. Paste it again to retry.",
+            ]
+        )
     }
 
     private static func findTmuxTarget(tty: String) async -> TmuxTarget? {

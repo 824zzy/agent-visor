@@ -2,14 +2,14 @@ import XCTest
 @testable import AgentVisorCore
 
 final class SessionBrowserShortcutEducationPolicyTests: XCTestCase {
-    func testControlCommandExplainsNumberedPillsAndMoreSessions() {
+    func testControlCommandDescribesSessionSwitchingAndTheSessionMenu() {
         let presentation = SessionBrowserShortcutEducationPolicy.presentation(
             for: .controlCommand
         )
 
         XCTAssertEqual(presentation.hints, [
-            SessionBrowserShortcutHint(keys: "⌃⌘1-9", label: "Open pills"),
-            SessionBrowserShortcutHint(keys: "⌃⌘0", label: "More sessions"),
+            SessionBrowserShortcutHint(keys: "⌃⌘1-9", label: "Switch sessions"),
+            SessionBrowserShortcutHint(keys: "⌃⌘0", label: "Session menu"),
         ])
         XCTAssertNil(presentation.disabledMessage)
     }

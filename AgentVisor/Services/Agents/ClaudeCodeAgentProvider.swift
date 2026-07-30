@@ -17,6 +17,7 @@ struct ClaudeCodeAgentProvider: AgentProvider {
     // Spawnable: a new session is forked under a headless PTY via
     // SpawnedSessionManager and driven through the pty (writeMessage).
     let canSpawnSession: Bool = true
+    nonisolated let canRenderChat = true
 
     nonisolated init() {}
 

@@ -15,7 +15,7 @@ final class AgentBrandLogoVisualAuditTests: XCTestCase {
 
     func testEveryBundledBrandAssetSupportsLargeInspectorRendering() throws {
         let assetsRoot = appSourceURL("AgentVisor/Assets.xcassets/AgentBrand")
-        let brands = ["AgentClaude", "AgentAuggie", "AgentCodex", "AgentCursor"]
+        let brands = ["AgentClaude", "AgentAuggie", "AgentCodex", "AgentCursor", "AgentPi"]
         let variants = [("", 128), ("@2x", 256), ("@3x", 384)]
 
         for brand in brands {

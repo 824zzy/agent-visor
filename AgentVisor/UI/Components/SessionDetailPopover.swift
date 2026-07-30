@@ -14,9 +14,7 @@ struct SessionDetailPopover: View {
     let shortcutModifierFamily: SessionShortcutModifierFamily
 
     private var contextWindow: Int {
-        session.contextWindowTokens > 0
-            ? session.contextWindowTokens
-            : ModelContextWindow.tokens(for: session.modelName)
+        ModelContextWindow.tokens(for: session)
     }
 
     private var presentation: SessionHoverDetailPresentation {
@@ -26,9 +24,9 @@ struct SessionDetailPopover: View {
                 agentID: session.agentID,
                 terminalHost: session.terminalHost
             ),
-            modelDisplayName: ModelDisplayName.format(session.modelName),
+            modelDisplayName: session.displayModelName,
             effortLevel: session.effortLevel,
-            permissionMode: session.permissionMode,
+            permissionMode: session.permissionModeSurfaceDecision.displayMode,
             codexApprovalPolicy: session.conversationInfo.lastCodexApprovalPolicy,
             codexSandboxPolicyType: session.conversationInfo.lastCodexSandboxPolicyType,
             contextTokens: session.lastContextTokens,
@@ -103,6 +101,7 @@ struct SessionDetailPopover: View {
         }
         .padding(12)
         .frame(width: 300, alignment: .leading)
+        .background(Catppuccin.base)
     }
 
     private var statusBadge: some View {

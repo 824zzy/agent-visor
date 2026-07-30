@@ -10,8 +10,7 @@
 //
 //  Differences from the notch ChatView:
 //      - Top-down layout (no scaleEffect(y: -1) flip).
-//      - No composer in this iteration (read-only). Composer +
-//        approval bar arrive in a follow-up commit.
+//      - Window-owned composer, approval bar, and source-capability fallbacks.
 //      - No NotchViewModel dependency. Boot-clean: ChatHistoryManager
 //        is the data source; SessionStore is the metadata source.
 //      - Per-session @State so session switches in MainSplitView
@@ -61,6 +60,18 @@ final class WindowChatViewModel: ObservableObject {
     /// `proxy.scrollTo("__bottom__")` — no row re-diff, no ForEach
     /// keypath cost, no layout invalidation feedback loop.
     @Published private(set) var streamTick: Int = 0
+
+    /// A prompt-bounded live turn already renders its own Working header.
+    /// The view uses this to avoid a second, contradictory typing indicator.
+    var hasLiveTurnHeader: Bool {
+        flatRows.contains { row in
+            if case .turnDuration(let seconds) = row.item.type {
+                return seconds == ClaudeLiveTurnSentinel.seconds
+            }
+            return false
+        }
+    }
+
     private var cancellables: Set<AnyCancellable> = []
     private let sessionId: String
 
@@ -194,8 +205,9 @@ final class WindowChatViewModel: ObservableObject {
             displayTitle: next.displayTitle,
             projectName: next.bestProjectName,
             phaseTag: phaseTag(next.phase),
-            permissionMode: next.permissionMode,
+            permissionMode: next.permissionModeSurfaceDecision.displayMode,
             modelName: next.modelName,
+            modelDisplayName: next.modelDisplayName,
             contextWindowTokens: next.contextWindowTokens,
             contextTokenBucket: next.lastContextTokens / 1000,
             effortLevel: next.effortLevel,
@@ -301,21 +313,39 @@ final class WindowChatViewModel: ObservableObject {
         // expanded the window past the echo position.
         let total = merged.count
         totalItemCount = total
-        let range = pagination.slice(totalItems: total)
+        let visibilityRules = ChatVisibilitySelector.shared.rules
+        let usesPromptBoundedGrouping = (session?.agentID == .codex
+            && visibilityRules.collapseCodexTurns)
+            || (session?.agentID == .pi && visibilityRules.collapsePiTurns)
+        let range: Range<Int>
+        if usesPromptBoundedGrouping {
+            let promptIndices = merged.indices.filter { index in
+                if case .user = merged[index].type { return true }
+                return false
+            }
+            range = pagination.sliceAlignedToPrompt(
+                totalItems: total,
+                promptIndices: promptIndices
+            )
+        } else {
+            range = pagination.slice(totalItems: total)
+        }
         let sliced: [ChatHistoryItem]
         if range == 0..<total {
             sliced = merged
         } else {
             sliced = Array(merged[range])
         }
-        hasMoreAbove = pagination.hasMore(totalItems: total)
-        hiddenAboveCount = pagination.hiddenCount(totalItems: total)
+        hasMoreAbove = range.lowerBound > 0
+        hiddenAboveCount = range.lowerBound
         // Per-agent grouping:
         //   * Codex uses the prompt-boundary grouper (CodexTurnGrouper) when
         //     enabled — fold each turn's work behind a leading "Worked …"
         //     header, fold narration as children, keep only the final answer;
         //     the trailing live turn collapses into "Working…". When disabled,
         //     fall back to the legacy consecutive-tool-run coalescing.
+        //   * Pi uses prompt-bounded turns with nested reasoning and one
+        //     Worked/Working disclosure; disabling it restores raw activity.
         //   * Claude Code uses the trailing-turn_duration grouper
         //     (collapse work behind "Worked for X", keep only the final
         //     answer) when the user hasn't disabled it.
@@ -329,6 +359,15 @@ final class WindowChatViewModel: ObservableObject {
             )
         } else if session?.agentID == .codex {
             grouped = groupedTimelineRows(from: Self.coalesceCodexToolRuns(sliced))
+        } else if session?.agentID == .pi,
+                  ChatVisibilitySelector.shared.rules.collapsePiTurns {
+            grouped = piGroupedTimelineRows(
+                from: sliced,
+                sessionIsProcessing: session?.phase == .processing
+                    || session?.phase == .compacting
+            )
+        } else if session?.agentID == .pi {
+            grouped = groupedTimelineRows(from: sliced, agentID: .pi)
         } else if session?.agentID == .claudeCode,
                   ChatVisibilitySelector.shared.rules.collapseClaudeTurns {
             grouped = claudeGroupedTimelineRows(from: sliced)
@@ -482,18 +521,15 @@ struct WindowChatView: View {
                 content
                 if let session = viewModel.session {
                     interactiveSurface(session: session)
+                        .mainContentRail()
                     ChatStatusBar(
-                        modelName: session.modelName,
+                        modelDisplayName: session.displayModelName,
                         projectName: displayPath(session.cwd),
                         contextTokens: session.lastContextTokens,
-                        // Same fallback the notch uses: when the
-                        // session hasn't had a token-counting JSONL
-                        // line yet, contextWindowTokens is 0 and the
-                        // % bar would divide by zero (renders 0%).
-                        // Fall back to the model's known max window.
-                        contextWindow: session.contextWindowTokens > 0
-                            ? session.contextWindowTokens
-                            : ModelContextWindow.tokens(for: session.modelName),
+                        // Use provider-observed metadata first. Pi has no
+                        // generic fallback because Claude's 200k default
+                        // would fabricate an incorrect percentage.
+                        contextWindow: ModelContextWindow.tokens(for: session),
                         effortLevel: session.effortLevel,
                         // Match the notch: true for Claude (so
                         // ClaudeSettings.effortLevel back-fills the
@@ -501,18 +537,18 @@ struct WindowChatView: View {
                         // override), false only for Codex (whose
                         // effort comes from elsewhere).
                         useGlobalEffort: session.agentID != .codex,
-                        permissionMode: session.permissionMode,
-                        // Wire the cycler when the session has a TTY
-                        // (Ghostty/iTerm pane to write OSC 7 + Shift-
-                        // Tab keystroke to). Editor-host sessions
-                        // (Cursor) skip this — same as notch.
-                        onCycleMode: session.tty == nil ? nil : {
-                            Task { await PermissionModeCycler.cycle(session: session) }
-                        }
+                        permissionMode: session.permissionModeSurfaceDecision.displayMode,
+                        // The shared provider policy keeps Claude's mode
+                        // action out of Pi and other terminal agents whose
+                        // Shift-Tab keys have different semantics.
+                        onCycleMode: session.permissionModeSurfaceDecision.canCycle
+                            ? { Task { await PermissionModeCycler.cycle(session: session) } }
+                            : nil
                     )
                     .padding(.horizontal, 14)
                     .padding(.top, 2)
                     .padding(.bottom, 6)
+                    .mainContentRail()
                 }
             }
 
@@ -565,6 +601,13 @@ struct WindowChatView: View {
             installEscMonitor()
             installScrollKeyMonitor()
             startModeProbe()
+        }
+        .onChange(of: viewModel.session?.permissionModeSurfaceDecision.shouldProbe) { _, shouldProbe in
+            if shouldProbe == true {
+                startModeProbe()
+            } else {
+                stopModeProbe()
+            }
         }
         .task(id: "\(sessionId)|\(codexConnectedLab.isRunning)") {
             await codexConnectedLab.attachIfLabActive(threadId: sessionId)
@@ -695,6 +738,7 @@ struct WindowChatView: View {
     /// Claude Code only writes `permission-mode` to JSONL on the next
     /// prompt submission.
     private func startModeProbe() {
+        guard viewModel.session?.permissionModeSurfaceDecision.shouldProbe == true else { return }
         guard modeProbeTimer == nil else { return }
         let capturedSessionId = sessionId
         modeProbeTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
@@ -703,8 +747,7 @@ struct WindowChatView: View {
                 guard let live = sessions.first(where: { $0.sessionId == capturedSessionId }) else {
                     return
                 }
-                if live.isInTmux { return }
-                if live.tty == nil { return }
+                guard live.permissionModeSurfaceDecision.shouldProbe else { return }
                 DispatchQueue.global(qos: .utility).async {
                     let probeStartedAt = Date()
                     let mode: String? = TerminalAdapterRegistry.adapter(for: live) is ITermAdapter
@@ -1077,10 +1120,13 @@ struct WindowChatView: View {
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if viewModel.session?.phase == .processing || viewModel.session?.phase == .compacting {
+            if (viewModel.session?.phase == .processing
+                || viewModel.session?.phase == .compacting)
+                && !viewModel.hasLiveTurnHeader {
                 ProcessingIndicatorView(turnId: viewModel.rows.last?.id ?? sessionId)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
+                    .mainContentRail(alignment: .leading)
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -1100,6 +1146,7 @@ struct WindowChatView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .padding(.bottom, 8)
+                .mainContentRail(alignment: .leading)
                 .background(ChatTheme.headerBg)
                 .transition(.move(edge: .top).combined(with: .opacity))
             } else {

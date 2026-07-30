@@ -46,17 +46,22 @@ public enum TurnCollapsePlanner {
     }
 
     /// Linearize `groups` into the visible ordered row list. A group's
-    /// children are emitted (at depth 1) only when its `parentId` is in
-    /// `expanded`; otherwise just the parent shows. Order is preserved.
-    public static func plan(groups: [RowGroup], expanded: Set<String>) -> [PlannedRow] {
+    /// children are emitted (at depth 1) when its `parentId` is expanded.
+    /// Callers may pin failed or blocking child ids through
+    /// `alwaysVisibleChildren`; those exceptions remain visible even while
+    /// the routine work is collapsed. Original child order is preserved.
+    public static func plan(
+        groups: [RowGroup],
+        expanded: Set<String>,
+        alwaysVisibleChildren: Set<String> = []
+    ) -> [PlannedRow] {
         var out: [PlannedRow] = []
         out.reserveCapacity(groups.count)
         for group in groups {
             out.append(PlannedRow(id: group.parentId, depth: 0))
-            guard !group.childIds.isEmpty, expanded.contains(group.parentId) else {
-                continue
-            }
-            for child in group.childIds {
+            let isExpanded = expanded.contains(group.parentId)
+            for child in group.childIds
+                where isExpanded || alwaysVisibleChildren.contains(child) {
                 out.append(PlannedRow(id: child, depth: 1))
             }
         }

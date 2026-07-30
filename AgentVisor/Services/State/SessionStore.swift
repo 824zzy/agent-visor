@@ -232,17 +232,56 @@ actor SessionStore {
 
     private func processHookEvent(_ event: HookEvent) async {
         guard let event = codexBackedHookEvent(event) else { return }
+        if event.agentID == .pi {
+            await MainActor.run {
+                PiIntegrationMonitor.shared.recordHeartbeat()
+            }
+        }
 
         let sessionId = event.sessionId
-        let isNewSession = sessions[sessionId] == nil
-        var session = sessions[sessionId] ?? createSession(from: event)
+        let existingSessionBeforeHook = sessions[sessionId]
+        let isNewSession = existingSessionBeforeHook == nil
+        var session = existingSessionBeforeHook ?? createSession(from: event)
+        let pidBeforeHookMerge = session.pid
+        let ttyBeforeHookMerge = session.tty
+        let terminalHostBeforeHookMerge = session.terminalHost
+        let originBeforeHookMerge = session.origin
+        let sessionNameBeforeHookMerge = session.sessionName
+        let tmuxBeforeHookMerge = session.isInTmux
         let eventProvider = AgentRegistry.provider(for: event.agentID)
         let sharesProcessAcrossSessions = eventProvider?.skipsPidDedup(for: session) ?? false
+        let isPiSessionHeartbeat = PiSessionHeartbeatPolicy.isHeartbeat(
+            agentID: event.agentID,
+            lifecycleEvent: event.event
+        )
+        let hasDifferentLiveSessionWithEventPid = event.pid.map { eventPid in
+            sessions.contains { entry in
+                entry.key != sessionId
+                    && entry.value.pid == eventPid
+                    && entry.value.phase != .ended
+            }
+        } ?? false
+        let heartbeatDisposition = PiSessionHeartbeatPolicy.disposition(
+            agentID: event.agentID,
+            lifecycleEvent: event.event,
+            hasExistingSession: !isNewSession,
+            existingSessionEnded: existingSessionBeforeHook?.phase == .ended,
+            existingPid: pidBeforeHookMerge,
+            eventPid: event.pid,
+            hasDifferentLiveSessionWithEventPid: hasDifferentLiveSessionWithEventPid
+        )
+        if heartbeatDisposition == .ignore {
+            Self.logger.info("Ignoring Pi SessionHeartbeat for \(sessionId.prefix(8), privacy: .public): missing liveness PID, same-PID Ended row, or PID owned by another live session")
+            return
+        }
 
         // Deduplicate: if this PID is already tracked under a different session ID,
         // remove the old session. This handles /resume which creates a new session ID
         // but reuses the same process. GUI agents intentionally share a host process,
-        // so their hook-emitter PID is not a one-session ownership signal.
+        // so their hook-emitter PID is not a one-session ownership signal. Heartbeats
+        // reject a different live owner above before this authoritative-event path can
+        // evict it; exact SessionStart remains allowed to transfer ownership.
+        var hookDidRemoveStaleSession = false
         if let pid = event.pid {
             let staleIds = sessions.keys.filter { existingId in
                 guard existingId != sessionId,
@@ -258,6 +297,7 @@ actor SessionStore {
             for staleId in staleIds {
                 Self.logger.debug("Dedup: removing stale session \(staleId.prefix(8), privacy: .public) (PID \(pid) now belongs to \(sessionId.prefix(8), privacy: .public))")
                 sessions.removeValue(forKey: staleId)
+                hookDidRemoveStaleSession = true
                 cancelPendingSync(sessionId: staleId)
                 Task { @MainActor in
                     SessionFileWatcherManager.shared.stopWatching(sessionId: staleId)
@@ -265,8 +305,17 @@ actor SessionStore {
             }
         }
 
-        // Track new session in Mixpanel
-        if isNewSession {
+        if isNewSession, isPiSessionHeartbeat {
+            session.lastActivity = Self.transcriptModificationDate(
+                provider: eventProvider,
+                sessionId: sessionId,
+                cwd: session.cwd
+            ) ?? .distantPast
+        }
+
+        // Track genuinely new sessions in Mixpanel. A heartbeat-created row is
+        // an app-restart reattachment, not a newly started Pi conversation.
+        if isNewSession && !isPiSessionHeartbeat {
             Mixpanel.mainInstance().track(event: "Session Started")
         }
 
@@ -278,35 +327,53 @@ actor SessionStore {
         )
         session.pid = processMetadata.pid
         session.tty = processMetadata.tty
-        // Refresh terminalHost on every hook event. The host can change
-        // mid-session: a JSONL first written from iTerm2 gets resumed
-        // via `claude --resume <id>` inside Zed, and we want the host
-        // badge to reflect Zed (the live driver), not the stale iTerm2
-        // detection from session creation. The detector is idempotent
-        // and parent-walk-bounded; running it per-event is cheap.
-        if event.agentID == .codex, processMetadata.tty == nil {
-            session.terminalHost = .codexApp
-        } else if !sharesProcessAcrossSessions, let pid = processMetadata.pid {
-            let host = TerminalHostDetector.detect(pid: pid_t(pid), reader: LiveProcessInfoReader.shared)
-            // Don't overwrite a real host with `.unknown` — process
-            // walk can transiently miss when the parent chain is being
-            // re-parented mid-event (rare but happens during shell
-            // reparent / launchd handoff).
-            if host != .unknown {
-                session.terminalHost = host
+        let shouldRefreshDerivedAttachmentMetadata = !isPiSessionHeartbeat
+            || heartbeatDisposition == .reattachIdle
+            || pidBeforeHookMerge != processMetadata.pid
+            || ttyBeforeHookMerge != processMetadata.tty
+
+        // Refresh terminalHost when lifecycle activity or changed attachment
+        // metadata can make the owning terminal differ. Repeated unchanged
+        // heartbeats deliberately avoid a full process-tree walk.
+        if shouldRefreshDerivedAttachmentMetadata {
+            if event.agentID == .codex, processMetadata.tty == nil {
+                session.terminalHost = .codexApp
+            } else if !sharesProcessAcrossSessions, let pid = processMetadata.pid {
+                let host = TerminalHostDetector.detect(pid: pid_t(pid), reader: LiveProcessInfoReader.shared)
+                // Don't overwrite a real host with `.unknown` — process
+                // walk can transiently miss when the parent chain is being
+                // re-parented mid-event (rare but happens during shell
+                // reparent / launchd handoff).
+                if host != .unknown {
+                    session.terminalHost = host
+                }
             }
         }
-        // Refresh session name on every hook event. Each provider
-        // looks up the user-set name in its own index — claude-code
-        // by pid, codex by sessionId, etc. Nil means "no rename
-        // recorded"; don't clobber a customTitle the bootstrap parser
-        // may have surfaced from JSONL rows.
-        if let eventProvider,
+        // Reconcile origin after merging live process metadata. A transcript
+        // can bootstrap as historical (`pid=0`, no TTY, observed origin) and
+        // then receive a hook from a resumed live process. Keeping the stale
+        // observed origin makes `supportsSilentSend` disable the composer even
+        // though the hook supplied an exact PID and TTY. Re-running the same
+        // provider policy used at creation promotes that session to terminal
+        // ownership without inventing sendability for truly observed sources.
+        session.origin = SessionStore.originForHostedSession(
+            sessionId: event.sessionId,
+            tty: processMetadata.tty,
+            agentID: event.agentID,
+            terminalHost: session.terminalHost
+        )
+        // Resolve a provider-owned name for lifecycle activity and restored
+        // attachments. Active Pi renames continue through the file watcher,
+        // so an unchanged heartbeat does not rescan every transcript.
+        if shouldRefreshDerivedAttachmentMetadata,
+           let eventProvider,
            let name = eventProvider.resolveSessionName(sessionId: event.sessionId, pid: processMetadata.pid),
            !name.isEmpty {
             session.sessionName = name
         }
-        if !sharesProcessAcrossSessions, let pid = processMetadata.pid {
+        if shouldRefreshDerivedAttachmentMetadata,
+           !sharesProcessAcrossSessions,
+           let pid = processMetadata.pid {
             let tree = ProcessTreeBuilder.shared.buildTree()
             session.isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: pid, tree: tree)
         }
@@ -314,7 +381,8 @@ actor SessionStore {
         // not activity from Claude or the user. Updating lastActivity here
         // would reset the color fade on every idle_prompt and make stale
         // sessions look fresh forever.
-        if event.event != "Notification" {
+        if event.event != "Notification"
+            && !isPiSessionHeartbeat {
             session.lastActivity = Date()
         }
 
@@ -327,6 +395,45 @@ actor SessionStore {
             cancelPendingSync(sessionId: sessionId)
             publishState()
             return
+        }
+
+        switch heartbeatDisposition {
+        case .reattachIdle, .preserveLiveState:
+            let didReattach = heartbeatDisposition == .reattachIdle
+            let didChangeReattachmentState = didReattach
+                ? session.reattachAsIdleWithoutPhaseEvidence()
+                : false
+            sessions[sessionId] = session
+            let heartbeatDidChange = hookDidRemoveStaleSession
+                || isNewSession
+                || pidBeforeHookMerge != session.pid
+                || ttyBeforeHookMerge != session.tty
+                || terminalHostBeforeHookMerge != session.terminalHost
+                || originBeforeHookMerge != session.origin
+                || sessionNameBeforeHookMerge != session.sessionName
+                || tmuxBeforeHookMerge != session.isInTmux
+                || didChangeReattachmentState
+            if didReattach {
+                let heartbeatCwd = session.cwd
+                Task { @MainActor in
+                    SessionFileWatcherManager.shared.startWatching(
+                        sessionId: sessionId,
+                        cwd: heartbeatCwd,
+                        agentID: .pi
+                    )
+                }
+                Self.logger.info("Reattached Pi session \(sessionId.prefix(8), privacy: .public) from SessionHeartbeat (pid \(pidBeforeHookMerge ?? -1, privacy: .public) -> \(event.pid ?? -1, privacy: .public))")
+            }
+            if heartbeatDidChange {
+                publishState()
+            }
+            return
+
+        case .ignore:
+            return
+
+        case .notHeartbeat:
+            break
         }
 
         // Apply chat-item side-effects BEFORE the phase transition so the
@@ -379,8 +486,14 @@ actor SessionStore {
         }
 
         let newPhase = event.determinePhase()
+        let isAuthoritativePiHeartbeat = event.agentID == .pi && event.event == "SessionStart"
+        let rebindEvidence = SessionRebindCandidatePolicy.evidence(
+            agentID: event.agentID,
+            lifecycleEvent: event.event
+        )
         if !ObservedHookPhasePolicy.shouldApplyHookPhase(
-            usesTranscriptPhaseInference: usesTranscriptPhaseInference(session),
+            usesTranscriptPhaseInference: usesTranscriptAsAuthoritativeSource(session)
+                && !isAuthoritativePiHeartbeat,
             reportedPhase: Self.reportedHookPhase(for: newPhase),
             isCurrentlyWaitingForApproval: session.phase.isWaitingForApproval
         ) {
@@ -449,16 +562,17 @@ actor SessionStore {
             // SessionStatusDot pulse stops far before its configured 7-min
             // window. Skip the transition entirely for notifications.
         } else if session.phase == .ended && newPhase != .ended {
-            // Resurrection. A hook event can only originate from a LIVE
-            // claude process, but the same PID can still emit delayed hook
-            // events while winding down after SessionEnd. Only a different
-            // PID proves the user re-attached (`claude --resume`) or started
-            // a fresh turn in a new shell.
+            // Resurrection. An ordinary same-PID event may be delayed while
+            // the old attachment winds down after SessionEnd, so it cannot
+            // revive the row. A different PID proves a reattachment. Pi's
+            // exact SessionStart is stronger: Pi can replace sessions inside
+            // one process, and that event names the new live attachment.
             if SessionRebindCandidatePolicy.shouldResurrectEndedSessionFromHook(
-                currentPid: session.pid,
-                eventPid: event.pid
+                currentPid: pidBeforeHookMerge,
+                eventPid: event.pid,
+                evidence: rebindEvidence
             ) {
-                Self.logger.info("Resurrecting ended session \(sessionId.prefix(8), privacy: .public) on live \(event.event, privacy: .public) (pid \(session.pid ?? -1, privacy: .public) -> \(event.pid ?? -1, privacy: .public))")
+                Self.logger.info("Resurrecting ended session \(sessionId.prefix(8), privacy: .public) on live \(event.event, privacy: .public) (pid \(pidBeforeHookMerge ?? -1, privacy: .public) -> \(event.pid ?? -1, privacy: .public))")
                 session.setPhase(newPhase, evidenceSource: .hook)
                 let cwdCopy = session.cwd
                 let agentCopy = session.agentID
@@ -542,6 +656,17 @@ actor SessionStore {
         case .cursorObserved: return .cursorObserved
         case .observed: return .observed
         }
+    }
+
+    private static func transcriptModificationDate(
+        provider: (any AgentProvider)?,
+        sessionId: String,
+        cwd: String
+    ) -> Date? {
+        guard let provider else { return nil }
+        let url = provider.transcriptURL(sessionId: sessionId, cwd: cwd)
+        return try? url.resourceValues(forKeys: [.contentModificationDateKey])
+            .contentModificationDate
     }
 
     private func createSession(from event: HookEvent) -> SessionState {
@@ -1039,8 +1164,8 @@ actor SessionStore {
                 continue
             }
             guard message.role == .assistant else { continue }
-            if let model = message.model, !model.hasPrefix("<") {
-                session.modelName = model
+            if let model = message.model {
+                session.applyModelMetadata(modelID: model)
             }
             let context = (message.inputTokens ?? 0)
                 + (message.cacheReadTokens ?? 0)
@@ -1298,6 +1423,7 @@ actor SessionStore {
             live.toolTracker = session.toolTracker
             live.needsClearReconciliation = session.needsClearReconciliation
             live.modelName = session.modelName
+            live.modelDisplayName = session.modelDisplayName
             live.totalInputTokens = session.totalInputTokens
             live.totalOutputTokens = session.totalOutputTokens
             live.lastContextTokens = session.lastContextTokens
@@ -1848,6 +1974,7 @@ actor SessionStore {
             lastCwd: info.lastCwd,
             customTitle: info.customTitle,
             lastModelName: info.lastModelName,
+            lastModelDisplayName: info.lastModelDisplayName,
             lastContextTokens: info.lastContextTokens,
             lastContextWindowTokens: info.lastContextWindowTokens,
             lastEffortLevel: info.lastEffortLevel,
@@ -1873,6 +2000,7 @@ actor SessionStore {
             lastCwd: info.lastCwd,
             customTitle: info.customTitle,
             lastModelName: info.lastModelName,
+            lastModelDisplayName: info.lastModelDisplayName,
             lastContextTokens: info.lastContextTokens,
             lastContextWindowTokens: info.lastContextWindowTokens,
             lastEffortLevel: info.lastEffortLevel,
@@ -1924,6 +2052,7 @@ actor SessionStore {
             lastCwd: incoming.lastCwd ?? previous.lastCwd,
             customTitle: incoming.customTitle ?? previous.customTitle,
             lastModelName: incoming.lastModelName ?? previous.lastModelName,
+            lastModelDisplayName: incoming.lastModelDisplayName ?? previous.lastModelDisplayName,
             lastContextTokens: incoming.lastContextTokens ?? previous.lastContextTokens,
             lastContextWindowTokens: incoming.lastContextWindowTokens ?? previous.lastContextWindowTokens,
             lastEffortLevel: incoming.lastEffortLevel ?? previous.lastEffortLevel,
@@ -2178,6 +2307,7 @@ actor SessionStore {
     /// file-sync path, and the history-load path.
     private func applyModeUpdate(sessionId: String, mode: String?, source: String = "?") {
         guard var session = sessions[sessionId] else { return }
+        guard PermissionModeSurfacePolicy.acceptsStateUpdates(for: session.agentID) else { return }
         let oldMode = session.permissionMode
         guard oldMode != mode else { return }
         Self.logger.info("apply mode \(oldMode ?? "nil", privacy: .public) → \(mode ?? "nil", privacy: .public) src=\(source, privacy: .public) for \(sessionId.prefix(8), privacy: .public)")
@@ -2221,8 +2351,8 @@ actor SessionStore {
                 continue
             }
             guard message.role == .assistant else { continue }
-            if let model = message.model, !model.hasPrefix("<") {
-                session.modelName = model
+            if let model = message.model {
+                session.applyModelMetadata(modelID: model)
             }
             let context = (message.inputTokens ?? 0)
                 + (message.cacheReadTokens ?? 0)
@@ -2297,19 +2427,19 @@ actor SessionStore {
 
         sessions[sessionId] = session
 
-        // Observed (hookless) agents derive phase from the transcript we
-        // just parsed: codex GUI from its task marker, cursor from
-        // last-role + quiescence. No-op for hooked agents (claude-code,
-        // codex CLI, zed-claude), whose phase comes from hook events.
+        // Transcript-reconciled agents derive or recover phase from the
+        // transcript we just parsed: codex GUI from its task marker, cursor
+        // from last-role + quiescence, and Claude Desktop as a guarded
+        // completion fallback when its lifecycle metadata is unavailable.
         _ = await applyInferredObservedPhase(sessionId: sessionId)
     }
 
-    // MARK: - Transcript-driven phase (observed/hookless agents)
+    // MARK: - Transcript-driven phase
 
-    /// Observed agents have no hook seam, so their phase is inferred from
-    /// transcript shape instead of reported. Codex.app GUI threads
-    /// (`tty == nil`) and all cursor sessions qualify; everything else
-    /// (claude-code, codex CLI, zed-claude) reports phase via hooks.
+    /// Most qualifying agents have no hook seam, so their phase is inferred
+    /// from transcript shape. Claude Desktop is the deliberate hybrid: hooks
+    /// remain immediate when they arrive, while a newer transcript can recover
+    /// a completion that the desktop worker failed to report.
     private func usesTranscriptPhaseInference(_ s: SessionState) -> Bool {
         switch s.agentID {
         case .codex:
@@ -2331,9 +2461,31 @@ actor SessionStore {
         case .cursor:
             // Cursor IDE has no hook seam — transcript shape is the only signal.
             return true
+        case .pi:
+            // Pi starts with disk/process fallback. Once the bundled extension
+            // reports a hook event, its agent_start/agent_settled lifecycle is
+            // stronger than transcript quiescence and remains authoritative.
+            return s.phaseEvidenceSource != .hook
+        case .claudeCode:
+            return ClaudeDesktopTranscriptFallbackPolicy.isEligible(
+                terminalHost: s.terminalHost,
+                hasTTY: s.tty != nil
+            )
         default:
             return false
         }
+    }
+
+    /// Passive observed sessions ignore hook-ready/idle events that can lag
+    /// behind transcript truth. Claude Desktop does not: it is hook-first and
+    /// uses the transcript only when the stronger completion evidence is
+    /// missing.
+    private func usesTranscriptAsAuthoritativeSource(_ s: SessionState) -> Bool {
+        guard usesTranscriptPhaseInference(s) else { return false }
+        return !ClaudeDesktopTranscriptFallbackPolicy.isEligible(
+            terminalHost: s.terminalHost,
+            hasTTY: s.tty != nil
+        )
     }
 
     private func observedLastEntryRole(_ s: SessionState) -> LastEntryRole {
@@ -2351,9 +2503,10 @@ actor SessionStore {
     /// between processing / waitingForInput (never forces idle or ended,
     /// and respects the phase state machine).
     private func applyInferredObservedPhase(sessionId: String) async -> Bool {
-        guard var session = sessions[sessionId],
-              usesTranscriptPhaseInference(session),
-              session.phase != .ended else { return false }
+        guard var session = sessions[sessionId] else { return false }
+        let isEndedPiCandidate = session.agentID == .pi && session.phase == .ended
+        guard (usesTranscriptPhaseInference(session) && session.phase != .ended)
+                || isEndedPiCandidate else { return false }
 
         guard let provider = AgentRegistry.provider(for: session.agentID) else { return false }
         let transcriptPath = provider.transcriptURL(
@@ -2365,6 +2518,22 @@ actor SessionStore {
                 as? Date
         else {
             return false
+        }
+
+        if session.agentID == .claudeCode {
+            let metadataActivity = ClaudeCodeSessionMetadataPolicy.activity(
+                for: session.pid.flatMap { SessionState.readSessionStatus(pid: $0) }
+            )
+            let hookObservedAt = session.phaseEvidenceSource == .hook
+                ? (session.phaseObservedAt ?? session.phaseChangedAt).timeIntervalSince1970
+                : nil
+            guard ClaudeDesktopTranscriptFallbackPolicy.shouldApply(
+                metadataActivity: metadataActivity,
+                transcriptModifiedAt: transcriptModifiedAt.timeIntervalSince1970,
+                hookObservedAt: hookObservedAt
+            ) else {
+                return false
+            }
         }
 
         // Codex marker: prefer the full-parse cache (populated when the chat
@@ -2385,6 +2554,15 @@ actor SessionStore {
                 )
                 marker = await CodexConversationSummary.shared.lastTurnMarker(for: sessionId)
             }
+        } else if session.agentID == .pi {
+            marker = await PiConversationParser.shared.lastTurnMarker(for: sessionId)
+            if marker == .none {
+                _ = await PiConversationParser.shared.parseFullConversation(
+                    sessionId: sessionId,
+                    transcriptPath: transcriptPath
+                )
+                marker = await PiConversationParser.shared.lastTurnMarker(for: sessionId)
+            }
         }
 
         // Quiescence (seconds since the transcript was last written) gates
@@ -2401,6 +2579,38 @@ actor SessionStore {
         let evidenceSource: SessionPhaseEvidenceSource = marker == .none
             ? .transcriptHeuristic
             : .transcriptMarker
+
+        if isEndedPiCandidate {
+            let hasLiveProcess = session.pid.map { kill(Int32($0), 0) == 0 } ?? false
+            let endedObservedAt = session.phaseObservedAt ?? session.phaseChangedAt
+            guard PiEndedSessionRecoveryPolicy.shouldRecover(
+                isEnded: true,
+                hasLiveProcess: hasLiveProcess,
+                transcriptModifiedAt: transcriptModifiedAt.timeIntervalSince1970,
+                endedObservedAt: endedObservedAt.timeIntervalSince1970,
+                turnMarker: marker
+            ) else { return false }
+
+            session.lastActivity = max(session.lastActivity, transcriptModifiedAt)
+            session.setPhase(
+                .processing,
+                evidenceSource: .transcriptMarker,
+                observedAt: transcriptModifiedAt
+            )
+            sessions[sessionId] = session
+            AgentDiscoveryUtilities.writeLog(
+                "[Phase] pi \(sessionId.prefix(8)) resurrected -> processing (live post-end transcript)"
+            )
+            let cwd = session.cwd
+            Task { @MainActor in
+                SessionFileWatcherManager.shared.startWatching(
+                    sessionId: sessionId,
+                    cwd: cwd,
+                    agentID: .pi
+                )
+            }
+            return true
+        }
 
         guard ObservedApprovalRecoveryPolicy.shouldApply(
             currentPhaseIsWaitingForApproval: session.phase.isWaitingForApproval,
@@ -2888,10 +3098,31 @@ actor SessionStore {
         pid: Int,
         isHistorical: Bool
     ) -> SessionPhase {
-        if hasTerminalBootstrapMetadataStatus(agentID: agentID, pid: pid) {
-            return .ended
+        if agentID == .claudeCode {
+            let status = SessionState.readSessionStatus(pid: pid)
+            if ClaudeCodeSessionMetadataPolicy.isTerminalStatus(status) {
+                return .ended
+            }
+            if ClaudeCodeSessionMetadataPolicy.activity(for: status) == .working {
+                return .processing
+            }
         }
         return isHistorical ? .ended : .idle
+    }
+
+    private func reconcileClaudeMetadataPhase(sessionId: String, pid: Int) {
+        guard let currentPhase = sessions[sessionId]?.phase else { return }
+        let activity = ClaudeCodeSessionMetadataPolicy.activity(
+            for: SessionState.readSessionStatus(pid: pid)
+        )
+        switch (activity, currentPhase) {
+        case (.working, .idle), (.working, .waitingForInput):
+            setSessionPhase(sessionId, .processing, evidenceSource: .rediscovery)
+        case (.idle, .processing):
+            setSessionPhase(sessionId, .waitingForInput, evidenceSource: .rediscovery)
+        default:
+            break
+        }
     }
 
     private static func bootstrapLastActivity(fileDate: Date?, pid: Int, tty: String?) -> Date {
@@ -2967,6 +3198,12 @@ actor SessionStore {
                             SessionFileWatcherManager.shared.stopWatching(sessionId: info.sessionId)
                         }
                     }
+                }
+                if info.agentID == .claudeCode {
+                    reconcileClaudeMetadataPhase(
+                        sessionId: info.sessionId,
+                        pid: info.pid
+                    )
                 }
                 if let provider = AgentRegistry.provider(for: info.agentID),
                    let resolvedName = provider.resolveSessionName(
@@ -3173,17 +3410,19 @@ actor SessionStore {
     }
 
     private func applyConversationMetadata(_ info: ConversationInfo, to session: inout SessionState) {
-        // Zed's claude-acp adapter writes user-set thread titles directly
-        // into the JSONL as `{"type":"custom-title",...}` rows. When
-        // present, that's the most authoritative title — it's what Zed
-        // shows in its own sidebar. Don't clobber a non-empty
-        // sessionName already on the session (the hook-side
-        // `readSessionName(pid:)` may have run first), but DO overwrite
-        // when the existing name is the bare UUID prefix or empty.
+        // Most agents treat a transcript title as fallback metadata behind a
+        // process- or index-resolved name. Pi is deliberately different: the
+        // latest active-branch `session_info.name` is its canonical rename
+        // store and must replace an earlier Pi transcript name. Keep that
+        // source-specific authority in the provider rather than teaching the
+        // shared merge or menu renderer to special-case Pi.
+        let titleAuthority = AgentRegistry.provider(for: session.agentID)?
+            .transcriptTitleAuthority ?? .fallback
         session.sessionName = SessionTranscriptTitlePolicy.preferredName(
             sessionId: session.sessionId,
             currentName: session.sessionName,
-            transcriptTitle: info.customTitle
+            transcriptTitle: info.customTitle,
+            authority: titleAuthority
         )
         // Most agents keep the first-set model name; codex overwrites
         // on every parse because its JSONL doesn't persist model
@@ -3192,8 +3431,11 @@ actor SessionStore {
         if let model = info.lastModelName, !model.isEmpty {
             let shouldWrite = session.modelName == nil
                 || (AgentRegistry.provider(for: session.agentID)?.overwritesModelName() ?? false)
-            if shouldWrite {
-                session.modelName = model
+            if shouldWrite || session.modelName == model {
+                session.applyModelMetadata(
+                    modelID: model,
+                    catalogDisplayName: info.lastModelDisplayName
+                )
             }
         }
         if let tokens = info.lastContextTokens, tokens > 0 {
@@ -3205,7 +3447,9 @@ actor SessionStore {
         if let effort = info.lastEffortLevel, !effort.isEmpty {
             session.effortLevel = effort
         }
-        if let mode = info.lastPermissionMode, session.permissionMode == nil {
+        if PermissionModeSurfacePolicy.acceptsStateUpdates(for: session.agentID),
+           let mode = info.lastPermissionMode,
+           session.permissionMode == nil {
             session.permissionMode = mode
         }
     }

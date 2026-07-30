@@ -1,0 +1,313 @@
+import Foundation
+import AgentVisorCore
+
+/// Pi integration with two independent evidence paths:
+/// - persisted versioned JSONL under ~/.pi/agent/sessions;
+/// - a bundled global Pi extension for exact lifecycle hooks.
+///
+/// The extension is never a discovery prerequisite. Existing sessions remain
+/// browsable and terminal-owned sessions remain navigable if it is absent.
+struct PiAgentProvider: AgentProvider {
+    nonisolated let id: AgentID = .pi
+    nonisolated let displayName: String = "Pi"
+    nonisolated let processNameFilter: String = "pi"
+    nonisolated let canRenderChat = true
+    nonisolated let transcriptTitleAuthority: SessionTranscriptTitlePolicy.Authority = .authoritative
+
+    nonisolated init() {}
+
+    nonisolated var configDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".pi")
+            .appendingPathComponent("agent")
+    }
+
+    nonisolated var settingsURL: URL {
+        configDirectory.appendingPathComponent("settings.json")
+    }
+
+    nonisolated var hooksDirectory: URL {
+        configDirectory.appendingPathComponent("extensions")
+    }
+
+    nonisolated var sessionMetadataDirectory: URL {
+        configDirectory.appendingPathComponent("sessions")
+    }
+
+    nonisolated var projectsDirectory: URL { sessionMetadataDirectory }
+
+    nonisolated func projectDirName(forCwd cwd: String) -> String {
+        "--" + cwd.split(separator: "/").joined(separator: "-") + "--"
+    }
+
+    nonisolated func transcriptURL(sessionId: String, cwd: String) -> URL {
+        Self.sessionFiles().first { $0.metadata.sessionId == sessionId }?.url
+            ?? sessionMetadataDirectory
+                .appendingPathComponent(projectDirName(forCwd: cwd))
+                .appendingPathComponent("\(sessionId).jsonl")
+    }
+
+    // MARK: - Availability and installation
+
+    nonisolated func isAvailable() -> Bool { Self.isPiAvailable() }
+
+    nonisolated func installHooks() throws {
+        guard Self.isPiAvailable() else { return }
+        guard let bundled = Bundle.main.url(
+            forResource: Self.extensionResourceName,
+            withExtension: "txt"
+        ) else { return }
+
+        try FileManager.default.createDirectory(
+            at: hooksDirectory,
+            withIntermediateDirectories: true
+        )
+        let target = hooksDirectory.appendingPathComponent(Self.extensionFileName)
+        if FileManager.default.fileExists(atPath: target.path),
+           FileManager.default.contentsEqual(atPath: bundled.path, andPath: target.path) {
+            return
+        }
+
+        let temporary = hooksDirectory.appendingPathComponent(".\(Self.extensionFileName).tmp")
+        try? FileManager.default.removeItem(at: temporary)
+        try FileManager.default.copyItem(at: bundled, to: temporary)
+        if FileManager.default.fileExists(atPath: target.path) {
+            _ = try FileManager.default.replaceItemAt(target, withItemAt: temporary)
+        } else {
+            try FileManager.default.moveItem(at: temporary, to: target)
+        }
+    }
+
+    nonisolated func uninstallHooks() {
+        try? FileManager.default.removeItem(
+            at: hooksDirectory.appendingPathComponent(Self.extensionFileName)
+        )
+    }
+
+    nonisolated func isInstalled() -> Bool {
+        FileManager.default.fileExists(
+            atPath: hooksDirectory.appendingPathComponent(Self.extensionFileName).path
+        )
+    }
+
+    nonisolated private static let extensionFileName = "agent-visor.ts"
+    nonisolated private static let extensionResourceName = "agent-visor-pi.ts"
+
+    nonisolated static func isPiAvailable() -> Bool {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        let configRoot = home + "/.pi/agent"
+        if fm.fileExists(atPath: configRoot) { return true }
+
+        let live = AgentDiscoveryUtilities.runProcess(
+            "/usr/bin/pgrep",
+            arguments: ["-x", "pi"]
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !live.isEmpty { return true }
+
+        let candidates = [
+            "/opt/homebrew/bin/pi",
+            "/usr/local/bin/pi",
+            home + "/.local/bin/pi",
+        ]
+        if candidates.contains(where: fm.isExecutableFile(atPath:)) { return true }
+
+        let nvmRoot = home + "/.nvm/versions/node"
+        guard let versions = try? fm.contentsOfDirectory(atPath: nvmRoot) else { return false }
+        return versions.contains { version in
+            fm.isExecutableFile(atPath: nvmRoot + "/" + version + "/bin/pi")
+        }
+    }
+
+    // MARK: - Discovery
+
+    nonisolated func discoverLiveSessions() -> [DiscoveredSession] {
+        guard Self.isPiAvailable() else { return [] }
+        // Pi can be installed after Agent Visor launches. Discovery doubles
+        // as the periodic, idempotent installation opportunity so users do
+        // not need to restart either application or configure Pi manually.
+        try? installHooks()
+
+        let files = Self.sessionFiles()
+        let processes = Self.liveProcesses()
+        let matches = PiProcessSessionMatcher.match(
+            processes: processes,
+            sessions: files.map {
+                PiSessionCandidate(
+                    id: $0.metadata.sessionId,
+                    cwd: $0.metadata.cwd,
+                    createdAt: $0.metadata.createdAt
+                )
+            },
+            tolerance: 5
+        )
+
+        let fileByID = Dictionary(uniqueKeysWithValues: files.map { ($0.metadata.sessionId, $0) })
+        return matches.compactMap { match in
+            guard fileByID[match.session.id] != nil,
+                  let pid = Int(match.process.id) else { return nil }
+            AgentDiscoveryUtilities.writeLog(
+                "[Discovery] Found Pi: \(match.session.id.prefix(8)) PID=\(pid) tty=\(match.process.tty ?? "none") cwd=\(match.session.cwd)"
+            )
+            return DiscoveredSession(
+                sessionId: match.session.id,
+                cwd: match.session.cwd,
+                pid: pid,
+                tty: match.process.tty,
+                agentID: id
+            )
+        }
+    }
+
+    nonisolated func discoverHistoricalSessions(
+        excluding liveIds: Set<String>,
+        limit: Int
+    ) -> [DiscoveredSession] {
+        let results = Self.sessionFiles()
+            .filter { !liveIds.contains($0.metadata.sessionId) && $0.byteCount > $0.headerByteCount }
+            .sorted { $0.modifiedAt > $1.modifiedAt }
+            .prefix(limit)
+            .map {
+                DiscoveredSession(
+                    sessionId: $0.metadata.sessionId,
+                    cwd: $0.metadata.cwd,
+                    pid: 0,
+                    tty: nil,
+                    agentID: id
+                )
+            }
+        if !results.isEmpty {
+            AgentDiscoveryUtilities.writeLog("[Discovery] Found \(results.count) historical Pi sessions")
+        }
+        return Array(results)
+    }
+
+    private struct SessionFile {
+        let metadata: PiTranscriptMetadata
+        let url: URL
+        let modifiedAt: Date
+        let byteCount: Int
+        let headerByteCount: Int
+    }
+
+    nonisolated private static func sessionFiles() -> [SessionFile] {
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".pi")
+            .appendingPathComponent("agent")
+            .appendingPathComponent("sessions")
+        let keys: [URLResourceKey] = [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        var result: [SessionFile] = []
+        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
+            guard let values = try? url.resourceValues(forKeys: Set(keys)),
+                  values.isRegularFile == true,
+                  let modifiedAt = values.contentModificationDate,
+                  let byteCount = values.fileSize,
+                  let header = readHeader(url: url) else { continue }
+            result.append(SessionFile(
+                metadata: header.metadata,
+                url: url,
+                modifiedAt: modifiedAt,
+                byteCount: byteCount,
+                headerByteCount: header.byteCount
+            ))
+        }
+        return result
+    }
+
+    nonisolated private static func readHeader(url: URL) -> (metadata: PiTranscriptMetadata, byteCount: Int)? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let prefix = try? handle.read(upToCount: 64 * 1024),
+              let newline = prefix.firstIndex(of: 0x0A) else { return nil }
+        let line = prefix[..<newline]
+        guard let json = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+              json["type"] as? String == "session",
+              let id = json["id"] as? String,
+              let cwd = json["cwd"] as? String,
+              let timestamp = json["timestamp"] as? String,
+              let createdAt = parseISO8601(timestamp) else { return nil }
+        return (
+            PiTranscriptMetadata(sessionId: id, cwd: cwd, createdAt: createdAt),
+            line.count + 1
+        )
+    }
+
+    nonisolated private static func liveProcesses() -> [PiProcessCandidate] {
+        let pidOutput = AgentDiscoveryUtilities.runProcess(
+            "/usr/bin/pgrep",
+            arguments: ["-x", "pi"]
+        )
+        return pidOutput.split(separator: "\n").compactMap { rawPID in
+            guard let pid = Int(rawPID.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  let cwd = AgentDiscoveryUtilities.cwdForProcess(pid: pid) else { return nil }
+            let tty = TTYNormalizer.normalize(AgentDiscoveryUtilities.runProcess(
+                "/bin/ps",
+                arguments: ["-p", "\(pid)", "-o", "tty="]
+            ))
+            guard tty != nil else { return nil }
+            let rawStart = AgentDiscoveryUtilities.runProcess(
+                "/bin/ps",
+                arguments: ["-p", "\(pid)", "-o", "lstart="]
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let startedAt = parseProcessDate(rawStart) else { return nil }
+            return PiProcessCandidate(
+                id: String(pid),
+                cwd: cwd,
+                startedAt: startedAt,
+                tty: tty
+            )
+        }
+    }
+
+    nonisolated private static func parseISO8601(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value)
+    }
+
+    nonisolated private static func parseProcessDate(_ value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"
+        return formatter.date(from: value)
+    }
+
+    // MARK: - Transcript and lifecycle
+
+    nonisolated func loadFullHistory(sessionId: String, cwd: String) async -> ParsedHistory {
+        let path = transcriptURL(sessionId: sessionId, cwd: cwd).path
+        let messages = await PiConversationParser.shared.parseFullConversation(
+            sessionId: sessionId,
+            transcriptPath: path
+        )
+        return ParsedHistory(
+            messages: messages,
+            completedToolIds: await PiConversationParser.shared.completedToolIds(for: sessionId),
+            toolResults: await PiConversationParser.shared.toolResults(for: sessionId),
+            structuredResults: [:],
+            conversationInfo: await PiConversationParser.shared.conversationInfo(for: sessionId),
+            currentPermissionMode: nil
+        )
+    }
+
+    nonisolated func loadConversationInfo(sessionId: String, cwd: String) async -> ConversationInfo {
+        _ = await loadFullHistory(sessionId: sessionId, cwd: cwd)
+        return await PiConversationParser.shared.conversationInfo(for: sessionId)
+    }
+
+    nonisolated func fileSync(sessionId: String, cwd: String) async -> FileSyncOutcome {
+        .fullReplay(await loadFullHistory(sessionId: sessionId, cwd: cwd))
+    }
+
+    nonisolated func originForSession(sessionId: String, tty: String?) -> SessionOrigin {
+        tty == nil ? .observed : .terminal
+    }
+
+    nonisolated func overwritesModelName() -> Bool { true }
+}

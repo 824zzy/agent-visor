@@ -12,13 +12,57 @@ final class NotchMenuContextRefreshPolicyTests: XCTestCase {
         ))
     }
 
-    func testWindowMoveDoesNotResolveOwnerAgainForSameFrontmostApp() {
+    func testWindowMoveResolvesOwnerWhenSameFrontmostAppNowOwnsTargetScreen() {
+        XCTAssertTrue(NotchMenuContextRefreshPolicy.shouldResolveOwner(
+            hasContext: true,
+            contextFrontmostPid: 100,
+            observedFrontmostPid: 100,
+            contextTargetScreenID: "screen-a",
+            observedTargetScreenID: "screen-a",
+            contextOwnerPid: 200,
+            observedOwnerPid: 100,
+            observedOwnerIsResolved: true
+        ))
+    }
+
+    func testWindowMoveResolvesTopmostOwnerWhenSameFrontmostAppLeavesTargetScreen() {
+        XCTAssertTrue(NotchMenuContextRefreshPolicy.shouldResolveOwner(
+            hasContext: true,
+            contextFrontmostPid: 100,
+            observedFrontmostPid: 100,
+            contextTargetScreenID: "screen-a",
+            observedTargetScreenID: "screen-a",
+            contextOwnerPid: 100,
+            observedOwnerPid: 200,
+            observedOwnerIsResolved: true
+        ))
+    }
+
+    func testTransientUnresolvedTopologyDoesNotReplaceReliableOwner() {
         XCTAssertFalse(NotchMenuContextRefreshPolicy.shouldResolveOwner(
             hasContext: true,
             contextFrontmostPid: 100,
             observedFrontmostPid: 100,
             contextTargetScreenID: "screen-a",
-            observedTargetScreenID: "screen-a"
+            observedTargetScreenID: "screen-a",
+            contextOwnerPid: 200,
+            observedOwnerPid: 100,
+            observedOwnerIsResolved: false,
+            contextOwnerIsResolved: true
+        ))
+    }
+
+    func testStableResolvedTopologyDoesNotStartAnotherGeneration() {
+        XCTAssertFalse(NotchMenuContextRefreshPolicy.shouldResolveOwner(
+            hasContext: true,
+            contextFrontmostPid: 100,
+            observedFrontmostPid: 100,
+            contextTargetScreenID: "screen-a",
+            observedTargetScreenID: "screen-a",
+            contextOwnerPid: 100,
+            observedOwnerPid: 100,
+            observedOwnerIsResolved: true,
+            contextOwnerIsResolved: true
         ))
     }
 

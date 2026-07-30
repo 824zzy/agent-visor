@@ -1,44 +1,56 @@
-// Humanizes a raw Claude model identifier into a short display label.
-//
-//   "claude-sonnet-4-5-20250929"   -> "Sonnet 4.5"
-//   "claude-opus-4-7"              -> "Opus 4.7"
-//   "claude-haiku-4-5-20251001"    -> "Haiku 4.5"
-//   "claude-sonnet-4-5-20250929[1m]" -> "Sonnet 4.5"
-//
-// Returns nil for synthetic / internal IDs (anything beginning with "<")
-// — Claude Code stamps internal bookkeeping messages with
-// "<synthetic>" / "<missing>" model names; we never want those in the UI.
+// Resolves provider-owned model labels without conflating them with raw IDs.
+// Catalog metadata wins. Known GPT and Claude identifiers receive a
+// conservative fallback, unknown identifiers remain unchanged, and synthetic
+// bookkeeping identifiers are never presented.
 
 import Foundation
 
 public enum ModelDisplayName {
     public static func format(_ raw: String?) -> String? {
-        guard let raw = raw, !raw.isEmpty else { return nil }
+        resolve(modelID: raw, catalogDisplayName: nil)
+    }
+
+    public static func resolve(
+        modelID raw: String?,
+        catalogDisplayName: String?
+    ) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
         if raw.hasPrefix("<") { return nil }
 
-        // Strip the "claude-" prefix when present so capitalization
-        // works on the family name. Some non-claude model IDs are
-        // passed through unchanged.
+        if let catalogDisplayName,
+           !catalogDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return catalogDisplayName
+        }
+
+        return gptFallback(for: raw)
+            ?? claudeFallback(for: raw)
+            ?? raw
+    }
+
+    private static func gptFallback(for raw: String) -> String? {
+        guard raw.hasPrefix("gpt-") else { return nil }
+        let components = raw.dropFirst("gpt-".count).split(separator: "-")
+        guard let version = components.first, !version.isEmpty else { return nil }
+        let variants = components.dropFirst().map { $0.capitalized }
+        return variants.isEmpty
+            ? "GPT-\(version)"
+            : "GPT-\(version) \(variants.joined(separator: " "))"
+    }
+
+    private static func claudeFallback(for raw: String) -> String? {
         let cleaned = raw.hasPrefix("claude-")
             ? String(raw.dropFirst("claude-".count))
             : raw
-
         let parts = cleaned.split(separator: "-")
-        guard parts.count >= 3 else { return raw }
+        guard parts.count >= 3,
+              ["opus", "sonnet", "haiku"].contains(parts[0].lowercased()) else {
+            return nil
+        }
 
         let family = parts[0].capitalized
         let major = parts[1]
-        // The minor component may carry a trailing variant marker
-        // like "[1m]" for the 1M-context Sonnet beta — strip it so
-        // "Sonnet 4.5" reads cleanly. The 1M variant is surfaced
-        // through the context-window number, not the model name.
         let minorWithTag = String(parts[2])
-        let minor: String
-        if let bracket = minorWithTag.firstIndex(of: "[") {
-            minor = String(minorWithTag[..<bracket])
-        } else {
-            minor = minorWithTag
-        }
+        let minor = minorWithTag.split(separator: "[").first.map(String.init) ?? minorWithTag
         return "\(family) \(major).\(minor)"
     }
 }

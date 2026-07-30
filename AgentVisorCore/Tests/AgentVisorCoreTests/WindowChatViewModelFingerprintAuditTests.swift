@@ -18,6 +18,7 @@ final class WindowChatViewModelFingerprintAuditTests: XCTestCase {
             refreshBody.contains("codexControlCapability: next.codexControlCapability"),
             "Observed-to-connected transitions must refresh the chat control surface."
         )
+        XCTAssertTrue(refreshBody.contains("modelDisplayName: next.modelDisplayName"))
         XCTAssertTrue(refreshBody.contains("agentID: next.agentID"))
         XCTAssertTrue(refreshBody.contains("originTag: next.origin.rawValue"))
         XCTAssertTrue(refreshBody.contains("tty: next.tty"))

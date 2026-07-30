@@ -39,6 +39,7 @@ enum AgentBrand {
         case .codex:      return Catppuccin.green
         case .cursor:     return Catppuccin.sky
         case .auggie:     return Catppuccin.yellow
+        case .pi:         return Catppuccin.mauve
         }
     }
 }

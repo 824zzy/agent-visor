@@ -110,6 +110,7 @@ public enum AgentControlSurfacePolicy {
         case .auggie: return "Auggie"
         case .codex: return "Codex"
         case .cursor: return "Cursor"
+        case .pi: return "Pi"
         }
     }
 

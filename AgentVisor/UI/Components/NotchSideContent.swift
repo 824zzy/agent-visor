@@ -19,7 +19,8 @@ enum MenuBarPillMetrics {
     static let height: CGFloat = 24
     static let sessionFontSize: CGFloat = 11
     static let usageFontSize: CGFloat = 10.5
-    static let horizontalPadding: CGFloat = 7
+    static let standardHorizontalPadding: CGFloat = 7
+    static let pressureHorizontalPadding: CGFloat = 5
     static let statusDotDiameter: CGFloat = 6
 }
 
@@ -356,6 +357,7 @@ struct PillButton: View {
     let label: String
     let role: PillSurfaceRole
     let shortcutPosition: Int?
+    let horizontalPadding: CGFloat
 
     @ObservedObject private var flashStore = PillFlashStore.shared
     @ObservedObject private var sessionShortcutManager = GlobalSessionShortcutManager.shared
@@ -392,7 +394,7 @@ struct PillButton: View {
                 .foregroundColor(.white.opacity(isRecentShortcut ? 0.62 : 0.85))
                 .lineLimit(1)
         }
-        .padding(.horizontal, MenuBarPillMetrics.horizontalPadding)
+        .padding(.horizontal, horizontalPadding)
         .padding(.vertical, 3)
         .frame(height: MenuBarPillMetrics.height)
         .background(
@@ -561,6 +563,7 @@ final class SessionNavigationRecencyStore: ObservableObject {
 /// follow the same pattern as `PillButton` — see its doc.
 struct OverflowPillButton: View {
     let count: Int
+    let width: CGFloat
 
     @ObservedObject private var flashStore = PillFlashStore.shared
     @ObservedObject private var sessionShortcutManager = GlobalSessionShortcutManager.shared
@@ -580,7 +583,7 @@ struct OverflowPillButton: View {
             }
         }
             .frame(
-                width: PillBarCoordinator.overflowPillWidth(count: count),
+                width: width,
                 height: MenuBarPillMetrics.height
             )
             .background(
@@ -621,8 +624,8 @@ struct CodexUsagePillButton: View {
         }
     }
 
-    private var presentation: CodexUsageGlancePresentation {
-        CodexUsageGlancePolicy.presentation(for: monitor.snapshot)
+    private var presentation: CodexUsageMenuBarPresentation? {
+        monitor.snapshot.flatMap(CodexUsageGlancePolicy.menuBarPresentation)
     }
 
     private var isFlashing: Bool {
@@ -630,28 +633,145 @@ struct CodexUsagePillButton: View {
     }
 
     var body: some View {
-        HStack(spacing: 4) {
-            CodexUsagePillValue(presentation: presentation.fiveHour)
-            Rectangle()
-                .fill(Color.white.opacity(0.18))
-                .frame(width: 1, height: 10)
-            CodexUsagePillValue(presentation: presentation.sevenDay)
-        }
-        .frame(
-            width: CGFloat(CodexUsageGlancePolicy.fixedWidth),
-            height: MenuBarPillMetrics.height
-        )
-        .background(
-            Capsule().fill(
-                isFlashing ? Color.white.opacity(0.25) : Color.black.opacity(0.3)
+        if let presentation {
+            HStack(spacing: 4) {
+                ForEach(Array(presentation.windows.enumerated()), id: \.offset) { index, window in
+                    if index > 0 {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.18))
+                            .frame(width: 1, height: 10)
+                    }
+                    CodexUsagePillValue(presentation: window)
+                }
+            }
+            .frame(
+                width: CGFloat(presentation.width),
+                height: MenuBarPillMetrics.height
             )
-        )
-        .scaleEffect(isFlashing ? 0.93 : 1)
-        .animation(
-            .spring(response: 0.2, dampingFraction: 0.7),
-            value: isFlashing
-        )
-        .accessibilityLabel(presentation.label)
+            .background(
+                Capsule().fill(
+                    isFlashing ? Color.white.opacity(0.25) : Color.black.opacity(0.3)
+                )
+            )
+            .scaleEffect(isFlashing ? 0.93 : 1)
+            .animation(
+                .spring(response: 0.2, dampingFraction: 0.7),
+                value: isFlashing
+            )
+            .accessibilityLabel(presentation.label)
+        }
+    }
+}
+
+/// Compact Claude (Anthropic subscription) dollar-pool usage capsule,
+/// rendered in the shared right-side usage slot beside the Codex pill.
+struct ClaudeUsagePillButton: View {
+    @ObservedObject private var monitor = ClaudeUsageMonitor.shared
+
+    private var presentation: ClaudeUsageGlancePresentation {
+        ClaudeUsageGlancePolicy.presentation(for: monitor.snapshot)
+    }
+
+    var body: some View {
+        // No provider word: the `$` self-labels this as spend, matching
+        // Codex's label-less `5h|7d`. Identity lives in the popover and
+        // the accessibility label below.
+        Text(presentation.label)
+            .foregroundColor(valueColor)
+            .font(.system(size: MenuBarPillMetrics.usageFontSize, weight: .medium, design: .rounded))
+            .monospacedDigit()
+            .lineLimit(1)
+            .frame(
+                width: CGFloat(ClaudeUsageGlancePolicy.fixedWidth),
+                height: MenuBarPillMetrics.height
+            )
+            .background(Capsule().fill(Color.black.opacity(0.3)))
+            .accessibilityLabel("Claude usage \(presentation.label), \(presentation.percentText) used")
+    }
+
+    private var valueColor: Color {
+        switch presentation.severity {
+        case .normal: return .white.opacity(0.8)
+        case .warning: return TerminalColors.amber
+        case .critical: return TerminalColors.red
+        case nil: return .white.opacity(0.35)
+        }
+    }
+}
+
+struct ClaudeUsagePopover: View {
+    @ObservedObject private var monitor = ClaudeUsageMonitor.shared
+
+    var body: some View {
+        TimelineView(.periodic(from: Date(), by: 30)) { context in
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Claude Usage")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(ChatTheme.primary)
+                    Spacer()
+                    freshness(now: context.date)
+                }
+
+                if let spend = monitor.snapshot?.spend {
+                    let used = ClaudeUsageGlancePolicy.dollars(minor: spend.usedMinor, exponent: spend.exponent)
+                    let limit = ClaudeUsageGlancePolicy.dollars(minor: spend.limitMinor, exponent: spend.exponent)
+                    HStack {
+                        Text("This month")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(ChatTheme.primary)
+                        Spacer()
+                        Text("\(used) of \(limit)")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundColor(toneColor(spend.severity))
+                    }
+                    ProgressView(value: Double(spend.usedPercent), total: 100)
+                        .tint(toneColor(spend.severity))
+                    Text("\(spend.usedPercent)% used · \(spend.remainingPercent)% remaining")
+                        .font(.system(size: 10))
+                        .foregroundColor(ChatTheme.tertiary)
+                } else {
+                    HStack(spacing: 8) {
+                        if monitor.isRefreshing { ProgressView().controlSize(.small) }
+                        Text(monitor.lastError ?? "Loading Claude usage...")
+                            .font(.system(size: 11))
+                            .foregroundColor(ChatTheme.secondary)
+                    }
+                }
+            }
+            .padding(14)
+            .frame(width: 300)
+            .background(ChatTheme.headerBg)
+        }
+    }
+
+    private func freshness(now: Date) -> some View {
+        let text: String
+        if monitor.lastError != nil, let observedAt = monitor.snapshot?.observedAt {
+            text = "Stale; updated \(relativeDate(observedAt, now: now))"
+        } else if let observedAt = monitor.snapshot?.observedAt {
+            text = "Updated \(relativeDate(observedAt, now: now))"
+        } else if monitor.isRefreshing {
+            text = "Updating"
+        } else {
+            text = "Unavailable"
+        }
+        return Text(text)
+            .font(.system(size: 9.5))
+            .foregroundColor(ChatTheme.tertiary)
+    }
+
+    private func toneColor(_ severity: ClaudeUsageSeverity) -> Color {
+        switch severity {
+        case .normal: return TerminalColors.green
+        case .warning: return TerminalColors.amber
+        case .critical: return TerminalColors.red
+        }
+    }
+
+    private func relativeDate(_ date: Date, now: Date) -> String {
+        RelativeDateTimeFormatter().localizedString(for: date, relativeTo: now)
     }
 }
 
@@ -1290,8 +1410,10 @@ struct SessionNavigatorRow: View {
 struct VisiblePill: Identifiable {
     let session: SessionState
     let label: String
+    let labelTier: PillBarPacker.LabelTier
     let role: PillSurfaceRole
     let shortcutPosition: Int?
+    let renderedWidth: CGFloat
     var id: String { session.stableId }
 }
 
@@ -1328,9 +1450,17 @@ struct NotchPillBar: View {
     /// Count of sessions not visible on EITHER bar. Non-zero means this
     /// side owns the +N slot. Zero means render no overflow pill here.
     let overflowCount: Int
+    let overflowPillWidth: CGFloat?
     let maxWidth: CGFloat
+    let pillSpacing: CGFloat
+    let horizontalPadding: CGFloat
     let overflowPopover: OverflowPopoverConfiguration?
     let usagePopover: UsagePopoverConfiguration?
+    /// Which provider capsules occupy the shared right-side usage slot.
+    /// The packer decides these from available width; defaults keep the
+    /// left bar (which never hosts usage) unchanged.
+    var showsCodexUsage: Bool = false
+    var showsClaudeUsage: Bool = false
     // No `onOverflowTap` — the overflow pill is presentation-only,
     // same as the session pills. The `.overflow` hit case in
     // `NotchView.dispatchHit` toggles the Sessions popover state.
@@ -1339,13 +1469,14 @@ struct NotchPillBar: View {
         if visiblePills.isEmpty && overflowCount == 0 && usagePopover == nil {
             EmptyView()
         } else {
-            HStack(spacing: PillBarCoordinator.pillSpacing) {
+            HStack(spacing: pillSpacing) {
                 ForEach(visiblePills) { pill in
                     PillButton(
                         session: pill.session,
                         label: pill.label,
                         role: pill.role,
-                        shortcutPosition: pill.shortcutPosition
+                        shortcutPosition: pill.shortcutPosition,
+                        horizontalPadding: horizontalPadding
                     )
                         // Diagnostic: report each pill's actual rendered
                         // global frame so NotchView's click handler can
@@ -1364,9 +1495,9 @@ struct NotchPillBar: View {
                         )
                 }
 
-                if overflowCount > 0 {
+                if overflowCount > 0, let overflowPillWidth {
                     if let overflowPopover {
-                        OverflowPillButton(count: overflowCount)
+                        OverflowPillButton(count: overflowCount, width: overflowPillWidth)
                             .popover(isPresented: overflowPopover.isPresented, arrowEdge: .top) {
                                 FirstMouseHostingContainer(
                                     content: SessionNavigatorPopover(
@@ -1389,28 +1520,30 @@ struct NotchPillBar: View {
                                 }
                             }
                     } else {
-                        OverflowPillButton(count: overflowCount)
+                        OverflowPillButton(count: overflowCount, width: overflowPillWidth)
                     }
                 }
 
 
                 if side == .right, let usagePopover {
-                    CodexUsagePillButton()
-                        .popover(isPresented: usagePopover.isPresented, arrowEdge: .top) {
-                            CodexUsagePopover()
-                                .background(
-                                    PopoverWindowReader(onWindowChange: usagePopover.onWindowChange)
-                                )
-                                .onDisappear {
-                                    usagePopover.onWindowChange(nil)
-                                }
+                    HStack(spacing: PillBarCoordinator.standardPillSpacing) {
+                        if showsClaudeUsage { ClaudeUsagePillButton() }
+                        if showsCodexUsage { CodexUsagePillButton() }
+                    }
+                    .popover(isPresented: usagePopover.isPresented, arrowEdge: .top) {
+                        VStack(spacing: 8) {
+                            if showsClaudeUsage { ClaudeUsagePopover() }
+                            if showsCodexUsage { CodexUsagePopover() }
                         }
+                        .background(
+                            PopoverWindowReader(onWindowChange: usagePopover.onWindowChange)
+                        )
+                        .onDisappear {
+                            usagePopover.onWindowChange(nil)
+                        }
+                    }
                 }
             }
-            .padding(
-                side == .left ? .trailing : .leading,
-                PillBarCoordinator.edgePadding
-            )
             .frame(
                 maxWidth: maxWidth,
                 alignment: side == .left ? .trailing : .leading
@@ -1427,7 +1560,9 @@ struct NotchPillBar: View {
 /// coordinator just bridges from `[SessionState]` to the packer's
 /// abstract `Candidate` model and back.
 enum PillBarCoordinator {
-    static let pillSpacing: CGFloat = 4
+    static let standardPillSpacing: CGFloat = 4
+    static let pressurePillSpacing: CGFloat = 3
+    static let densityReleaseHeadroom: CGFloat = 8
     /// Padding between the outermost pill and the edge of the auxiliary
     /// region (trailing for left bar, leading for right bar).
     static let edgePadding: CGFloat = 8
@@ -1438,14 +1573,28 @@ enum PillBarCoordinator {
         let overflowSessions: [SessionState]
         let leftOverflowCount: Int
         let rightOverflowCount: Int
-        let showsUsagePill: Bool
+        let leftOverflowWidth: CGFloat?
+        let rightOverflowWidth: CGFloat?
+        let density: PillBarPacker.Density
+        let pillSpacing: CGFloat
+        let horizontalPadding: CGFloat
+        let showsCodexUsagePill: Bool
+        let showsClaudeUsagePill: Bool
+        /// Combined width of the right-side usage slot (Codex + Claude,
+        /// with one inter-pill gap when both show). Zero when neither shows.
+        let usageSlotWidth: CGFloat
+
+        /// True when the usage slot hosts at least one provider pill.
+        var showsUsagePill: Bool { showsCodexUsagePill || showsClaudeUsagePill }
     }
 
     static func pack(
         sessions: [SessionState],
         leftMax: CGFloat,
         rightMax: CGFloat,
-        includeUsage: Bool = false
+        codexUsagePresentation: CodexUsageMenuBarPresentation? = nil,
+        includeClaudeUsage: Bool = false,
+        currentDensity: PillBarPacker.Density = .standard
     ) -> Pack {
         let selection = selectPillSurface(sessions: sessions)
         let visibleIds = selection.orderedVisibleIds
@@ -1454,17 +1603,21 @@ enum PillBarCoordinator {
             sessionsByStableId[session.stableId] = session
         }
 
-        // Subtract the per-side edge padding from the usable region so
-        // the packer's budget matches what the HStack actually has after
-        // padding. (Without this, the rightmost pill would press against
-        // the system tray boundary by exactly `edgePadding` pixels.)
-        let leftUsable = max(0, leftMax - edgePadding)
-        let rightReservation = CodexUsageGlancePolicy.reserveRightSide(
-            usableWidth: Double(max(0, rightMax - edgePadding)),
-            spacing: Double(pillSpacing),
-            enabled: includeUsage
+        // The caller positions each bar behind exactly one notch-edge
+        // padding layer. No second inner layer is subtracted here, so Core
+        // receives the full measured budget while the far-side menu/status
+        // collision boundary remains unchanged.
+        let leftUsable = max(0, leftMax)
+        // One Core policy selects the provider capsules and returns both
+        // their exact rendered width and the remaining session budget.
+        let usageLayout = MenuBarUsageSlotPolicy.layout(
+            usableWidth: Double(max(0, rightMax)),
+            spacing: Double(standardPillSpacing),
+            codexWidth: codexUsagePresentation?.width,
+            claudeWidth: includeClaudeUsage ? ClaudeUsageGlancePolicy.fixedWidth : nil
         )
-        let rightUsable = CGFloat(rightReservation.sessionUsableWidth)
+        let rightUsable = CGFloat(usageLayout.sessionUsableWidth)
+        let usageSlotWidth = CGFloat(usageLayout.usageSlotWidth)
 
         guard !visibleIds.isEmpty else {
             return Pack(
@@ -1473,7 +1626,14 @@ enum PillBarCoordinator {
                 overflowSessions: [],
                 leftOverflowCount: 0,
                 rightOverflowCount: 0,
-                showsUsagePill: rightReservation.showsUsage
+                leftOverflowWidth: nil,
+                rightOverflowWidth: nil,
+                density: .standard,
+                pillSpacing: standardPillSpacing,
+                horizontalPadding: MenuBarPillMetrics.standardHorizontalPadding,
+                showsCodexUsagePill: usageLayout.showsCodex,
+                showsClaudeUsagePill: usageLayout.showsClaude,
+                usageSlotWidth: usageSlotWidth
             )
         }
 
@@ -1481,30 +1641,34 @@ enum PillBarCoordinator {
             let session: SessionState
             let role: PillSurfaceRole
             let label: String
-            let shortLabel: String
+            let compactLabel: String
+            let tightLabel: String
             let candidate: PillBarPacker.Candidate
         }
 
         func makeEntries(_ pairs: [(SessionState, PillSurfaceRole)]) -> [Entry] {
-            pairs.enumerated().map { idx, pair in
+            pairs.map { pair in
                 let (session, role) = pair
                 let label = sessionLabel(session)
                 let width = pillWidth(forLabel: label)
-                // Every pill provides a shorter render label so the packer
-                // can compress lower-priority suffixes before hiding sessions
-                // behind +N. The first pill keeps the older aggressive fallback:
-                // if the left bar is very narrow, showing one recognizable
-                // highest-priority pill beats an empty side.
-                let shortLabel = idx == 0 ? aggressivelyShortLabel(from: label) : compactLabel(from: label)
-                let minimumWidth: CGFloat? = shortLabel == label ? nil : pillWidth(forLabel: shortLabel)
+                let compactTitle = compactLabel(from: label)
+                let tightTitle = tightLabel(from: label)
+                let compactWidth: CGFloat? = compactTitle == label
+                    ? nil
+                    : pillWidth(forLabel: compactTitle)
+                let minimumWidth: CGFloat? = tightTitle == compactTitle
+                    ? nil
+                    : pillWidth(forLabel: tightTitle)
                 return Entry(
                     session: session,
                     role: role,
                     label: label,
-                    shortLabel: shortLabel,
+                    compactLabel: compactTitle,
+                    tightLabel: tightTitle,
                     candidate: PillBarPacker.Candidate(
                         id: session.stableId,
                         pillWidth: width,
+                        compactWidth: compactWidth,
                         minimumWidth: minimumWidth
                     )
                 )
@@ -1516,7 +1680,21 @@ enum PillBarCoordinator {
                 candidates: entries.map(\.candidate),
                 leftMax: leftUsable,
                 rightMax: rightUsable,
-                pillSpacing: pillSpacing,
+                standardProfile: .init(
+                    density: .standard,
+                    pillSpacing: standardPillSpacing,
+                    widthReduction: 0
+                ),
+                pressureProfile: .init(
+                    density: .pressure,
+                    pillSpacing: pressurePillSpacing,
+                    widthReduction: 2 * (
+                        MenuBarPillMetrics.standardHorizontalPadding
+                            - MenuBarPillMetrics.pressureHorizontalPadding
+                    )
+                ),
+                currentDensity: currentDensity,
+                releaseHeadroom: densityReleaseHeadroom,
                 overflowPillWidthFor: { count in overflowPillWidth(count: count) }
             )
         }
@@ -1529,6 +1707,12 @@ enum PillBarCoordinator {
 
         let entries = makeEntries(orderedPairs)
         let result = packEntries(entries)
+        let selectedPillSpacing = result.density == .pressure
+            ? pressurePillSpacing
+            : standardPillSpacing
+        let selectedHorizontalPadding = result.density == .pressure
+            ? MenuBarPillMetrics.pressureHorizontalPadding
+            : MenuBarPillMetrics.standardHorizontalPadding
 
         // Build a lookup of (session, full-label) and substitute the
         // short label for any IDs the packer rebalanced.
@@ -1539,12 +1723,26 @@ enum PillBarCoordinator {
         )
         let materialize: (String) -> VisiblePill? = { id in
             guard let entry = byEntry[id] else { return nil }
-            let label = result.shortenedIds.contains(id) ? entry.shortLabel : entry.label
+            let labelTier = result.labelTier(for: id)
+            let label: String
+            switch labelTier {
+            case .full:
+                label = entry.label
+            case .compact:
+                label = entry.compactLabel
+            case .tight:
+                label = entry.tightLabel
+            }
             return VisiblePill(
                 session: entry.session,
                 label: label,
+                labelTier: labelTier,
                 role: entry.role,
-                shortcutPosition: shortcutSnapshot.displayPosition(forSessionID: id)
+                shortcutPosition: shortcutSnapshot.displayPosition(forSessionID: id),
+                renderedWidth: pillWidth(
+                    forLabel: label,
+                    horizontalPadding: selectedHorizontalPadding
+                )
             )
         }
         let leftPills = result.leftVisibleIds.compactMap(materialize)
@@ -1556,6 +1754,12 @@ enum PillBarCoordinator {
         let hiddenVisibleCount = overflowSessions.count
         let leftOverflow = result.overflowSide == .left ? hiddenVisibleCount : 0
         let rightOverflow = result.overflowSide == .right ? hiddenVisibleCount : 0
+        let renderedOverflowWidth = hiddenVisibleCount > 0
+            ? overflowPillWidth(
+                count: hiddenVisibleCount,
+                horizontalPadding: selectedHorizontalPadding
+            )
+            : nil
 
         return Pack(
             leftPills: leftPills,
@@ -1563,7 +1767,14 @@ enum PillBarCoordinator {
             overflowSessions: overflowSessions,
             leftOverflowCount: leftOverflow,
             rightOverflowCount: rightOverflow,
-            showsUsagePill: rightReservation.showsUsage
+            leftOverflowWidth: leftOverflow > 0 ? renderedOverflowWidth : nil,
+            rightOverflowWidth: rightOverflow > 0 ? renderedOverflowWidth : nil,
+            density: result.density,
+            pillSpacing: selectedPillSpacing,
+            horizontalPadding: selectedHorizontalPadding,
+            showsCodexUsagePill: usageLayout.showsCodex,
+            showsClaudeUsagePill: usageLayout.showsClaude,
+            usageSlotWidth: usageSlotWidth
         )
     }
 
@@ -1575,18 +1786,24 @@ enum PillBarCoordinator {
 
     /// Width of a session pill rendered with the given label. Must stay in
     /// sync with `PillButton`'s layout (dot + label + horizontal padding).
-    static func pillWidth(forLabel label: String) -> CGFloat {
+    static func pillWidth(
+        forLabel label: String,
+        horizontalPadding: CGFloat = MenuBarPillMetrics.standardHorizontalPadding
+    ) -> CGFloat {
         let labelWidth = textWidth(label)
         return labelWidth
-            + (2 * MenuBarPillMetrics.horizontalPadding)
+            + (2 * horizontalPadding)
             + MenuBarPillMetrics.statusDotDiameter
             + 3
     }
 
     /// Width of the "+N" overflow pill for a given count.
-    static func overflowPillWidth(count: Int) -> CGFloat {
+    static func overflowPillWidth(
+        count: Int,
+        horizontalPadding: CGFloat = MenuBarPillMetrics.standardHorizontalPadding
+    ) -> CGFloat {
         let labelWidth = textWidth("+\(count)", weight: .medium)
-        return labelWidth + (2 * MenuBarPillMetrics.horizontalPadding)
+        return labelWidth + (2 * horizontalPadding)
     }
 
     static func textWidth(_ text: String, weight: NSFont.Weight = .medium) -> CGFloat {
@@ -1598,43 +1815,13 @@ enum PillBarCoordinator {
         return ceil((text as NSString).size(withAttributes: attrs).width)
     }
 
-    /// Active tool context label showing what the session is doing right now
+    /// Stable session identity. Activity belongs in the status dot and hover card;
+    /// changing the title for every tool would move pills while the user targets them.
     static func sessionLabel(_ session: SessionState) -> String {
-        // Pending approval: show tool name
-        if let toolName = PendingActionPresentation.contextualToolName(session.pendingToolName) {
-            return truncate(MCPToolFormatter.formatToolName(toolName))
-        }
-
-        // Active tool: show tool + context (only when actually processing)
-        if session.phase.isActive,
-           let currentTool = session.toolTracker.inProgress.values
-            .sorted(by: { $0.startTime > $1.startTime }).first {
-            let name = MCPToolFormatter.formatToolName(currentTool.name)
-            if let msg = session.lastMessage, let lastTool = session.lastToolName,
-               MCPToolFormatter.formatToolName(lastTool) == name {
-                return truncate("\(name) \(msg)")
-            }
-            return truncate(name)
-        }
-
-        // Source session name takes priority over stale tool context.
-        // Showing "Bash" for every idle session defeats the purpose.
-        if let name = session.sessionName {
-            return truncate(name)
-        }
-
-        // Last completed tool (only when there is no session name)
-        if let toolName = session.lastToolName {
-            let name = MCPToolFormatter.formatToolName(toolName)
-            if let msg = session.lastMessage {
-                return truncate("\(name) \(msg)")
-            }
-            return truncate(name)
-        }
-        if let msg = session.lastMessage {
-            return truncate(msg)
-        }
-        return truncate(session.bestProjectName)
+        truncate(MenuBarPillTitlePolicy.title(
+            sessionName: session.sessionName,
+            projectName: session.bestProjectName
+        ))
     }
 
     private static func truncate(_ text: String) -> String {
@@ -1645,23 +1832,18 @@ enum PillBarCoordinator {
         return cleaned
     }
 
-    /// Aggressive truncation for the no-empty-side rebalance. When the
-    /// left bar is too narrow for a normal-length pill, the packer can
-    /// retry with this shorter form so the user still sees a pill on
-    /// each side. Keeps just enough characters to identify the session
-    /// at a glance ("claud..." beats no pill at all).
-    static func aggressivelyShortLabel(from label: String) -> String {
-        let cleaned = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.count > 6 {
-            return String(cleaned.prefix(6)) + "..."
-        }
-        return cleaned
-    }
-
     static func compactLabel(from label: String) -> String {
         let cleaned = label.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleaned.count > 14 {
             return String(cleaned.prefix(12)) + "..."
+        }
+        return cleaned
+    }
+
+    static func tightLabel(from label: String) -> String {
+        let cleaned = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.count > 10 {
+            return String(cleaned.prefix(8)) + "..."
         }
         return cleaned
     }

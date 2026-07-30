@@ -7,6 +7,31 @@ import XCTest
 @testable import AgentVisorCore
 
 final class ChatPaginationWindowTests: XCTestCase {
+    func testPromptAlignmentDoesNotExceedRenderSafetyCap() {
+        let window = ChatPaginationWindow(visibleLimit: 3)
+
+        XCTAssertEqual(
+            window.sliceAlignedToPrompt(
+                totalItems: 10,
+                promptIndices: [0],
+                safetyCap: 5
+            ),
+            7..<10
+        )
+    }
+
+    func testPromptAlignedSliceIncludesTheWholeVisibleTurn() {
+        let window = ChatPaginationWindow(visibleLimit: 3)
+
+        XCTAssertEqual(
+            window.sliceAlignedToPrompt(
+                totalItems: 8,
+                promptIndices: [0, 4]
+            ),
+            4..<8
+        )
+    }
+
     // MARK: - slice(totalItems:)
 
     func testEmptyTotalReturnsEmptyRange() {

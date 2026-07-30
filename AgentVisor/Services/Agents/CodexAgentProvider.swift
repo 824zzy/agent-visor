@@ -21,6 +21,7 @@ struct CodexAgentProvider: AgentProvider {
     // Spawnable: a new thread is created via codex app-server JSON-RPC
     // (CodexAppServerClient.startThread) and driven over the same socket.
     nonisolated let canSpawnSession: Bool = true
+    nonisolated let canRenderChat = true
 
     nonisolated init() {}
 

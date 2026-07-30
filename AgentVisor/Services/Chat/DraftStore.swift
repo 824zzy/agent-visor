@@ -3,7 +3,7 @@
 //  AgentVisor
 //
 //  In-memory store for unsent chat drafts, keyed by sessionId. Lets the
-//  notch chat view survive close/reopen and tab switches without losing
+//  Chat view survive close/reopen and session switches without losing
 //  whatever the user was typing (or any attached images).
 //
 //  Scope is a single app launch: drafts live in RAM only. That's aligned

@@ -624,6 +624,7 @@ private struct AppearanceSection: View {
 private struct PillsSection: View {
     @ObservedObject private var pillsSelector = PillsEnabledSelector.shared
     @ObservedObject private var usageMonitor = CodexUsageMonitor.shared
+    @ObservedObject private var claudeUsageMonitor = ClaudeUsageMonitor.shared
     @ObservedObject private var fullScreenPolicy = FullScreenPolicySelector.shared
     @State private var sessionShortcutFamily = AppSettings.sessionShortcutModifierFamily
 
@@ -653,6 +654,18 @@ private struct PillsSection: View {
                     Toggle("", isOn: Binding(
                         get: { usageMonitor.enabled },
                         set: { usageMonitor.setEnabled($0) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                }
+                SettingsRow(
+                    icon: "dollarsign.gauge.chart.lefthalf.righthalf",
+                    title: "Show Claude usage when available",
+                    description: claudeUsageAvailabilityDescription
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { claudeUsageMonitor.enabled },
+                        set: { claudeUsageMonitor.setEnabled($0) }
                     ))
                     .labelsHidden()
                     .toggleStyle(.switch)
@@ -705,6 +718,21 @@ private struct PillsSection: View {
             return "Hidden because Codex did not provide a supported usage window; it will appear automatically when available."
         }
     }
+
+    private var claudeUsageAvailabilityDescription: String {
+        switch claudeUsageMonitor.availability {
+        case .disabled:
+            return "Turn on to show your Claude plan's monthly spend (e.g. $18 / $600) when the account provides it."
+        case .checking:
+            return "Checking whether a signed-in Claude (Anthropic) account exposes usage."
+        case .available:
+            return "Claude usage is available and shown as a fixed menu-bar pill beside Codex."
+        case .stale:
+            return "Showing the last known Claude spend; the OAuth token is refreshed by Pi."
+        case .unavailable:
+            return "Hidden because no signed-in Claude account exposed usage; it will appear automatically when available."
+        }
+    }
 }
 
 private struct ChatSection: View {
@@ -737,6 +765,11 @@ private struct ChatSection: View {
                     "Group Codex turns",
                     description: "Collapse each Codex turn's commentary and commands behind a \"Worked\" header and show only the final answer. Off shows the full flat transcript.",
                     keyPath: \.collapseCodexTurns
+                )
+                visibilityToggle(
+                    "Group Pi turns",
+                    description: "Collapse each Pi turn's reasoning and actions behind a \"Worked\" header and keep the final answer prominent. Off shows the raw activity stream.",
+                    keyPath: \.collapsePiTurns
                 )
             }
 
@@ -861,6 +894,8 @@ private struct NotificationsSection: View {
 }
 
 private struct HooksSection: View {
+    @ObservedObject private var piIntegration = PiIntegrationMonitor.shared
+
     /// Per-agent install state, refreshed after every toggle so the
     /// description text reflects what's actually on disk now.
     @State private var installed: [AgentID: Bool] = Self.snapshot()
@@ -895,7 +930,9 @@ private struct HooksSection: View {
                 ForEach(AgentRegistry.all, id: \.id) { provider in
                     AgentConnectionRow(
                         provider: provider,
+                        isAvailable: provider.isAvailable(),
                         isInstalled: installed[provider.id] ?? false,
+                        piHasHeartbeat: piIntegration.hasHeartbeat,
                         onToggle: { newValue in
                             if newValue {
                                 try? provider.installHooks()
@@ -985,8 +1022,27 @@ private struct HooksSection: View {
 
 private struct AgentConnectionRow: View {
     let provider: AgentProvider
+    let isAvailable: Bool
     let isInstalled: Bool
+    let piHasHeartbeat: Bool
     let onToggle: (Bool) -> Void
+
+    private var piConnectionState: PiConnectionState? {
+        guard provider.id == .pi else { return nil }
+        return PiConnectionStatePolicy.state(
+            isDetected: isAvailable,
+            hasHeartbeat: piHasHeartbeat
+        )
+    }
+
+    private var title: String {
+        switch piConnectionState {
+        case .notDetected: return "Pi — Not detected"
+        case .observing: return "Pi — Observing"
+        case .connected: return "Pi — Connected"
+        case .none: return provider.displayName
+        }
+    }
 
     private var description: String {
         switch provider.id {
@@ -1004,19 +1060,32 @@ private struct AgentConnectionRow: View {
             return isInstalled
                 ? "Hooks installed in ~/.augment/settings.json."
                 : "Not installed."
+        case .pi:
+            switch piConnectionState {
+            case .notDetected:
+                return "Install or run Pi to enable automatic session discovery. Agent Visor has not created any Pi files."
+            case .observing:
+                return isInstalled
+                    ? "Session and process observation is active. Exact lifecycle status begins when Pi next loads the bundled integration."
+                    : "Pi detected. Session files remain observable while the lifecycle integration is installed."
+            case .connected:
+                return "A Pi TUI session is reporting exact lifecycle status. Disk and process observation remain available as fallback."
+            case .none:
+                return ""
+            }
         }
     }
 
     private var canToggle: Bool {
-        // Cursor's "install" is just metadata — there's no hook script
-        // to actually write. Disable the toggle so the user understands
-        // the row is informational, not actionable.
-        provider.id != .cursor
+        // Cursor has no hook script. Pi owns an automatic, guarded install,
+        // so exposing a switch that periodic detection immediately reverses
+        // would be misleading; its row reports connection state instead.
+        provider.id != .cursor && provider.id != .pi && isAvailable
     }
 
     var body: some View {
         SettingsRow(
-            title: provider.displayName,
+            title: title,
             description: description
         ) {
             if canToggle {

@@ -1,7 +1,7 @@
 import XCTest
 
 final class SessionBrowserWindowAuditTests: XCTestCase {
-    func testMainWindowIsSearchFirstAndKeepsInspectorOnDemand() throws {
+    func testMainWindowIsSearchFirstAndEntersChatWithoutAModal() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let split = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
@@ -29,8 +29,11 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         )
         XCTAssertFalse(split.contains("SessionBrowserSummaryChip"))
         XCTAssertTrue(split.contains("viewModel.openOriginal"))
-        XCTAssertTrue(split.contains("viewModel.inspectSession"))
-        XCTAssertTrue(split.contains(".sheet("))
+        XCTAssertTrue(split.contains("viewModel.activateSession"))
+        XCTAssertTrue(split.contains("viewModel.mode == .chat"))
+        XCTAssertTrue(split.contains("SessionChatWorkspace("))
+        XCTAssertFalse(split.contains("viewModel.inspectSession"))
+        XCTAssertFalse(split.contains(".sheet("))
         XCTAssertFalse(split.contains("NavigationSplitView"))
         XCTAssertFalse(split.contains("SessionWorkspaceOverview"))
         XCTAssertFalse(split.contains("let session: SessionState?"))
@@ -40,6 +43,9 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         XCTAssertTrue(split.contains("return displaySection.tint"))
         XCTAssertTrue(model.contains("SessionBrowserPolicy.select"))
         XCTAssertTrue(model.contains("SessionBrowserListPresentation.elements"))
+        XCTAssertTrue(model.contains("SessionBrowserPrimaryActionPolicy.action"))
+        XCTAssertTrue(model.contains("func enterChat("))
+        XCTAssertTrue(model.contains("func leaveChat()"))
         XCTAssertTrue(model.contains("CodexThreadStore.browsableThreadCandidates()"))
         XCTAssertTrue(model.contains(".cvCodexCatalogDidChange"))
         XCTAssertTrue(codexStore.contains("name: .cvCodexCatalogDidChange"))
@@ -51,6 +57,102 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         XCTAssertTrue(notifications.contains("openSessionInMainWindow(sessionId)"))
         XCTAssertTrue(appDelegate.contains("ensureMainWindowController().showSessions()"))
         XCTAssertTrue(appDelegate.contains("ensureMainWindowController().toggleSessions()"))
+    }
+
+    func testRowsAndKeyboardUseStableChatFirstActions() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let split = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
+        let model = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/MainWindowViewModel.swift"))
+
+        XCTAssertFalse(split.contains("SessionBrowserActionSelector.shared"))
+        XCTAssertTrue(split.contains("viewModel.activateSession(\n                        sessionId\n                    )"))
+        XCTAssertTrue(split.contains("viewModel.activateKeyboardCursor()"))
+        XCTAssertTrue(split.contains("viewModel.activateKeyboardCursor(alternate: true)"))
+        XCTAssertTrue(split.contains("modifiers == .shift"))
+        XCTAssertFalse(model.contains("defaultAction: SessionBrowserDefaultAction"))
+        XCTAssertTrue(model.contains("alternate: Bool = false"))
+    }
+
+    func testSessionsDoNotExposeADestinationPreferenceThatCanInvertControls() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let settings = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/Core/Settings.swift"))
+        let settingsView = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/SettingsWindowView.swift"))
+        let selector = root
+            .appendingPathComponent("AgentVisor/Core/SessionBrowserActionSelector.swift")
+
+        XCTAssertFalse(settings.contains("sessionBrowserDefaultAction"))
+        XCTAssertFalse(settingsView.contains("Default session action"))
+        XCTAssertFalse(settingsView.contains("SessionBrowserActionSelector"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: selector.path))
+    }
+
+    func testCoreRowActionPolicyCannotBeOverriddenByAStoredDestination() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let policy = try String(contentsOf: root
+            .appendingPathComponent("AgentVisorCore/Sources/AgentVisorCore/SessionBrowserPrimaryActionPolicy.swift"))
+
+        XCTAssertFalse(policy.contains("SessionBrowserDefaultAction"))
+        XCTAssertFalse(policy.contains("defaultAction:"))
+        XCTAssertTrue(policy.contains("alternate: Bool = false"))
+    }
+
+    func testRowOwnsChatDisclosureAndOwnerActionHasADisjointTarget() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let split = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
+
+        XCTAssertTrue(split.contains("Button(action: onActivate)"))
+        XCTAssertTrue(split.contains("if item.canEnterChat {\n                        chatDisclosureChevron"))
+        XCTAssertTrue(split.contains("private var chatDisclosureChevron: some View"))
+        XCTAssertTrue(split.contains(".accessibilityHidden(true)"))
+        XCTAssertTrue(split.contains("SessionBrowserOwnerAction("))
+        XCTAssertTrue(split.contains("onOpenOriginal: { viewModel.openOriginal(sessionId) }"))
+        XCTAssertTrue(split.contains("action: onOpenOriginal"))
+        XCTAssertTrue(split.contains("fullTitle: \"Open in \\(item.ownerName)\""))
+        XCTAssertTrue(split.contains(".frame(width: 138, alignment: .trailing)"))
+        XCTAssertFalse(split.contains("SessionBrowserChatDisclosure"))
+        XCTAssertFalse(split.contains("title: \"Enter Chat\""))
+        XCTAssertFalse(split.contains("prominent: true"))
+        XCTAssertTrue(split.contains("keyboardHint(keys: \"↩\", label: footerLabel"))
+        XCTAssertTrue(split.contains("keyboardHint(keys: \"⇧↩\", label: footerLabel"))
+        XCTAssertFalse(split.contains("keyboardHint(keys: \"⌥↩\""))
+        XCTAssertFalse(split.contains("Inspect session"))
+    }
+
+    func testFooterActionCopyIsProviderNeutralWhileRowsKeepExactOwners() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let split = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
+
+        guard let start = split.range(of: "private func footerLabel")?.lowerBound,
+              let end = split.range(of: "private func keyboardHint", range: start..<split.endIndex)?.lowerBound else {
+            return XCTFail("Could not isolate footerLabel.")
+        }
+        let footerLabel = String(split[start..<end])
+        XCTAssertTrue(footerLabel.contains("SessionBrowserPrimaryActionPolicy.footerLabel"))
+        XCTAssertFalse(footerLabel.contains("ownerName"))
+        XCTAssertTrue(split.contains("fullTitle: \"Open in \\(item.ownerName)\""))
+    }
+
+    func testBackKeepsTheMountedBrowserStateInsteadOfReconstructingIt() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let split = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
+        let model = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/MainWindowViewModel.swift"))
+
+        XCTAssertTrue(split.contains("sessionsBrowser\n                .opacity(viewModel.mode == .sessions ? 1 : 0)"))
+        XCTAssertTrue(split.contains("onBack: { viewModel.leaveChat() }"))
+        let start = try XCTUnwrap(model.range(of: "func leaveChat()"))
+        let end = try XCTUnwrap(model.range(of: "func openOriginal(", range: start.upperBound..<model.endIndex))
+        let leaveChat = String(model[start.lowerBound..<end.lowerBound])
+        XCTAssertFalse(leaveChat.contains("searchQuery"))
+        XCTAssertFalse(leaveChat.contains("keyboardCursorSessionId"))
+        XCTAssertFalse(leaveChat.contains("browserScrollRequest"))
     }
 
     func testPointerHoverDoesNotDriveKeyboardCursor() throws {

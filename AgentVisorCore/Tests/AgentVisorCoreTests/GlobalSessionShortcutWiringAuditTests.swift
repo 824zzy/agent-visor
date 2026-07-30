@@ -100,7 +100,8 @@ final class GlobalSessionShortcutWiringAuditTests: XCTestCase {
         XCTAssertTrue(manager.contains("isRevealingShortcuts = false"))
         XCTAssertTrue(sideContent.contains("if sessionShortcutManager.isRevealingShortcuts"))
         XCTAssertTrue(sideContent.contains("PillShortcutKeycap(number: 0)"))
-        XCTAssertTrue(sideContent.contains("width: PillBarCoordinator.overflowPillWidth(count: count)"))
+        XCTAssertTrue(sideContent.contains("OverflowPillButton(count: overflowCount, width: overflowPillWidth)"))
+        XCTAssertTrue(sideContent.contains("width: width"))
     }
 
     func testShortcutBadgeIsReadableWithoutMovingTheTitleOrGrowingThePill() throws {
@@ -116,12 +117,14 @@ final class GlobalSessionShortcutWiringAuditTests: XCTestCase {
         XCTAssertTrue(sideContent.contains(".frame(width: 10, height: 12)"))
         XCTAssertTrue(sideContent.contains("RoundedRectangle(cornerRadius: 3)"))
         XCTAssertTrue(sideContent.contains(".frame(width: 6, height: 6)"))
-        XCTAssertTrue(sideContent.contains(".padding(.horizontal, MenuBarPillMetrics.horizontalPadding)"))
+        XCTAssertTrue(sideContent.contains(".padding(.horizontal, horizontalPadding)"))
         XCTAssertFalse(sideContent.contains(".padding(.horizontal, shortcutPosition == nil"))
 
-        let normalTitleOrigin = 7 + 6 + 3
-        let shortcutTitleOrigin = 7 + 6 + 3
-        XCTAssertEqual(normalTitleOrigin, shortcutTitleOrigin)
+        for horizontalPadding in [7, 5] {
+            let normalTitleOrigin = horizontalPadding + 6 + 3
+            let shortcutTitleOrigin = horizontalPadding + 6 + 3
+            XCTAssertEqual(normalTitleOrigin, shortcutTitleOrigin)
+        }
     }
 
     func testPillsSettingsConfigureTheGlobalModifierFamily() throws {

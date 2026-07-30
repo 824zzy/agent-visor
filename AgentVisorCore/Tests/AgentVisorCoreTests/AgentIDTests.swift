@@ -10,6 +10,7 @@ final class AgentIDTests: XCTestCase {
         XCTAssertEqual(AgentID.auggie.rawValue, "auggie")
         XCTAssertEqual(AgentID.codex.rawValue, "codex")
         XCTAssertEqual(AgentID.cursor.rawValue, "cursor")
+        XCTAssertEqual(AgentID.pi.rawValue, "pi")
     }
 
     func testDecodesFromRawWireValue() throws {

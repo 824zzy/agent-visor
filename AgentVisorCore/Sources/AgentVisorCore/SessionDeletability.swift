@@ -28,7 +28,7 @@ public enum SessionDeletabilityPolicy {
             // Transcript is a JSONL we own the path to — deletable, but only
             // when nothing is still writing it.
             return isLive ? .hideOnly : .deletableTranscript
-        case .codex, .cursor, .auggie:
+        case .codex, .cursor, .auggie, .pi:
             // Read-only / observed agents: never delete their data.
             return .hideOnly
         }

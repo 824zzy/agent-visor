@@ -299,6 +299,255 @@ final class PillBarPackerTests: XCTestCase {
         XCTAssertEqual(result.shortenedIds, [])
     }
 
+    func testAsymmetricCapacitiesMinimizeTheLargestUnusedRegion() {
+        let candidates: [PillBarPacker.Candidate] = [
+            .init(id: "pc", pillWidth: 65),
+            .init(id: "intern", pillWidth: 103),
+            .init(id: "donut", pillWidth: 98),
+            .init(id: "agent", pillWidth: 97),
+            .init(id: "misc", pillWidth: 60),
+            .init(id: "review", pillWidth: 95),
+            .init(id: "codex", pillWidth: 102),
+            .init(id: "pi-donut", pillWidth: 66),
+            .init(id: "s9", pillWidth: 80),
+            .init(id: "s10", pillWidth: 80),
+            .init(id: "s11", pillWidth: 80),
+            .init(id: "s12", pillWidth: 80),
+            .init(id: "s13", pillWidth: 80),
+        ]
+
+        let result = PillBarPacker.pack(
+            candidates: candidates,
+            leftMax: 507,
+            rightMax: 210,
+            pillSpacing: 3,
+            overflowPillWidthFor: { _ in 24 }
+        )
+
+        XCTAssertEqual(result.leftVisibleIds, ["pc", "intern", "donut", "agent", "misc"])
+        XCTAssertEqual(result.rightVisibleIds, ["review"])
+        XCTAssertEqual(result.hiddenIds, Array(candidates.dropFirst(6).map(\.id)))
+        XCTAssertEqual(result.overflowSide, .right)
+    }
+
+    func testTightLowerPriorityLabelsExposeMoreOfTheOrderedPrefix() {
+        let compactOnly: [PillBarPacker.Candidate] = [
+            .init(id: "pc", pillWidth: 65),
+            .init(id: "intern", pillWidth: 103, compactWidth: 95),
+            .init(id: "donut", pillWidth: 98, compactWidth: 92),
+            .init(id: "agent", pillWidth: 97, compactWidth: 90),
+            .init(id: "misc", pillWidth: 60),
+            .init(id: "review", pillWidth: 103, compactWidth: 95),
+            .init(id: "codex", pillWidth: 102, compactWidth: 90),
+            .init(id: "pi-donut", pillWidth: 66),
+            .init(id: "s9", pillWidth: 80, compactWidth: 70),
+            .init(id: "s10", pillWidth: 80, compactWidth: 70),
+            .init(id: "s11", pillWidth: 80, compactWidth: 70),
+            .init(id: "s12", pillWidth: 80, compactWidth: 70),
+            .init(id: "s13", pillWidth: 80, compactWidth: 70),
+        ]
+        let adaptive = compactOnly.enumerated().map { index, candidate in
+            let tightWidths: [CGFloat?] = [
+                nil, 75, 75, 70, nil, 75, 82, nil, 60, 60, 60, 60, 60,
+            ]
+            return PillBarPacker.Candidate(
+                id: candidate.id,
+                pillWidth: candidate.pillWidth,
+                compactWidth: candidate.compactWidth,
+                minimumWidth: tightWidths[index]
+            )
+        }
+
+        let compactResult = PillBarPacker.pack(
+            candidates: compactOnly,
+            leftMax: 507,
+            rightMax: 210,
+            pillSpacing: 3,
+            overflowPillWidthFor: { _ in 24 }
+        )
+        let adaptiveResult = PillBarPacker.pack(
+            candidates: adaptive,
+            leftMax: 507,
+            rightMax: 210,
+            pillSpacing: 3,
+            overflowPillWidthFor: { _ in 24 }
+        )
+
+        XCTAssertEqual(compactResult.hiddenCount, 7)
+        XCTAssertEqual(
+            adaptiveResult.leftVisibleIds + adaptiveResult.rightVisibleIds,
+            Array(adaptive.prefix(8).map(\.id))
+        )
+        XCTAssertEqual(adaptiveResult.hiddenIds, Array(adaptive.dropFirst(8).map(\.id)))
+        XCTAssertEqual(adaptiveResult.labelTier(for: "intern"), .full)
+        XCTAssertEqual(adaptiveResult.labelTier(for: "donut"), .full)
+        XCTAssertEqual(adaptiveResult.labelTier(for: "agent"), .compact)
+        XCTAssertEqual(adaptiveResult.labelTier(for: "review"), .tight)
+    }
+
+    func testResidualCapacityRestoresALowerLabelWhenHigherUpgradeCannotFit() {
+        let result = PillBarPacker.pack(
+            candidates: [
+                .init(
+                    id: "higher",
+                    pillWidth: 100,
+                    compactWidth: 90,
+                    minimumWidth: 70
+                ),
+                .init(
+                    id: "lower",
+                    pillWidth: 80,
+                    compactWidth: 68,
+                    minimumWidth: 60
+                ),
+            ],
+            leftMax: 142,
+            rightMax: 0,
+            pillSpacing: 4,
+            overflowPillWidthFor: { _ in 30 }
+        )
+
+        XCTAssertEqual(result.leftVisibleIds, ["higher", "lower"])
+        XCTAssertEqual(result.rightVisibleIds, [])
+        XCTAssertEqual(result.hiddenCount, 0)
+        XCTAssertEqual(result.labelTier(for: "higher"), .tight)
+        XCTAssertEqual(
+            result.labelTier(for: "lower"),
+            .compact,
+            "Residual capacity should improve a lower label when no higher tier fits."
+        )
+    }
+
+    func testScreenshotResidualBackfillUsesBothIndependentSideBudgets() {
+        let candidates: [PillBarPacker.Candidate] = [
+            .init(id: "pc", pillWidth: 69),
+            .init(id: "misc", pillWidth: 64),
+            .init(id: "donut", pillWidth: 102, minimumWidth: 81),
+            .init(id: "intern", pillWidth: 107, compactWidth: 95, minimumWidth: 73),
+            .init(id: "agent", pillWidth: 101, minimumWidth: 80),
+            .init(id: "review", pillWidth: 99, compactWidth: 95, minimumWidth: 77),
+            .init(id: "codex", pillWidth: 130, compactWidth: 102, minimumWidth: 83),
+            .init(id: "pi-donut", pillWidth: 70),
+            .init(id: "s9", pillWidth: 80, minimumWidth: 60),
+            .init(id: "s10", pillWidth: 80, minimumWidth: 60),
+            .init(id: "s11", pillWidth: 80, minimumWidth: 60),
+            .init(id: "s12", pillWidth: 80, minimumWidth: 60),
+            .init(id: "s13", pillWidth: 80, minimumWidth: 60),
+        ]
+
+        let result = PillBarPacker.pack(
+            candidates: candidates,
+            leftMax: 507,
+            rightMax: 210,
+            pillSpacing: 4,
+            overflowPillWidthFor: { _ in 29 }
+        )
+
+        XCTAssertEqual(result.leftVisibleIds, Array(candidates.prefix(6).map(\.id)))
+        XCTAssertEqual(result.rightVisibleIds, Array(candidates[6..<8].map(\.id)))
+        XCTAssertEqual(result.hiddenIds, Array(candidates.dropFirst(8).map(\.id)))
+        XCTAssertEqual(result.labelTier(for: "intern"), .compact)
+        XCTAssertEqual(result.labelTier(for: "agent"), .tight)
+        XCTAssertEqual(result.labelTier(for: "review"), .tight)
+        XCTAssertEqual(
+            result.labelTier(for: "codex"),
+            .compact,
+            "The right-side 20-point fragment should restore the 19-point compact tier."
+        )
+    }
+
+    func testPressureProfileIsSelectedWhenItExposesAnotherOrderedPill() {
+        let result = PillBarPacker.pack(
+            candidates: [
+                .init(id: "a", pillWidth: 60),
+                .init(id: "b", pillWidth: 40),
+                .init(id: "c", pillWidth: 60),
+            ],
+            leftMax: 100,
+            rightMax: 100,
+            standardProfile: .init(
+                density: .standard,
+                pillSpacing: 4,
+                widthReduction: 0
+            ),
+            pressureProfile: .init(
+                density: .pressure,
+                pillSpacing: 3,
+                widthReduction: 4
+            ),
+            overflowPillWidthFor: { _ in 30 }
+        )
+
+        XCTAssertEqual(result.density, .pressure)
+        XCTAssertEqual(result.leftVisibleIds + result.rightVisibleIds, ["a", "b", "c"])
+        XCTAssertEqual(result.hiddenCount, 0)
+    }
+
+    func testStandardRemainsWhenPressureDoesNotExposeAnotherPill() {
+        let result = PillBarPacker.pack(
+            candidates: [.init(id: "a", pillWidth: 60)],
+            leftMax: 100,
+            rightMax: 100,
+            standardProfile: .init(
+                density: .standard,
+                pillSpacing: 4,
+                widthReduction: 0
+            ),
+            pressureProfile: .init(
+                density: .pressure,
+                pillSpacing: 3,
+                widthReduction: 4
+            ),
+            overflowPillWidthFor: { _ in 30 }
+        )
+
+        XCTAssertEqual(result.density, .standard)
+        XCTAssertEqual(result.hiddenCount, 0)
+    }
+
+    func testPressureRemainsUntilStandardHasReleaseHeadroom() {
+        let candidates: [PillBarPacker.Candidate] = [
+            .init(id: "a", pillWidth: 60),
+            .init(id: "b", pillWidth: 40),
+            .init(id: "c", pillWidth: 60),
+        ]
+        let standard = PillBarPacker.PackingProfile(
+            density: .standard,
+            pillSpacing: 4,
+            widthReduction: 0
+        )
+        let pressure = PillBarPacker.PackingProfile(
+            density: .pressure,
+            pillSpacing: 3,
+            widthReduction: 4
+        )
+
+        let nearBoundary = PillBarPacker.pack(
+            candidates: candidates,
+            leftMax: 104,
+            rightMax: 104,
+            standardProfile: standard,
+            pressureProfile: pressure,
+            currentDensity: .pressure,
+            releaseHeadroom: 8,
+            overflowPillWidthFor: { _ in 30 }
+        )
+        let released = PillBarPacker.pack(
+            candidates: candidates,
+            leftMax: 112,
+            rightMax: 112,
+            standardProfile: standard,
+            pressureProfile: pressure,
+            currentDensity: .pressure,
+            releaseHeadroom: 8,
+            overflowPillWidthFor: { _ in 30 }
+        )
+
+        XCTAssertEqual(nearBoundary.density, .pressure)
+        XCTAssertEqual(released.density, .standard)
+        XCTAssertEqual(nearBoundary.hiddenCount, released.hiddenCount)
+    }
+
     func testShortensLabelsBeforeOverflowingSessions() {
         let result = PillBarPacker.pack(
             candidates: [
@@ -316,6 +565,7 @@ final class PillBarPackerTests: XCTestCase {
         XCTAssertEqual(result.leftVisibleIds, ["a", "b"])
         XCTAssertEqual(result.rightVisibleIds, ["c", "d"])
         XCTAssertEqual(result.hiddenCount, 0)
-        XCTAssertEqual(result.shortenedIds, ["b", "c", "d"])
+        XCTAssertEqual(result.shortenedIds, ["b", "d"])
+        XCTAssertEqual(result.labelTier(for: "c"), .full)
     }
 }

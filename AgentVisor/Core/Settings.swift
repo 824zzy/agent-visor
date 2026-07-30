@@ -167,6 +167,7 @@ enum AppSettings {
         static let fullScreenPolicy = "fullScreenPolicy"
         static let pillsEnabled = "pillsEnabled"
         static let codexUsageGlanceEnabled = "codexUsageGlanceEnabled"
+        static let claudeUsageGlanceEnabled = "claudeUsageGlanceEnabled"
         static let chatVisibility = "chatVisibility"
         static let editorPreference = "editorPreference"
         static let connectedCodexEnabled = "connectedCodexEnabled"
@@ -341,6 +342,18 @@ enum AppSettings {
         }
         set {
             defaults.set(newValue, forKey: Keys.codexUsageGlanceEnabled)
+        }
+    }
+
+    static var claudeUsageGlanceEnabled: Bool {
+        get {
+            guard let stored = defaults.object(forKey: Keys.claudeUsageGlanceEnabled) as? Bool else {
+                return true
+            }
+            return stored
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.claudeUsageGlanceEnabled)
         }
     }
 

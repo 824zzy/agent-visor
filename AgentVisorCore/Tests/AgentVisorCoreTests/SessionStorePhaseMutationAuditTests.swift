@@ -144,12 +144,73 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
         )
     }
 
-    func testHookResurrectionUsesSamePidGuard() throws {
+    func testHookResurrectionUsesPreMergePidAndSourceAwareEvidence() throws {
         let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        guard let start = source.range(of: "private func processHookEvent")?.lowerBound,
+              let end = source.range(of: "private func codexBackedHookEvent")?.lowerBound else {
+            return XCTFail("Could not isolate processHookEvent.")
+        }
+        let hookPath = String(source[start..<end])
+
         XCTAssertTrue(
-            source.contains("SessionRebindCandidatePolicy.shouldResurrectEndedSessionFromHook"),
-            "Late hook events from the same just-ended PID must not resurrect a deactivated session row."
+            hookPath.contains("let pidBeforeHookMerge = session.pid"),
+            "Ended-session rebind checks must preserve process identity from before hook metadata is merged."
         )
+        XCTAssertTrue(
+            hookPath.contains("SessionRebindCandidatePolicy.evidence("),
+            "The hook path must classify exact Pi SessionStart evidence through the shared policy."
+        )
+        XCTAssertTrue(hookPath.contains("agentID: event.agentID"))
+        XCTAssertTrue(hookPath.contains("lifecycleEvent: event.event"))
+        XCTAssertTrue(
+            hookPath.contains("currentPid: pidBeforeHookMerge"),
+            "Late-hook protection must compare the incoming PID with the pre-event attachment, not the already-merged PID."
+        )
+    }
+
+    func testPiHeartbeatUsesPhaseNeutralReattachmentPathBeforePidDedup() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let root = repoRootURL(from: testFile)
+        let source = try String(contentsOf: sessionStoreURL(from: testFile))
+        guard let start = source.range(of: "private func processHookEvent")?.lowerBound,
+              let end = source.range(of: "private func codexBackedHookEvent")?.lowerBound else {
+            return XCTFail("Could not isolate processHookEvent.")
+        }
+        let hookPath = String(source[start..<end])
+
+        guard let disposition = hookPath.range(of: "PiSessionHeartbeatPolicy.disposition(")?.lowerBound,
+              let pidDedup = hookPath.range(of: "// Deduplicate: if this PID")?.lowerBound,
+              let heartbeatBranch = hookPath.range(of: "switch heartbeatDisposition")?.lowerBound,
+              let genericPhase = hookPath.range(of: "let newPhase = event.determinePhase()")?.lowerBound else {
+            return XCTFail("Heartbeat disposition, collision ordering, or phase-neutral branch is missing.")
+        }
+
+        XCTAssertLessThan(
+            disposition,
+            pidDedup,
+            "Heartbeat PID ownership collisions must be rejected before generic dedup can evict the newer live session."
+        )
+        XCTAssertLessThan(
+            heartbeatBranch,
+            genericPhase,
+            "Heartbeat handling must return before generic lifecycle phase mapping."
+        )
+        XCTAssertTrue(hookPath.contains("hasDifferentLiveSessionWithEventPid"))
+        XCTAssertTrue(hookPath.contains("&& !isPiSessionHeartbeat"))
+        XCTAssertTrue(hookPath.contains("session.reattachAsIdleWithoutPhaseEvidence()"))
+        XCTAssertTrue(hookPath.contains("heartbeatDidChange"))
+        XCTAssertTrue(hookPath.contains("if heartbeatDidChange {\n                publishState()"))
+
+        let sessionState = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor")
+            .appendingPathComponent("Models")
+            .appendingPathComponent("SessionState.swift"))
+        XCTAssertTrue(
+            sessionState.contains("mutating func reattachAsIdleWithoutPhaseEvidence"),
+            "A liveness-only reattachment must clear stale Ended evidence instead of stamping a fresh phase observation."
+        )
+        XCTAssertTrue(sessionState.contains("phaseObservedAt = nil"))
+        XCTAssertTrue(sessionState.contains("phaseEvidenceSource = nil"))
     }
 
     func testHookPidDedupRespectsSharedProcessSessions() throws {
@@ -253,6 +314,18 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
         )
     }
 
+    func testBusyClaudeMetadataBootstrapsAsProcessing() throws {
+        let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        XCTAssertTrue(
+            source.contains("ClaudeCodeSessionMetadataPolicy.activity(for: status) == .working"),
+            "A discovered live Claude CLI with authoritative busy metadata should bootstrap as Working."
+        )
+        XCTAssertTrue(
+            source.contains("return .processing"),
+            "Busy Claude metadata must produce the processing phase used by menu-bar pills."
+        )
+    }
+
     func testExistingBootstrapRowsOnlyEndForTerminalMetadataStatus() throws {
         let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
@@ -262,6 +335,39 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
         XCTAssertFalse(
             source.contains("if bootstrapPhase == .ended, existing.phase != .ended"),
             "Existing Codex/Cursor rows must not be ended just because a rediscovery result is historical; that causes transient misses to hide active rows."
+        )
+    }
+
+    func testExistingClaudeRowsReconcileBusyAndIdleMetadata() throws {
+        let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        XCTAssertTrue(
+            source.contains("reconcileClaudeMetadataPhase("),
+            "Periodic rediscovery must reconcile authoritative Claude metadata for sessions already in the store."
+        )
+        XCTAssertTrue(
+            source.contains("case (.working, .idle), (.working, .waitingForInput):"),
+            "A passive existing Claude session must become Working when metadata reports busy."
+        )
+        XCTAssertTrue(
+            source.contains("case (.idle, .processing):"),
+            "Only a previously Working Claude session should become Ready when metadata returns to idle."
+        )
+    }
+
+    func testClaudeDesktopUsesTranscriptAsCompletionFallbackWithoutWeakeningHooks() throws {
+        let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+
+        XCTAssertTrue(
+            source.contains("ClaudeDesktopTranscriptFallbackPolicy.isEligible("),
+            "Claude Desktop needs transcript reconciliation because its long-lived worker and missing status cannot prove a turn is still running."
+        )
+        XCTAssertTrue(
+            source.contains("ClaudeDesktopTranscriptFallbackPolicy.shouldApply("),
+            "Claude Desktop transcript evidence must be checked against metadata and hook recency before changing phase."
+        )
+        XCTAssertTrue(
+            source.contains("usesTranscriptAsAuthoritativeSource(session)"),
+            "Claude Desktop is hybrid: available Stop/approval hooks must remain immediate instead of being discarded like passive observed phases."
         )
     }
 

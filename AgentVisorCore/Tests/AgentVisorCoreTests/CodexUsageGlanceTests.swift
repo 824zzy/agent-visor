@@ -181,6 +181,27 @@ final class CodexUsageGlanceTests: XCTestCase {
         XCTAssertEqual(snapshot.observedAt, observedAt)
     }
 
+    func testSingleRecognizedWindowUsesCompactMenuBarShape() throws {
+        let snapshot = CodexUsageSnapshot(
+            primary: nil,
+            secondary: CodexUsageWindow(
+                usedPercent: 1,
+                windowDurationMinutes: 10_080,
+                resetsAt: nil
+            ),
+            resetCreditsAvailable: nil,
+            observedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let presentation = try XCTUnwrap(
+            CodexUsageGlancePolicy.menuBarPresentation(for: snapshot)
+        )
+
+        XCTAssertEqual(presentation.label, "7d 99%")
+        XCTAssertEqual(presentation.width, 64)
+        XCTAssertFalse(presentation.label.contains("--%"))
+    }
+
     func testPresentationShowsBothWindowsAndUsesCompoundFixedWidth() throws {
         let snapshot = CodexUsageSnapshot(
             primary: CodexUsageWindow(
@@ -198,9 +219,13 @@ final class CodexUsageGlanceTests: XCTestCase {
         )
 
         let presentation = try XCTUnwrap(CodexUsageGlancePolicy.presentation(for: snapshot))
+        let menuBarPresentation = try XCTUnwrap(
+            CodexUsageGlancePolicy.menuBarPresentation(for: snapshot)
+        )
 
         XCTAssertEqual(presentation.label, "5h 56% | 7d 20%")
-        XCTAssertEqual(CodexUsageGlancePolicy.fixedWidth, 114)
+        XCTAssertEqual(menuBarPresentation.label, "5h 56% | 7d 20%")
+        XCTAssertEqual(menuBarPresentation.width, 114)
     }
 
     func testPresentationKeepsFiveHourThenSevenDayWhenServerWindowsSwap() throws {
@@ -248,6 +273,31 @@ final class CodexUsageGlanceTests: XCTestCase {
         XCTAssertNil(presentation.fiveHour.tone)
         XCTAssertNil(presentation.sevenDay.remainingPercent)
         XCTAssertNil(presentation.sevenDay.tone)
+    }
+
+    func testCompactUsagePillReservesOnlySingleWindowWidth() throws {
+        let snapshot = CodexUsageSnapshot(
+            primary: nil,
+            secondary: CodexUsageWindow(
+                usedPercent: 1,
+                windowDurationMinutes: 10_080,
+                resetsAt: nil
+            ),
+            resetCreditsAvailable: nil,
+            observedAt: Date()
+        )
+        let presentation = try XCTUnwrap(
+            CodexUsageGlancePolicy.menuBarPresentation(for: snapshot)
+        )
+
+        let reservation = CodexUsageGlancePolicy.reserveRightSide(
+            usableWidth: 200,
+            spacing: 4,
+            presentation: presentation
+        )
+
+        XCTAssertTrue(reservation.showsUsage)
+        XCTAssertEqual(reservation.sessionUsableWidth, 132)
     }
 
     func testUsagePillReservesRightSideBeforeSessionPacking() {

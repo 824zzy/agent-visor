@@ -40,18 +40,36 @@ public enum SessionNameRefreshPlanner {
 }
 
 public enum SessionTranscriptTitlePolicy {
+    public enum Authority: Equatable, Sendable {
+        /// The transcript title fills an unnamed or placeholder session, but
+        /// must not replace a stronger process- or index-resolved name.
+        case fallback
+
+        /// The transcript is the owning agent's canonical name store. Its
+        /// latest non-empty active-branch title replaces an earlier value.
+        case authoritative
+    }
+
     public static func preferredName(
         sessionId: String,
         currentName: String?,
-        transcriptTitle: String?
+        transcriptTitle: String?,
+        authority: Authority = .fallback
     ) -> String? {
         let current = currentName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let transcript = transcriptTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if authority == .authoritative,
+           let transcript,
+           !transcript.isEmpty {
+            return transcript
+        }
+
         let isPlaceholder = current == sessionId || current == String(sessionId.prefix(8))
         if let current, !current.isEmpty, !isPlaceholder {
             return current
         }
 
-        let transcript = transcriptTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let transcript, !transcript.isEmpty {
             return transcript
         }

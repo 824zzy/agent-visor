@@ -135,7 +135,10 @@ actor CodexConversationParser {
                 model: message.role == .assistant ? parsed.modelName : nil
             )
         }
-        let info = CodexConversationInfoBuilder.build(from: parsed)
+        let info = CodexConversationInfoBuilder.build(
+            from: parsed,
+            modelDisplayName: CodexModelCatalogReader.displayName(for: parsed.modelName)
+        )
         let entry = ParseCacheEntry(
             signature: signature,
             messages: messages,

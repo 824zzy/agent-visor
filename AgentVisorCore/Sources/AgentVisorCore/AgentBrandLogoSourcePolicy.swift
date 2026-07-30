@@ -28,6 +28,8 @@ public enum AgentBrandLogoSourcePolicy {
                 assetName: "AgentCursor",
                 runtimeBundleIdentifier: "com.todesktop.230313mzl4w4u92"
             )
+        case .pi:
+            return AgentBrandLogoSource(assetName: "AgentPi")
         }
     }
 }

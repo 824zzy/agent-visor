@@ -15,6 +15,7 @@ import Foundation
 /// settings remains a separate context inside the same NSWindow.
 enum WindowMode {
     case sessions
+    case chat
     case settings
 }
 
@@ -27,7 +28,7 @@ struct SessionBrowserScrollRequest: Equatable {
 final class MainWindowViewModel: ObservableObject {
     /// Current live/recent session lookup. Browser rows carry only their
     /// lightweight `SessionBrowserItem`; this dictionary is consulted only
-    /// for navigation and the explicit inspector.
+    /// for navigation and the explicitly entered Chat destination.
     @Published private(set) var sessionsById: [String: SessionState] = [:]
     @Published var searchQuery = "" {
         didSet {
@@ -51,8 +52,8 @@ final class MainWindowViewModel: ObservableObject {
     /// Sourced from persistence (hidden rows aren't in the published session
     /// array), refreshed on every hide/unhide.
     @Published private(set) var hiddenSessions: [HiddenSessionEntry] = MainWindowSettings.hiddenSessions()
-    /// The selected id drives the explicit inspector sheet. Normal row
-    /// activation opens the owning app and does not mutate this value.
+    /// The selected id identifies the full-window Chat destination.
+    /// The Sessions browser stays mounted so Back restores its state.
     @Published var selectedSessionId: String? {
         didSet {
             if let id = selectedSessionId {
@@ -79,10 +80,10 @@ final class MainWindowViewModel: ObservableObject {
     private var lastBrowserFingerprint: String = ""
 
     init() {
-        // Boot with no inspected session so transcript work doesn't
+        // Boot with no Chat destination so conversation work doesn't
         // auto-load a multi-hundred-megabyte JSONL on launch. This
         // matches Codex / Claude Desktop's "instant window, lazy
-        // chat" boot. Inspection is always explicit.
+        // chat" boot. Entering Chat is always explicit.
         //
         // Test escape hatch: setting `AV_AUTOSELECT_LAST=1` in the
         // environment auto-restores the last session — used by the
@@ -92,6 +93,7 @@ final class MainWindowViewModel: ObservableObject {
         if Foundation.ProcessInfo.processInfo.environment["AV_AUTOSELECT_LAST"] == "1",
            let stored = MainWindowSettings.lastSessionId() {
             selectedSessionId = stored
+            mode = .chat
         } else {
             selectedSessionId = nil
         }
@@ -179,9 +181,9 @@ final class MainWindowViewModel: ObservableObject {
         let allIds = Set(browserItemsById.keys)
         if let current = selectedSessionId, !allIds.contains(current) {
             selectedSessionId = nil
+            if mode == .chat { mode = .sessions }
         }
-        // No auto-inspection on boot. Transcript work starts only after
-        // the user explicitly asks for details.
+        // Full conversation parsing remains lazy until Chat is entered.
     }
 
     func refreshHistoricalSessions() {
@@ -215,7 +217,9 @@ final class MainWindowViewModel: ObservableObject {
                         section: .recent,
                         sortDate: Date(timeIntervalSince1970: TimeInterval(thread.updatedAt)),
                         isHistorical: true,
-                        transcriptPath: thread.rolloutPath
+                        transcriptPath: thread.rolloutPath,
+                        canEnterChat: false,
+                        canOpenOriginal: true
                     )
                     return (thread.id, item)
                 },
@@ -264,8 +268,8 @@ final class MainWindowViewModel: ObservableObject {
     }
 
     private func browserItem(for session: SessionState) -> SessionBrowserItem {
-        let sourceName = AgentRegistry.provider(for: session.agentID)?.displayName
-            ?? session.agentID.rawValue
+        let provider = AgentRegistry.provider(for: session.agentID)
+        let sourceName = provider?.displayName ?? session.agentID.rawValue
         let rawPreview = session.lastMessage ?? session.summary ?? session.firstUserMessage ?? ""
         return SessionBrowserItem(
             sessionId: session.sessionId,
@@ -280,7 +284,9 @@ final class MainWindowViewModel: ObservableObject {
             section: browserSection(for: session.phase),
             sortDate: Self.sortKey(for: session),
             isHistorical: false,
-            transcriptPath: nil
+            transcriptPath: nil,
+            canEnterChat: provider?.canRenderChat == true,
+            canOpenOriginal: session.phase != .ended && session.origin != .visorSpawned
         )
     }
 
@@ -347,33 +353,53 @@ final class MainWindowViewModel: ObservableObject {
         )
     }
 
-    func openKeyboardCursor() {
+    func activateKeyboardCursor(alternate: Bool = false) {
         guard let keyboardCursorSessionId else { return }
-        openOriginal(keyboardCursorSessionId)
+        activateSession(
+            keyboardCursorSessionId,
+            alternate: alternate
+        )
     }
 
-    func inspectKeyboardCursor() {
-        guard let keyboardCursorSessionId else { return }
-        inspectSession(keyboardCursorSessionId)
+    func activateSession(
+        _ sessionId: String,
+        alternate: Bool = false
+    ) {
+        guard let item = browserItemsById[sessionId] else { return }
+        switch SessionBrowserPrimaryActionPolicy.action(
+            canEnterChat: item.canEnterChat,
+            canOpenOriginal: item.canOpenOriginal,
+            alternate: alternate
+        ) {
+        case .enterChat:
+            enterChat(sessionId)
+        case .openOriginal:
+            openOriginal(sessionId)
+        case .none:
+            break
+        }
+    }
+
+    func enterChat(_ sessionId: String) {
+        guard browserItemsById[sessionId]?.canEnterChat == true else { return }
+        keyboardCursorSessionId = sessionId
+        selectedSessionId = sessionId
+        mode = .chat
+    }
+
+    func leaveChat() {
+        mode = .sessions
+        selectedSessionId = nil
     }
 
     func openOriginal(_ sessionId: String) {
-        guard let item = browserItemsById[sessionId] else { return }
+        guard let item = browserItemsById[sessionId], item.canOpenOriginal else { return }
         if let session = sessionsById[sessionId] {
             SessionNavigationRecencyStore.shared.record(session)
             SessionNavigator.navigateToSession(session)
         } else if item.agentID == .codex {
             CodexAgentProvider.openThreadInApp(sessionId)
         }
-    }
-
-    func inspectSession(_ sessionId: String) {
-        guard browserItemsById[sessionId] != nil else { return }
-        selectedSessionId = sessionId
-    }
-
-    func dismissInspector() {
-        selectedSessionId = nil
     }
 
     func clearSearch() {
@@ -387,6 +413,7 @@ final class MainWindowViewModel: ObservableObject {
     }
 
     func prepareForUpdateSettings() {
+        selectedSessionId = nil
         selectedSettingsCategory = .general
         mode = .settings
         settingsUpdateRevealRequest &+= 1
@@ -426,12 +453,7 @@ final class MainWindowViewModel: ObservableObject {
     }
 
     func selectSession(_ sessionId: String) {
-        if mode != .sessions {
-            mode = .sessions
-        }
-        if selectedSessionId != sessionId {
-            selectedSessionId = sessionId
-        }
+        enterChat(sessionId)
     }
 
     // MARK: - Hide / delete
@@ -477,8 +499,8 @@ final class MainWindowViewModel: ObservableObject {
 
 /// Lightweight, source-agnostic row model for the full Sessions browser.
 /// Current sessions resolve back to `SessionState`; older Codex rows retain
-/// just enough metadata for search, display, deep-link navigation, and an
-/// explicit diagnostic preview.
+/// just enough metadata for search, display, deep-link navigation, and
+/// capability-honest action presentation.
 struct SessionBrowserItem: Identifiable, Equatable {
     let id: String
     let sessionId: String
@@ -494,6 +516,8 @@ struct SessionBrowserItem: Identifiable, Equatable {
     let sortDate: Date
     let isHistorical: Bool
     let transcriptPath: String?
+    let canEnterChat: Bool
+    let canOpenOriginal: Bool
 
     init(
         sessionId: String,
@@ -508,7 +532,9 @@ struct SessionBrowserItem: Identifiable, Equatable {
         section: SessionBrowserSection,
         sortDate: Date,
         isHistorical: Bool,
-        transcriptPath: String?
+        transcriptPath: String?,
+        canEnterChat: Bool,
+        canOpenOriginal: Bool
     ) {
         self.id = sessionId
         self.sessionId = sessionId
@@ -524,6 +550,8 @@ struct SessionBrowserItem: Identifiable, Equatable {
         self.sortDate = sortDate
         self.isHistorical = isHistorical
         self.transcriptPath = transcriptPath
+        self.canEnterChat = canEnterChat
+        self.canOpenOriginal = canOpenOriginal
     }
 }
 

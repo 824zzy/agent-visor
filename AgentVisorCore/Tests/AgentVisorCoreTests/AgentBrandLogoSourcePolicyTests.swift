@@ -11,6 +11,7 @@ final class AgentBrandLogoSourcePolicyTests: XCTestCase {
         XCTAssertEqual(assets[.auggie], "AgentAuggie")
         XCTAssertEqual(assets[.codex], "AgentCodex")
         XCTAssertEqual(assets[.cursor], "AgentCursor")
+        XCTAssertEqual(assets[.pi], "AgentPi")
     }
 
     func testInstalledAppBrandsPreferTheirNativeHighResolutionIcons() {
@@ -27,5 +28,6 @@ final class AgentBrandLogoSourcePolicyTests: XCTestCase {
             "com.todesktop.230313mzl4w4u92"
         )
         XCTAssertNil(AgentBrandLogoSourcePolicy.source(for: .auggie).runtimeBundleIdentifier)
+        XCTAssertNil(AgentBrandLogoSourcePolicy.source(for: .pi).runtimeBundleIdentifier)
     }
 }

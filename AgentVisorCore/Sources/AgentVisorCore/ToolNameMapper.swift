@@ -75,7 +75,17 @@ public enum ToolNameMapper {
         "EnterPlanMode": .enterPlanMode,
     ]
 
+    private static let piTable: [String: CanonicalTool] = [
+        "read": .read,
+        "edit": .edit,
+        "write": .write,
+        "bash": .bash,
+        "grep": .grep,
+        "find": .glob,
+    ]
+
     private static let tables: [AgentID: [String: CanonicalTool]] = [
         .claudeCode: claudeCodeTable,
+        .pi: piTable,
     ]
 }
