@@ -773,23 +773,25 @@ struct WindowChatView: View {
 
     /// Install the local Cmd-+ / Cmd-= / Cmd-- / Cmd-0 monitor.
     /// Decision logic delegated to the pure-Core
-    /// `ChatFontScaleCommand`, which is unit-tested. Local scope
+    /// `ContentFontScaleCommand`, which is unit-tested. Local scope
     /// means the monitor only fires while the window is key — no
     /// accidental font-zooms from typing Cmd-+ in another app.
     private func installFontSizeMonitor() {
         guard fontSizeMonitor == nil else { return }
         fontSizeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            let cmd = event.modifierFlags.contains(.command)
+            let modifiers = event.modifierFlags
             let chars = event.charactersIgnoringModifiers ?? ""
-            guard let command = ChatFontScaleCommand.decode(
-                commandHeld: cmd,
+            guard let command = ContentFontScaleCommand.decode(
+                commandHeld: modifiers.contains(.command),
+                optionHeld: modifiers.contains(.option),
+                controlHeld: modifiers.contains(.control),
                 charactersIgnoringModifiers: chars
             ) else { return event }
-            AppSettings.chatFontScale = command.apply(
-                to: AppSettings.chatFontScale,
-                step: AppSettings.chatFontScaleStep,
-                min: AppSettings.chatFontScaleMin,
-                max: AppSettings.chatFontScaleMax
+            AppSettings.contentFontScale = command.apply(
+                to: AppSettings.contentFontScale,
+                step: AppSettings.contentFontScaleStep,
+                min: AppSettings.contentFontScaleMin,
+                max: AppSettings.contentFontScaleMax
             )
             return nil
         }

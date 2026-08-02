@@ -9,7 +9,7 @@ struct MainSplitView: View {
     @ObservedObject private var sessionShortcutManager = GlobalSessionShortcutManager.shared
     @ObservedObject private var appearance = AppearanceSelector.shared
     @ObservedObject private var permissionHealth = PermissionHealthMonitor.shared
-    @AppStorage("chatFontScale") private var chatFontScaleStorage: Double = 1.0
+    @AppStorage("chatFontScale") private var contentFontScaleStorage: Double = 1.0
     @FocusState private var searchFocused: Bool
     @State private var keyboardMonitor: Any?
 
@@ -41,7 +41,7 @@ struct MainSplitView: View {
 
             AppToastView(model: toastModel)
         }
-        .environment(\.chatFontScale, CGFloat(chatFontScaleStorage))
+        .environment(\.contentFontScale, CGFloat(contentFontScaleStorage))
         .preferredColorScheme(preferredScheme)
         .onAppear {
             installKeyboardMonitor()
@@ -124,7 +124,7 @@ struct MainSplitView: View {
                     .frame(maxWidth: .infinity)
                 if viewModel.browserSelection.isSearching {
                     Text(resultCountLabel)
-                        .font(.system(size: 11, weight: .medium))
+                        .contentScaledFont(size: 11, weight: .medium)
                         .foregroundColor(ChatTheme.tertiary)
                         .fixedSize()
                 }
@@ -168,10 +168,10 @@ struct MainSplitView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(presentation.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .contentScaledFont(size: 12, weight: .semibold)
                     .foregroundColor(ChatTheme.primary)
                 Text(presentation.detail)
-                    .font(.system(size: 11))
+                    .contentScaledFont(size: 11)
                     .foregroundColor(ChatTheme.secondary)
                     .lineLimit(2)
             }
@@ -180,10 +180,13 @@ struct MainSplitView: View {
 
             if let actionTitle = presentation.actionTitle {
                 VStack(alignment: .trailing, spacing: 5) {
-                    Button(actionTitle) {
+                    Button {
                         permissionHealth.performPrimarySetupAction()
+                    } label: {
+                        permissionHealthActionLabel(actionTitle)
                     }
-                    .controlSize(.small)
+                    .buttonStyle(.plain)
+                    .fixedSize()
 
                     if permissionHealth.health == .needsAccessibility {
                         HStack(spacing: 10) {
@@ -195,7 +198,7 @@ struct MainSplitView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .font(.system(size: 10, weight: .medium))
+                        .contentScaledFont(size: 10, weight: .medium)
                         .foregroundColor(ChatTheme.link)
                     }
                 }
@@ -213,14 +216,30 @@ struct MainSplitView: View {
         )
     }
 
+    private func permissionHealthActionLabel(_ title: String) -> some View {
+        Text(title)
+            .contentScaledFont(size: 11, weight: .medium)
+            .foregroundColor(ChatTheme.link)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(ChatTheme.link.opacity(0.10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(ChatTheme.link.opacity(0.28), lineWidth: 0.7)
+                    )
+            )
+    }
+
     private var searchField: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 13, weight: .medium))
+                .contentScaledFont(size: 13, weight: .medium)
                 .foregroundColor(searchFocused ? ChatTheme.link : ChatTheme.tertiary)
             TextField("Search all sessions", text: $viewModel.searchQuery)
                 .textFieldStyle(.plain)
-                .font(.system(size: 14))
+                .contentScaledFont(size: 14)
                 .foregroundColor(ChatTheme.primary)
                 .focused($searchFocused)
                 .accessibilityLabel("Search sessions")
@@ -230,13 +249,14 @@ struct MainSplitView: View {
                     searchFocused = true
                 } label: {
                     Image(systemName: "xmark.circle.fill")
+                        .contentScaledFont(size: 13)
                         .foregroundColor(ChatTheme.tertiary)
                 }
                 .buttonStyle(.plain)
                 .help("Clear search")
             } else {
                 Text("⌘F")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .contentScaledFont(size: 10, weight: .medium, design: .rounded)
                     .foregroundColor(ChatTheme.tertiary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
@@ -244,7 +264,8 @@ struct MainSplitView: View {
             }
         }
         .padding(.horizontal, 13)
-        .frame(height: 40)
+        .padding(.vertical, 8)
+        .frame(minHeight: 40)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(ChatTheme.cardBg)
@@ -266,7 +287,7 @@ struct MainSplitView: View {
         return HStack(spacing: 12) {
             if let disabledMessage = presentation.disabledMessage {
                 Text(disabledMessage)
-                    .font(.system(size: 10))
+                    .contentScaledFont(size: 10)
                     .foregroundColor(ChatTheme.tertiary)
             } else {
                 ForEach(Array(presentation.hints.enumerated()), id: \.offset) { _, hint in
@@ -281,10 +302,10 @@ struct MainSplitView: View {
     private func footerShortcutHint(_ hint: SessionBrowserShortcutHint) -> some View {
         HStack(spacing: 5) {
             Text(hint.keys)
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .contentScaledFont(size: 10, weight: .semibold, design: .rounded)
                 .foregroundColor(ChatTheme.secondary)
             Text(hint.label)
-                .font(.system(size: 10))
+                .contentScaledFont(size: 10)
                 .foregroundColor(ChatTheme.tertiary)
         }
     }
@@ -374,10 +395,10 @@ struct MainSplitView: View {
     private func sectionHeader(_ title: String, count: Int) -> some View {
         HStack(spacing: 7) {
             Text(title)
-                .font(.system(size: 12, weight: .semibold))
+                .contentScaledFont(size: 12, weight: .semibold)
                 .foregroundColor(ChatTheme.secondary)
             Text("\(count)")
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .contentScaledFont(size: 10, weight: .semibold, design: .rounded)
                 .foregroundColor(ChatTheme.tertiary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
@@ -395,34 +416,66 @@ struct MainSplitView: View {
                 .font(.system(size: 30, weight: .light))
                 .foregroundColor(ChatTheme.tertiary)
             Text(viewModel.searchQuery.isEmpty ? "No sessions available" : "No matching sessions")
-                .font(.system(size: 16, weight: .semibold))
+                .contentScaledFont(size: 16, weight: .semibold)
                 .foregroundColor(ChatTheme.primary)
             Text(viewModel.searchQuery.isEmpty
                  ? "Start a session in Codex, Claude Code, Cursor, or a terminal."
                  : "Try a title, project, source, or path.")
-                .font(.system(size: 12))
+                .contentScaledFont(size: 12)
                 .foregroundColor(ChatTheme.secondary)
         }
         .frame(maxWidth: .infinity, minHeight: 330)
     }
 
     private var browserFooter: some View {
+        responsiveBrowserFooter
+            .mainContentRail()
+            .padding(.vertical, 5)
+            .frame(minHeight: 42)
+            .background(ChatTheme.headerBg)
+            .overlay(alignment: .top) {
+                Divider().overlay(ChatTheme.cardBorder.opacity(0.8))
+            }
+    }
+
+    private var responsiveBrowserFooter: some View {
         let primaryAction = footerAction(alternate: false)
         let alternateAction = footerAction(alternate: true)
-        return HStack(spacing: 16) {
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 16) {
+                browserLocalFooter(
+                    primaryAction: primaryAction,
+                    alternateAction: alternateAction
+                )
+                Spacer(minLength: 12)
+                footerShortcutEducation
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 0) {
+                    browserLocalFooter(
+                        primaryAction: primaryAction,
+                        alternateAction: alternateAction
+                    )
+                    Spacer(minLength: 0)
+                }
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    footerShortcutEducation
+                }
+            }
+        }
+    }
+
+    private func browserLocalFooter(
+        primaryAction: SessionBrowserPrimaryAction,
+        alternateAction: SessionBrowserPrimaryAction
+    ) -> some View {
+        HStack(spacing: 16) {
             keyboardHint(keys: "↑↓", label: "Navigate")
             keyboardHint(keys: "↩", label: footerLabel(for: primaryAction))
             if alternateAction != primaryAction, alternateAction != .none {
                 keyboardHint(keys: "⇧↩", label: footerLabel(for: alternateAction))
             }
-            Spacer(minLength: 12)
-            footerShortcutEducation
-        }
-        .mainContentRail()
-        .frame(height: 42)
-        .background(ChatTheme.headerBg)
-        .overlay(alignment: .top) {
-            Divider().overlay(ChatTheme.cardBorder.opacity(0.8))
         }
     }
 
@@ -449,10 +502,10 @@ struct MainSplitView: View {
     private func keyboardHint(keys: String, label: String) -> some View {
         HStack(spacing: 5) {
             Text(keys)
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .contentScaledFont(size: 10, weight: .semibold, design: .rounded)
                 .foregroundColor(ChatTheme.secondary)
             Text(label)
-                .font(.system(size: 10))
+                .contentScaledFont(size: 10)
                 .foregroundColor(ChatTheme.tertiary)
         }
     }
@@ -464,6 +517,22 @@ struct MainSplitView: View {
             let modifiers = event.modifierFlags.intersection(semantic)
 
             guard viewModel.mode == .sessions else { return event }
+
+            if let characters = event.charactersIgnoringModifiers,
+               let command = ContentFontScaleCommand.decode(
+                    commandHeld: modifiers.contains(.command),
+                    optionHeld: modifiers.contains(.option),
+                    controlHeld: modifiers.contains(.control),
+                    charactersIgnoringModifiers: characters
+               ) {
+                AppSettings.contentFontScale = command.apply(
+                    to: AppSettings.contentFontScale,
+                    step: AppSettings.contentFontScaleStep,
+                    min: AppSettings.contentFontScaleMin,
+                    max: AppSettings.contentFontScaleMax
+                )
+                return nil
+            }
 
             if modifiers == .command,
                let characters = event.charactersIgnoringModifiers,
@@ -533,31 +602,16 @@ private struct SessionBrowserRow: View {
                     statusMark
                     AgentBrandLogo(agent: item.agentID, size: 28)
                     VStack(alignment: .leading, spacing: 5) {
-                        HStack(spacing: 7) {
-                            Text(item.title)
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(ChatTheme.primary)
-                                .lineLimit(1)
-                                .layoutPriority(2)
-                            BrowserChip(
-                                text: item.sourceName,
-                                tint: AgentBrand.tint(for: item.agentID)
-                            )
-                            BrowserChip(text: item.projectName, tint: Catppuccin.lavender)
-                            if item.ownerName != item.sourceName {
-                                BrowserChip(text: item.ownerName, tint: Catppuccin.sky)
-                            }
-                            Spacer(minLength: 4)
-                        }
+                        sessionIdentityLine
                         Text(rowSubtitle)
-                            .font(.system(size: 12))
+                            .contentScaledFont(size: 12)
                             .foregroundColor(ChatTheme.secondary)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 12)
                     if let age = RelativeTimestampFormatter.format(since: item.sortDate, now: now) {
                         Text(age)
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .contentScaledFont(size: 11, weight: .medium, design: .rounded)
                             .foregroundColor(ChatTheme.tertiary)
                             .frame(minWidth: 28, alignment: .trailing)
                     }
@@ -607,6 +661,35 @@ private struct SessionBrowserRow: View {
         }
     }
 
+    private var sessionIdentityLine: some View {
+        ViewThatFits(in: .horizontal) {
+            identityLine(showsProject: true, showsOwner: true)
+            identityLine(showsProject: true, showsOwner: false)
+            identityLine(showsProject: false, showsOwner: false)
+        }
+    }
+
+    private func identityLine(showsProject: Bool, showsOwner: Bool) -> some View {
+        HStack(spacing: 7) {
+            Text(item.title)
+                .contentScaledFont(size: 14, weight: .semibold)
+                .foregroundColor(ChatTheme.primary)
+                .lineLimit(1)
+                .layoutPriority(2)
+            BrowserChip(
+                text: item.sourceName,
+                tint: AgentBrand.tint(for: item.agentID)
+            )
+            if showsProject {
+                BrowserChip(text: item.projectName, tint: Catppuccin.lavender)
+            }
+            if showsOwner, item.ownerName != item.sourceName {
+                BrowserChip(text: item.ownerName, tint: Catppuccin.sky)
+            }
+            Spacer(minLength: 4)
+        }
+    }
+
     private var rowBackground: Color {
         if isHighlighted { return ChatTheme.cardBg }
         if isHovered { return ChatTheme.cardBg.opacity(0.72) }
@@ -635,26 +718,26 @@ private struct SessionBrowserRow: View {
         return displaySection.tint
     }
 
-    @ViewBuilder
     private var hotkeyBadge: some View {
-        ZStack {
-            if let hotkeyPosition, isCommandHeld {
-                Text("⌘\(hotkeyPosition + 1)")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundColor(ChatTheme.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(ChatTheme.cardBorder.opacity(0.75)))
-            }
-        }
-        .frame(width: 35, height: 24)
+        let isVisible = hotkeyPosition != nil && isCommandHeld
+        let label = hotkeyPosition.map { "⌘\($0 + 1)" } ?? "⌘9"
+        return Text(label)
+            .contentScaledFont(size: 11, weight: .semibold, design: .rounded)
+            .foregroundColor(ChatTheme.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(ChatTheme.cardBorder.opacity(0.75)))
+            .opacity(isVisible ? 1 : 0)
+            .fixedSize()
+            .frame(minWidth: 35, minHeight: 24)
+            .accessibilityHidden(!isVisible)
     }
 
     private var chatDisclosureChevron: some View {
         Image(systemName: "chevron.right")
-            .font(.system(size: 11, weight: .semibold))
+            .contentScaledFont(size: 11, weight: .semibold)
             .foregroundColor(isHovered ? ChatTheme.link : ChatTheme.tertiary)
-            .frame(width: 28, height: 32)
+            .frame(minWidth: 28, minHeight: 32)
             .accessibilityHidden(true)
     }
 
@@ -684,13 +767,14 @@ private struct SessionBrowserOwnerAction: View {
                 actionLabel(fullTitle)
                 actionLabel(compactTitle)
                 Image(systemName: "arrow.up.forward.app")
-                    .frame(width: 28, height: 32)
+                    .frame(minWidth: 28, minHeight: 32)
             }
-            .font(.system(size: 11, weight: .semibold))
+            .contentScaledFont(size: 11, weight: .semibold)
             .foregroundColor(isHovered ? ChatTheme.link : ChatTheme.secondary)
             .lineLimit(1)
             .padding(.horizontal, 6)
-            .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32, alignment: .trailing)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, minHeight: 32, alignment: .trailing)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(isHovered ? ChatTheme.link.opacity(0.08) : Color.clear)
@@ -715,7 +799,7 @@ private struct BrowserChip: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 10, weight: .medium))
+            .contentScaledFont(size: 10, weight: .medium)
             .foregroundColor(ChatTheme.chipForeground(tint))
             .lineLimit(1)
             .padding(.horizontal, 6)

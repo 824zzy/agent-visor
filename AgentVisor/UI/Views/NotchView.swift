@@ -234,7 +234,7 @@ struct NotchView: View {
     /// new ChatTheme tokens into every descendant.
     @ObservedObject private var appearance = AppearanceSelector.shared
     @State private var previousPendingIds: Set<String> = []
-    @State private var previousWaitingForInputIds: Set<String> = []
+    @State private var readyEpisodeTracker = ReadySessionEpisodeTracker()
     @State private var waitingForInputTimestamps: [String: Date] = [:]  // sessionId -> when it entered waitingForInput
     @State private var isVisible: Bool = true
     @State private var isHovering: Bool = false
@@ -298,7 +298,7 @@ struct NotchView: View {
         return sessionMonitor.instances.contains { session in
             guard session.phase == .waitingForInput else { return false }
             // Only show if within the 30-second display window
-            if let enteredAt = waitingForInputTimestamps[session.stableId] {
+            if let enteredAt = waitingForInputTimestamps[session.sessionId] {
                 return now.timeIntervalSince(enteredAt) < displayDuration
             }
             return false
@@ -1771,13 +1771,13 @@ struct NotchView: View {
     private func handleWaitingForInputChange(_ instances: [SessionState]) {
         // Get sessions that are now waiting for input
         let waitingForInputSessions = instances.filter { $0.phase == .waitingForInput }
-        let currentIds = Set(waitingForInputSessions.map { $0.stableId })
-        let newWaitingIds = currentIds.subtracting(previousWaitingForInputIds)
+        let currentIds = Set(waitingForInputSessions.map { $0.sessionId })
+        let newWaitingIds = readyEpisodeTracker.update(readySessionIDs: currentIds)
 
         // Track timestamps for newly waiting sessions
         let now = Date()
-        for session in waitingForInputSessions where newWaitingIds.contains(session.stableId) {
-            waitingForInputTimestamps[session.stableId] = now
+        for session in waitingForInputSessions where newWaitingIds.contains(session.sessionId) {
+            waitingForInputTimestamps[session.sessionId] = now
         }
 
         // Clean up timestamps for sessions no longer waiting
@@ -1789,7 +1789,7 @@ struct NotchView: View {
         // Bounce the notch when a session newly enters waitingForInput state
         if !newWaitingIds.isEmpty {
             // Get the sessions that just entered waitingForInput
-            let newlyWaitingSessions = waitingForInputSessions.filter { newWaitingIds.contains($0.stableId) }
+            let newlyWaitingSessions = waitingForInputSessions.filter { newWaitingIds.contains($0.sessionId) }
 
             // Play notification sound if the session is not actively focused
             if let soundName = AppSettings.notificationSound.soundName {
@@ -1819,8 +1819,6 @@ struct NotchView: View {
                 handleProcessingChange()
             }
         }
-
-        previousWaitingForInputIds = currentIds
     }
 
     /// Determine if notification sound should play for the given sessions

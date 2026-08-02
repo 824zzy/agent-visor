@@ -1,7 +1,7 @@
 # Sessions Browser UI Design
 
 Status: Accepted
-Last reviewed: 2026-07-30
+Last reviewed: 2026-07-31
 
 ## Purpose
 
@@ -35,6 +35,18 @@ The browser must not use a hero-sized empty area. At the default window size, th
 
 Wide windows keep the list and Chat rail centered instead of stretching rows indefinitely. Minimum-width windows use the available width after the 28-point insets and must not introduce horizontal scrolling.
 
+## Content Scaling
+
+The Sessions browser and Agent Visor Chat share one persistent content-text scale. The accepted range is 80% through 250% in 10% steps; all point sizes elsewhere in this document describe the 100% baseline.
+
+- `Cmd+=` or `Cmd++` increases the scale, `Cmd+-` decreases it, and `Cmd+0` resets it to 100%. These commands work while either Sessions or Chat is visible, including while the browser search field is focused.
+- Settings presents the shared control as `Content font size`, not Chat-only font size. The existing stored Chat scale remains the compatibility source so an upgrade preserves the user's selected percentage.
+- In Sessions, the scale applies to search text and its inline symbol/hint, result counts, permission-health copy and actions, section labels/counts, row titles/subtitles/chips/ages/shortcut badges, owner actions, empty-state copy, and footer education.
+- Brand logos, status dots, window controls, the Settings surface, and menu-bar surfaces remain fixed. Settings must remain usable as a recovery path at every content scale.
+- Text containers grow from their existing minimum hit-target sizes instead of clipping scaled text. Search remains at least 40 points tall, rows at least 58 points, the footer at least 42 points, and owner actions at least 32 points.
+- At high scales, preserve row information in the existing title/source/project/owner priority order. Lower-priority chips may disappear, owner actions may use their compact or icon-only form, and the footer may stack its browser-local and global shortcut groups. Scaling must not introduce horizontal scrolling.
+- Changing scale never clears the query, changes the keyboard cursor, activates a row, or changes the visible product destination.
+
 ## Page Structure
 
 The browser has three vertical regions:
@@ -60,7 +72,7 @@ Do not add illustrations, large metrics cards, state dashboards, gradients, shor
 ### Search Field
 
 - Placeholder: `Search all sessions`.
-- Height: 40 points.
+- Minimum height: 40 points; scaled content may make the field taller.
 - Corner radius: 10 points.
 - Horizontal content inset: 13 points.
 - Text: 14-point regular.
@@ -192,7 +204,7 @@ If saved history fails to load, keep current sessions usable and show a compact,
 
 ## Footer
 
-- Height: 42 points.
+- Minimum height: 42 points; at high content scales the local and global shortcut groups may stack.
 - Left: `Up/Down Navigate`, then capability-aware Return and Shift-Return labels. A Chat-capable owner-routable row reads `Return Enter Chat` and `Shift+Return Continue in source app`. The footer remains provider-neutral and stable; the row-level owner action names the exact Codex, terminal, or editor destination. When only one destination is supported, show that action once rather than teaching a duplicate shortcut.
 - Right: configured global shortcuts using intent-first labels: `1-9 Switch sessions` and `0 Session menu`. Numbered shortcuts still follow menu-bar pill reading order, while zero toggles the menu-bar session overflow; the teaching copy must not expose “pill” or “more sessions” implementation language.
 - When global shortcuts are disabled, the right side says `Global shortcuts off · Configure in Settings`.
@@ -261,6 +273,7 @@ Background updates may reorder rows according to the interaction contract, but m
 Review the browser at:
 
 - default size and minimum size;
+- 80%, 100%, 120%, and 250% content scales;
 - light and dark appearance;
 - empty, loading, populated, and no-results states;
 - short and very long titles;
@@ -271,7 +284,7 @@ Review the browser at:
 - hover, keyboard cursor, Sessions-to-Chat, and Chat-to-Sessions states;
 - large session counts and rapid status changes.
 
-For each case, verify that titles remain the dominant text, logos are sharp, chips stay subordinate, the owner action does not read as disabled or compete with the row, rows do not move on hover or modifier changes, no horizontal scrollbar appears, and the first section begins without excessive empty space.
+For each case, verify that titles remain the dominant text, logos are sharp, chips stay subordinate, the owner action does not read as disabled or compete with the row, rows do not move on hover or modifier changes, scaled text is not clipped, high-scale metadata/footer fallbacks preserve action labels or accessibility equivalents, no horizontal scrollbar appears, and the first section begins without excessive empty space.
 
 ## Change Control
 

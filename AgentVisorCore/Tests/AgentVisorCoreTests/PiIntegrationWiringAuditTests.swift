@@ -12,7 +12,7 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
 
         XCTAssertTrue(registry.contains("PiAgentProvider()"))
         XCTAssertTrue(provider.contains("PiProcessSessionMatcher.match"))
-        XCTAssertTrue(provider.contains("PiConversationParser.shared.parseFullConversation"))
+        XCTAssertTrue(provider.contains("PiConversationParser.shared.loadHistory"))
         XCTAssertTrue(provider.contains("guard Self.isPiAvailable() else { return }"))
         XCTAssertTrue(provider.contains("try? installHooks()"))
         XCTAssertTrue(provider.contains("line.count + 1"), "Header-only Pi sessions must not appear as history")

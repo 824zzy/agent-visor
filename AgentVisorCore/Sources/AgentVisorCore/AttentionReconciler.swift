@@ -5,10 +5,10 @@ public enum AttentionKind: Equatable, Sendable {
     /// A tool is blocked waiting on approve/deny. `toolUseId` distinguishes
     /// successive approvals so each gets its own notification.
     case approval(toolUseId: String)
-    /// The agent finished its turn and it's the user's move. `turnToken`
-    /// changes per turn (e.g. transcript length) so a fresh turn re-fires
-    /// instead of being swallowed as a duplicate.
-    case yourTurn(turnToken: String)
+    /// The agent finished its turn and it's the user's move. Identity stays
+    /// stable for the continuous Ready episode; leaving Ready resolves it so
+    /// a later completion can notify again.
+    case yourTurn
 }
 
 /// One session currently needing attention.
@@ -21,16 +21,15 @@ public struct AttentionItem: Equatable, Sendable {
         self.kind = kind
     }
 
-    /// Stable identity for de-duplication. Two reconciles that see the
-    /// same pending approval / same completed turn produce the same key,
-    /// so the notification fires once; a new tool or new turn changes the
-    /// key and re-fires.
+    /// Stable identity for de-duplication. Approval identity follows the
+    /// explicit tool request. Completion identity follows the continuous
+    /// Ready episode and becomes eligible again only after it resolves.
     public var dedupeKey: String {
         switch kind {
         case .approval(let toolUseId):
             return "\(sessionId)|approval|\(toolUseId)"
-        case .yourTurn(let turnToken):
-            return "\(sessionId)|turn|\(turnToken)"
+        case .yourTurn:
+            return "\(sessionId)|turn"
         }
     }
 }

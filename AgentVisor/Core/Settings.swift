@@ -177,27 +177,38 @@ enum AppSettings {
         nonisolated static let observedWindowHours = "observedWindowHours"
     }
 
-    // MARK: - Chat Font Scale
+    // MARK: - Shared Content Font Scale
 
-    /// Multiplier applied to all text inside the chat scroll area
-    /// (message bodies, tool-call labels, plan blocks, code blocks).
-    /// Header / input / status bar stay fixed because they're chrome.
-    /// Adjusted at runtime via Cmd-+ / Cmd-- / Cmd-0 in the chat panel.
-    static let chatFontScaleMin: Double = 0.8
-    static let chatFontScaleMax: Double = 2.5
-    static let chatFontScaleStep: Double = 0.1
+    /// Persistent multiplier shared by Sessions browser typography and
+    /// Agent Visor Chat content. Keep the original UserDefaults key so
+    /// upgrades preserve the percentage users selected before Sessions
+    /// joined the scaling surface.
+    static let contentFontScaleMin: Double = 0.8
+    static let contentFontScaleMax: Double = 2.5
+    static let contentFontScaleStep: Double = 0.1
 
-    static var chatFontScale: Double {
+    static var contentFontScale: Double {
         get {
             let raw = defaults.object(forKey: Keys.chatFontScale) as? Double ?? 1.0
-            return min(max(raw, chatFontScaleMin), chatFontScaleMax)
+            return min(max(raw, contentFontScaleMin), contentFontScaleMax)
         }
         set {
-            let clamped = min(max(newValue, chatFontScaleMin), chatFontScaleMax)
+            let clamped = min(max(newValue, contentFontScaleMin), contentFontScaleMax)
             // Round to 1 decimal so 0.1 increments don't accumulate float drift.
             let rounded = (clamped * 10).rounded() / 10
             defaults.set(rounded, forKey: Keys.chatFontScale)
         }
+    }
+
+    /// Compatibility API for existing Chat renderers. Both spellings own
+    /// the same persisted value; this is not a second preference.
+    static let chatFontScaleMin = contentFontScaleMin
+    static let chatFontScaleMax = contentFontScaleMax
+    static let chatFontScaleStep = contentFontScaleStep
+
+    static var chatFontScale: Double {
+        get { contentFontScale }
+        set { contentFontScale = newValue }
     }
 
     // MARK: - Notification Sound

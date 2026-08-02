@@ -128,19 +128,27 @@ public struct PillBarPacker {
         releaseHeadroom: CGFloat = 8,
         overflowPillWidthFor: (Int) -> CGFloat
     ) -> PackResult {
+        var overflowWidthCache: [Int: CGFloat] = [:]
+        let overflowWidth: (Int) -> CGFloat = { count in
+            if let cached = overflowWidthCache[count] { return cached }
+            let measured = overflowPillWidthFor(count)
+            overflowWidthCache[count] = measured
+            return measured
+        }
+
         let standard = pack(
             candidates: candidates,
             leftMax: leftMax,
             rightMax: rightMax,
             profile: standardProfile,
-            overflowPillWidthFor: overflowPillWidthFor
+            overflowPillWidthFor: overflowWidth
         )
         let pressure = pack(
             candidates: candidates,
             leftMax: leftMax,
             rightMax: rightMax,
             profile: pressureProfile,
-            overflowPillWidthFor: overflowPillWidthFor
+            overflowPillWidthFor: overflowWidth
         )
         if pressure.hiddenCount < standard.hiddenCount {
             return pressure
@@ -156,7 +164,7 @@ public struct PillBarPacker {
             leftMax: max(0, leftMax - margin),
             rightMax: max(0, rightMax - margin),
             profile: standardProfile,
-            overflowPillWidthFor: overflowPillWidthFor
+            overflowPillWidthFor: overflowWidth
         )
         return standardWithHeadroom.hiddenCount <= pressure.hiddenCount
             ? standard
@@ -201,13 +209,21 @@ public struct PillBarPacker {
         pillSpacing: CGFloat,
         overflowPillWidthFor: (Int) -> CGFloat
     ) -> PackResult {
+        var overflowWidthCache: [Int: CGFloat] = [:]
+        let overflowWidth: (Int) -> CGFloat = { count in
+            if let cached = overflowWidthCache[count] { return cached }
+            let measured = overflowPillWidthFor(count)
+            overflowWidthCache[count] = measured
+            return measured
+        }
+
         // First pass: pack at standard widths.
         let initial = packStrict(
             candidates: candidates,
             leftMax: leftMax,
             rightMax: rightMax,
             pillSpacing: pillSpacing,
-            overflowPillWidthFor: overflowPillWidthFor
+            overflowPillWidthFor: overflowWidth
         )
 
         let selected: PackResult
@@ -218,7 +234,7 @@ public struct PillBarPacker {
             leftMax: leftMax,
             rightMax: rightMax,
             pillSpacing: pillSpacing,
-            overflowPillWidthFor: overflowPillWidthFor
+            overflowPillWidthFor: overflowWidth
            ) {
             selected = compressed
         } else {
@@ -230,7 +246,7 @@ public struct PillBarPacker {
                 leftMax: leftMax,
                 rightMax: rightMax,
                 pillSpacing: pillSpacing,
-                overflowPillWidthFor: overflowPillWidthFor
+                overflowPillWidthFor: overflowWidth
             )
         }
 
@@ -240,7 +256,7 @@ public struct PillBarPacker {
             leftMax: leftMax,
             rightMax: rightMax,
             pillSpacing: pillSpacing,
-            overflowPillWidthFor: overflowPillWidthFor
+            overflowPillWidthFor: overflowWidth
         )
     }
 

@@ -1,7 +1,7 @@
 # Menu-Bar Space Packing
 
 Status: Accepted and implemented
-Last reviewed: 2026-07-27
+Last reviewed: 2026-08-02
 
 ## Purpose
 
@@ -35,7 +35,8 @@ The capacity-aware revision was verified through fixed Core fixtures and a signe
 - a residual-backfill fixture proves that an unaffordable higher-priority upgrade no longer blocks an independently affordable lower-priority upgrade on the same side;
 - the screenshot fixture restores `Codex St...` to `Codex Stupid...` from the right-side 20-point fragment without changing its eight-session prefix or split;
 - exactly one 8-point notch-edge padding layer now feeds both rendering and hit testing, recovering 8 points per side while leaving the far-side menu/status bounds unchanged;
-- the complete Core suite passed 1,674 tests;
+- one representative 12-candidate pressure/headroom pack now performs 7 actual overflow text measurements instead of 709 and completes in approximately 2.14 ms in Debug, so the accepted variant search remains unchanged;
+- the complete Core suite passed 1,796 tests after the width-cache amendment;
 - `scripts/dev-build.sh`, deep strict signature verification, deployment, and launch succeeded;
 - Accessibility health returned to `ready`, with exactly one development process running.
 
@@ -138,6 +139,17 @@ For each refresh:
 
 Residual slack is correct only when no longer highest-priority prefix fits under the full/compact/tight variants of either density and no visible label can be independently restored without sacrificing a higher-priority tier. Atomic residuals that remain are distributed by capacity: minimizing the largest unused side takes precedence over making the rendered bars themselves look equal.
 
+## Measurement Performance
+
+Packing runs on the main thread, so expensive font measurement must be bounded independently of the number of candidate variants evaluated.
+
+- Session and overflow text widths are deterministic for a process-lifetime tuple of text, font size, and font weight. `PillBarCoordinator` caches that measurement and keeps content scale out of the key because menu-bar pills remain fixed-size by design.
+- The packer's `overflowPillWidthFor` callback is treated as an expensive deterministic boundary. One top-level `pack` memoizes its result per distinct hidden count and shares that cache across standard, pressure, and release-headroom evaluations.
+- Rendering reuses the exact selected tier widths instead of introducing a second uncached measurement path.
+- Width caching may not alter safe capacities, candidate order, density selection, label tiers, overflow identity, or hit-test geometry.
+
+The existing suffix-tier search remains the correctness reference. After callback and text-width caching, a representative 12-candidate Debug probe must be reassessed. The search is simplified only if pure packing still consumes a material portion of a frame; avoiding speculative algorithm replacement is preferred because ordering and tier tie-breaks are safety-sensitive.
+
 ## Stability
 
 - Changing a percentage or dollar amount within the same usage shape does not move session pills.
@@ -186,8 +198,10 @@ Core tests must prove:
 15. The render-time and hit-test snapshots use the plan's exact density, label tier, per-pill widths, overflow width, and usage width.
 16. If a higher-priority label's next tier cannot fit, a lower-priority label whose next tier does fit consumes that side-local residual without changing the visible prefix or split.
 17. Exactly one 8-point notch-edge padding layer separates pills from each notch edge. Removing the duplicate layer increases the Core budget by 8 points per side while preserving the existing far-side application-menu and status-item collision boundaries.
+18. One top-level pack invokes the overflow-width callback no more than once for each distinct count, even when standard, pressure, and release-headroom paths are all evaluated.
+19. App wiring uses the shared process-lifetime text-width cache for full, compact, tight, selected render, and overflow labels without changing fixed menu-bar typography.
 
-Source-wiring audits must reject independent hard-coded session padding, spacing, Codex width, or a second notch-edge padding layer in rendering and hit-testing once the packing plan owns those values.
+Source-wiring audits must reject independent hard-coded session padding, spacing, Codex width, a second notch-edge padding layer, or uncached duplicate text measurement in rendering and hit testing once the packing plan owns those values.
 
 ## TDD Implementation Record
 
@@ -273,6 +287,16 @@ Manual app switching to Outlook, adding/removing system status items, or other f
 
 **GREEN:** Remove the inner duplicate notch padding, stop subtracting it from the Core budgets, and update hit-test anchors from two edge paddings to one. Keep the measured menu/status policies and their 28/16-point margins unchanged.
 
+### Slice 12 — Bounded width measurement
+
+**RED:** Add a 12-candidate pressure/headroom fixture whose callback records requested overflow counts. Require every distinct count to be measured once while preserving the exact existing plan. Add a source-wiring regression requiring one shared text-width cache across candidate construction, selected-tier rendering, and overflow materialization.
+
+**GREEN:** Memoize overflow widths at the outermost Core packing boundary and add a process-lifetime AppKit measurement cache keyed by text, fixed font size, and weight.
+
+**REFACTOR:** Re-run a representative Debug cost probe after caching. Keep the suffix-tier search unchanged if its remaining pure-logic cost is comfortably bounded; any later search replacement must reproduce the complete existing fixture suite before adoption.
+
+**RESULT:** The representative 12-candidate pressure/headroom probe reduced actual overflow text measurements from 709 to 7 and measured approximately 2.14 ms per Debug pack. The remaining pure variant search was comfortably bounded, so simplifying it was unnecessary and the accepted geometry logic was retained.
+
 Manual validation must cover:
 
 - Ghostty's narrow menus and Outlook's wider menus;
@@ -290,7 +314,7 @@ Manual validation must cover:
 
 - Usage shape and width policy belong in `AgentVisorCore`.
 - Density selection and ordered packing remain pure `AgentVisorCore` logic.
-- `PillBarCoordinator` adapts sessions and usage snapshots into the Core plan.
+- `PillBarCoordinator` adapts sessions and usage snapshots into the Core plan and owns the fixed-font text-measurement cache.
 - `NotchPillBar` renders the plan without inventing geometry.
 - `PillBarHitTest` consumes the same plan.
 - `NotchMenuLayoutPolicy` and `StatusTrayLayoutPolicy` remain unchanged by this work.

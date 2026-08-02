@@ -1,7 +1,7 @@
 # Product Surface Contract
 
 Status: Accepted
-Last reviewed: 2026-07-30
+Last reviewed: 2026-08-01
 
 ## Purpose
 
@@ -201,6 +201,15 @@ Within an attention tier, newer phase-entry evidence sorts first and session ID 
 - Navigation recency is recorded independently for `Recent` ordering and must not replace the Ready acknowledgment timestamp.
 - The attention pulse expires after seven minutes even when it is not acknowledged.
 - The brief capsule press response remains separate click feedback and is not an attention signal.
+
+### Ready Completion Notifications
+
+- Agent Visor posts at most one `your turn` notification during one continuous `Ready` episode. The episode begins when a session enters `Ready` from another phase and ends when it leaves `Ready`.
+- Notification identity follows that Ready episode, not rendered transcript shape. Late history hydration, thinking/text block expansion, tool-result reconciliation, metadata refresh, and same-phase evidence updates must not replace or repost the notification while the session remains Ready.
+- A later genuine completion may notify again only after an intervening non-Ready phase such as `Working`, `Needs attention`, `Recent`, or `Ended` establishes a new episode.
+- Resolving an attention episode retracts its Agent Visor notification. Approval notifications remain independently keyed to their explicit tool request.
+- Agent Visor owns only notifications posted under its own application identity. Provider, terminal, and user-installed extension notifications remain independent; Agent Visor neither mutates nor silently disables them.
+- Regression coverage must replay the observed Pi ordering where `agent_settled` publishes Ready before the debounced transcript replay adds final thinking and text rows. `Ready(count: 3216) → Ready(count: 3218)` produces one Agent Visor notification, while `Ready → Working → Ready` produces two.
 
 ## Navigation-Driven Spatial Grace
 

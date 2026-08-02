@@ -578,7 +578,7 @@ private struct AppearanceSection: View {
     @ObservedObject private var appearance = AppearanceSelector.shared
     @ObservedObject private var screenSelector = ScreenSelector.shared
     @ObservedObject private var fullScreenPolicy = FullScreenPolicySelector.shared
-    @AppStorage("chatFontScale") private var chatFontScale: Double = 1.0
+    @AppStorage("chatFontScale") private var contentFontScale: Double = 1.0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -594,25 +594,25 @@ private struct AppearanceSection: View {
                 FullScreenPolicyPickerRow(selector: fullScreenPolicy)
             }
 
-            SettingsSubheading("Chat font size", subtitle: "Use ⌘+ / ⌘− / ⌘0 inside the chat to change live")
+            SettingsSubheading("Content font size", subtitle: "Use ⌘+ / ⌘− / ⌘0 in Sessions or Chat to change live")
             SettingsGroup(dividerInset: 38) {
                 SettingsRow(
                     icon: "textformat.size",
                     title: "Scale",
-                    description: "Multiplier applied to chat body text. Header, composer, and status bar stay fixed."
+                    description: "Multiplier applied to Sessions browser and Chat content. Menu-bar pills and Settings stay fixed."
                 ) {
                     HStack(spacing: 8) {
-                        Text(String(format: "%.0f%%", chatFontScale * 100))
+                        Text(String(format: "%.0f%%", contentFontScale * 100))
                             .font(.system(size: 12, weight: .medium, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .frame(width: 44, alignment: .trailing)
                         Slider(
-                            value: $chatFontScale,
-                            in: AppSettings.chatFontScaleMin...AppSettings.chatFontScaleMax,
-                            step: AppSettings.chatFontScaleStep
+                            value: $contentFontScale,
+                            in: AppSettings.contentFontScaleMin...AppSettings.contentFontScaleMax,
+                            step: AppSettings.contentFontScaleStep
                         )
                         .frame(width: 160)
-                        Button("Reset") { chatFontScale = 1.0 }
+                        Button("Reset") { contentFontScale = 1.0 }
                             .controlSize(.small)
                     }
                 }

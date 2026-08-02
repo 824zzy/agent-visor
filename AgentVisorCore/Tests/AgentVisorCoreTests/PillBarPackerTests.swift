@@ -568,4 +568,44 @@ final class PillBarPackerTests: XCTestCase {
         XCTAssertEqual(result.shortenedIds, ["b", "d"])
         XCTAssertEqual(result.labelTier(for: "c"), .full)
     }
+
+    func testTopLevelPackMeasuresEachOverflowCountOnlyOnce() {
+        let candidates = (1...12).map { index in
+            PillBarPacker.Candidate(
+                id: "s\(index)",
+                pillWidth: 100,
+                compactWidth: 76,
+                minimumWidth: 60
+            )
+        }
+        var measuredCounts: [Int] = []
+
+        let result = PillBarPacker.pack(
+            candidates: candidates,
+            leftMax: 515,
+            rightMax: 217,
+            standardProfile: .init(
+                density: .standard,
+                pillSpacing: 4,
+                widthReduction: 0
+            ),
+            pressureProfile: .init(
+                density: .pressure,
+                pillSpacing: 3,
+                widthReduction: 4
+            ),
+            currentDensity: .pressure,
+            releaseHeadroom: 8,
+            overflowPillWidthFor: { count in
+                measuredCounts.append(count)
+                return 28
+            }
+        )
+
+        XCTAssertEqual(measuredCounts.count, Set(measuredCounts).count)
+        XCTAssertEqual(
+            result.leftVisibleIds + result.rightVisibleIds + result.hiddenIds,
+            candidates.map(\.id)
+        )
+    }
 }

@@ -1560,6 +1560,8 @@ struct NotchPillBar: View {
 /// coordinator just bridges from `[SessionState]` to the packer's
 /// abstract `Candidate` model and back.
 enum PillBarCoordinator {
+    private static let textWidthCache = NSCache<NSString, NSNumber>()
+
     static let standardPillSpacing: CGFloat = 4
     static let pressurePillSpacing: CGFloat = 3
     static let densityReleaseHeadroom: CGFloat = 8
@@ -1807,12 +1809,26 @@ enum PillBarCoordinator {
     }
 
     static func textWidth(_ text: String, weight: NSFont.Weight = .medium) -> CGFloat {
+        let cacheKey = textWidthCacheKey(text: text, weight: weight)
+        if let cached = textWidthCache.object(forKey: cacheKey) {
+            return CGFloat(cached.doubleValue)
+        }
+
         let font = NSFont.systemFont(
             ofSize: MenuBarPillMetrics.sessionFontSize,
             weight: weight
         )
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
-        return ceil((text as NSString).size(withAttributes: attrs).width)
+        let width = ceil((text as NSString).size(withAttributes: attrs).width)
+        textWidthCache.setObject(NSNumber(value: Double(width)), forKey: cacheKey)
+        return width
+    }
+
+    static func textWidthCacheKey(
+        text: String,
+        weight: NSFont.Weight
+    ) -> NSString {
+        "\(MenuBarPillMetrics.sessionFontSize)|\(weight.rawValue)|\(text)" as NSString
     }
 
     /// Stable session identity. Activity belongs in the status dot and hover card;

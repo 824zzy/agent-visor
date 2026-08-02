@@ -282,27 +282,27 @@ struct PiAgentProvider: AgentProvider {
 
     nonisolated func loadFullHistory(sessionId: String, cwd: String) async -> ParsedHistory {
         let path = transcriptURL(sessionId: sessionId, cwd: cwd).path
-        let messages = await PiConversationParser.shared.parseFullConversation(
+        return await PiConversationParser.shared.loadHistory(
             sessionId: sessionId,
             transcriptPath: path
-        )
-        return ParsedHistory(
-            messages: messages,
-            completedToolIds: await PiConversationParser.shared.completedToolIds(for: sessionId),
-            toolResults: await PiConversationParser.shared.toolResults(for: sessionId),
-            structuredResults: [:],
-            conversationInfo: await PiConversationParser.shared.conversationInfo(for: sessionId),
-            currentPermissionMode: nil
-        )
+        ).history
     }
 
     nonisolated func loadConversationInfo(sessionId: String, cwd: String) async -> ConversationInfo {
-        _ = await loadFullHistory(sessionId: sessionId, cwd: cwd)
-        return await PiConversationParser.shared.conversationInfo(for: sessionId)
+        let path = transcriptURL(sessionId: sessionId, cwd: cwd).path
+        return await PiConversationSummary.shared.loadConversationInfo(
+            sessionId: sessionId,
+            transcriptPath: path
+        )
     }
 
     nonisolated func fileSync(sessionId: String, cwd: String) async -> FileSyncOutcome {
-        .fullReplay(await loadFullHistory(sessionId: sessionId, cwd: cwd))
+        let path = transcriptURL(sessionId: sessionId, cwd: cwd).path
+        let result = await PiConversationParser.shared.loadHistory(
+            sessionId: sessionId,
+            transcriptPath: path
+        )
+        return result.didChange ? .fullReplay(result.history) : .noChange
     }
 
     nonisolated func originForSession(sessionId: String, tty: String?) -> SessionOrigin {

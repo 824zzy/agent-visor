@@ -88,8 +88,19 @@ actor SessionStore {
     /// and kept in sync by `hideSession`/`unhideSession`.
     private lazy var hiddenSessionIds: Set<String> = MainWindowSettings.hiddenSessionIds()
 
-    /// Pending file syncs (debounced)
+    /// Pending file syncs (debounced) for providers whose existing scheduler
+    /// is not part of Pi's bounded refresh amendment.
     private var pendingSyncs: [String: Task<Void, Never>] = [:]
+
+    private struct PiFileSyncState {
+        var coalescer = TranscriptSyncCoalescer<String>()
+        var debounceTask: Task<Void, Never>?
+        var discardRunningResult = false
+    }
+
+    /// Pi hooks and file watching are intentionally redundant. Keep at most
+    /// one active provider call and one replaceable latest rerun per session.
+    private var piFileSyncStates: [String: PiFileSyncState] = [:]
 
     private var lastCodexMetadataRediscoveryAt: Date?
     private var pendingCodexMetadataRediscoveryTask: Task<Void, Never>?
@@ -248,6 +259,24 @@ actor SessionStore {
         let originBeforeHookMerge = session.origin
         let sessionNameBeforeHookMerge = session.sessionName
         let tmuxBeforeHookMerge = session.isInTmux
+        let existingOwnerIsAlive = event.agentID == .pi
+            && (pidBeforeHookMerge.map { pid in
+                pid > 0 && kill(Int32(pid), 0) == 0
+            } ?? false)
+        let runtimeOwnershipDisposition = PiRuntimeOwnershipPolicy.disposition(
+            agentID: event.agentID,
+            hasExistingSession: !isNewSession,
+            existingPid: pidBeforeHookMerge,
+            existingOwnerIsAlive: existingOwnerIsAlive,
+            eventPid: event.pid
+        )
+        if runtimeOwnershipDisposition == .ignoreCompetingRuntime {
+            Self.logger.debug(
+                "Ignoring competing Pi runtime for \(sessionId.prefix(8), privacy: .public): owner PID \(pidBeforeHookMerge ?? -1, privacy: .public), event PID \(event.pid ?? -1, privacy: .public)"
+            )
+            return
+        }
+
         let eventProvider = AgentRegistry.provider(for: event.agentID)
         let sharesProcessAcrossSessions = eventProvider?.skipsPidDedup(for: session) ?? false
         let isPiSessionHeartbeat = PiSessionHeartbeatPolicy.isHeartbeat(
@@ -2725,10 +2754,15 @@ actor SessionStore {
     // MARK: - File Sync Scheduling
 
     private func scheduleFileSync(sessionId: String, cwd: String) {
-        cancelPendingSync(sessionId: sessionId)
         let agentID = sessions[sessionId]?.agentID ?? .claudeCode
         guard let provider = AgentRegistry.provider(for: agentID) else { return }
 
+        if agentID == .pi {
+            schedulePiFileSync(sessionId: sessionId, cwd: cwd)
+            return
+        }
+
+        cancelPendingSync(sessionId: sessionId)
         pendingSyncs[sessionId] = Task { [weak self, syncDebounceNs] in
             try? await Task.sleep(nanoseconds: syncDebounceNs)
             guard !Task.isCancelled else { return }
@@ -2741,50 +2775,117 @@ actor SessionStore {
                 }
             }
 
-            switch await provider.fileSync(sessionId: sessionId, cwd: cwd) {
-            case .fullReplay(let parsed):
-                // Codex / cursor: no incremental parser, full reparse
-                // every tick. Same shape as bootstrap → historyLoaded.
-                await self?.process(.historyLoaded(
-                    sessionId: sessionId,
-                    messages: parsed.messages,
-                    completedTools: parsed.completedToolIds,
-                    toolResults: parsed.toolResults,
-                    structuredResults: parsed.structuredResults,
-                    conversationInfo: parsed.conversationInfo
-                ))
+            let outcome = await provider.fileSync(sessionId: sessionId, cwd: cwd)
+            await self?.applyFileSyncOutcome(
+                outcome,
+                sessionId: sessionId,
+                cwd: cwd
+            )
+        }
+    }
 
-            case .incremental(let result):
-                // claude-code's delta path. Mode may change without
-                // producing a ChatMessage (a `permission-mode` line on
-                // its own); propagate before the early-return below
-                // so the chip updates. File extends fire constantly
-                // during streaming, and re-applying a stale JSONL mode
-                // would flip the chip from any in-flight optimistic /
-                // probe value — `applyJsonlModeIfNew` guards on the
-                // *new value* check.
-                await self?.applyJsonlModeIfNew(sessionId: sessionId, mode: result.currentPermissionMode)
+    private func schedulePiFileSync(sessionId: String, cwd: String) {
+        pendingSyncs[sessionId]?.cancel()
+        pendingSyncs.removeValue(forKey: sessionId)
 
-                if result.clearDetected {
-                    await self?.process(.clearDetected(sessionId: sessionId))
-                }
+        var state = piFileSyncStates[sessionId] ?? PiFileSyncState()
+        let disposition = state.coalescer.request(cwd)
+        if disposition == .debounceLatest {
+            state.debounceTask?.cancel()
+            state.debounceTask = makePiFileSyncDebounceTask(sessionId: sessionId)
+        }
+        piFileSyncStates[sessionId] = state
+    }
 
-                guard !result.newMessages.isEmpty || result.clearDetected else {
-                    return
-                }
-
-                let payload = FileUpdatePayload(
-                    sessionId: sessionId,
-                    cwd: cwd,
-                    messages: result.newMessages,
-                    isIncremental: !result.clearDetected,
-                    completedToolIds: result.completedToolIds,
-                    toolResults: result.toolResults,
-                    structuredResults: result.structuredResults
-                )
-
-                await self?.process(.fileUpdated(payload))
+    private func makePiFileSyncDebounceTask(sessionId: String) -> Task<Void, Never> {
+        Task { [weak self, syncDebounceNs] in
+            do {
+                try await Task.sleep(nanoseconds: syncDebounceNs)
+            } catch {
+                return
             }
+            guard !Task.isCancelled else { return }
+            await self?.runPiFileSync(sessionId: sessionId)
+        }
+    }
+
+    private func runPiFileSync(sessionId: String) async {
+        guard var state = piFileSyncStates[sessionId],
+              let cwd = state.coalescer.beginPendingRun() else { return }
+        state.debounceTask = nil
+        piFileSyncStates[sessionId] = state
+
+        guard sessions[sessionId]?.agentID == .pi,
+              let provider = AgentRegistry.provider(for: .pi) else {
+            finishPiFileSync(sessionId: sessionId)
+            return
+        }
+
+        let outcome = await provider.fileSync(sessionId: sessionId, cwd: cwd)
+        if let current = piFileSyncStates[sessionId],
+           !current.discardRunningResult,
+           sessions[sessionId]?.agentID == .pi {
+            await applyFileSyncOutcome(outcome, sessionId: sessionId, cwd: cwd)
+        }
+        finishPiFileSync(sessionId: sessionId)
+    }
+
+    private func finishPiFileSync(sessionId: String) {
+        guard var state = piFileSyncStates[sessionId] else { return }
+        let disposition = state.coalescer.completeRun()
+        state.discardRunningResult = false
+
+        if disposition == .debounceLatest {
+            state.debounceTask?.cancel()
+            state.debounceTask = makePiFileSyncDebounceTask(sessionId: sessionId)
+            piFileSyncStates[sessionId] = state
+        } else {
+            piFileSyncStates.removeValue(forKey: sessionId)
+        }
+    }
+
+    private func applyFileSyncOutcome(
+        _ outcome: FileSyncOutcome,
+        sessionId: String,
+        cwd: String
+    ) async {
+        switch outcome {
+        case .noChange:
+            return
+
+        case .fullReplay(let parsed):
+            await process(.historyLoaded(
+                sessionId: sessionId,
+                messages: parsed.messages,
+                completedTools: parsed.completedToolIds,
+                toolResults: parsed.toolResults,
+                structuredResults: parsed.structuredResults,
+                conversationInfo: parsed.conversationInfo
+            ))
+
+        case .incremental(let result):
+            // claude-code's delta path. Mode may change without producing a
+            // ChatMessage, so propagate it before the empty-delta return.
+            applyJsonlModeIfNew(sessionId: sessionId, mode: result.currentPermissionMode)
+
+            if result.clearDetected {
+                await process(.clearDetected(sessionId: sessionId))
+            }
+
+            guard !result.newMessages.isEmpty || result.clearDetected else {
+                return
+            }
+
+            let payload = FileUpdatePayload(
+                sessionId: sessionId,
+                cwd: cwd,
+                messages: result.newMessages,
+                isIncremental: !result.clearDetected,
+                completedToolIds: result.completedToolIds,
+                toolResults: result.toolResults,
+                structuredResults: result.structuredResults
+            )
+            await process(.fileUpdated(payload))
         }
     }
 
@@ -2842,6 +2943,17 @@ actor SessionStore {
     private func cancelPendingSync(sessionId: String) {
         pendingSyncs[sessionId]?.cancel()
         pendingSyncs.removeValue(forKey: sessionId)
+
+        guard var state = piFileSyncStates[sessionId] else { return }
+        state.debounceTask?.cancel()
+        state.debounceTask = nil
+        state.coalescer.cancelPending()
+        if state.coalescer.isRunning {
+            state.discardRunningResult = true
+            piFileSyncStates[sessionId] = state
+        } else {
+            piFileSyncStates.removeValue(forKey: sessionId)
+        }
     }
 
     /// Read-only access to a session by ID.

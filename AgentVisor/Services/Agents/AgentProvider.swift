@@ -26,7 +26,8 @@ struct DiscoveredSession: Equatable, Sendable {
 }
 
 /// What a provider's `fileSync` returned after the watcher debounce.
-/// Two distinct shapes today:
+/// - `.noChange` means signature-aware work proved there is no new canonical
+///   transcript state, so SessionStore must not publish another replay.
 /// - `.incremental` is claude-code's parseIncremental delta (only NEW
 ///   lines since the last call) plus its `clearDetected` and JSONL
 ///   permission-mode signals; SessionStore folds these into
@@ -36,6 +37,7 @@ struct DiscoveredSession: Equatable, Sendable {
 ///   (same shape as the chat-open path). Some providers gate this behind
 ///   cheaper metadata-only refreshes before calling `fileSync`.
 enum FileSyncOutcome: Sendable {
+    case noChange
     case incremental(IncrementalSyncResult)
     case fullReplay(ParsedHistory)
 }

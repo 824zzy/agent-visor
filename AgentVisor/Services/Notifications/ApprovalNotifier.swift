@@ -19,9 +19,9 @@ final class ApprovalNotifier: NSObject {
     private let logger = Logger(subsystem: AppBranding.loggerSubsystem, category: "ApprovalNotifier")
 
     /// Dedupe keys we've already notified for, driven by
-    /// `AttentionReconciler`. Covers both approvals (keyed by toolUseId)
-    /// and your-turn events (keyed by a per-turn token). A key clears when
-    /// its attention resolves, so the same tool/turn re-fires next time.
+    /// `AttentionReconciler`. Covers approvals (keyed by toolUseId) and
+    /// your-turn events (keyed to one continuous Ready episode). A key clears
+    /// when its attention resolves, so a later request/completion can re-fire.
     private var notifiedKeys: Set<String> = []
 
     private let categoryID = "cv.approval.category"
@@ -128,11 +128,9 @@ final class ApprovalNotifier: NSObject {
                 ))
                 approvalCtx[state.sessionId] = ctx
             case .waitingForInput:
-                // Token = transcript length so a NEW completed turn re-fires
-                // instead of being swallowed as a duplicate of the last.
                 items.append(AttentionItem(
                     sessionId: state.sessionId,
-                    kind: .yourTurn(turnToken: "\(state.chatItems.count)")
+                    kind: .yourTurn
                 ))
             default:
                 break

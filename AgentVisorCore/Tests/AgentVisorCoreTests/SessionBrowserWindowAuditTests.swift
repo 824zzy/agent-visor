@@ -195,6 +195,125 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         XCTAssertFalse(split.contains("Codex history included"))
     }
 
+    func testBrowserHandlesContentScaleShortcutsWithoutStealingGlobalModifierFamilies() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let split = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
+        let start = try XCTUnwrap(split.range(of: "private func installKeyboardMonitor()"))
+        let end = try XCTUnwrap(split.range(
+            of: "private func removeKeyboardMonitor()",
+            range: start.upperBound..<split.endIndex
+        ))
+        let handler = String(split[start.lowerBound..<end.lowerBound])
+
+        XCTAssertTrue(handler.contains("ContentFontScaleCommand.decode("))
+        XCTAssertTrue(handler.contains("optionHeld: modifiers.contains(.option)"))
+        XCTAssertTrue(handler.contains("controlHeld: modifiers.contains(.control)"))
+        XCTAssertTrue(handler.contains("AppSettings.contentFontScale = command.apply("))
+        XCTAssertTrue(handler.contains("step: AppSettings.contentFontScaleStep"))
+        XCTAssertTrue(handler.contains("min: AppSettings.contentFontScaleMin"))
+        XCTAssertTrue(handler.contains("max: AppSettings.contentFontScaleMax"))
+
+        let scaleDecode = try XCTUnwrap(handler.range(of: "ContentFontScaleCommand.decode("))
+        let sessionHotkey = try XCTUnwrap(handler.range(of: "SessionHotkeyMatcher.position("))
+        XCTAssertLessThan(
+            handler.distance(from: handler.startIndex, to: scaleDecode.lowerBound),
+            handler.distance(from: handler.startIndex, to: sessionHotkey.lowerBound),
+            "Content scaling should consume plain Cmd zoom gestures before numbered-session matching."
+        )
+    }
+
+    func testEverySessionsBrowserTextRoleConsumesTheSharedContentScale() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let split = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
+        let sharedScale = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Views/ChatView.swift"))
+
+        XCTAssertTrue(sharedScale.contains("var contentFontScale: CGFloat"))
+        XCTAssertTrue(sharedScale.contains("func contentScaledFont("))
+        XCTAssertTrue(split.contains(".environment(\\.contentFontScale, CGFloat(contentFontScaleStorage))"))
+        XCTAssertTrue(split.contains(".contentScaledFont(size: 14, weight: .semibold)"))
+        XCTAssertTrue(split.contains(".contentScaledFont(size: 12)"))
+        XCTAssertTrue(split.contains(".contentScaledFont(size: 10, weight: .medium)"))
+        XCTAssertTrue(split.contains(".contentScaledFont(size: 11, weight: .semibold)"))
+
+        let scaledRoleCount = split.components(separatedBy: ".contentScaledFont(").count - 1
+        XCTAssertGreaterThanOrEqual(
+            scaledRoleCount,
+            24,
+            "Search, health, sections, rows, chips, actions, empty states, and footer should all scale."
+        )
+        let fixedSystemFontCount = split.components(separatedBy: ".font(.system(").count - 1
+        XCTAssertEqual(
+            fixedSystemFontCount,
+            2,
+            "Only the Settings gear and empty-state illustration should keep fixed system fonts in the browser."
+        )
+    }
+
+    func testScaledBrowserUsesIntrinsicHeightsAndResponsiveHighZoomFallbacks() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let split = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
+
+        XCTAssertTrue(split.contains(".frame(minHeight: 40)"))
+        XCTAssertFalse(split.contains(".frame(height: 40)"))
+        XCTAssertTrue(split.contains(".frame(minHeight: 42)"))
+        XCTAssertFalse(split.contains(".frame(height: 42)"))
+        XCTAssertFalse(split.contains("maxHeight: 32"))
+        XCTAssertTrue(split.contains(".frame(minWidth: 35, minHeight: 24)"))
+        XCTAssertFalse(split.contains(".frame(width: 35, height: 24)"))
+        XCTAssertTrue(split.contains("private var sessionIdentityLine: some View"))
+        XCTAssertTrue(split.contains("private var responsiveBrowserFooter: some View"))
+        XCTAssertTrue(split.contains("private func permissionHealthActionLabel("))
+        XCTAssertFalse(split.contains("Button(actionTitle) {\n                        permissionHealth.performPrimarySetupAction()\n                    }\n                    .controlSize(.small)"))
+
+        let horizontalFallbackCount = split.components(separatedBy: "ViewThatFits(in: .horizontal)").count - 1
+        XCTAssertGreaterThanOrEqual(
+            horizontalFallbackCount,
+            3,
+            "Rows, footer, and owner actions each need a high-zoom horizontal fallback."
+        )
+    }
+
+    func testSettingsPresentsOneSharedContentScaleAndPreservesTheLegacyPreferenceKey() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let settings = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/Core/Settings.swift"))
+        let settingsView = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/SettingsWindowView.swift"))
+        let split = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
+
+        XCTAssertTrue(settings.contains("static let chatFontScale = \"chatFontScale\""))
+        XCTAssertTrue(settings.contains("static var contentFontScale: Double"))
+        XCTAssertTrue(settings.contains("static let contentFontScaleMin: Double = 0.8"))
+        XCTAssertTrue(settings.contains("static let contentFontScaleMax: Double = 2.5"))
+        XCTAssertTrue(settingsView.contains("SettingsSubheading(\"Content font size\""))
+        XCTAssertTrue(settingsView.contains("in Sessions or Chat"))
+        XCTAssertTrue(settingsView.contains("Sessions browser and Chat content"))
+        XCTAssertFalse(settingsView.contains("SettingsSubheading(\"Chat font size\""))
+        XCTAssertTrue(split.contains("AppSettings.contentFontScale = command.apply("))
+    }
+
+    func testSessionsAndBothChatSurfacesUseTheSharedScaleDecoder() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let split = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
+        let windowChat = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/WindowChatView.swift"))
+        let notchChat = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Views/ChatView.swift"))
+
+        for source in [split, windowChat, notchChat] {
+            XCTAssertTrue(source.contains("ContentFontScaleCommand.decode("))
+            XCTAssertTrue(source.contains("optionHeld:"))
+            XCTAssertTrue(source.contains("controlHeld:"))
+            XCTAssertTrue(source.contains("AppSettings.contentFontScale"))
+        }
+    }
+
     private func repositoryRoot(from testFile: URL) -> URL {
         testFile
             .deletingLastPathComponent()

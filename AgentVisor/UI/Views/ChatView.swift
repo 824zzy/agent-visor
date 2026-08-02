@@ -11,26 +11,31 @@ import Combine
 import os
 import SwiftUI
 
-// MARK: - Chat Font Scale Environment
+// MARK: - Shared Content Font Scale Environment
 
-/// Multiplier applied to text rendered inside the chat scroll area. Sourced
-/// from `AppSettings.chatFontScale` and adjusted at runtime via Cmd-+/-/0.
-/// Only views that opt in via `.chatScaledFont(...)` (or read the env
-/// directly, like `MarkdownText`) react. Chrome (header, input, status bar,
-/// approval bar) keeps `.font(...)` and stays at fixed sizes.
-struct ChatFontScaleKey: EnvironmentKey {
+/// Persistent multiplier shared by Sessions browser text and Agent Visor
+/// Chat content. The stored preference keeps its original `chatFontScale`
+/// key for upgrade compatibility, while views opt in through either the
+/// general content API or the existing Chat compatibility API.
+struct ContentFontScaleKey: EnvironmentKey {
     static let defaultValue: CGFloat = 1.0
 }
 
 extension EnvironmentValues {
+    var contentFontScale: CGFloat {
+        get { self[ContentFontScaleKey.self] }
+        set { self[ContentFontScaleKey.self] = newValue }
+    }
+
+    /// Compatibility spelling for the established Chat renderers.
     var chatFontScale: CGFloat {
-        get { self[ChatFontScaleKey.self] }
-        set { self[ChatFontScaleKey.self] = newValue }
+        get { contentFontScale }
+        set { contentFontScale = newValue }
     }
 }
 
-private struct ChatScaledFont: ViewModifier {
-    @Environment(\.chatFontScale) private var scale
+private struct ContentScaledFont: ViewModifier {
+    @Environment(\.contentFontScale) private var scale
     let size: CGFloat
     let weight: Font.Weight
     let design: Font.Design
@@ -41,12 +46,21 @@ private struct ChatScaledFont: ViewModifier {
 }
 
 extension View {
+    func contentScaledFont(
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        design: Font.Design = .default
+    ) -> some View {
+        modifier(ContentScaledFont(size: size, weight: weight, design: design))
+    }
+
+    /// Compatibility spelling for existing Chat call sites.
     func chatScaledFont(
         size: CGFloat,
         weight: Font.Weight = .regular,
         design: Font.Design = .default
     ) -> some View {
-        modifier(ChatScaledFont(size: size, weight: weight, design: design))
+        contentScaledFont(size: size, weight: weight, design: design)
     }
 }
 
@@ -559,21 +573,21 @@ struct ChatView: View {
             // the focused text field.
             if localFontSizeMonitor == nil {
                 localFontSizeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                    guard event.modifierFlags.contains(.command) else { return event }
-                    guard let chars = event.charactersIgnoringModifiers else { return event }
-                    switch chars {
-                    case "=", "+":
-                        AppSettings.chatFontScale = AppSettings.chatFontScale + AppSettings.chatFontScaleStep
-                        return nil
-                    case "-":
-                        AppSettings.chatFontScale = AppSettings.chatFontScale - AppSettings.chatFontScaleStep
-                        return nil
-                    case "0":
-                        AppSettings.chatFontScale = 1.0
-                        return nil
-                    default:
-                        return event
-                    }
+                    let modifiers = event.modifierFlags
+                    let chars = event.charactersIgnoringModifiers ?? ""
+                    guard let command = ContentFontScaleCommand.decode(
+                        commandHeld: modifiers.contains(.command),
+                        optionHeld: modifiers.contains(.option),
+                        controlHeld: modifiers.contains(.control),
+                        charactersIgnoringModifiers: chars
+                    ) else { return event }
+                    AppSettings.contentFontScale = command.apply(
+                        to: AppSettings.contentFontScale,
+                        step: AppSettings.contentFontScaleStep,
+                        min: AppSettings.contentFontScaleMin,
+                        max: AppSettings.contentFontScaleMax
+                    )
+                    return nil
                 }
             }
             // Poll Ghostty's TUI for the current mode label every second.

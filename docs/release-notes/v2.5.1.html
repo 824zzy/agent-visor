@@ -1,0 +1,12 @@
+<h3>What is fixed</h3>
+<ul>
+  <li>Fixed severe CPU and memory pressure in large Pi sessions. Agent Visor now coalesces transcript refreshes, skips unchanged files, and decodes only appended JSONL records after the initial index build.</li>
+  <li>Prevented Agent Visor from replaying completion notifications, sounds, and visual attention while a session remains continuously Ready, including during transcript hydration or attachment metadata changes.</li>
+  <li>Stabilized accidentally resumed Pi sessions by keeping the first live runtime as the session owner until it exits, preventing PID/terminal oscillation and misrouted actions.</li>
+  <li>Reduced menu-bar packing work by caching fixed-font pill and overflow measurements without changing session priority or collision safety.</li>
+</ul>
+<h3>Improvement</h3>
+<ul>
+  <li>Sessions and Chat now share one persistent <strong>Content font size</strong> setting from 80% to 250%. Use Command-Plus, Command-Minus, or Command-0 to adjust or reset it without affecting menu-bar pills and fixed controls.</li>
+</ul>
+<p>Pi still performs one initial transcript index build after Agent Visor launches or first opens an uncached session. Later unchanged checks read no transcript bytes, and normal growth reads only the appended range.</p>

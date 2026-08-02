@@ -51,6 +51,21 @@ final class ChatFontScaleCommandTests: XCTestCase {
         XCTAssertNil(ChatFontScaleCommand.decode(commandHeld: true, charactersIgnoringModifiers: "1"))
     }
 
+    func testDecodeRejectsGlobalSessionShortcutModifierFamilies() {
+        XCTAssertNil(ChatFontScaleCommand.decode(
+            commandHeld: true,
+            optionHeld: true,
+            controlHeld: false,
+            charactersIgnoringModifiers: "0"
+        ))
+        XCTAssertNil(ChatFontScaleCommand.decode(
+            commandHeld: true,
+            optionHeld: false,
+            controlHeld: true,
+            charactersIgnoringModifiers: "="
+        ))
+    }
+
     // MARK: - apply
 
     func testZoomInIncrementsByStep() {

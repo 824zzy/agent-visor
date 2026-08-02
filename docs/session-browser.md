@@ -1,7 +1,7 @@
 # Sessions Browser Interaction Design
 
 Status: Accepted
-Last reviewed: 2026-07-27
+Last reviewed: 2026-07-31
 
 ## Purpose
 
@@ -62,6 +62,9 @@ The keyboard cursor starts at the first visible row when the browser opens or th
 | Up/Down | Move the keyboard cursor by one row and minimally reveal it if needed |
 | Cmd+1 through Cmd+9 | Open the corresponding row in its canonical owner in current visible order |
 | Cmd+F | Focus search |
+| Cmd+= or Cmd++ | Increase the shared Sessions-and-Chat content font scale by 10% |
+| Cmd+- | Decrease the shared Sessions-and-Chat content font scale by 10% |
+| Cmd+0 | Reset the shared Sessions-and-Chat content font scale to 100% |
 | Escape with a query | Clear the query and keep search focused |
 | Chat disclosure chevron | Visually communicates the row's Chat destination; it is part of the row target, not a separate button |
 | Open in `<owner>` action | Open the canonical owning app or terminal without entering Chat |
@@ -69,6 +72,8 @@ The keyboard cursor starts at the first visible row when the browser opens or th
 | Context menu | Duplicate `Enter Chat` and `Open in <owner>` when available, plus hide |
 
 Hotkey numbering follows the exact visible row order, including state groups and search ranking.
+
+Content-scale commands remain active while browser search is focused and consume the matching keystroke without editing the query. Shift is permitted for the `+`/`_` keyboard forms, but Option-Command and Control-Command combinations are not content-scale gestures because they may belong to configured global session shortcuts. Changing scale preserves the query, keyboard cursor, and current Sessions-versus-Chat destination.
 
 ## Scrolling Contract
 
@@ -127,6 +132,10 @@ Interaction tests must prove:
 - no repeated high-emphasis `Enter Chat` button competes with session identity;
 - opening the browser does not parse conversation content;
 - Back preserves query, keyboard cursor, and viewport;
+- browser font-scale commands work while search is focused without mutating the query;
+- Option-Command and Control-Command global shortcuts are not consumed as font-scale commands;
+- changing scale preserves the query, keyboard cursor, and current destination;
+- scaled search, rows, owner actions, and footer grow without clipped text or horizontal scrolling;
 - archiving or hiding removes a row without an unrelated jump.
 
 Source-wiring audits must reject an `onHover` path that calls `highlightSession` or any path that turns every highlight change into `scrollTo(..., anchor: .center)`.

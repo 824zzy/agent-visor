@@ -3,7 +3,7 @@ import XCTest
 
 final class AttentionReconcilerTests: XCTestCase {
     func testNewYourTurnFiresOnce() {
-        let items = [AttentionItem(sessionId: "a", kind: .yourTurn(turnToken: "3"))]
+        let items = [AttentionItem(sessionId: "a", kind: .yourTurn)]
         let first = AttentionReconciler.reconcile(current: items, previouslyNotified: [])
         XCTAssertEqual(first.newItems, items)
         XCTAssertEqual(first.totalCount, 1)
@@ -17,13 +17,55 @@ final class AttentionReconcilerTests: XCTestCase {
         XCTAssertEqual(second.totalCount, 1)
     }
 
-    func testNewTurnReFiresAfterTokenChange() {
-        let turn1 = [AttentionItem(sessionId: "a", kind: .yourTurn(turnToken: "3"))]
-        let r1 = AttentionReconciler.reconcile(current: turn1, previouslyNotified: [])
-        // User replied, agent finished again → token advances.
-        let turn2 = [AttentionItem(sessionId: "a", kind: .yourTurn(turnToken: "5"))]
-        let r2 = AttentionReconciler.reconcile(current: turn2, previouslyNotified: r1.currentKeys)
-        XCTAssertEqual(r2.newItems, turn2)
+    func testTranscriptHydrationDuringSameReadyEpisodeDoesNotRefire() {
+        let settled = [AttentionItem(
+            sessionId: "pi",
+            kind: .yourTurn
+        )]
+        let first = AttentionReconciler.reconcile(
+            current: settled,
+            previouslyNotified: []
+        )
+        XCTAssertEqual(first.newItems, settled)
+
+        // Captured Pi ordering: agent_settled publishes Ready first, then the
+        // debounced transcript replay adds final thinking + text rows.
+        let hydrated = [AttentionItem(
+            sessionId: "pi",
+            kind: .yourTurn
+        )]
+        let second = AttentionReconciler.reconcile(
+            current: hydrated,
+            previouslyNotified: first.currentKeys
+        )
+
+        XCTAssertTrue(second.newItems.isEmpty)
+        XCTAssertTrue(second.resolvedKeys.isEmpty)
+        XCTAssertEqual(second.currentKeys, ["pi|turn"])
+        XCTAssertEqual(second.totalCount, 1)
+    }
+
+    func testLaterReadyEpisodeRefiresAfterWorkingSnapshot() {
+        let ready = [AttentionItem(
+            sessionId: "pi",
+            kind: .yourTurn
+        )]
+        let first = AttentionReconciler.reconcile(
+            current: ready,
+            previouslyNotified: []
+        )
+        let working = AttentionReconciler.reconcile(
+            current: [],
+            previouslyNotified: first.currentKeys
+        )
+        XCTAssertEqual(working.resolvedKeys, ["pi|turn"])
+
+        let laterReady = AttentionReconciler.reconcile(
+            current: ready,
+            previouslyNotified: working.currentKeys
+        )
+
+        XCTAssertEqual(laterReady.newItems, ready)
     }
 
     func testApprovalDedupedByToolUseId() {
@@ -46,8 +88,8 @@ final class AttentionReconcilerTests: XCTestCase {
 
     func testMixedAgentsCountedTogether() {
         let items = [
-            AttentionItem(sessionId: "claude", kind: .yourTurn(turnToken: "2")),
-            AttentionItem(sessionId: "codex", kind: .yourTurn(turnToken: "8")),
+            AttentionItem(sessionId: "claude", kind: .yourTurn),
+            AttentionItem(sessionId: "codex", kind: .yourTurn),
             AttentionItem(sessionId: "claude2", kind: .approval(toolUseId: "t")),
         ]
         let r = AttentionReconciler.reconcile(current: items, previouslyNotified: [])

@@ -1,8 +1,8 @@
 # Pi Integration Design
 
 Status: Accepted
-Last reviewed: 2026-07-30
-Implementation status: The restart-safe liveness-heartbeat amendment is implemented, signed-deployed, and user-validated with live Pi runtimes. Native-equivalent image path submission is implemented and signed-deployed; image-only and image-plus-text delivery are user-validated with readable Pi results, while the remaining edge-case matrix has automated coverage but has not been exercised live. Provider-isolated bottom-bar behavior is also signed-deployed and user-validated: Pi exposes no Claude permission-mode chip and Agent Visor reserves Claude mode probing and cycling for Claude Code.
+Last reviewed: 2026-08-02
+Implementation status: The restart-safe liveness-heartbeat amendment is implemented, signed-deployed, and user-validated with live Pi runtimes. Native-equivalent image path submission is implemented and signed-deployed; image-only and image-plus-text delivery are user-validated with readable Pi results, while the remaining edge-case matrix has automated coverage but has not been exercised live. Provider-isolated bottom-bar behavior is also signed-deployed and user-validated: Pi exposes no Claude permission-mode chip and Agent Visor reserves Claude mode probing and cycling for Claude Code. The bounded same-session live-runtime ownership guardrail is implemented and signed-deployed: Agent Visor keeps one live owner per durable Pi session, rejects competing runtime evidence while that owner remains alive, and keys Ready attention to the durable session rather than mutable attachment metadata. The bounded transcript-refresh performance amendment is implemented, signed-deployed, and passively validated against a naturally active 100+ MB transcript.
 
 ## Purpose
 
@@ -23,6 +23,9 @@ This document defines the Pi-specific discovery, lifecycle, transcript, installa
 9. Pi's latest non-empty session name on the active transcript branch is authoritative. A rename replaces the previously displayed Pi name without requiring an Agent Visor restart; other agents retain their source-specific title precedence.
 10. Agent Visor presents Pi as a prompt-bounded conversation, not a flat execution log. Work is grouped and collapsed by default while the final answer remains prominent; a user setting preserves access to the raw activity stream.
 11. Restarting Agent Visor must not make a still-running interactive Pi session disappear. A Pi runtime that has loaded the current bundled extension periodically reasserts its exact live attachment; that signal proves liveness and routing metadata only, never new user or agent activity.
+12. Agent Visor models one live runtime owner per durable Pi session ID. If an accidental second Pi TUI resumes the same session while the accepted owner PID remains alive, the existing owner stays pinned and every hook from the competing PID is ignored before it can alter phase, attachment, navigation, sending, or notification state. Ownership may transfer after the pinned owner exits. Independent concurrent branches and multiple pills for one Pi session remain out of scope.
+13. Ready attention is identified by durable session ID. PID, TTY, terminal-host, or other attachment churn cannot by itself create another Ready episode, replay the completion sound, or bounce the menu-bar surface.
+14. Transcript refresh work is bounded. Repeated hook and file-watcher signals may collapse into one running refresh plus one latest pending rerun, an unchanged file performs no read or UI replay, and an append decodes only newly added complete JSONL records. Large historical Pi files use a bounded summary path until the user or a live update requires full history.
 
 ## User-Visible States
 
@@ -65,6 +68,10 @@ Reconciliation proceeds from strongest to weakest evidence:
 A heartbeat is not phase or activity evidence. It must not refresh `lastActivity`, reorder an already tracked session, clear or create an approval, modify tool state, or change Working/Ready/Idle for a non-ended row. When it restores an absent or historical row, Agent Visor uses Idle as the conservative live phase and retains transcript-derived activity time. A later transcript or lifecycle event may refine that phase normally.
 
 The ordinary same-PID late-event guard remains in force for heartbeats. A heartbeat may restore an Ended row only when the pre-merge attachment PID is absent or differs from the reporting PID. It also cannot evict a different non-ended session that already owns the same PID. These rules prevent an in-flight heartbeat from reviving a session after its matching `SessionEnd` or replacing a newer same-process session. Exact `SessionStart` remains the only Pi event allowed to transfer, replace, or reactivate an attachment under the same PID.
+
+A separate same-session ownership guard applies before heartbeat handling and before generic lifecycle mutation. Once a Pi row has an accepted positive PID whose process remains alive, a Pi hook with a different or missing PID is competing evidence and is discarded in full. It cannot replace PID/TTY/host/origin, mutate phase or activity, update tool state, redirect navigation or delivery, restart a watcher, or resolve and recreate attention. When the pinned PID is no longer alive, the next exact Pi event may establish the replacement attachment through the existing heartbeat or lifecycle rules. After an Agent Visor restart, the first accepted exact report may establish the owner; later competing reports cannot make ownership oscillate.
+
+This guardrail deliberately does not infer Pi branch identity, add a leaf ID to the extension payload, merge concurrent runtime phases, or manufacture multiple runtime rows. Those semantics require a separate product decision if independently active duplicate resumes become a supported workflow.
 
 A live process using an older already-loaded copy of the extension cannot be upgraded invisibly. It continues through fallback behavior until the user runs `/reload` or starts Pi again; Agent Visor must not inject `/reload` or terminal input to force adoption.
 
@@ -140,6 +147,35 @@ The latest non-empty `session_info.name` on the active branch is Pi's canonical 
 
 Agent Visor Chat is mirrored from Pi's transcript, remains secondary in authority to Pi's TUI, and may lag file writes. The Sessions browser enters this shared Chat by default while keeping **Open in <terminal>** visible; menu-bar pills and the `+N` popover remain original-terminal first.
 
+## Transcript Refresh Performance
+
+Pi lifecycle hooks and the provider-resolved file watcher are intentionally redundant evidence sources. Their redundancy must not become duplicate parsing work.
+
+For each Pi session, SessionStore maintains a coalescing refresh state with at most one running refresh and one replaceable pending request. Signals received before a run starts reset the existing 100-millisecond quiescence window. Signals received while a run is active replace the pending request instead of starting or queueing another parse. Completion schedules only that latest pending request; continuous writes may produce later runs, but queue depth remains bounded at one pending request. Ending or removing a session cancels pending work and suppresses publication from an obsolete in-flight run.
+
+The shared Pi conversation parser actor remains the global serialization boundary, so two Pi transcript parses never execute concurrently. Direct Chat history loads and file refreshes share the same per-session file cache. While mutating a cached parser, the actor temporarily removes it from the cache and restores it on every exit path; this preserves unique ownership of the typed tree index, avoids a copy-on-write clone after each append, and still retains the last good parser after a transient read failure.
+
+Each cached file state records the resolved path, filesystem identity, byte count, and modification time:
+
+- an identical signature returns unchanged without opening or replaying the transcript;
+- growth of the same file identity reads exactly the byte range from the previous byte count to the captured new byte count;
+- truncation, replacement, path change, or a same-size content modification discards the old index and performs one bounded rebuild;
+- a failed read retains the last good state and is retried by later evidence rather than publishing an empty conversation.
+
+The incremental parser retains a typed index of Pi entries by ID plus append order. It decodes only newly read complete JSONL records, preserves an incomplete trailing record until later bytes arrive, and reconstructs the latest active branch from the retained index after each accepted append. Unknown entry types remain parent-chain connectors but produce no visible content. The static whole-buffer parser delegates to the same accumulator so incremental and full parsing cannot drift semantically.
+
+A changed active transcript may still publish a full canonical history to SessionStore; incremental UI deltas are not required by this amendment because Pi branch changes can replace the visible path. The expensive disk scan and JSON decoding are incremental. Exact duplicate signatures produce neither a replay nor a state publication.
+
+Bootstrap metadata uses a separate bounded head-and-tail summary actor and signature cache. It must not enqueue a whole-file parse on the full-history actor merely to populate Sessions rows. Opening Chat or receiving a real live append may create the first full index for that session.
+
+### Performance failure behavior
+
+- A partial final JSONL record is withheld until complete; the prior valid conversation remains visible.
+- Corrupt individual appended lines are ignored under the existing transcript contract.
+- File replacement or truncation favors correctness through one rebuild rather than attempting to splice incompatible indexes.
+- Coalescing never drops the latest file state: a signal observed during a run leaves one latest rerun pending.
+- No lifecycle event, terminal route, completion boundary, active-branch rule, or provider model presentation changes as part of this work.
+
 ## Chat Presentation
 
 Pi Chat is conversation-first. Each user prompt opens one turn whose default top-level structure is:
@@ -170,6 +206,7 @@ With extension evidence:
 
 - `session_start` is exact live-attachment evidence for its session ID. It reactivates an Ended or historical Pi row as idle even when Pi reused the same PID for an in-process session replacement; ordinary same-PID events remain subject to the late-hook guard;
 - `SessionHeartbeat` refreshes exact PID/TTY/host/origin attachment metadata but is phase-neutral for a non-ended row;
+- every Pi hook first satisfies same-session runtime ownership: matching-owner events continue, competing events are ignored while the accepted owner process is alive, and a replacement PID is eligible only after owner loss;
 - `SessionHeartbeat` reattaches an absent or historical row conservatively as Idle when the pre-merge PID is absent or different, while a same-PID heartbeat after Ended remains rejected as potentially late;
 - heartbeat handling does not update user-visible activity time or phase-evidence freshness and does not flow through generic lifecycle phase mapping;
 - `agent_start` through `agent_settled` is Working;
@@ -190,6 +227,7 @@ A live Pi TUI session is terminal-owned:
 - PID ancestry resolves Ghostty, iTerm2, Terminal, VS Code, Cursor, Zed, or another supported host;
 - TTY identifies the exact pane where the host adapter supports exact routing;
 - a normal pill or `+N` popover action opens that original terminal;
+- a competing live Pi runtime reporting the same session ID cannot replace the pinned PID or TTY and therefore cannot redirect navigation or terminal submission;
 - a Chat-capable Sessions-browser row or Return enters the same in-window Chat used by other supported sources;
 - Shift-Return and the always-visible **Open in <terminal>** action open the terminal, while the quiet disclosure chevron belongs to the row's Chat target rather than acting as a separate neighboring button.
 
@@ -221,6 +259,8 @@ Pi detection considers, without creating files:
 
 If Pi is absent, all other Agent Visor integrations continue normally. If extension installation fails, Settings reports Observing and baseline support remains active. If a transcript cannot be parsed, other sessions remain available and the failure does not block menu-bar updates.
 
+If multiple live Pi runtimes report the same durable session, Agent Visor retains the first accepted live owner and records rejected competing evidence diagnostically. It does not alternate the visible attachment or claim to represent both branches. Exiting the owner permits a remaining runtime to attach on its next exact report.
+
 The initial release targets Pi's default `~/.pi/agent` directory. Custom `PI_CODING_AGENT_DIR` stores may be observed later when Agent Visor has explicit path evidence; Agent Visor must not guess shell-only environment overrides from a GUI launch context.
 
 ## Privacy And Security
@@ -239,6 +279,7 @@ The socket's absence is a normal state. No busy retry loop, background daemon, r
 - Fabricating Needs attention without explicit evidence.
 - Live pills for print, JSON, RPC, SDK, or ephemeral runs.
 - Full support for custom Pi config roots in the first release.
+- Independently representing multiple simultaneous Pi runtimes or transcript leaves that share one durable session ID.
 
 ## Test Contract
 
@@ -246,6 +287,9 @@ Core behavior tests must prove:
 
 - active-branch reconstruction excludes abandoned Pi branches;
 - transcript parsing maps messages, tools, results, compaction, model, and usage while tolerating unknown records;
+- incremental chunks produce the same canonical transcript as a whole-buffer parse, including branch replacement and partial-line completion;
+- an identical filesystem signature reads zero bytes, same-identity growth reads only the appended byte range, and truncation or replacement rebuilds once;
+- repeated requests while a refresh is running retain only the latest pending request and never permit two runs at once;
 - process/session matching uses CWD plus closest creation time and never assigns one session twice;
 - unmatched processes do not fabricate sessions;
 - baseline phase inference never fabricates Needs attention;
@@ -254,6 +298,9 @@ Core behavior tests must prove:
 - a heartbeat cannot evict a different non-ended session already attached to its PID, while exact `SessionStart` can transfer that PID during an in-process replacement;
 - a heartbeat preserves the phase, phase-evidence timestamp, last activity, approval state, and tool state of an already live row;
 - a heartbeat-created or restored row retains transcript-derived activity time rather than appearing newly active merely because Agent Visor restarted;
+- a matching PID may continue to update its Pi session, but a different or missing PID cannot alter an existing same-session attachment while the pinned owner process remains alive;
+- after the pinned owner exits, an exact event from a replacement PID becomes eligible for the ordinary heartbeat or lifecycle path;
+- Ready episode tracking uses durable session ID, so a metadata-only PID replacement cannot replay completion attention while the session remains continuously Ready, while a genuine leave-and-return to Ready remains eligible;
 - Pi availability does not create `~/.pi` when absent;
 - a newer active-branch Pi session name replaces an earlier displayed Pi name, while a missing or abandoned-branch name does not;
 - Pi prompt boundaries produce prompt → grouped work → final-answer order;
@@ -268,12 +315,16 @@ Integration and source-wiring tests must prove:
 
 - `AgentID.pi` is registered and rendered across shared surfaces;
 - Pi file watching uses the provider's resolved transcript path rather than the Claude fallback;
+- SessionStore routes Pi signals through the one-running/one-latest coalescer and handles an unchanged provider outcome without publishing history;
+- Pi full-history and live-refresh paths share the signature-aware incremental file parser, temporarily take the cached parser with guaranteed restoration to avoid copying its retained index, while bootstrap metadata uses the separate bounded summary path;
 - Pi declares transcript session names authoritative and the shared metadata merge consumes that provider authority;
 - window Chat enables Pi grouping by default, offers a raw-stream escape hatch, and suppresses the duplicate processing indicator when a live work header exists;
 - Pi tool rows consume Pi-aware canonical names and grouped reasoning renders Markdown behind a nested disclosure;
 - the bundled extension contains no network, prompt mutation, tool registration, or content-forwarding behavior;
 - the heartbeat timer starts only after `session_start`, is unreferenced, has one instance per runtime, emits metadata only, and is cleared during every `session_shutdown` path;
+- SessionStore evaluates same-session Pi runtime ownership before heartbeat disposition, PID deduplication, process-metadata merge, tool effects, or generic phase mutation;
 - SessionStore handles `SessionHeartbeat` before generic lifecycle phase mutation and excludes it from user-activity refresh;
+- the menu-bar completion sound and bounce track Ready session IDs rather than PID-bearing SwiftUI stable IDs;
 - installation modifies only `agent-visor.ts` and is skipped when Pi is absent;
 - `agent_settled` maps to Ready and low-level `agent_end` does not;
 - terminal-owned Pi sessions route through the existing terminal adapter;
@@ -299,7 +350,104 @@ Manual validation must cover:
 13. an idle resumed or imported session surviving an Agent Visor quit/relaunch without prompt or transcript activity;
 14. at least ten concurrent Pi TUIs across a relaunch, with every live attachment represented by a visible pill or the `+N` overflow count;
 15. a delayed same-PID heartbeat after `SessionEnd` remaining unable to resurrect the ended row;
-16. a Pi runtime that loaded the pre-heartbeat extension remaining on documented fallback behavior until `/reload` or its next launch.
+16. a Pi runtime that loaded the pre-heartbeat extension remaining on documented fallback behavior until `/reload` or its next launch;
+17. passive high-volume observation of a naturally active large Pi transcript, confirming bounded CPU bursts, no growing refresh backlog, and stable memory after the initial index build without submitting prompts solely for the test.
+
+## TDD Implementation Plan — Bounded Transcript Refresh
+
+Status: Implemented and signed-deployed on 2026-08-02. The captured regression was the signed Debug app repeatedly consuming approximately one CPU core while 40–105 MB Pi transcripts grew. An eight-second sample showed the main thread idle for most of the interval and background work repeatedly traversing `SessionStore.scheduleFileSync → PiAgentProvider.fileSync → PiConversationParser → PiTranscriptParser`, with a 1.4 GB observed peak footprint.
+
+### Slice 1 — One running refresh plus one latest rerun
+
+**RED:** Add pure coalescer examples proving that pre-run requests replace the pending value, requests during a run retain only the latest rerun, completion exposes at most that one rerun, and cancellation clears pending work. Add a SessionStore wiring regression requiring Pi to use this state before invoking the provider.
+
+**GREEN:** Keep the existing debounce for the first/latest pending request, mark one latest request while a parse is running, and start it only after the active run completes. Preserve the existing scheduler for non-Pi providers unless shared extraction is proven behaviorally safe.
+
+**REFACTOR:** Separate scheduling state from provider result application. Cancellation suppresses obsolete publication even when Foundation file or JSON APIs cannot be interrupted mid-call.
+
+### Slice 2 — Signature-aware incremental file parsing
+
+**RED:** Through a temporary real JSONL file, prove that the first read builds history, an unchanged signature reads zero bytes, an append reads exactly the appended byte count and preserves prior branch history, and truncation/replacement rebuilds. Add chunk tests for a JSON record split across appends and semantic equivalence with `PiTranscriptParser.parse(data:)`.
+
+**GREEN:** Add a Core Pi transcript file parser that owns filesystem signatures, exact byte-range reads, a typed tree accumulator, and the last canonical transcript. Refactor the static parser to consume the same accumulator.
+
+**REFACTOR:** Keep filesystem change policy, byte ingestion, typed entry projection, and active-branch materialization separate. Preserve unknown connectors and all existing parsed fields.
+
+### Slice 3 — Provider cache and no-change propagation
+
+**RED:** Add wiring coverage requiring Pi full-history and file-sync calls to share one parser cache and requiring exact duplicates to return an explicit no-change outcome that SessionStore ignores.
+
+**GREEN:** Replace `PiConversationParser` whole-file reads with per-session incremental file states and one atomic projected-history result. A changed file continues through the existing canonical full-replay reducer path; unchanged evidence stops at the provider boundary.
+
+**REFACTOR:** Remove multi-await cache assembly so messages, tools, results, marker, and conversation metadata always come from one parser snapshot. Take the cached parser out while mutating it and guarantee restoration on success and failure so appends do not trigger a copy-on-write clone of the retained tree index.
+
+### Slice 4 — Bounded bootstrap summaries
+
+**RED:** Add a large-file fixture whose active leaf and name live in the tail, and a wiring regression rejecting `loadConversationInfo → loadFullHistory` for Pi.
+
+**GREEN:** Use the existing bounded JSONL head-and-tail reader on a separate Pi summary actor with signature caching. Project only `ConversationInfo`; do not populate the full-history index during bootstrap.
+
+**REFACTOR:** Share Pi transcript-to-conversation projection without coupling the summary actor to full-parser mutable state.
+
+### Slice 5 — Validation and signed deployment
+
+Run all focused coalescing, file-parser, Pi transcript, provider-wiring, lifecycle, and packing tests; the complete AgentVisorCore suite; `git diff --check`; and an unsigned Debug app build. Then run `scripts/dev-build.sh`, validate the signed app, socket ownership, Accessibility health, embedded runtime, and passive CPU/memory behavior. Do not manufacture transcript activity, alter a terminal, or recreate competing Pi runtimes solely for acceptance.
+
+## TDD Implementation Record — Bounded Transcript Refresh
+
+Status: Implemented and signed-deployed on 2026-08-02.
+
+- **RED:** Pure coalescer tests first failed because `TranscriptSyncCoalescer` did not exist. Filesystem fixtures then failed until unchanged signatures, exact append ranges, partial-line buffering, and replacement/truncation rebuilds existed. Wiring audits failed until SessionStore used the bounded Pi path, provider calls shared one parser cache, bootstrap stopped loading full history, unchanged outcomes stopped publication, and cached-parser mutation guaranteed restoration without a retained-index copy.
+- **GREEN:** SessionStore now permits one active Pi refresh plus one replaceable latest rerun. `PiIncrementalTranscriptFileParser` performs zero reads for exact duplicate signatures, reads only appended bytes for same-file growth, buffers an incomplete final record, and rebuilds for incompatible mutations. `PiTranscriptParser` full and incremental entry points share one typed accumulator. Pi history projection is atomic, unchanged results stop at the provider boundary, and bounded bootstrap summaries use separate head/tail reads.
+- **REFACTOR:** `JSONLLineIterator` uses bounded newline scanning; the full-history actor serializes all Pi parsing; cached parsers are taken and restored around mutation to preserve copy-on-write uniqueness; filesystem policy, entry ingestion, active-branch materialization, and app projection remain separate. No lifecycle, routing, model, completion, or Chat semantics changed.
+- **Automated validation:** Focused coalescing, filesystem, parser-equivalence, summary, provider, lifecycle, and packing suites passed. The complete AgentVisorCore suite passed **1,796/1,796**; `git diff --check`, the unsigned Debug app build, and the signed development build passed.
+- **Packing result:** A representative 12-candidate pressure/headroom probe reduced actual overflow text measurements from 709 to 7 and measured approximately 2.14 ms per Debug pack. Because the remaining pure variant search was already bounded and retained all accepted geometry, it was deliberately not replaced.
+- **Signed deployment:** `scripts/dev-build.sh` relaunched `/Applications/Agent Visor Dev.app` as one process at PID `3755`. It owns `/tmp/agent-visor.sock`, Accessibility is Ready, deep strict signature verification passes with identifier `com.824zzy.AgentVisor.Dev` and authority `AgentVisor Dev`, and the embedded Codex runtime bundle passes validation.
+- **Passive performance acceptance:** The naturally active Pi transcript was `107,702,627` bytes. After the one-time index build, an eight-second sample at `/tmp/agentvisor-performance-final-sample.txt` showed a 439.3 MB physical footprint and 646.5 MB peak, versus the diagnosed 629–656 MB steady footprint and 1.4 GB peak. A natural append used the incremental path with no full `PiTranscriptParser.parse` or index copy-on-write stack; Pi refresh work was a bounded fraction of the sample rather than the former sustained near-one-core decode loop. No prompt, terminal input, duplicate runtime, or synthetic completion was created for acceptance.
+
+## TDD Implementation Record — Competing Live Pi Runtime Guardrail
+
+Status: Implemented and signed-deployed on 2026-08-01. Automated ownership and Ready-identity regressions are complete; live validation deliberately did not recreate a competing Pi runtime.
+
+The captured regression used Pi session `019fa69e-0555-795d-a356-07ab09c44c38` concurrently reported by PID `58775` on `ttys010` and PID `78443` on `ttys022`. Their 10-second heartbeats repeatedly replaced the row's PID-bearing `stableId`; competing lifecycle events also resolved and recreated the same `sessionId|turn` completion attention. After the user acknowledged the finished task, Agent Visor replayed its completion sound and resumed visual attention even though no intended new turn had completed.
+
+### Slice 1 — Pure runtime ownership
+
+**RED:** Add focused Core examples proving that a matching Pi owner remains accepted, a different or missing runtime PID is rejected while the existing owner process is alive, non-Pi providers are unaffected, and a replacement Pi PID becomes eligible after the owner exits.
+
+**GREEN:** Add one pure ownership policy with only the evidence SessionStore already has: provider, row existence, existing PID, existing-process liveness, and event PID.
+
+**REFACTOR:** Name the outcomes around accepted ownership versus ignored competing evidence; do not add branch, leaf, terminal, or transcript policy to this seam.
+
+### Slice 2 — Guard every Pi hook before mutation
+
+**RED:** Add a production-wiring regression requiring ownership disposition and its early return to precede heartbeat arbitration, PID deduplication, metadata merge, watcher changes, tool effects, and generic phase mapping.
+
+**GREEN:** Evaluate existing-owner process liveness once at the start of `processHookEvent(_:)` and discard a competing Pi event before session state changes. Matching-owner and owner-dead events continue through the existing paths unchanged.
+
+**REFACTOR:** Keep the guard shared by `SessionHeartbeat`, `SessionStart`, Working, Ready, tool, and shutdown events so no lifecycle subtype can bypass ownership.
+
+### Slice 3 — Session-stable Ready episodes
+
+**RED:** Add focused Ready-episode examples proving that the first Ready observation is new, repeated Ready evidence for the same session is not new even when attachment metadata changed, and leaving Ready before returning creates a genuine later episode. Add a wiring regression that rejects PID-bearing `stableId` in the menu-bar Ready tracker and timestamp lookup.
+
+**GREEN:** Track Ready entry, checkmark timing, sound, and bounce by `sessionId`. Keep PID available only for the later terminal-focus decision.
+
+**REFACTOR:** Concentrate the set transition in a small Core tracker instead of duplicating identity arithmetic in SwiftUI.
+
+### Slice 4 — Validation and deployment
+
+Run each focused RED → GREEN loop separately, then nearby Pi, lifecycle, attention, menu-bar, and source-wiring regressions; the complete AgentVisorCore suite; an unsigned app build; `git diff --check`; and `scripts/dev-build.sh`. Validate the signed development app, single-process/socket ownership, Accessibility readiness, and bundled runtime integrity without creating another Pi duplicate or submitting a prompt solely for testing.
+
+### Validation record
+
+- **Slice 1 RED:** `swift test --package-path AgentVisorCore --filter PiRuntimeOwnershipPolicyTests` failed because `PiRuntimeOwnershipPolicy` did not exist. GREEN added the pure first-live-owner policy; all six ownership examples passed.
+- **Slice 2 RED:** the focused SessionStore wiring audit failed because no ownership guard existed. GREEN placed one early return before heartbeat disposition, PID deduplication, metadata merge, tool effects, and generic phase handling. Matching-owner and owner-dead evidence retain the existing paths.
+- **Slice 3 RED:** the tracker tests first failed because `ReadySessionEpisodeTracker` did not exist; the production-wiring regression then failed nine assertions because `NotchView` still used PID-bearing `stableId`. GREEN moved entry detection, timestamps, checkmarks, sound, and bounce to durable `sessionId`; terminal-focus checking still receives the exact PID.
+- **Refactor:** Ready set-transition arithmetic moved into the small Core tracker, and ownership outcomes remain isolated from transcript or branch semantics. The combined Pi ownership, heartbeat, notification, and Ready-attention suite passed 40 tests.
+- **Full validation:** the complete AgentVisorCore suite passed 1,782 tests with zero failures; `git diff --check` and an unsigned Debug app build passed.
+- **Signed deployment:** `scripts/dev-build.sh` succeeded and relaunched `/Applications/Agent Visor Dev.app` as one process at PID `77059`. The app owns `/tmp/agent-visor.sock`, Accessibility reached Ready, deep strict code-signature validation passed, and the embedded Codex runtime passed its bundle audit. Bundled and installed Pi extension SHA-256 values remain byte-identical at `4191e1e3c2ac3681da6582ed6b1656a2fb15678cfa7abb70f8a8a4a25b080375`.
+- **Live boundary:** after the user removed the accidental duplicate, only PID `78443` remained attached to `intern-paper`. Agent Visor did not recreate a duplicate, submit a prompt, or mutate terminal state solely to exercise the rejection branch.
 
 ## TDD Implementation Record — Native Image Path Submission
 
@@ -381,4 +529,4 @@ Do not type `/reload`, launch or close a Pi TUI, or otherwise mutate a foregroun
 
 ## Change Control
 
-Changes that make the extension mandatory, add content to its wire payload, let heartbeat evidence mutate phase or activity, increase heartbeat frequency, introduce Needs attention inference, enable new-session launching, or broaden live support beyond interactive TUI require an explicit design update before implementation.
+Changes that make the extension mandatory, add content to its wire payload, let heartbeat evidence mutate phase or activity, increase heartbeat frequency, introduce Needs attention inference, enable new-session launching, broaden live support beyond interactive TUI, independently represent multiple live Pi runtimes or branches under one durable session ID, or trade active-branch correctness for a flat/tail-only live transcript require an explicit design update before implementation.
