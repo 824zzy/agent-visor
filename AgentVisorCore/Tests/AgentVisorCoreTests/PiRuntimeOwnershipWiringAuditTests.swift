@@ -52,6 +52,53 @@ final class PiRuntimeOwnershipWiringAuditTests: XCTestCase {
         )
     }
 
+    func testBootstrapRejectsPiDiscoveryWhosePidIsOwnedByAnotherLiveSession() throws {
+        let source = try String(contentsOf: repoRoot()
+            .appendingPathComponent("AgentVisor/Services/State/SessionStore.swift"))
+        guard let start = source.range(of: "func bootstrapSessions(_ discovered:")?.lowerBound,
+              let end = source.range(
+                of: "private func applyBootstrapConversationInfo",
+                range: start..<source.endIndex
+              )?.lowerBound else {
+            return XCTFail("Could not isolate bootstrapSessions.")
+        }
+        let bootstrap = String(source[start..<end])
+
+        guard let hiddenSkip = bootstrap.range(
+                of: "if hiddenSessionIds.contains(info.sessionId)"
+              )?.lowerBound,
+              let admits = bootstrap.range(
+                of: "PiRuntimeOwnershipPolicy.admitsDiscoveredSession("
+              )?.lowerBound,
+              let existingMerge = bootstrap.range(
+                of: "if let existing = sessions[info.sessionId]"
+              )?.lowerBound,
+              let insert = bootstrap.range(
+                of: "sessions[info.sessionId] = session"
+              )?.lowerBound else {
+            return XCTFail("The fallback Pi discovery ownership guard is missing from bootstrapSessions.")
+        }
+
+        XCTAssertLessThan(
+            hiddenSkip,
+            admits,
+            "Hidden rows are filtered before the discovery ownership guard runs."
+        )
+        XCTAssertLessThan(
+            admits,
+            existingMerge,
+            "Discovery ownership must be resolved before the existing-row merge."
+        )
+        XCTAssertLessThan(
+            admits,
+            insert,
+            "Discovery ownership must be resolved before a new discovery row is inserted."
+        )
+        XCTAssertTrue(bootstrap.contains("pidOwnedByOtherLiveSession"))
+        XCTAssertTrue(bootstrap.contains("agentID: info.agentID"))
+        XCTAssertTrue(bootstrap.contains("== .ignoreCompetingRuntime"))
+    }
+
     func testMenuBarReadyEpisodesUseSessionIdentityInsteadOfAttachmentIdentity() throws {
         let source = try String(contentsOf: repoRoot()
             .appendingPathComponent("AgentVisor/UI/Views/NotchView.swift"))

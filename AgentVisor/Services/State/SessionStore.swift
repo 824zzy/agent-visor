@@ -3283,6 +3283,33 @@ actor SessionStore {
                 continue
             }
 
+            // Fallback creation-time discovery can only ever pair a live Pi
+            // process with its STARTUP transcript. Once that process resumes
+            // another session in-process (`/new`, `/resume`, `/fork`), the
+            // heuristic keeps re-finding the abandoned startup transcript for
+            // the same PID. Admitting it would republish a nameless ghost row,
+            // infer a false Ready for it, and shadow the hook-tracked owner's
+            // heartbeats until the ~3s prune removed the duplicate PID row.
+            // Defer to the existing live owner: skip a Pi discovery whose PID
+            // already belongs to a different non-ended session. Computed the
+            // same way the heartbeat path computes its PID-collision evidence.
+            let discoveredPid = info.pid == 0 ? nil : info.pid
+            let pidOwnedByOtherLiveSession = discoveredPid.map { pid in
+                sessions.contains { existingId, existing in
+                    existingId != info.sessionId
+                        && existing.pid == pid
+                        && existing.phase != .ended
+                }
+            } ?? false
+            if PiRuntimeOwnershipPolicy.admitsDiscoveredSession(
+                agentID: info.agentID,
+                discoveredPid: discoveredPid,
+                pidOwnedByOtherLiveSession: pidOwnedByOtherLiveSession
+            ) == .ignoreCompetingRuntime {
+                Self.logger.debug("Ignoring Pi discovery for \(info.sessionId.prefix(8), privacy: .public): PID \(discoveredPid ?? -1, privacy: .public) already owned by a different live session")
+                continue
+            }
+
             // Discovery uses pid=0 as a sentinel for rows surfaced from
             // disk without a per-session process. For Codex GUI threads
             // that sentinel is still an active observed-app row within

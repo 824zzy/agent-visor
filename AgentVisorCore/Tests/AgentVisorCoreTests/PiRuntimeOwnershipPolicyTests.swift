@@ -55,6 +55,50 @@ final class PiRuntimeOwnershipPolicyTests: XCTestCase {
         )
     }
 
+    func testPiDiscoveryIsRejectedWhenPidOwnedByAnotherLiveSession() {
+        XCTAssertEqual(
+            PiRuntimeOwnershipPolicy.admitsDiscoveredSession(
+                agentID: .pi,
+                discoveredPid: 70934,
+                pidOwnedByOtherLiveSession: true
+            ),
+            .ignoreCompetingRuntime
+        )
+    }
+
+    func testPiDiscoveryIsAdmittedWhenPidIsUnowned() {
+        XCTAssertEqual(
+            PiRuntimeOwnershipPolicy.admitsDiscoveredSession(
+                agentID: .pi,
+                discoveredPid: 70934,
+                pidOwnedByOtherLiveSession: false
+            ),
+            .accept
+        )
+    }
+
+    func testHistoricalPiDiscoveryWithoutPidIsAlwaysAdmitted() {
+        XCTAssertEqual(
+            PiRuntimeOwnershipPolicy.admitsDiscoveredSession(
+                agentID: .pi,
+                discoveredPid: nil,
+                pidOwnedByOtherLiveSession: true
+            ),
+            .accept
+        )
+    }
+
+    func testNonPiDiscoveryIgnoresPidOwnership() {
+        XCTAssertEqual(
+            PiRuntimeOwnershipPolicy.admitsDiscoveredSession(
+                agentID: .cursor,
+                discoveredPid: 70934,
+                pidOwnedByOtherLiveSession: true
+            ),
+            .accept
+        )
+    }
+
     private func disposition(
         hasExistingSession: Bool = true,
         existingPid: Int?,

@@ -50,6 +50,8 @@ It separately discovers live `pi` processes and records PID, process start time,
 
 Creation-time matching is fallback evidence for a freshly created session, not a restart-recovery mechanism for resumed or imported sessions. The bundled extension is authoritative after `/new`, `/resume`, `/fork`, or another in-process session replacement because process start time no longer identifies the active session. Its periodic live-attachment heartbeat is also the authoritative mapping after Agent Visor itself restarts.
 
+A discovery-created row cannot claim a PID that a different non-ended session already owns. Fallback creation-time matching can only ever pair a live process with its startup transcript; after that process runs `/new`, `/resume`, or `/fork` in place, discovery keeps re-finding the stale startup transcript for the same PID. Admitting it would republish a ghost row, infer a false Ready state for it, and shadow the authoritative hook-tracked owner's heartbeats until the next prune removed the duplicate. Discovery therefore defers to the existing live owner: a Pi discovery match is admitted only when no different non-ended session already holds its PID. This mirrors the heartbeat rule that a competing runtime cannot evict a different non-ended session that already owns the same PID.
+
 Historical Pi sessions are included in the Sessions browser when their JSONL has a valid session header and renderable transcript evidence. They do not become menu-bar pills merely because a file exists.
 
 Ephemeral `--no-session` runs have no durable identity and are ignored. Print, JSON, RPC, and SDK sessions may appear as saved history when persisted, but only interactive TUI sessions receive live pills and terminal navigation in the initial release.
@@ -448,6 +450,36 @@ Run each focused RED → GREEN loop separately, then nearby Pi, lifecycle, atten
 - **Full validation:** the complete AgentVisorCore suite passed 1,782 tests with zero failures; `git diff --check` and an unsigned Debug app build passed.
 - **Signed deployment:** `scripts/dev-build.sh` succeeded and relaunched `/Applications/Agent Visor Dev.app` as one process at PID `77059`. The app owns `/tmp/agent-visor.sock`, Accessibility reached Ready, deep strict code-signature validation passed, and the embedded Codex runtime passed its bundle audit. Bundled and installed Pi extension SHA-256 values remain byte-identical at `4191e1e3c2ac3681da6582ed6b1656a2fb15678cfa7abb70f8a8a4a25b080375`.
 - **Live boundary:** after the user removed the accidental duplicate, only PID `78443` remained attached to `intern-paper`. Agent Visor did not recreate a duplicate, submit a prompt, or mutate terminal state solely to exercise the rejection branch.
+
+## TDD Implementation Record — Fallback Discovery Ownership
+
+Status: implemented on 2026-08-02 to close a latent discovery/ownership gap observed live.
+
+The captured regression is one Pi process (PID `70934`, `ttys012`, `/Users/zhengyuanz/Codes`) started at `22:34:52`, whose startup transcript `019fc61e-2ab1-769a-82c0-0b570eae1751` was created 1.6 seconds later and then abandoned after an in-process `/resume wayfinder`. The process continued in the pre-existing `wayfinder` session `019fbe8b-bd10-74d6-8e73-661c799ca465`, which is tracked through hooks. Fallback creation-time discovery kept re-matching PID `70934` to the abandoned startup transcript. Every ~30-second rediscovery re-inserted a nameless `Codes` row, inferred a false `waitingForInput` for it, emitted Ready attention, and briefly caused `wayfinder` heartbeats to be ignored, before the ~3-second prune removed the duplicate PID row. Across the sampled window this produced 54 flicker cycles at roughly 36-second spacing.
+
+### Slice 1 — Pure discovery ownership
+
+**RED:** Add focused Core examples proving a Pi discovery match is rejected when its PID already belongs to a different non-ended session, is admitted when the PID is unowned, is always admitted when the discovered row is historical (no PID), and never gates non-Pi providers that intentionally share a host process.
+
+**GREEN:** Add one pure `admitsDiscoveredSession` decision reusing the existing accept / ignore-competing-runtime outcome and only the evidence the store already computes: provider, discovered PID, and whether that PID is owned by a different live session.
+
+**REFACTOR:** Keep the discovery seam free of branch, leaf, terminal, or transcript inference; it only defers fallback discovery to an existing live owner.
+
+### Slice 2 — Guard bootstrap before insertion
+
+**RED:** Add a production-wiring regression requiring the ownership guard to run after the hidden-row filter and before both the existing-row merge and any new-row insertion inside `bootstrapSessions`.
+
+**GREEN:** Compute `pidOwnedByOtherLiveSession` inline the same way the heartbeat path computes its PID-collision evidence, then continue past a rejected Pi discovery without creating, refreshing, watching, or publishing a row.
+
+**REFACTOR:** Leave the fresh-session, historical, Codex, and Cursor discovery paths unchanged; only a Pi row whose live PID is already owned is skipped.
+
+### Validation record
+
+- **Slice 1 RED:** `PiRuntimeOwnershipPolicyTests` failed to compile because `admitsDiscoveredSession` did not exist. GREEN added the pure decision; the four new discovery-ownership examples passed.
+- **Slice 2 RED:** the bootstrap wiring audit failed because no guard existed. GREEN placed one `continue` guard after the hidden filter and before the merge and insert paths. The audit then confirmed ordering and evidence.
+- **Full validation:** the complete AgentVisorCore suite passed 1,801 tests with zero failures; `git diff --check` passed; the change touches exactly five paths (the policy, its two test files, `SessionStore.swift`, and this doc).
+- **Signed deployment:** `scripts/dev-build.sh` built and relaunched `/Applications/Agent Visor Dev.app` as one process at PID `25797`. It owns `/tmp/agent-visor.sock`, Accessibility transitioned `needsAccessibility → verifying → ready`, deep strict signature verification passed with identifier `com.824zzy.AgentVisor.Dev` and authority `AgentVisor Dev`, and the embedded Codex runtime bundle passed. Bundled, source, and installed `agent-visor.ts` SHA-256 remain byte-identical at `4191e1e3c2ac3681da6582ed6b1656a2fb15678cfa7abb70f8a8a4a25b080375`.
+- **Live boundary:** the machine restart cleared the original ghost (PID `70934` / transcript `019fc61e`), so the exact flicker was not reproducible after deployment and no competing Pi runtime was manufactured to force the rejection branch. The guard is deployed and stays quiet until a resume ghost recurs, at which point it logs `Ignoring Pi discovery for …`.
 
 ## TDD Implementation Record — Native Image Path Submission
 

@@ -22,4 +22,23 @@ public enum PiRuntimeOwnershipPolicy {
         }
         return eventPid == existingPid ? .accept : .ignoreCompetingRuntime
     }
+
+    /// Decides whether a fallback disk/process *discovery* match may be
+    /// admitted to the store. Creation-time discovery can only ever pair a
+    /// live Pi process with its startup transcript; once that process resumes
+    /// another session in-process, discovery keeps re-finding the stale
+    /// startup transcript for the same PID. Reject the discovered row when its
+    /// live PID already belongs to a different non-ended session so the
+    /// authoritative hook-tracked owner is never shadowed by a ghost row.
+    ///
+    /// Historical discovery (no PID) and providers that intentionally share a
+    /// host process across sessions are never gated here.
+    public static func admitsDiscoveredSession(
+        agentID: AgentID,
+        discoveredPid: Int?,
+        pidOwnedByOtherLiveSession: Bool
+    ) -> Disposition {
+        guard agentID == .pi, discoveredPid != nil else { return .accept }
+        return pidOwnedByOtherLiveSession ? .ignoreCompetingRuntime : .accept
+    }
 }
