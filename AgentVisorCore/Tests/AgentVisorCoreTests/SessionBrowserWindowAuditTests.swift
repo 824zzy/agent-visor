@@ -314,6 +314,44 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         }
     }
 
+    func testHotkeySummonRaisesTheBrowserAboveOtherAppsAsKeyWindow() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let controller = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/MainWindowController.swift"))
+        guard let start = controller.range(of: "func show() {")?.lowerBound,
+              let end = controller.range(
+                of: "func showSessions()",
+                range: start..<controller.endIndex
+              )?.lowerBound else {
+            return XCTFail("Could not isolate MainWindowController.show().")
+        }
+        let show = String(controller[start..<end])
+
+        guard let activate = show.range(
+                of: "NSApp.activate(ignoringOtherApps: true)"
+              )?.lowerBound,
+              let makeKey = show.range(
+                of: "window.makeKeyAndOrderFront(nil)"
+              )?.lowerBound,
+              let regardless = show.range(
+                of: "window.orderFrontRegardless()"
+              )?.lowerBound else {
+            return XCTFail(
+                "show() must activate Agent Visor, promote the window to key, and order it front regardless so a global-hotkey summon rises above other apps on cooperative-activation macOS."
+            )
+        }
+        XCTAssertLessThan(
+            activate,
+            makeKey,
+            "Activate the app before promoting the window to key."
+        )
+        XCTAssertLessThan(
+            makeKey,
+            regardless,
+            "orderFrontRegardless must run last so the window rises above other apps even when full activation is deferred."
+        )
+    }
+
     private func repositoryRoot(from testFile: URL) -> URL {
         testFile
             .deletingLastPathComponent()

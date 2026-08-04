@@ -227,6 +227,7 @@ Within an attention tier, newer phase-entry evidence sorts first and session ID 
 - With a non-empty query, the popover searches the complete recent navigable snapshot and may return sessions already visible as pills. Search does not expand the observed window or invent historical rows.
 - The popover header identifies the default rows as `More Sessions` and search results as `Search Sessions`. Its footer opens the complete workspace explicitly as `Open Agent Sessions`.
 - The Sessions browser is the broadest surface. It includes current source-agnostic sessions plus supported saved Codex Desktop and Pi history that can be routed, opened in Chat, or viewed as Details according to actual capability.
+- An explicit summon of the Sessions browser — the global window hotkey, the Dock, or an owner/overflow action — brings it to the foreground as the key window, raised above other applications' windows, even when another app is frontmost. macOS made cross-app activation cooperative, so a background summon must activate Agent Visor, promote the window to key, and order it front regardless of deferred activation; it must not leave the browser visible-but-behind. This is distinct from the nonactivating menu-bar popover and Usage glance, which never activate the app.
 - Historical rows from unsupported sources are not invented from process metadata alone.
 
 ## Navigation Contract

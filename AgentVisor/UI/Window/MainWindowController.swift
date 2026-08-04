@@ -77,21 +77,28 @@ final class MainWindowController: NSWindowController {
     func show() {
         guard let window else { return }
         viewModel.refreshHistoricalSessions()
-        // Always `makeKeyAndOrderFront`, even when the window is
-        // already visible. Earlier this branched to
-        // `orderFrontRegardless` when visible — that raised the
-        // z-order but didn't promote the window to key status, so
-        // `NSApp.activate` came back half-completed: the window
-        // painted on top, but the app stayed in the background. The
-        // user saw a visible window but their menu bar still
-        // belonged to the previous app, traffic lights stayed gray,
-        // and Cmd+N landed in nowhere. A second double-shift hit a
-        // different code path (window became hidden via toggle, then
-        // re-shown), which is why the second invocation "worked."
-        // `makeKeyAndOrderFront` is idempotent and handles both
-        // ordering and key-status promotion in a single call.
-        window.makeKeyAndOrderFront(nil)
+        // Summon order matters on cooperative-activation macOS (14+,
+        // and stricter on 26.x). A background app summoned from a
+        // global hotkey while another app is frontmost is no longer
+        // force-raised by `activate(ignoringOtherApps:)` alone —
+        // `makeKeyAndOrderFront` orders the window into the z-stack,
+        // but the app never activates, so the window never becomes
+        // key and other apps' windows stay on top (the "visible but
+        // covered" double-shift regression on macOS 26.5). Because
+        // the window then stays non-key, `toggleSessions` kept taking
+        // the re-show branch, so repeated double-taps never raised or
+        // toggled it.
+        //
+        // Fix: activate the app first, promote the window to key with
+        // the idempotent `makeKeyAndOrderFront`, then
+        // `orderFrontRegardless` so the window rises above other
+        // applications' windows even when full activation is deferred.
+        // This uses `orderFrontRegardless` IN ADDITION TO — never
+        // instead of — `makeKeyAndOrderFront`, so it does not
+        // reintroduce the earlier "ordered on top but not key" bug.
         NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 
     func showSessions() {
