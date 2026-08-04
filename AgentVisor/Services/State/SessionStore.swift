@@ -338,6 +338,11 @@ actor SessionStore {
             }
             for staleId in staleIds {
                 Self.logger.debug("Dedup: removing stale session \(staleId.prefix(8), privacy: .public) (PID \(pid) now belongs to \(sessionId.prefix(8), privacy: .public))")
+                if sessions[staleId]?.agentID == .pi {
+                    await MainActor.run {
+                        PiRebootRestorationManager.shared.end(sessionID: staleId)
+                    }
+                }
                 sessions.removeValue(forKey: staleId)
                 hookDidRemoveStaleSession = true
                 cancelPendingSync(sessionId: staleId)
@@ -448,6 +453,37 @@ actor SessionStore {
         if event.event != "Notification"
             && !isPiSessionHeartbeat {
             session.lastActivity = Date()
+        }
+
+        if event.agentID == .pi {
+            if event.isTerminalLifecycleStatus {
+                await MainActor.run {
+                    PiRebootRestorationManager.shared.end(sessionID: sessionId)
+                }
+            } else if session.terminalHost == .ghostty,
+                      session.origin == .terminal,
+                      let pid = session.pid, pid > 0,
+                      let tty = session.tty, !tty.isEmpty {
+                let sessionFile = event.sessionFile
+                    ?? eventProvider?.transcriptURL(sessionId: sessionId, cwd: session.cwd).path
+                    ?? ""
+                let sessionName = session.sessionName
+                let cwd = session.cwd
+                await MainActor.run {
+                    PiRebootRestorationManager.shared.recordAcceptedSession(
+                        sessionID: sessionId,
+                        sessionFile: sessionFile,
+                        cwd: cwd,
+                        sessionName: sessionName,
+                        tty: tty,
+                        allowTopologyRefresh: !isPiSessionHeartbeat
+                    )
+                }
+            } else {
+                await MainActor.run {
+                    PiRebootRestorationManager.shared.end(sessionID: sessionId)
+                }
+            }
         }
 
         if event.isTerminalLifecycleStatus {
@@ -2221,6 +2257,11 @@ actor SessionStore {
     // MARK: - Session End Processing
 
     private func processSessionEnd(sessionId: String) async {
+        if sessions[sessionId]?.agentID == .pi {
+            await MainActor.run {
+                PiRebootRestorationManager.shared.end(sessionID: sessionId)
+            }
+        }
         // Mark ended but DO NOT remove. The user can still browse the
         // chat history, send a message (which fails fast if the TTY is
         // gone), or — for codex/cursor whose session ids persist across
@@ -3024,9 +3065,9 @@ actor SessionStore {
         publishState()
     }
 
-    func refreshCodexMetadata() {
+    func refreshCodexMetadata() async {
         refreshSessionNames(agentID: .codex)
-        pruneDeadSessions()
+        await pruneDeadSessions()
     }
 
     func refreshCodexMetadataAfterExternalChange() async {
@@ -3046,7 +3087,7 @@ actor SessionStore {
         for action in actions {
             switch action {
             case .refreshKnownSessions:
-                refreshCodexMetadata()
+                await refreshCodexMetadata()
             case .rediscoverSessions:
                 markCodexMetadataRediscoveryStarted(cancelScheduledTask: true)
                 await completeCodexMetadataRediscovery()
@@ -3725,7 +3766,7 @@ actor SessionStore {
         return !hasName && !hasFirstUser && !hasItems
     }
 
-    private func pruneDeadSessions() {
+    private func pruneDeadSessions() async {
         var didMark = false
 
         // 1. Sessions with dead PIDs: per-provider rule decides
@@ -3863,6 +3904,12 @@ actor SessionStore {
             guard let session = sessions[sessionId],
                   let provider = AgentRegistry.provider(for: session.agentID)
             else { continue }
+
+            if session.agentID == .pi {
+                await MainActor.run {
+                    PiRebootRestorationManager.shared.end(sessionID: sessionId)
+                }
+            }
 
             // Before marking ended, try to rebind to a NEW live PID for
             // the same session. Users routinely close a terminal pane

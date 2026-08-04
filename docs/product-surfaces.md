@@ -240,6 +240,14 @@ Within an attention tier, newer phase-entry evidence sorts first and session ID 
 - Routing is best effort. When a source cannot select an exact task, the UI must not claim exact routing.
 - A navigation action records recency so frequently used `Recent` sessions remain easy to reach and the current Ready completion can be acknowledged. Recent ordering applies the new recency after the two-second spatial grace.
 
+## Automatic Pi Reboot Restoration
+
+Automatic reboot restoration is a lifecycle capability, not a new navigation or Chat surface. When Agent Visor launches on a new macOS boot, it may recreate only the exact persisted interactive Pi sessions that it had accepted as live and Ghostty-owned before the prior boot ended.
+
+Restoration is silent and does not summon the Sessions browser, post a confirmation dialog, replay a prompt, acknowledge a Ready episode, or change normal pill ordering. Successfully relaunched sessions re-enter every surface through the existing authoritative Pi `SessionStart` and heartbeat path. Failures remain diagnostics; no historical row is promoted to live and no substitute session is created.
+
+Same-boot Agent Visor relaunches, sleep/wake, intentional Pi or Ghostty closure, and already-live exact owners never trigger a restoration launch. Ghostty layout is best effort, but the restored durable session-ID set is strict. The detailed lifecycle, identity, persistence, and fallback contract is defined in [Pi Integration](pi-integration.md#reboot-restoration).
+
 ## Non-Goals
 
 - Reimplementing Codex, Claude Code, Cursor, Pi, or terminal chat experiences.

@@ -103,6 +103,18 @@ final class GhosttyMarkerLocatorTests: XCTestCase {
         XCTAssertTrue(script.contains("return \"not-found\""))
     }
 
+    // MARK: - topology location
+
+    func testParsesTopologyLocation() {
+        XCTAssertEqual(
+            GhosttyMarkerLocator.parseTopologyOutput("2,3,4\n"),
+            .init(windowIndex: 2, tabIndex: 3, terminalIndex: 4)
+        )
+        XCTAssertNil(GhosttyMarkerLocator.parseTopologyOutput("not-found"))
+        XCTAssertNil(GhosttyMarkerLocator.parseTopologyOutput("1,2"))
+        XCTAssertNil(GhosttyMarkerLocator.parseTopologyOutput("1,0,2"))
+    }
+
     // MARK: - Integration: AppleScript compile-check
     //
     // Regression guard for the class of bug from the Ctrl+U/`using {control down}`
@@ -121,6 +133,13 @@ final class GhosttyMarkerLocatorTests: XCTestCase {
         let script = GhosttyMarkerLocator.focusScript(marker: "/tmp/av-focus-test")
         XCTAssertTrue(script.contains("focused terminal of selected tab"))
         XCTAssertTrue(script.contains("front window"))
+        let result = Self.osacompile(script)
+        XCTAssertEqual(result.exitCode, 0, "osacompile stderr: \(result.stderr)")
+    }
+
+    func testTopologyScriptCompiles() throws {
+        try Self.requireGhostty()
+        let script = GhosttyMarkerLocator.topologyScript(marker: "/tmp/av-topology-test")
         let result = Self.osacompile(script)
         XCTAssertEqual(result.exitCode, 0, "osacompile stderr: \(result.stderr)")
     }

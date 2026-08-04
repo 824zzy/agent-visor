@@ -134,12 +134,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         HookInstaller.installIfNeeded()
         ImagePasteSender.cleanupStaleFiles()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(workspaceWillPowerOff(_:)),
+            name: NSWorkspace.willPowerOffNotification,
+            object: nil
+        )
         // Trigger the "Agent Visor wants to control X" TCC prompts now
         // (before the notch is open) so the system alert lands on top of
         // the desktop instead of behind the high-windowLevel notch panel.
         // Without this, the first AppleScript call happens when the user
         // types in chat — and the alert is unreachable, forcing a pkill.
         TCCPrewarm.start()
+        Task { @MainActor in
+            await PiRebootRestorationManager.shared.start()
+        }
         // Tail Cursor's claude-code extension logs to mirror the
         // auto-generated session titles (the names users see on chat
         // tabs in Cursor) into agent-visor's pill labels. Cursor's
@@ -268,7 +277,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return controller
     }
 
+    @objc private func workspaceWillPowerOff(_ notification: Notification) {
+        PiRebootRestorationManager.shared.freezeForSystemPowerOff()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        PiRebootRestorationManager.shared.invalidateForCleanAppTermination()
+        NSWorkspace.shared.notificationCenter.removeObserver(
+            self,
+            name: NSWorkspace.willPowerOffNotification,
+            object: nil
+        )
 #if DEBUG
         Task { @MainActor in
             await CodexConnectedRuntimeCoordinator.shared.shutdownForAppTermination()

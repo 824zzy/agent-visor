@@ -25,6 +25,8 @@ struct HookEvent: Codable, Sendable {
     let status: String
     let pid: Int?
     let tty: String?
+    /// Exact persisted Pi conversation path. Other providers omit it.
+    let sessionFile: String?
     let tool: String?
     let toolInput: [String: AnyCodable]?
     let toolUseId: String?
@@ -47,6 +49,7 @@ struct HookEvent: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
+        case sessionFile = "session_file"
         case cwd, event, status, pid, tty, tool
         case toolInput = "tool_input"
         case toolUseId = "tool_use_id"
@@ -69,7 +72,8 @@ struct HookEvent: Codable, Sendable {
         notificationType: String?,
         message: String?,
         agent: String? = nil,
-        permissionSuggestions: [AnyCodable]? = nil
+        permissionSuggestions: [AnyCodable]? = nil,
+        sessionFile: String? = nil
     ) {
         self.sessionId = sessionId
         self.cwd = cwd
@@ -77,6 +81,7 @@ struct HookEvent: Codable, Sendable {
         self.status = status
         self.pid = pid
         self.tty = tty
+        self.sessionFile = sessionFile
         self.tool = tool
         self.toolInput = toolInput
         self.toolUseId = toolUseId

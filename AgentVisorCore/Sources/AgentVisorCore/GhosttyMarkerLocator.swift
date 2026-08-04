@@ -68,6 +68,33 @@ public enum GhosttyMarkerLocator {
         """
     }
 
+    /// AppleScript that returns the exact window/tab/terminal position for
+    /// the terminal whose temporary OSC 7 working-directory marker matches.
+    public static func topologyScript(marker: String) -> String {
+        let escaped = marker
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return """
+        tell application "Ghostty"
+            repeat with w from 1 to (count windows)
+                set currentWindow to window w
+                repeat with tb from 1 to (count tabs of currentWindow)
+                    set currentTab to tab tb of currentWindow
+                    repeat with i from 1 to (count terminals of currentTab)
+                        set t to terminal i of currentTab
+                        try
+                            if working directory of t is "\(escaped)" then
+                                return (w as string) & "," & (tb as string) & "," & (i as string)
+                            end if
+                        end try
+                    end repeat
+                end repeat
+            end repeat
+            return "not-found"
+        end tell
+        """
+    }
+
     public static func focusScript(marker: String) -> String {
         let escaped = marker
             .replacingOccurrences(of: "\\", with: "\\\\")
@@ -95,6 +122,23 @@ public enum GhosttyMarkerLocator {
             return "focus-mismatch"
         end tell
         """
+    }
+
+    public static func parseTopologyOutput(_ raw: String) -> PiGhosttyLayout? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "not-found" else { return nil }
+        let parts = trimmed.split(separator: ",", omittingEmptySubsequences: false)
+        guard parts.count == 3,
+              let window = Int(parts[0]), window > 0,
+              let tab = Int(parts[1]), tab > 0,
+              let terminal = Int(parts[2]), terminal > 0 else {
+            return nil
+        }
+        return PiGhosttyLayout(
+            windowIndex: window,
+            tabIndex: tab,
+            terminalIndex: terminal
+        )
     }
 
     /// Parse the locator script's stdout. Trims whitespace; accepts only

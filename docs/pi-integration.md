@@ -2,7 +2,7 @@
 
 Status: Accepted
 Last reviewed: 2026-08-02
-Implementation status: The restart-safe liveness-heartbeat amendment is implemented, signed-deployed, and user-validated with live Pi runtimes. Native-equivalent image path submission is implemented and signed-deployed; image-only and image-plus-text delivery are user-validated with readable Pi results, while the remaining edge-case matrix has automated coverage but has not been exercised live. Provider-isolated bottom-bar behavior is also signed-deployed and user-validated: Pi exposes no Claude permission-mode chip and Agent Visor reserves Claude mode probing and cycling for Claude Code. The bounded same-session live-runtime ownership guardrail is implemented and signed-deployed: Agent Visor keeps one live owner per durable Pi session, rejects competing runtime evidence while that owner remains alive, and keys Ready attention to the durable session rather than mutable attachment metadata. The bounded transcript-refresh performance amendment is implemented, signed-deployed, and passively validated against a naturally active 100+ MB transcript.
+Implementation status: Automatic prior-boot restoration of the exact interactive Pi sessions owned by Ghostty is implemented behind Agent Visor's launch lifecycle; deterministic policy, persistence, AppleScript compilation, and wiring validation are complete, while signed deployment and a real reboot acceptance remain pending. The restart-safe liveness-heartbeat amendment is implemented, signed-deployed, and user-validated with live Pi runtimes. Native-equivalent image path submission is implemented and signed-deployed; image-only and image-plus-text delivery are user-validated with readable Pi results, while the remaining edge-case matrix has automated coverage but has not been exercised live. Provider-isolated bottom-bar behavior is also signed-deployed and user-validated: Pi exposes no Claude permission-mode chip and Agent Visor reserves Claude mode probing and cycling for Claude Code. The bounded same-session live-runtime ownership guardrail is implemented and signed-deployed: Agent Visor keeps one live owner per durable Pi session, rejects competing runtime evidence while that owner remains alive, and keys Ready attention to the durable session rather than mutable attachment metadata. The bounded transcript-refresh performance amendment is implemented, signed-deployed, and passively validated against a naturally active 100+ MB transcript.
 
 ## Purpose
 
@@ -17,7 +17,7 @@ This document defines the Pi-specific discovery, lifecycle, transcript, installa
 3. The extension is an enhancement, not a hard dependency. Removing it or failing to install it must not break discovery, history, or terminal navigation.
 4. Agent Visor does not create `~/.pi` or install anything when Pi is not detected.
 5. Settings always shows Pi. An unavailable installation appears as disabled `Pi — Not detected`.
-6. Initial support covers existing interactive TUI sessions. Agent Visor does not launch new Pi sessions.
+6. Initial support covers existing interactive TUI sessions. Agent Visor does not launch arbitrary new Pi sessions. The only launch exception is one automatically claimed prior-boot restoration generation, where every process opens an exact previously live persisted session with `pi --session`.
 7. Text and image-path submission to a terminal-owned Pi TUI are supported after terminal routing is verified. Agent Visor mirrors Pi's native clipboard-image convention without modifying Pi, mutating the system clipboard, or expanding the lifecycle extension protocol; source-specific interactive forms remain out of scope.
 8. Pi receives `Needs attention` only from explicit evidence. Agent Visor does not infer it from silence, a long-running tool, or an extension dialog it cannot observe.
 9. Pi's latest non-empty session name on the active transcript branch is authoritative. A rename replaces the previously displayed Pi name without requiring an Agent Visor restart; other agents retain their source-specific title precedence.
@@ -26,6 +26,7 @@ This document defines the Pi-specific discovery, lifecycle, transcript, installa
 12. Agent Visor models one live runtime owner per durable Pi session ID. If an accidental second Pi TUI resumes the same session while the accepted owner PID remains alive, the existing owner stays pinned and every hook from the competing PID is ignored before it can alter phase, attachment, navigation, sending, or notification state. Ownership may transfer after the pinned owner exits. Independent concurrent branches and multiple pills for one Pi session remain out of scope.
 13. Ready attention is identified by durable session ID. PID, TTY, terminal-host, or other attachment churn cannot by itself create another Ready episode, replay the completion sound, or bounce the menu-bar surface.
 14. Transcript refresh work is bounded. Repeated hook and file-watcher signals may collapse into one running refresh plus one latest pending rerun, an unchanged file performs no read or UI replay, and an append decodes only newly added complete JSONL records. Large historical Pi files use a bounded summary path until the user or a live update requires full history.
+15. Reboot restoration is exact-set and at-most-once. Agent Visor persists only accepted interactive Ghostty-owned Pi lifecycle metadata, freezes it for system power-off, removes intentionally ended sessions, gates launch on a different macOS boot identity, and never substitutes bare `pi`, `-c`, `-r`, CWD recency, or display names for the exact durable session path.
 
 ## User-Visible States
 
@@ -78,6 +79,29 @@ A separate same-session ownership guard applies before heartbeat handling and be
 This guardrail deliberately does not infer Pi branch identity, add a leaf ID to the extension payload, merge concurrent runtime phases, or manufacture multiple runtime rows. Those semantics require a separate product decision if independently active duplicate resumes become a supported workflow.
 
 A live process using an older already-loaded copy of the extension cannot be upgraded invisibly. It continues through fallback behavior until the user runs `/reload` or starts Pi again; Agent Visor must not inject `/reload` or terminal input to force adoption.
+
+## Reboot Restoration
+
+Agent Visor maintains one atomic, schema-versioned restoration snapshot under its Application Support directory. Only accepted, persisted, interactive Pi runtimes whose canonical terminal host is Ghostty enter it. Historical rows, fallback-unmatched processes, print/JSON/RPC/SDK invocations, ephemeral sessions, subagents, other terminal hosts, and competing live owners are excluded.
+
+The snapshot is keyed by durable Pi session ID and records exact session-file path, working directory, optional display name, last accepted attachment evidence, and optional Ghostty window/tab/terminal topology. It contains no prompt, response, tool input, credential, or transcript content. PID and TTY locate the current terminal for capture but are never treated as valid authority after reboot.
+
+Lifecycle rules are:
+
+- an accepted live Pi event adds or refreshes an eligible entry;
+- `/new`, `/resume`, and `/fork` replace the old same-process identity with the newly authoritative session;
+- `SessionEnd` or conclusive process death removes an entry while the machine remains up;
+- macOS `willPowerOff` freezes the current generation before teardown, so later shutdown-driven end events cannot erase it;
+- an app crash or power loss leaves the latest atomic active generation intact;
+- a clean Agent Visor termination outside system power-off invalidates the snapshot because later Pi lifecycle changes would be unobserved.
+
+At Agent Visor launch, a stable macOS boot identity separates ordinary same-boot reattachment from a genuine reboot. Same-boot launches never start Pi; normal heartbeats remain authoritative. A different boot may claim one active or frozen prior generation. The claim reaches disk before any AppleScript or process launch, and the generation cannot be claimed twice.
+
+Every candidate must still have a real session file and working directory. Every launch uses the resolved Pi executable plus exact `--session <path>`. Missing or invalid candidates are skipped; Agent Visor never falls back to a new session, most-recent session, or interactive selector and never replays a prompt or tool call.
+
+Ghostty's own AppKit restoration receives a bounded settle window. Agent Visor first reuses a captured window/tab/terminal only when that surface still exists and its working directory matches. It injects the exact resume command into that fresh restored shell. Unmatched sessions are reconstructed through Ghostty's supported AppleScript `new window`, `new tab`, and `split` commands. Missing topology degrades to one deterministic fallback window with one tab per session. Unrelated surfaces are never closed or repurposed.
+
+The bundled Pi extension remains socket-only and metadata-only. It writes no restoration registry. Therefore exactness is guaranteed only while Agent Visor was actively tracking the relevant lifecycle; sessions that start or end while Agent Visor is unavailable are not guessed later.
 
 ## Bundled Extension
 
@@ -275,7 +299,7 @@ The socket's absence is a normal state. No busy retry loop, background daemon, r
 
 ## Initial Non-Goals
 
-- Launching a new Pi session from Agent Visor.
+- Launching an arbitrary new Pi session from Agent Visor; only exact prior-boot restoration is allowed.
 - Replacing Pi's TUI or exposing a second full composer workflow.
 - Direct multimodal image-byte injection into a running Pi session or any modification of Pi's own package, settings, model catalog, or extension API.
 - Pi account/provider usage aggregation.
@@ -330,6 +354,9 @@ Integration and source-wiring tests must prove:
 - SessionStore handles `SessionHeartbeat` before generic lifecycle phase mutation and excludes it from user-activity refresh;
 - the menu-bar completion sound and bounce track Ready session IDs rather than PID-bearing SwiftUI stable IDs;
 - installation modifies only `agent-visor.ts` and is skipped when Pi is absent;
+- reboot restoration accepts only exact interactive Ghostty-owned sessions, atomically claims a prior-boot generation before automation, and uses only `pi --session`;
+- same-boot launch, sleep/wake, intentional Pi/Ghostty closure, missing files, and already-live exact owners produce no duplicate launch;
+- captured Ghostty surfaces are reused only when position and CWD agree, with unmatched sessions routed to the deterministic fallback layout;
 - `agent_settled` maps to Ready and low-level `agent_end` does not;
 - terminal-owned Pi sessions route through the existing terminal adapter;
 - both shared Chat composers admit Pi images through the provider-aware route instead of hard-coded Pi exclusions;
@@ -355,7 +382,8 @@ Manual validation must cover:
 14. at least ten concurrent Pi TUIs across a relaunch, with every live attachment represented by a visible pill or the `+N` overflow count;
 15. a delayed same-PID heartbeat after `SessionEnd` remaining unable to resurrect the ended row;
 16. a Pi runtime that loaded the pre-heartbeat extension remaining on documented fallback behavior until `/reload` or its next launch;
-17. passive high-volume observation of a naturally active large Pi transcript, confirming bounded CPU bursts, no growing refresh backlog, and stable memory after the initial index build without submitting prompts solely for the test.
+17. passive high-volume observation of a naturally active large Pi transcript, confirming bounded CPU bursts, no growing refresh backlog, and stable memory after the initial index build without submitting prompts solely for the test;
+18. an explicitly authorized real machine restart with multiple Ghostty Pi sessions, including two exact sessions in one CWD and one intentionally closed session, confirming the pre-reboot eligible ID set equals the post-login restored ID set with no duplicate launches.
 
 ## TDD Implementation Plan — Bounded Transcript Refresh
 
@@ -591,4 +619,4 @@ Do not type `/reload`, launch or close a Pi TUI, or otherwise mutate a foregroun
 
 ## Change Control
 
-Changes that make the extension mandatory, add content to its wire payload, let heartbeat evidence mutate phase or activity, increase heartbeat frequency, introduce Needs attention inference, enable new-session launching, broaden live support beyond interactive TUI, independently represent multiple live Pi runtimes or branches under one durable session ID, or trade active-branch correctness for a flat/tail-only live transcript require an explicit design update before implementation.
+Changes that make the extension mandatory, add content beyond exact lifecycle metadata to its wire payload, let heartbeat evidence mutate phase or activity, increase heartbeat frequency, introduce Needs attention inference, enable arbitrary new-session launching, broaden reboot restoration beyond exact interactive Ghostty-owned sessions, weaken boot/claim/identity gates, independently represent multiple live Pi runtimes or branches under one durable session ID, or trade active-branch correctness for a flat/tail-only live transcript require an explicit design update before implementation.
