@@ -241,6 +241,19 @@ actor SessionStore {
 
     // MARK: - Hook Event Processing
 
+    /// Resolve a Pi runtime's controlling TTY from its live process when the
+    /// bundled extension attached a PID but no TTY (see `PiTtyBackfillPolicy`).
+    /// Reuses the same `ps`/normalizer pair discovery uses.
+    private static func resolvePiControllingTTY(pid: Int?) -> String? {
+        guard let pid, pid > 0 else { return nil }
+        return TTYNormalizer.normalize(
+            AgentDiscoveryUtilities.runProcess(
+                "/bin/ps",
+                arguments: ["-p", "\(pid)", "-o", "tty="]
+            )
+        )
+    }
+
     private func processHookEvent(_ event: HookEvent) async {
         guard let event = codexBackedHookEvent(event) else { return }
         if event.agentID == .pi {
@@ -355,11 +368,33 @@ actor SessionStore {
             sharesProcessAcrossSessions: sharesProcessAcrossSessions
         )
         session.pid = processMetadata.pid
-        session.tty = processMetadata.tty
+        // Server-side TTY backfill. The bundled extension resolves its
+        // controlling TTY once at load with a bounded /usr/bin/tty probe;
+        // under load that probe can time out and report no TTY for the whole
+        // process, leaving a resumed Pi session attached with a live PID but
+        // tty=none. Exact-terminal navigation then fails (`noTTY`). When a Pi
+        // hook supplies a live PID but no TTY, resolve the controlling TTY
+        // from the process itself so navigation, host detection, and origin
+        // all see the real terminal. Bounded to Pi and to the missing-TTY
+        // case, so a reported TTY is never overridden. The resolved TTY then
+        // satisfies the merge on later heartbeats, so this runs at most once
+        // per session.
+        let resolvedTTY: String?
+        if PiTtyBackfillPolicy.shouldResolveTTY(
+            agentID: event.agentID,
+            pid: processMetadata.pid,
+            tty: processMetadata.tty
+        ) {
+            resolvedTTY = Self.resolvePiControllingTTY(pid: processMetadata.pid)
+                ?? processMetadata.tty
+        } else {
+            resolvedTTY = processMetadata.tty
+        }
+        session.tty = resolvedTTY
         let shouldRefreshDerivedAttachmentMetadata = !isPiSessionHeartbeat
             || heartbeatDisposition == .reattachIdle
             || pidBeforeHookMerge != processMetadata.pid
-            || ttyBeforeHookMerge != processMetadata.tty
+            || ttyBeforeHookMerge != resolvedTTY
 
         // Refresh terminalHost when lifecycle activity or changed attachment
         // metadata can make the owning terminal differ. Repeated unchanged
@@ -387,7 +422,7 @@ actor SessionStore {
         // ownership without inventing sendability for truly observed sources.
         session.origin = SessionStore.originForHostedSession(
             sessionId: event.sessionId,
-            tty: processMetadata.tty,
+            tty: resolvedTTY,
             agentID: event.agentID,
             terminalHost: session.terminalHost
         )

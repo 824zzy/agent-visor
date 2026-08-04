@@ -52,6 +52,8 @@ Creation-time matching is fallback evidence for a freshly created session, not a
 
 A discovery-created row cannot claim a PID that a different non-ended session already owns. Fallback creation-time matching can only ever pair a live process with its startup transcript; after that process runs `/new`, `/resume`, or `/fork` in place, discovery keeps re-finding the stale startup transcript for the same PID. Admitting it would republish a ghost row, infer a false Ready state for it, and shadow the authoritative hook-tracked owner's heartbeats until the next prune removed the duplicate. Discovery therefore defers to the existing live owner: a Pi discovery match is admitted only when no different non-ended session already holds its PID. This mirrors the heartbeat rule that a competing runtime cannot evict a different non-ended session that already owns the same PID.
 
+When a Pi hook attaches a live PID but no controlling TTY, Agent Visor resolves the TTY from the live process itself and stores it. The bundled extension resolves its controlling TTY once at load with a bounded probe; if that probe is unavailable or times out under load, the process reports no TTY for its lifetime, so a resumed session can attach with a live PID but `tty` absent. Exact-terminal navigation, terminal-host detection, and terminal origin all require that TTY, so a background PID-to-TTY resolution keeps them correct without modifying the extension. The resolution is bounded to Pi and only fills a missing value; a TTY reported by the extension is never overridden, and no other provider forks a process for this.
+
 Historical Pi sessions are included in the Sessions browser when their JSONL has a valid session header and renderable transcript evidence. They do not become menu-bar pills merely because a file exists.
 
 Ephemeral `--no-session` runs have no durable identity and are ignored. Print, JSON, RPC, and SDK sessions may appear as saved history when persisted, but only interactive TUI sessions receive live pills and terminal navigation in the initial release.
@@ -450,6 +452,34 @@ Run each focused RED → GREEN loop separately, then nearby Pi, lifecycle, atten
 - **Full validation:** the complete AgentVisorCore suite passed 1,782 tests with zero failures; `git diff --check` and an unsigned Debug app build passed.
 - **Signed deployment:** `scripts/dev-build.sh` succeeded and relaunched `/Applications/Agent Visor Dev.app` as one process at PID `77059`. The app owns `/tmp/agent-visor.sock`, Accessibility reached Ready, deep strict code-signature validation passed, and the embedded Codex runtime passed its bundle audit. Bundled and installed Pi extension SHA-256 values remain byte-identical at `4191e1e3c2ac3681da6582ed6b1656a2fb15678cfa7abb70f8a8a4a25b080375`.
 - **Live boundary:** after the user removed the accidental duplicate, only PID `78443` remained attached to `intern-paper`. Agent Visor did not recreate a duplicate, submit a prompt, or mutate terminal state solely to exercise the rejection branch.
+
+## TDD Implementation Record — Controlling TTY Backfill
+
+Status: implemented on 2026-08-03 to restore navigation for a resumed Pi session that attached without a TTY.
+
+The captured regression is Pi session `019fb500` (donut-failure-mode) resumed in live PID `11882` on `ttys001`. Its pill resolved correctly on click, but navigation failed with `ghostty focus … result=fail reason=noTTY` and `nav fallback=none reason=exactFocusFailed`, because the tracked session had `pid=11882 tty=none`. The bundled extension resolves the controlling TTY once at module load with a 100 ms `/usr/bin/tty` probe and swallows failures; PID `11882` started during the post-restart load spike, so its probe returned no TTY, and every hook for that process reported `tty` absent. `HookProcessMetadataPolicy.merge` keeps `reported.tty ?? existing.tty`, so the session never gained a TTY. This is a pre-existing fragility, not a regression from the discovery-ownership or window-activation work: the extension is byte-identical and the hook TTY-merge path was unchanged.
+
+### Slice 1 — Pure backfill decision
+
+**RED:** Add focused Core examples proving Agent Visor resolves a Pi runtime's TTY only when the provider is Pi, a positive PID is present, and the TTY is missing (nil or empty); a reported TTY is never overridden, and non-Pi providers never trigger a resolution.
+
+**GREEN:** Add one pure `PiTtyBackfillPolicy.shouldResolveTTY` using only provider, PID, and current TTY.
+
+**REFACTOR:** Keep the decision free of process I/O so the resolver stays a thin, replaceable side effect.
+
+### Slice 2 — Resolve in the hook path before origin
+
+**RED:** Add a production-wiring regression requiring the hook path to consult `PiTtyBackfillPolicy.shouldResolveTTY` after the PID/TTY merge and apply the resolved TTY before terminal-host detection and terminal-origin resolution, so a backfilled TTY promotes the session to terminal ownership rather than observed.
+
+**GREEN:** After `HookProcessMetadataPolicy.merge`, resolve the controlling TTY from the live PID (`ps -p <pid> -o tty=`, normalized) when the policy allows, and use that resolved TTY for `session.tty`, the derived-metadata refresh test, and `originForHostedSession`. Resolution runs at most once per session because the resolved TTY then satisfies the merge on later heartbeats.
+
+**REFACTOR:** Reuse the existing `ps`/`TTYNormalizer` pattern and leave the extension, heartbeat cadence, and merge rule unchanged.
+
+### Validation record
+
+- **Slice 1 RED/GREEN:** the policy tests failed to compile until `PiTtyBackfillPolicy` existed, then all examples passed.
+- **Slice 2 RED/GREEN:** the hook wiring audit failed until the resolver and its ordering existed, then confirmed the merge → backfill → origin sequence.
+- **Full validation and signed deployment:** recorded after the run below.
 
 ## TDD Implementation Record — Fallback Discovery Ownership
 
