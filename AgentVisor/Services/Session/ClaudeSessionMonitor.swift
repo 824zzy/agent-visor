@@ -17,6 +17,7 @@ class ClaudeSessionMonitor: ObservableObject {
     @Published var pendingInstances: [SessionState] = []
 
     private var cancellables = Set<AnyCancellable>()
+    private var isMonitoring = false
 
     init() {
         SessionStore.shared.sessionsPublisher
@@ -34,6 +35,8 @@ class ClaudeSessionMonitor: ObservableObject {
     // MARK: - Monitoring Lifecycle
 
     func startMonitoring() {
+        guard !isMonitoring else { return }
+        isMonitoring = true
         CodexMetadataWatcher.shared.start()
 
         // Scan for existing sessions on a background thread (Process needs a run loop)
@@ -120,9 +123,19 @@ class ClaudeSessionMonitor: ObservableObject {
                 }
             }
         )
+
+        // Restoration must not claim a prior-boot generation until the hook
+        // socket is listening. The manager's bounded preflight then has one
+        // complete Pi heartbeat interval to observe exact owners that Ghostty
+        // or another login item already relaunched, preventing duplicate TUIs.
+        Task { @MainActor in
+            await PiRebootRestorationManager.shared.start()
+        }
     }
 
     func stopMonitoring() {
+        guard isMonitoring else { return }
+        isMonitoring = false
         CodexMetadataWatcher.shared.stop()
         HookSocketServer.shared.stop()
     }

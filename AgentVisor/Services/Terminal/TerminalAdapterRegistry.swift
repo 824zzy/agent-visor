@@ -48,12 +48,12 @@ enum TerminalAdapterRegistry {
                 displayName: "Cursor"
             )
         case .zed:
-            // Read-only: Zed exposes no public IPC for thread reveal,
-            // and ACP runs over stdio inside the host. We can only
-            // raise the app and tell the user where to find the thread.
-            return HostActivationAdapter(
-                bundleID: "dev.zed.Zed",
-                displayName: "Zed"
+            // Zed has no thread deeplink and no accessible row tree, so
+            // ZedAdapter activates the app, raises the worktree window it
+            // already has open, and drives Zed's own sidebar-filter
+            // keystrokes to reveal the exact thread. Read-only for input.
+            return ZedAdapter(
+                channel: ZedThreadStore.runningApp()?.channel ?? .stable
             )
         case .ghostty:
             return GhosttyAdapter()

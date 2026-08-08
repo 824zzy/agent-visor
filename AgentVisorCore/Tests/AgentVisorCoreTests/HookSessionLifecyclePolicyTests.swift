@@ -93,6 +93,16 @@ final class HookSessionLifecyclePolicyTests: XCTestCase {
             ),
             .waitingForInput
         )
+        // Pi's manual /compact finishes outside an agent run: the compaction
+        // boundary clears Compacting without manufacturing a turn completion.
+        XCTAssertEqual(
+            HookSessionLifecyclePolicy.phase(
+                event: "PostCompact",
+                reportedStatus: "idle",
+                isTerminalLifecycleStatus: false
+            ),
+            .idle
+        )
     }
 
     func testReadyDoesNotExpireAtTheBoundaryOrFromTranscriptEvidence() {

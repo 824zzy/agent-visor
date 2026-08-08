@@ -1,11 +1,9 @@
 import Foundation
 
 public enum PiGhosttyRestorationScript {
-    private struct PositionedSession {
-        let session: PiRestorableSession
-        let window: Int
-        let tab: Int
-        let terminal: Int
+    private struct TabGroupKey: Hashable {
+        let window: String
+        let tab: String
     }
 
     public static func make(
@@ -13,56 +11,46 @@ public enum PiGhosttyRestorationScript {
         piExecutable: String
     ) -> String {
         guard !sessions.isEmpty else { return "" }
-        let positioned = position(sessions)
-        let windows = Dictionary(grouping: positioned, by: \.window)
+        let groups = Dictionary(grouping: sessions, by: groupKey)
+            .values
+            .map { $0.sorted(by: terminalOrder) }
+            .sorted(by: groupOrder)
         var lines = ["tell application \"Ghostty\"", "    activate"]
         var configurationIndex = 0
 
-        for windowIndex in windows.keys.sorted() {
-            guard let windowSessions = windows[windowIndex] else { continue }
-            let tabs = Dictionary(grouping: windowSessions, by: \.tab)
-            var windowVariable: String?
+        for (groupOffset, group) in groups.enumerated() {
+            guard let first = group.first else { continue }
+            configurationIndex += 1
+            let firstConfiguration = "restoreCfg\(configurationIndex)"
+            appendConfiguration(
+                to: &lines,
+                variable: firstConfiguration,
+                session: first,
+                piExecutable: piExecutable
+            )
 
-            for tabIndex in tabs.keys.sorted() {
-                guard let tabSessions = tabs[tabIndex]?.sorted(by: terminalOrder),
-                      let first = tabSessions.first else { continue }
+            // A captured tab is reconstructed as one window. Ghostty 1.3's
+            // preview AppleScript API rejects `new tab` when tabs are hidden,
+            // and may create a surface before returning that error. Using one
+            // window per tab avoids both failed restoration and duplicates.
+            let windowVariable = "restoreWindow\(groupOffset + 1)"
+            lines.append("    set \(windowVariable) to new window with configuration \(firstConfiguration)")
+            let firstTerminalVariable = "restoreTerminal\(groupOffset + 1)_1"
+            lines.append("    set \(firstTerminalVariable) to terminal 1 of selected tab of \(windowVariable)")
+
+            var splitTarget = firstTerminalVariable
+            for (offset, session) in group.dropFirst().enumerated() {
                 configurationIndex += 1
-                let firstConfiguration = "restoreCfg\(configurationIndex)"
+                let configuration = "restoreCfg\(configurationIndex)"
                 appendConfiguration(
                     to: &lines,
-                    variable: firstConfiguration,
-                    session: first.session,
+                    variable: configuration,
+                    session: session,
                     piExecutable: piExecutable
                 )
-
-                let firstTerminalVariable: String
-                if windowVariable == nil {
-                    let variable = "restoreWindow\(windowIndex)"
-                    lines.append("    set \(variable) to new window with configuration \(firstConfiguration)")
-                    windowVariable = variable
-                    firstTerminalVariable = "restoreTerminal\(windowIndex)_\(tabIndex)_1"
-                    lines.append("    set \(firstTerminalVariable) to terminal 1 of selected tab of \(variable)")
-                } else {
-                    let tabVariable = "restoreTab\(windowIndex)_\(tabIndex)"
-                    lines.append("    set \(tabVariable) to new tab in \(windowVariable!) with configuration \(firstConfiguration)")
-                    firstTerminalVariable = "restoreTerminal\(windowIndex)_\(tabIndex)_1"
-                    lines.append("    set \(firstTerminalVariable) to terminal 1 of \(tabVariable)")
-                }
-
-                var splitTarget = firstTerminalVariable
-                for (offset, positionedSession) in tabSessions.dropFirst().enumerated() {
-                    configurationIndex += 1
-                    let configuration = "restoreCfg\(configurationIndex)"
-                    appendConfiguration(
-                        to: &lines,
-                        variable: configuration,
-                        session: positionedSession.session,
-                        piExecutable: piExecutable
-                    )
-                    let terminalVariable = "restoreTerminal\(windowIndex)_\(tabIndex)_\(offset + 2)"
-                    lines.append("    set \(terminalVariable) to split \(splitTarget) direction right with configuration \(configuration)")
-                    splitTarget = terminalVariable
-                }
+                let terminalVariable = "restoreTerminal\(groupOffset + 1)_\(offset + 2)"
+                lines.append("    set \(terminalVariable) to split \(splitTarget) direction right with configuration \(configuration)")
+                splitTarget = terminalVariable
             }
         }
 
@@ -83,40 +71,43 @@ public enum PiGhosttyRestorationScript {
         lines.append("    set wait after command of \(variable) to true")
     }
 
-    private static func position(_ sessions: [PiRestorableSession]) -> [PositionedSession] {
-        let ordered = sessions.sorted {
-            if $0.observedAt != $1.observedAt { return $0.observedAt < $1.observedAt }
-            return $0.sessionId < $1.sessionId
+    private static func groupKey(_ session: PiRestorableSession) -> TabGroupKey {
+        if let layout = session.layout,
+           let windowID = layout.windowID,
+           let tabID = layout.tabID,
+           !windowID.isEmpty,
+           !tabID.isEmpty {
+            return TabGroupKey(window: "id:\(windowID)", tab: "id:\(tabID)")
         }
-        let highestKnownWindow = ordered.compactMap(\.layout?.windowIndex).max() ?? 0
-        let fallbackWindow = highestKnownWindow + 1
-        var fallbackTab = 0
-
-        return ordered.map { session in
-            if let layout = session.layout,
-               layout.windowIndex > 0,
-               layout.tabIndex > 0,
-               layout.terminalIndex > 0 {
-                return PositionedSession(
-                    session: session,
-                    window: layout.windowIndex,
-                    tab: layout.tabIndex,
-                    terminal: layout.terminalIndex
-                )
-            }
-            fallbackTab += 1
-            return PositionedSession(
-                session: session,
-                window: fallbackWindow,
-                tab: fallbackTab,
-                terminal: 1
+        if let layout = session.layout,
+           layout.windowIndex > 0,
+           layout.tabIndex > 0 {
+            return TabGroupKey(
+                window: "legacy:\(layout.windowIndex)",
+                tab: "legacy:\(layout.tabIndex)"
             )
         }
+        return TabGroupKey(window: "fallback:\(session.sessionId)", tab: "session")
     }
 
-    private static func terminalOrder(_ lhs: PositionedSession, _ rhs: PositionedSession) -> Bool {
-        if lhs.terminal != rhs.terminal { return lhs.terminal < rhs.terminal }
-        return lhs.session.sessionId < rhs.session.sessionId
+    private static func groupOrder(_ lhs: [PiRestorableSession], _ rhs: [PiRestorableSession]) -> Bool {
+        guard let left = lhs.first, let right = rhs.first else { return !lhs.isEmpty }
+        let leftWindow = left.layout?.windowIndex ?? .max
+        let rightWindow = right.layout?.windowIndex ?? .max
+        if leftWindow != rightWindow { return leftWindow < rightWindow }
+        let leftTab = left.layout?.tabIndex ?? .max
+        let rightTab = right.layout?.tabIndex ?? .max
+        if leftTab != rightTab { return leftTab < rightTab }
+        if left.observedAt != right.observedAt { return left.observedAt < right.observedAt }
+        return left.sessionId < right.sessionId
+    }
+
+    private static func terminalOrder(_ lhs: PiRestorableSession, _ rhs: PiRestorableSession) -> Bool {
+        let leftTerminal = lhs.layout?.terminalIndex ?? .max
+        let rightTerminal = rhs.layout?.terminalIndex ?? .max
+        if leftTerminal != rightTerminal { return leftTerminal < rightTerminal }
+        if lhs.observedAt != rhs.observedAt { return lhs.observedAt < rhs.observedAt }
+        return lhs.sessionId < rhs.sessionId
     }
 
     private static func shellQuote(_ value: String) -> String {

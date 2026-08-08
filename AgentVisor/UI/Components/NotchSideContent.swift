@@ -673,9 +673,9 @@ struct ClaudeUsagePillButton: View {
     }
 
     var body: some View {
-        // No provider word: the `$` self-labels this as spend, matching
-        // Codex's label-less `5h|7d`. Identity lives in the popover and
-        // the accessibility label below.
+        // Compact dollars-remaining with an uppercase `CC` (Claude Code)
+        // label so it reads distinctly from Codex's `5h|7d` and avoids the
+        // email `cc:` reading. The used/limit breakdown lives in the popover.
         Text(presentation.label)
             .foregroundColor(valueColor)
             .font(.system(size: MenuBarPillMetrics.usageFontSize, weight: .medium, design: .rounded))
@@ -686,7 +686,7 @@ struct ClaudeUsagePillButton: View {
                 height: MenuBarPillMetrics.height
             )
             .background(Capsule().fill(Color.black.opacity(0.3)))
-            .accessibilityLabel("Claude usage \(presentation.label), \(presentation.percentText) used")
+            .accessibilityLabel("Claude Code usage, \(presentation.label) remaining, \(presentation.percentText) used")
     }
 
     private var valueColor: Color {

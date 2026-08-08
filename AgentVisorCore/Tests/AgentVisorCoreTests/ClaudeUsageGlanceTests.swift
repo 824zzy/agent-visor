@@ -66,23 +66,35 @@ final class ClaudeUsageGlanceTests: XCTestCase {
         XCTAssertNil(ClaudeUsageSnapshotParser.response(payload, observedAt: Date()))
     }
 
-    func testPresentationRendersWholeDollarsAndPercent() {
+    func testPresentationRendersRemainingDollarsWithClaudeCodeLabel() {
         let spend = ClaudeUsageSpend(
             usedMinor: 1837, limitMinor: 60000, exponent: 2,
             currency: "USD", usedPercent: 3, severity: .normal, enabled: true
         )
         let snapshot = ClaudeUsageSnapshot(spend: spend, observedAt: Date())
         let presentation = ClaudeUsageGlancePolicy.presentation(for: snapshot)
-        XCTAssertEqual(presentation.label, "$18/$600")
+        // remaining = $600 - $18.37 = $581.63 -> $582
+        XCTAssertEqual(presentation.label, "CC $582")
         XCTAssertEqual(presentation.percentText, "3%")
         XCTAssertEqual(presentation.severity, .normal)
+    }
+
+    func testPresentationShowsZeroRemainingWhenSpentOut() {
+        let spend = ClaudeUsageSpend(
+            usedMinor: 60000, limitMinor: 60000, exponent: 2,
+            currency: "USD", usedPercent: 100, severity: .critical, enabled: true
+        )
+        let snapshot = ClaudeUsageSnapshot(spend: spend, observedAt: Date())
+        let presentation = ClaudeUsageGlancePolicy.presentation(for: snapshot)
+        XCTAssertEqual(presentation.label, "CC $0")
+        XCTAssertEqual(presentation.severity, .critical)
     }
 
     func testMissingSnapshotKeepsAPlaceholderLabel() {
         let presentation = ClaudeUsageGlancePolicy.presentation(
             for: Optional<ClaudeUsageSnapshot>.none
         )
-        XCTAssertEqual(presentation.label, "$--/$--")
+        XCTAssertEqual(presentation.label, "CC $--")
         XCTAssertNil(presentation.severity)
     }
 

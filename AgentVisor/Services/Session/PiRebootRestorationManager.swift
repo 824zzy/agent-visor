@@ -1,6 +1,5 @@
 import AgentVisorCore
 import AppKit
-import Darwin
 import Foundation
 import os.log
 
@@ -15,39 +14,121 @@ final class PiRebootRestorationManager {
         category: "PiRebootRestore"
     )
     private static let snapshotFileName = "pi-reboot-restoration.json"
+    /// Pi heartbeats run every 10 seconds. Waiting one complete interval plus
+    /// scheduling slack lets an already-running exact owner report before a
+    /// prior-boot generation is claimed.
+    private static let priorBootPreflightInterval: TimeInterval = 11
 
-    private let currentBootID: String
+    private let currentBootID: String?
     private let snapshotStore: PiRestorationSnapshotStore
-    private var coordinator: PiRebootRestorationCoordinator
+    private var coordinator: PiRebootRestorationCoordinator?
     private var started = false
+    private var disabled = false
+    private var needsInitialSnapshotPersistence = false
     private var topologyCaptureInFlight: Set<String> = []
     private var ttyBySessionID: [String: String] = [:]
     private var lastTopologyCaptureAt: [String: Date] = [:]
+    private var exactLiveSessionIDs: Set<String> = []
     private let topologyRefreshInterval: TimeInterval = 300
 
     private init() {
-        currentBootID = Self.bootID()
+        currentBootID = MacBootIdentity.current()
         let fileURL = AppPaths.appSupportDirectory()
             .appendingPathComponent(Self.snapshotFileName)
         snapshotStore = PiRestorationSnapshotStore(fileURL: fileURL)
-        if let persisted = try? snapshotStore.load() {
-            coordinator = PiRebootRestorationCoordinator(snapshot: persisted)
-        } else {
+        coordinator = nil
+        guard let currentBootID else { return }
+        do {
+            if let persisted = try snapshotStore.load() {
+                coordinator = PiRebootRestorationCoordinator(snapshot: persisted)
+            } else {
+                coordinator = PiRebootRestorationCoordinator(
+                    bootID: currentBootID,
+                    generationID: UUID().uuidString
+                )
+                needsInitialSnapshotPersistence = true
+            }
+        } catch {
             coordinator = PiRebootRestorationCoordinator(
                 bootID: currentBootID,
                 generationID: UUID().uuidString
             )
+            needsInitialSnapshotPersistence = true
+            Self.logger.error("Could not load or sanitize Pi restoration snapshot: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     func start(liveSessionIDs: Set<String> = []) async {
         guard !started else { return }
         started = true
+        guard let currentBootID else {
+            disabled = true
+            coordinator = nil
+            Self.logger.error("Skipping Pi reboot restoration: macOS boot identity unavailable")
+            do {
+                try snapshotStore.remove()
+            } catch {
+                Self.logger.error("Could not remove Pi restoration snapshot after boot identity failure: \(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
+        guard var coordinator else {
+            disabled = true
+            Self.logger.error("Skipping Pi reboot restoration: coordinator unavailable")
+            return
+        }
 
-        let plan = coordinator.claimRestorePlan(
+        if needsInitialSnapshotPersistence {
+            var startupState = PiRestorationStartupState(
+                coordinator: coordinator,
+                needsInitialSnapshotPersistence: true
+            )
+            do {
+                try startupState.persistInitialSnapshotIfNeeded { snapshot in
+                    try snapshotStore.save(snapshot)
+                }
+            } catch {
+                disabled = true
+                self.coordinator = nil
+                needsInitialSnapshotPersistence =
+                    startupState.needsInitialSnapshotPersistence
+                Self.logger.error("Could not persist initial Pi restoration baseline; restoration is disabled for this run: \(error.localizedDescription, privacy: .public)")
+                return
+            }
+            guard let authorizedCoordinator = startupState.coordinator else {
+                disabled = true
+                self.coordinator = nil
+                Self.logger.error("Could not authorize initial Pi restoration baseline; restoration is disabled for this run")
+                return
+            }
+            coordinator = authorizedCoordinator
+            self.coordinator = authorizedCoordinator
+            needsInitialSnapshotPersistence =
+                startupState.needsInitialSnapshotPersistence
+        }
+
+        if coordinator.snapshot.schemaVersion != PiRestorationSnapshot.currentSchemaVersion {
+            coordinator = PiRebootRestorationCoordinator(
+                bootID: currentBootID,
+                generationID: UUID().uuidString
+            )
+            self.coordinator = coordinator
+            persistSnapshot()
+        }
+
+        let canClaimPriorBootGeneration = coordinator.snapshot.bootID != currentBootID
+            && (coordinator.snapshot.state == .active || coordinator.snapshot.state == .frozen)
+        if canClaimPriorBootGeneration {
+            try? await Task.sleep(
+                nanoseconds: UInt64(Self.priorBootPreflightInterval * 1_000_000_000)
+            )
+        }
+
+        var plan = coordinator.claimRestorePlan(
             currentBootID: currentBootID,
-            liveSessionIDs: liveSessionIDs
+            liveSessionIDs: liveSessionIDs.union(exactLiveSessionIDs)
         ).filter(Self.isValidRestoreCandidate)
+        self.coordinator = coordinator
 
         if coordinator.snapshot.state == .claimed {
             do {
@@ -64,6 +145,7 @@ final class PiRebootRestorationManager {
                 bootID: currentBootID,
                 generationID: UUID().uuidString
             )
+            self.coordinator = coordinator
             persistSnapshot()
         } else if coordinator.snapshot.bootID != currentBootID
                     || coordinator.snapshot.state != .active {
@@ -71,6 +153,7 @@ final class PiRebootRestorationManager {
                 bootID: currentBootID,
                 generationID: UUID().uuidString
             )
+            self.coordinator = coordinator
             persistSnapshot()
         }
 
@@ -87,6 +170,14 @@ final class PiRebootRestorationManager {
         // when their working directory still agrees; everything else falls
         // back to newly created, deterministic surfaces.
         try? await Task.sleep(nanoseconds: 1_500_000_000)
+        // Close the final race between the preflight claim and automation. A
+        // late exact heartbeat still prevents input or a fallback window even
+        // though the generation was already durably claimed at most once.
+        plan.removeAll { exactLiveSessionIDs.contains($0.sessionId) }
+        guard !plan.isEmpty else {
+            Self.logger.notice("Skipping prior-boot Pi launches: every candidate already has an exact live owner")
+            return
+        }
         let existingScript = PiGhosttyExistingSurfaceScript.make(
             sessions: plan,
             piExecutable: piExecutable
@@ -124,6 +215,15 @@ final class PiRebootRestorationManager {
         }
     }
 
+    func noteExactLiveSession(sessionID: String) {
+        guard !sessionID.isEmpty else { return }
+        exactLiveSessionIDs.insert(sessionID)
+    }
+
+    func noteExactSessionEnded(sessionID: String) {
+        exactLiveSessionIDs.remove(sessionID)
+    }
+
     func recordAcceptedSession(
         sessionID: String,
         sessionFile: String,
@@ -132,9 +232,18 @@ final class PiRebootRestorationManager {
         tty: String,
         allowTopologyRefresh: Bool
     ) {
+        noteExactLiveSession(sessionID: sessionID)
         guard started,
-              !sessionID.isEmpty,
-              !sessionFile.isEmpty,
+              !disabled,
+              var coordinator,
+              !sessionID.isEmpty else { return }
+
+        guard PiRestorationSessionFilePolicy.isPersistedRegularFile(atPath: sessionFile) else {
+            removeRestorationCandidate(sessionID: sessionID)
+            return
+        }
+
+        guard !sessionFile.isEmpty,
               !cwd.isEmpty,
               !tty.isEmpty else { return }
 
@@ -149,6 +258,7 @@ final class PiRebootRestorationManager {
         )
         if existing != session {
             coordinator.observe(session)
+            self.coordinator = coordinator
             persistSnapshot()
         }
 
@@ -162,10 +272,15 @@ final class PiRebootRestorationManager {
         }
     }
 
-    func end(sessionID: String) {
-        guard started else { return }
+    /// Removes reboot-restoration eligibility without claiming that the live
+    /// runtime ended. A Pi session hosted by iTerm, Zed, or another non-Ghostty
+    /// owner must still block a duplicate prior-boot launch of the same durable
+    /// session ID.
+    func removeRestorationCandidate(sessionID: String) {
+        guard started, !disabled, var coordinator else { return }
         let existed = coordinator.snapshot.sessionsByID[sessionID] != nil
         coordinator.end(sessionID: sessionID)
+        self.coordinator = coordinator
         ttyBySessionID.removeValue(forKey: sessionID)
         topologyCaptureInFlight.remove(sessionID)
         lastTopologyCaptureAt.removeValue(forKey: sessionID)
@@ -174,15 +289,22 @@ final class PiRebootRestorationManager {
         }
     }
 
+    func end(sessionID: String) {
+        noteExactSessionEnded(sessionID: sessionID)
+        removeRestorationCandidate(sessionID: sessionID)
+    }
+
     func freezeForSystemPowerOff() {
-        guard started else { return }
+        guard started, !disabled, var coordinator else { return }
         coordinator.freezeForSystemPowerOff(at: Date())
+        self.coordinator = coordinator
         persistSnapshot()
     }
 
     func invalidateForCleanAppTermination() {
-        guard started else { return }
+        guard started, !disabled, var coordinator else { return }
         coordinator.invalidateForCleanAppTermination()
+        self.coordinator = coordinator
         persistSnapshot()
     }
 
@@ -198,13 +320,18 @@ final class PiRebootRestorationManager {
             guard let self else { return }
             self.topologyCaptureInFlight.remove(sessionID)
             guard self.ttyBySessionID[sessionID] == tty,
-                  let layout else { return }
-            self.coordinator.updateLayout(sessionID: sessionID, layout: layout)
+                  let layout,
+                  self.started,
+                  !self.disabled,
+                  var coordinator = self.coordinator else { return }
+            coordinator.updateLayout(sessionID: sessionID, layout: layout)
+            self.coordinator = coordinator
             self.persistSnapshot()
         }
     }
 
     private func persistSnapshot() {
+        guard !disabled, let coordinator else { return }
         do {
             try snapshotStore.save(coordinator.snapshot)
         } catch {
@@ -214,7 +341,7 @@ final class PiRebootRestorationManager {
 
     private static func isValidRestoreCandidate(_ session: PiRestorableSession) -> Bool {
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: session.sessionFile),
+        guard PiRestorationSessionFilePolicy.isPersistedRegularFile(atPath: session.sessionFile),
               FileManager.default.fileExists(atPath: session.cwd, isDirectory: &isDirectory),
               isDirectory.boolValue else { return false }
         return true
@@ -297,13 +424,4 @@ final class PiRebootRestorationManager {
         return candidates.first(where: fm.isExecutableFile(atPath:))
     }
 
-    private nonisolated static func bootID() -> String {
-        var bootTime = timeval()
-        var size = MemoryLayout<timeval>.size
-        if sysctlbyname("kern.boottime", &bootTime, &size, nil, 0) == 0 {
-            return "\(bootTime.tv_sec).\(bootTime.tv_usec)"
-        }
-        let approximateBoot = Date().timeIntervalSince1970 - Foundation.ProcessInfo.processInfo.systemUptime
-        return String(Int(approximateBoot))
-    }
 }

@@ -1,19 +1,17 @@
 import Foundation
 
 /// Attempts to reuse Ghostty's own post-login saved-state surfaces. A surface
-/// is eligible only when its captured window/tab/terminal position still
-/// exists and Ghostty reports the same working directory. Unmatched sessions
-/// are left for the separate deterministic fallback layout.
+/// is eligible only when its captured stable terminal identity still exists
+/// and Ghostty reports the same working directory. Positional indices are not
+/// safe here because inserting a window renumbers every later window.
 public enum PiGhosttyExistingSurfaceScript {
     public static func make(
         sessions: [PiRestorableSession],
         piExecutable: String
     ) -> String {
         let candidates = sessions.compactMap { session -> PiRestorableSession? in
-            guard let layout = session.layout,
-                  layout.windowIndex > 0,
-                  layout.tabIndex > 0,
-                  layout.terminalIndex > 0 else { return nil }
+            guard let terminalID = session.layout?.terminalID,
+                  !terminalID.isEmpty else { return nil }
             return session
         }.sorted { $0.sessionId < $1.sessionId }
         guard !candidates.isEmpty else { return "" }
@@ -23,13 +21,11 @@ public enum PiGhosttyExistingSurfaceScript {
             "    set restoredOutput to \"\"",
         ]
         for session in candidates {
-            guard let layout = session.layout else { continue }
+            guard let terminalID = session.layout?.terminalID else { continue }
             let command = "\(shellQuote(piExecutable)) --session \(shellQuote(session.sessionFile))"
             lines.append(contentsOf: [
                 "    try",
-                "        set targetWindow to window \(layout.windowIndex)",
-                "        set targetTab to tab \(layout.tabIndex) of targetWindow",
-                "        set targetTerminal to terminal \(layout.terminalIndex) of targetTab",
+                "        set targetTerminal to terminal id \"\(AppleScriptEscaper.escape(terminalID))\"",
                 "        if working directory of targetTerminal is \"\(AppleScriptEscaper.escape(session.cwd))\" then",
                 "            input text \"\(AppleScriptEscaper.escape(command))\" to targetTerminal",
                 "            send key \"enter\" to targetTerminal",

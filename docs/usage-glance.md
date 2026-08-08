@@ -19,7 +19,7 @@ The ChatGPT status item exposes Codex limits after a click, but a user who is ac
 
 - Codex renders recognized 5-hour and 7-day rate-limit windows, always ordered `5h` then `7d` when both are available.
 - Two windows use `5h NN% | 7d NN%` in a fixed 114-point capsule; exactly one window uses only its available value (for example `7d 99%`) in a fixed 64-point capsule.
-- Claude renders monthly spend as `$used/$limit` in its fixed 84-point capsule.
+- Claude renders remaining monthly spend as `CC $<remaining>` in its fixed 68-point capsule.
 - Provider capsules remain on the right side of the notch, beside any `+N` overflow pill.
 - Keep utility pills outside session ordering and overflow counts.
 - Clicking toggles a compact popover with both windows, reset times, reset-credit count when available, and last-sync time.
@@ -39,6 +39,8 @@ The usage pill has no status dot. Dots elsewhere in Agent Visor communicate sess
 | 0% through 10% | Critical |
 
 Normal values remain neutral. A warning or critical tone applies only to the affected percentage, not the whole pill. If a successful snapshot contains only one recognized window, the menu bar omits the unavailable placeholder and reserves only the 64-point one-window width. The menu bar never renders `5h --% | 7d --%`: while capability is unknown, or when Codex exposes no recognized window, no Codex width is reserved.
+
+Claude presents **remaining** spend as a compact `CC $<remaining>` pill. The `CC` label reads as Claude Code and distinguishes it from Codex's window pill; it is uppercase to avoid the email `cc:` reading. The value is dollars remaining (`limit − used`), colored by the remaining-tone table above, sized so the label never clips at 10.5pt. The full `used of limit` amount and the used/remaining percentages live in the Claude Usage popover, not the pill.
 
 ## Availability
 
@@ -95,7 +97,7 @@ The latest successful snapshot remains visible if a later refresh fails, but the
 Detailed pressure packing and safety invariants are defined in [Menu-Bar Space Packing](menu-bar-packing.md).
 
 - Reserve the exact zero-, one-, or two-window Codex width from the right-side safe width before packing sessions.
-- Keep Claude at its fixed 84-point width and add one normal inter-pill gap when both providers render.
+- Keep Claude at its fixed 68-point width and add one normal inter-pill gap when both providers render.
 - Hide a utility pill rather than overlap system status items when the right-side safe width cannot contain it.
 - Include the usage slot in the same render-time `PillBarHitTest` snapshot used by session and overflow pills.
 - A second click while the popover is open closes it.

@@ -13,6 +13,10 @@ public struct CodexParsedTranscript: Equatable, Sendable {
     public var toolOutputs: [String: String]
     /// Per-tool-call terminal status (exit code / running), keyed by call id.
     public var toolStatuses: [String: CodexToolStatus]
+    /// The unresolved Codex function call that is blocked on the user, if
+    /// any. Native Codex.app threads expose no approval hook, so observed
+    /// sessions derive this state directly from the rollout.
+    public var pendingAction: CodexPendingAction?
     /// The last turn-boundary marker seen in the rollout. Drives
     /// deterministic phase inference for observed Codex.app GUI threads:
     /// `.completed` → it's the user's turn, `.started` → a turn is running.
@@ -30,6 +34,7 @@ public struct CodexParsedTranscript: Equatable, Sendable {
         completedToolIds: Set<String> = [],
         toolOutputs: [String: String] = [:],
         toolStatuses: [String: CodexToolStatus] = [:],
+        pendingAction: CodexPendingAction? = nil,
         lastTurnMarker: TurnMarker = .none
     ) {
         self.metadata = metadata
@@ -43,6 +48,7 @@ public struct CodexParsedTranscript: Equatable, Sendable {
         self.completedToolIds = completedToolIds
         self.toolOutputs = toolOutputs
         self.toolStatuses = toolStatuses
+        self.pendingAction = pendingAction
         self.lastTurnMarker = lastTurnMarker
     }
 }
@@ -161,6 +167,23 @@ public struct CodexToolStatus: Equatable, Sendable {
     public init(exitCode: Int? = nil, isRunning: Bool = false) {
         self.exitCode = exitCode
         self.isRunning = isRunning
+    }
+}
+
+/// An unresolved function call whose continuation requires the user. This
+/// covers both structured questions (`request_user_input`) and commands that
+/// explicitly request elevated sandbox permission.
+public struct CodexPendingAction: Equatable, Sendable {
+    public let callId: String
+    public let name: String
+    public let input: [String: String]
+    public let timestamp: Date
+
+    public init(callId: String, name: String, input: [String: String], timestamp: Date) {
+        self.callId = callId
+        self.name = name
+        self.input = input
+        self.timestamp = timestamp
     }
 }
 
@@ -287,6 +310,13 @@ public enum CodexTranscriptParser {
                 timestamp: timestamp,
                 blocks: [block]
             ))
+            // Codex cannot emit more assistant content until a blocking
+            // user action has been answered. This also prevents an old
+            // pending call from the head of a bounded head+tail slice from
+            // leaking across the omitted middle into a newer tail.
+            if role == .assistant {
+                parsed.pendingAction = nil
+            }
             if role == .assistant, phase == "final_answer" {
                 parsed.lastTurnMarker = .completed
             }
@@ -297,6 +327,20 @@ public enum CodexTranscriptParser {
                 return
             }
             let input = parseArguments(payload["arguments"] as? String)
+            // Codex blocks at a pending action: seeing any later function
+            // call proves the earlier one resumed, even when a bounded
+            // head+tail summary omitted its function_call_output.
+            if parsed.pendingAction?.callId != callId {
+                parsed.pendingAction = nil
+            }
+            if requiresUserAction(name: name, input: input) {
+                parsed.pendingAction = CodexPendingAction(
+                    callId: callId,
+                    name: name,
+                    input: input,
+                    timestamp: timestamp
+                )
+            }
             let namespace = payload["namespace"] as? String
             let (kind, command, server) = classifyTool(name: name, namespace: namespace, input: input)
             parsed.messages.append(CodexParsedMessage(
@@ -315,6 +359,9 @@ public enum CodexTranscriptParser {
 
         case "function_call_output":
             guard let callId = payload["call_id"] as? String else { return }
+            if parsed.pendingAction?.callId == callId {
+                parsed.pendingAction = nil
+            }
             if let output = payload["output"] as? String {
                 rawOutputs[callId] = output
             } else if let output = payload["output"],
@@ -469,6 +516,7 @@ public enum CodexTranscriptParser {
 
         switch eventType {
         case "user_message":
+            parsed.pendingAction = nil
             let blocks = userMessageBlocks(from: payload)
             guard !blocks.isEmpty else { return }
             parsed.messages.append(CodexParsedMessage(
@@ -479,6 +527,7 @@ public enum CodexTranscriptParser {
             ))
 
         case "task_started":
+            parsed.pendingAction = nil
             parsed.lastTurnMarker = .started
             if let window = payload["model_context_window"] as? Int, window > 0 {
                 parsed.contextWindowTokens = window
@@ -490,6 +539,7 @@ public enum CodexTranscriptParser {
             // phase inference doesn't leave the thread stuck on .processing
             // until the stale ceiling. No duration block — it's an abort.
             parsed.lastTurnMarker = .completed
+            parsed.pendingAction = nil
 
         case "task_complete":
             // Record the turn boundary regardless of duration — phase
@@ -497,6 +547,7 @@ public enum CodexTranscriptParser {
             // took. The duration-block insertion below is a separate,
             // cosmetic concern that still requires a valid duration.
             parsed.lastTurnMarker = .completed
+            parsed.pendingAction = nil
             guard let durationMs = payload["duration_ms"] as? Int, durationMs > 0 else {
                 return
             }
@@ -633,6 +684,17 @@ public enum CodexTranscriptParser {
         default:
             return (.other, nil, nil)
         }
+    }
+
+    private static func requiresUserAction(name: String, input: [String: String]) -> Bool {
+        let normalizedName = name
+            .lowercased()
+            .replacingOccurrences(of: "_", with: "")
+        if normalizedName == "requestuserinput"
+            || normalizedName == "item/tool/requestuserinput" {
+            return true
+        }
+        return input["sandbox_permissions"] == "require_escalated"
     }
 
     private static func parseRole(_ raw: String?) -> CodexParsedRole? {

@@ -25,6 +25,7 @@ actor CodexConversationParser {
         let toolResults: [String: ConversationParser.ToolResult]
         let info: ConversationInfo
         let marker: TurnMarker
+        let pendingAction: CodexPendingAction?
     }
 
     private var cache: [String: ParseCacheEntry] = [:]
@@ -37,6 +38,7 @@ actor CodexConversationParser {
     /// second parse — populated on every `parseFullConversation` (which
     /// already runs on each codex file-extend).
     private var markers: [String: TurnMarker] = [:]
+    private var pendingActions: [String: CodexPendingAction] = [:]
 
     func parseFullConversation(sessionId: String) async -> [ChatMessage] {
         await parseFullConversationAttempt(sessionId: sessionId)
@@ -52,6 +54,7 @@ actor CodexConversationParser {
             results[sessionId] = [:]
             infos[sessionId] = CodexConversationInfoBuilder.empty()
             markers[sessionId] = TurnMarker.none
+            pendingActions.removeValue(forKey: sessionId)
             await writeLog("[CodexParse] \(sessionId.prefix(8)) NO path/data (path=\(path ?? "nil"))")
             return []
         }
@@ -88,6 +91,7 @@ actor CodexConversationParser {
             results[sessionId] = [:]
             infos[sessionId] = CodexConversationInfoBuilder.empty()
             markers[sessionId] = TurnMarker.none
+            pendingActions.removeValue(forKey: sessionId)
             cache.removeValue(forKey: sessionId)
             await writeLog("[CodexParse] \(sessionId.prefix(8)) NO path/data (path=\(path))")
             return []
@@ -111,6 +115,7 @@ actor CodexConversationParser {
             results[sessionId] = [:]
             infos[sessionId] = CodexConversationInfoBuilder.empty()
             markers[sessionId] = TurnMarker.none
+            pendingActions.removeValue(forKey: sessionId)
             cache.removeValue(forKey: sessionId)
             await writeLog("[CodexParse] \(sessionId.prefix(8)) NO path/data (path=\(path))")
             return []
@@ -145,7 +150,8 @@ actor CodexConversationParser {
             completedToolIds: parsed.completedToolIds,
             toolResults: resultMap,
             info: info,
-            marker: parsed.lastTurnMarker
+            marker: parsed.lastTurnMarker,
+            pendingAction: parsed.pendingAction
         )
         cache[sessionId] = entry
         apply(entry, sessionId: sessionId)
@@ -169,6 +175,11 @@ actor CodexConversationParser {
         results[sessionId] = entry.toolResults
         infos[sessionId] = entry.info
         markers[sessionId] = entry.marker
+        if let pendingAction = entry.pendingAction {
+            pendingActions[sessionId] = pendingAction
+        } else {
+            pendingActions.removeValue(forKey: sessionId)
+        }
     }
 
     private func writeLog(_ message: String) async {
@@ -197,6 +208,18 @@ actor CodexConversationParser {
 
     func updateLastTurnMarker(sessionId: String, marker: TurnMarker) {
         markers[sessionId] = marker
+    }
+
+    func pendingAction(for sessionId: String) -> CodexPendingAction? {
+        pendingActions[sessionId]
+    }
+
+    func updatePendingAction(sessionId: String, pendingAction: CodexPendingAction?) {
+        if let pendingAction {
+            pendingActions[sessionId] = pendingAction
+        } else {
+            pendingActions.removeValue(forKey: sessionId)
+        }
     }
 
     private func chatRole(from role: CodexParsedRole) -> ChatRole {

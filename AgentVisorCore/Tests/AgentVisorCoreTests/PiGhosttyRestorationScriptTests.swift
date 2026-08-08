@@ -16,8 +16,8 @@ final class PiGhosttyRestorationScriptTests: XCTestCase {
             piExecutable: "/opt/homebrew/bin/pi"
         )
 
-        XCTAssertEqual(script.components(separatedBy: "new window with configuration").count - 1, 2)
-        XCTAssertEqual(script.components(separatedBy: "new tab in").count - 1, 1)
+        XCTAssertEqual(script.components(separatedBy: "new window with configuration").count - 1, 3)
+        XCTAssertFalse(script.contains("new tab"))
         XCTAssertEqual(script.components(separatedBy: "split ").count - 1, 1)
         XCTAssertEqual(script.components(separatedBy: "--session").count - 1, 4)
         XCTAssertTrue(script.contains("a'\\\\''s session.jsonl"))
@@ -29,7 +29,7 @@ final class PiGhosttyRestorationScriptTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0, "osacompile stderr: \(result.stderr)")
     }
 
-    func testMissingLayoutUsesOneFallbackWindowWithOneTabPerSession() {
+    func testMissingLayoutUsesOneFallbackWindowPerSession() {
         let sessions = [
             session("a", file: "/tmp/a.jsonl"),
             session("b", file: "/tmp/b.jsonl"),
@@ -40,8 +40,8 @@ final class PiGhosttyRestorationScriptTests: XCTestCase {
             piExecutable: "/usr/local/bin/pi"
         )
 
-        XCTAssertEqual(script.components(separatedBy: "new window with configuration").count - 1, 1)
-        XCTAssertEqual(script.components(separatedBy: "new tab in").count - 1, 1)
+        XCTAssertEqual(script.components(separatedBy: "new window with configuration").count - 1, 2)
+        XCTAssertFalse(script.contains("new tab"))
         XCTAssertEqual(script.components(separatedBy: "--session").count - 1, 2)
     }
 
@@ -54,7 +54,14 @@ final class PiGhosttyRestorationScriptTests: XCTestCase {
     ) -> PiRestorableSession {
         let layout: PiGhosttyLayout?
         if let window, let tab, let terminal {
-            layout = .init(windowIndex: window, tabIndex: tab, terminalIndex: terminal)
+            layout = .init(
+                windowIndex: window,
+                tabIndex: tab,
+                terminalIndex: terminal,
+                windowID: "window-\(window)",
+                tabID: "window-\(window)-tab-\(tab)",
+                terminalID: "terminal-\(id)"
+            )
         } else {
             layout = nil
         }

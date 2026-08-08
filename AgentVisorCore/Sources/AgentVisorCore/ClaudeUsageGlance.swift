@@ -84,11 +84,10 @@ public enum ClaudeUsageAvailability: Equatable, Sendable {
 }
 
 public enum ClaudeUsageGlancePolicy {
-    /// Sized so the worst-case `$600/$600` never clips at 10.5pt, with
-    /// capsule breathing room. No provider word: the `$` self-labels it
-    /// as spend (mirroring Codex's label-less `5h|7d`), and the popover
-    /// spells out "Claude Usage".
-    public static let fixedWidth = 84.0
+    /// Sized so the compact remaining-dollars label `CC $<remaining>` never
+    /// clips at 10.5pt (worst-case `CC $1000` ≈ 52pt text + capsule breathing
+    /// room). The full `used of limit` breakdown lives in the popover.
+    public static let fixedWidth = 68.0
 
     public static func availability(
         preferenceEnabled: Bool,
@@ -117,13 +116,17 @@ public enum ClaudeUsageGlancePolicy {
     ) -> ClaudeUsageGlancePresentation {
         guard let spend = snapshot?.spend else {
             return ClaudeUsageGlancePresentation(
-                label: "$--/$--",
+                label: "CC $--",
                 percentText: "--%",
                 severity: nil
             )
         }
+        // Compact pill shows dollars REMAINING with a `CC` (Claude Code)
+        // label; the used/limit breakdown and percentages live in the
+        // popover. Tone still follows the remaining-based severity.
+        let remainingMinor = max(0, spend.limitMinor - spend.usedMinor)
         return ClaudeUsageGlancePresentation(
-            label: "\(dollars(minor: spend.usedMinor, exponent: spend.exponent))/\(dollars(minor: spend.limitMinor, exponent: spend.exponent))",
+            label: "CC \(dollars(minor: remainingMinor, exponent: spend.exponent))",
             percentText: "\(spend.usedPercent)%",
             severity: spend.severity
         )

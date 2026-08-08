@@ -10,11 +10,36 @@ public struct PiRestorationSnapshotStore: Sendable {
     public func load() throws -> PiRestorationSnapshot? {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
         guard let data = try? Data(contentsOf: fileURL),
-              let snapshot = try? JSONDecoder().decode(PiRestorationSnapshot.self, from: data),
-              snapshot.schemaVersion == PiRestorationSnapshot.currentSchemaVersion else {
+              let snapshot = try? JSONDecoder().decode(PiRestorationSnapshot.self, from: data) else {
             return nil
         }
-        return snapshot
+        guard snapshot.schemaVersion == PiRestorationSnapshot.currentSchemaVersion else {
+            try remove()
+            return nil
+        }
+        guard let canonicalBootID = MacBootIdentity.canonicalize(snapshot.bootID) else {
+            try remove()
+            return nil
+        }
+        let authorized: PiRestorationSnapshot
+        if canonicalBootID == snapshot.bootID {
+            authorized = snapshot
+        } else {
+            authorized = PiRestorationSnapshot(
+                schemaVersion: snapshot.schemaVersion,
+                bootID: canonicalBootID,
+                generationID: snapshot.generationID,
+                state: snapshot.state,
+                sessionsByID: snapshot.sessionsByID,
+                attemptedSessionIDs: snapshot.attemptedSessionIDs,
+                frozenAt: snapshot.frozenAt
+            )
+        }
+        let sanitized = PiRestorationSessionFilePolicy.sanitizing(authorized)
+        if sanitized != snapshot {
+            try save(sanitized)
+        }
+        return sanitized
     }
 
     public func save(_ snapshot: PiRestorationSnapshot) throws {
@@ -29,5 +54,11 @@ public struct PiRestorationSnapshotStore: Sendable {
             [.posixPermissions: NSNumber(value: Int16(0o600))],
             ofItemAtPath: fileURL.path
         )
+    }
+
+    /// Removes restoration authority. Missing snapshots are already clean.
+    public func remove() throws {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        try FileManager.default.removeItem(at: fileURL)
     }
 }

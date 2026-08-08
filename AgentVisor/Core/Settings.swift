@@ -174,6 +174,7 @@ enum AppSettings {
         static let connectedCodexActivationDate = "connectedCodexActivationDate"
         static let connectedCodexLaunchEnvironmentOwned = "connectedCodexLaunchEnvironmentOwned"
         static let lastNotifiedUpdateVersion = "lastNotifiedUpdateVersion"
+        static let zedThreadRevealEnabled = "zedThreadRevealEnabled"
         nonisolated static let observedWindowHours = "observedWindowHours"
     }
 
@@ -235,6 +236,27 @@ enum AppSettings {
             } else {
                 defaults.removeObject(forKey: Keys.lastNotifiedUpdateVersion)
             }
+        }
+    }
+
+    // MARK: - Zed
+
+    /// Whether a Zed pill click may drive Zed's own sidebar-filter
+    /// keystrokes to reveal the exact thread.
+    ///
+    /// Zed has no existing-thread deeplink and no accessible row tree, so
+    /// exact navigation uses Zed's stock keyboard actions. The sequence
+    /// opens the command palette, dispatches Focus Workspace Sidebar, then
+    /// uses its filter; it never types directly into the current editor. The
+    /// result is verified against Zed's serialized Agent Panel thread id.
+    /// Users with remapped Zed navigation keys can turn this off and keep
+    /// activation plus the exact thread-name toast.
+    static var zedThreadRevealEnabled: Bool {
+        get {
+            defaults.object(forKey: Keys.zedThreadRevealEnabled) as? Bool ?? true
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.zedThreadRevealEnabled)
         }
     }
 

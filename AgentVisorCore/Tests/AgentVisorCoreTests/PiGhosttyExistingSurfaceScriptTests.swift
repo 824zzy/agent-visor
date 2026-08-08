@@ -9,7 +9,14 @@ final class PiGhosttyExistingSurfaceScriptTests: XCTestCase {
             sessionFile: "/tmp/session-a.jsonl",
             cwd: "/tmp/project-a",
             sessionName: nil,
-            layout: .init(windowIndex: 2, tabIndex: 3, terminalIndex: 1),
+            layout: .init(
+                windowIndex: 2,
+                tabIndex: 3,
+                terminalIndex: 1,
+                windowID: "window-a",
+                tabID: "tab-b",
+                terminalID: "terminal-c"
+            ),
             observedAt: Date(timeIntervalSince1970: 100)
         )
 
@@ -18,9 +25,9 @@ final class PiGhosttyExistingSurfaceScriptTests: XCTestCase {
             piExecutable: "/opt/homebrew/bin/pi"
         )
 
-        XCTAssertTrue(script.contains("window 2"))
-        XCTAssertTrue(script.contains("tab 3"))
-        XCTAssertTrue(script.contains("terminal 1"))
+        XCTAssertTrue(script.contains("terminal id \"terminal-c\""))
+        XCTAssertFalse(script.contains("window 2"))
+        XCTAssertFalse(script.contains("tab 3"))
         XCTAssertTrue(script.contains("working directory of targetTerminal is \"/tmp/project-a\""))
         XCTAssertTrue(script.contains("--session"))
         XCTAssertFalse(script.contains("new window"))

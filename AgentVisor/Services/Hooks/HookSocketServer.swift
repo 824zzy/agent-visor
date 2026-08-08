@@ -46,6 +46,13 @@ struct HookEvent: Codable, Sendable {
     /// Bash-prefix labels than the Read rules upstream often supplies
     /// for Bash invocations).
     let permissionSuggestions: [AnyCodable]?
+    /// Pi only: the runtime's own "no agent run, retry, auto-compaction, or
+    /// queued continuation in flight" flag, sampled when the event was sent.
+    /// `nil` from every other provider, and from a Pi process still running an
+    /// older copy of the bundled extension. Lets a heartbeat repair a Working
+    /// row whose completion event was dropped in transit — see
+    /// `PiIdleHeartbeatRecoveryPolicy`.
+    let isIdle: Bool?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -56,6 +63,7 @@ struct HookEvent: Codable, Sendable {
         case notificationType = "notification_type"
         case message, agent
         case permissionSuggestions = "permission_suggestions"
+        case isIdle = "is_idle"
     }
 
     /// Create a copy with updated toolUseId
@@ -73,7 +81,8 @@ struct HookEvent: Codable, Sendable {
         message: String?,
         agent: String? = nil,
         permissionSuggestions: [AnyCodable]? = nil,
-        sessionFile: String? = nil
+        sessionFile: String? = nil,
+        isIdle: Bool? = nil
     ) {
         self.sessionId = sessionId
         self.cwd = cwd
@@ -89,6 +98,7 @@ struct HookEvent: Codable, Sendable {
         self.message = message
         self.agent = agent
         self.permissionSuggestions = permissionSuggestions
+        self.isIdle = isIdle
     }
 
     /// Resolved agent id, falling back to claude-code when the wire
@@ -550,7 +560,8 @@ class HookSocketServer {
                 notificationType: event.notificationType,
                 message: event.message,
                 agent: event.agent,
-                permissionSuggestions: event.permissionSuggestions
+                permissionSuggestions: event.permissionSuggestions,
+                isIdle: event.isIdle
             )
 
             let pending = PendingPermission(

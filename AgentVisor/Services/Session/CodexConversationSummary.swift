@@ -15,6 +15,7 @@ actor CodexConversationSummary {
         let signature: CodexRolloutFileSignature
         let info: ConversationInfo
         let marker: TurnMarker
+        let pendingAction: CodexPendingAction?
         let turnContextScan: CodexTurnContextScanState?
     }
 
@@ -53,6 +54,7 @@ actor CodexConversationSummary {
             signature: signature,
             info: info,
             marker: parsed.lastTurnMarker,
+            pendingAction: parsed.pendingAction,
             turnContextScan: summary.turnContextScan
         )
         return info
@@ -60,6 +62,10 @@ actor CodexConversationSummary {
 
     func lastTurnMarker(for sessionId: String) -> TurnMarker {
         cache[sessionId]?.marker ?? .none
+    }
+
+    func pendingAction(for sessionId: String) -> CodexPendingAction? {
+        cache[sessionId]?.pendingAction
     }
 
     private static func signature(path: String) -> CodexRolloutFileSignature? {

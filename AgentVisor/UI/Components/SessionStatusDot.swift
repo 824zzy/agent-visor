@@ -119,19 +119,41 @@ struct SessionStatusDot: View {
     /// the previous animation (0.35).
     private static let pulseMinOpacity: Double = 0.35
 
+    /// Cap the pulse tick rate. A 1.5s cosine reads smoothly at 30fps, so
+    /// there is no reason to relayout at a ProMotion panel's 120Hz refresh.
+    private static let pulseFrameInterval: TimeInterval = 1.0 / 30.0
+
     /// Mount the animated timeline only for a fresh, unacknowledged
     /// completion. The common static path avoids display-rate updates
     /// across every visible session indicator.
     var body: some View {
         let acknowledgedAt = navigationRecencyStore.readyAcknowledgedAt(for: session)
+        // Resolve the status color ONCE per body evaluation. It is constant
+        // for the duration of a pulse (phase stays waitingForInput; idleAge
+        // moves on the order of seconds), so it must NOT be re-resolved inside
+        // the per-frame TimelineView closure — doing so re-ran NSColor
+        // colorspace conversions every display refresh and pinned WindowServer
+        // on ProMotion panels (sample-confirmed 2026-08-04). See
+        // SessionState.statusIdleAge: fade off conversational recency, not the
+        // mtime/default-driven lastActivity, so stale or empty GUI-spawned
+        // sessions don't read as fresh green.
+        let color = sessionStatusColor(
+            for: session.phase,
+            idleAge: session.statusIdleAge,
+            scheme: colorScheme
+        )
         if ReadyAttentionPolicy.shouldPulse(
             isReady: session.phase == .waitingForInput,
             phaseChangedAt: session.phaseChangedAt,
             acknowledgedAt: acknowledgedAt,
             now: Date()
         ) {
-            TimelineView(.animation) { context in
-                staticDot(
+            // Throttle to `pulseFrameInterval` instead of the raw display
+            // refresh, and animate only opacity (a cheap layer property) over
+            // the precomputed color.
+            TimelineView(.animation(minimumInterval: Self.pulseFrameInterval)) { context in
+                dot(
+                    color: color,
                     pulseOpacity: pulseOpacity(
                         at: context.date,
                         acknowledgedAt: acknowledgedAt
@@ -142,20 +164,12 @@ struct SessionStatusDot: View {
             // Common case: phase is .processing / .idle / .ended / etc.
             // Drop the TimelineView so SwiftUI doesn't tick the dot at
             // display refresh for no benefit.
-            staticDot(pulseOpacity: 1.0)
+            dot(color: color, pulseOpacity: 1.0)
         }
     }
 
-    private func staticDot(pulseOpacity: Double) -> some View {
-        // See SessionState.statusIdleAge: fade off conversational recency,
-        // not the mtime/default-driven lastActivity, so stale or empty
-        // GUI-spawned sessions don't read as fresh green.
-        let color = sessionStatusColor(
-            for: session.phase,
-            idleAge: session.statusIdleAge,
-            scheme: colorScheme
-        )
-        return Circle()
+    private func dot(color: Color, pulseOpacity: Double) -> some View {
+        Circle()
             .fill(color)
             .frame(width: diameter, height: diameter)
             .opacity(pulseOpacity)

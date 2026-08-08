@@ -39,6 +39,65 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
         )
     }
 
+    func testReadySessionCanJumpDirectlyToPendingTranscriptAction() throws {
+        let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
+        let source = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor")
+            .appendingPathComponent("Models")
+            .appendingPathComponent("SessionPhase.swift"))
+
+        XCTAssertTrue(
+            source.contains("case (.waitingForInput, .waitingForApproval):"),
+            "A coalesced Codex rollout can contain task_started and request_user_input in one sync, so Ready must transition directly to a pending action."
+        )
+    }
+
+    func testCodexPendingActionsCannotLeakIntoOtherProviders() throws {
+        let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        guard let declaration = source.range(of: "var pendingCodexAction: CodexPendingAction?")?.lowerBound,
+              let inference = source.range(
+                of: "let inferred = TranscriptPhaseInferrer.infer(",
+                range: declaration..<source.endIndex
+              )?.lowerBound else {
+            return XCTFail("Could not isolate observed transcript preparation.")
+        }
+        let preparation = String(source[declaration..<inference])
+        guard let codexBranch = preparation.range(of: "if session.agentID == .codex")?.lowerBound,
+              let piBranch = preparation.range(of: "} else if session.agentID == .pi")?.lowerBound,
+              let assignment = preparation.range(of: "pendingCodexAction =")?.lowerBound else {
+            return XCTFail("Codex pending-action acquisition is missing its provider branch.")
+        }
+
+        XCTAssertLessThan(codexBranch, assignment)
+        XCTAssertLessThan(assignment, piBranch)
+        XCTAssertEqual(
+            preparation.components(separatedBy: "pendingCodexAction =").count - 1,
+            1,
+            "Claude, Pi, Cursor, and Auggie must not acquire Codex request_user_input semantics through shared transcript inference."
+        )
+
+        guard let metadataStart = source.range(
+            of: "private func applyMetadataOnlyConversationInfo"
+        )?.lowerBound,
+              let metadataEnd = source.range(
+                of: "private func cancelPendingSync",
+                range: metadataStart..<source.endIndex
+              )?.lowerBound else {
+            return XCTFail("Could not isolate metadata-only conversation sync.")
+        }
+        let metadataSync = String(source[metadataStart..<metadataEnd])
+        guard let metadataCodexBranch = bracedBlock(
+            in: metadataSync,
+            startingAt: "if session.agentID == .codex"
+        ) else {
+            return XCTFail("Metadata-only pending-action propagation is missing its Codex gate.")
+        }
+        XCTAssertTrue(
+            metadataCodexBranch.contains("CodexConversationSummary.shared.pendingAction"),
+            "Moving pending-action propagation outside the exact Codex branch would leak Codex semantics into shared provider inference."
+        )
+    }
+
     func testApprovalProgressUsesAgentAwareReleasePolicy() throws {
         let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
 
@@ -422,12 +481,24 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
             "Codex lightweight summary parsing should keep the tail turn marker needed by observed phase inference."
         )
         XCTAssertTrue(
+            summarySource.contains("let pendingAction: CodexPendingAction?"),
+            "Codex lightweight summary parsing should retain unresolved user actions for background threads."
+        )
+        XCTAssertTrue(
             parserSource.contains("func updateLastTurnMarker(sessionId: String, marker: TurnMarker)"),
             "The full Codex parser actor should expose a marker-only update for metadata-only file sync."
         )
         XCTAssertTrue(
+            parserSource.contains("func updatePendingAction(sessionId: String, pendingAction: CodexPendingAction?)"),
+            "Metadata-only file sync should update the full parser's pending-action cache."
+        )
+        XCTAssertTrue(
             sessionStoreSource.contains("CodexConversationSummary.shared.lastTurnMarker"),
             "Metadata-only Codex sync must refresh the cached turn marker before observed phase inference runs."
+        )
+        XCTAssertTrue(
+            sessionStoreSource.contains("CodexConversationSummary.shared.pendingAction"),
+            "Observed Codex phase inference must read the unresolved action from the lightweight summary."
         )
     }
 
@@ -1030,6 +1101,29 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
             .appendingPathComponent("Services")
             .appendingPathComponent("State")
             .appendingPathComponent("SessionStore.swift")
+    }
+
+    private func bracedBlock(in source: String, startingAt marker: String) -> String? {
+        guard let markerRange = source.range(of: marker),
+              let openingBrace = source[markerRange.lowerBound...].firstIndex(of: "{") else {
+            return nil
+        }
+
+        var depth = 0
+        var index = openingBrace
+        while index < source.endIndex {
+            switch source[index] {
+            case "{": depth += 1
+            case "}":
+                depth -= 1
+                if depth == 0 {
+                    return String(source[openingBrace...index])
+                }
+            default: break
+            }
+            index = source.index(after: index)
+        }
+        return nil
     }
 
     private func repoRootURL(from testFile: URL) -> URL {

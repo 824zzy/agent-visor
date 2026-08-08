@@ -23,12 +23,35 @@ function controllingTTY(): string | undefined {
 
 const tty = controllingTTY();
 
+// The runtime's own "nothing is running" flag: false while an agent run,
+// automatic retry, auto-compaction retry, or queued continuation is in
+// flight. Reported as metadata so Agent Visor can repair a phase whose
+// lifecycle event was lost in transit — one dropped `Stop` otherwise pins a
+// finished session to Working until the user's next prompt. Probed
+// defensively: an older Pi runtime may not expose `isIdle`, and a stale
+// extension context throws instead of answering. Both cases report no flag,
+// which preserves the previous phase-neutral heartbeat.
+function runtimeIsIdle(ctx: ExtensionContext): boolean | undefined {
+  const probe = (ctx as { isIdle?: () => boolean }).isIdle;
+  if (typeof probe !== "function") return undefined;
+  try {
+    return probe.call(ctx) === true;
+  } catch {
+    return undefined;
+  }
+}
+
+interface ReportOptions {
+  tool?: string;
+  toolUseId?: string;
+  idle?: boolean;
+}
+
 function report(
   ctx: ExtensionContext,
   lifecycleEvent: string,
   status: string,
-  tool?: string,
-  toolUseId?: string,
+  options: ReportOptions = {},
 ): void {
   if (ctx.mode !== "tui" || !existsSync(SOCKET_PATH)) return;
 
@@ -40,8 +63,9 @@ function report(
     status,
     pid: process.pid,
     tty,
-    tool,
-    tool_use_id: toolUseId,
+    tool: options.tool,
+    tool_use_id: options.toolUseId,
+    is_idle: options.idle,
     agent: "pi",
   };
 
@@ -66,7 +90,7 @@ export default function (pi: ExtensionAPI) {
     stopHeartbeat();
     if (ctx.mode !== "tui") return;
     heartbeatTimer = setInterval(() => {
-      report(ctx, "SessionHeartbeat", "alive");
+      report(ctx, "SessionHeartbeat", "alive", { idle: runtimeIsIdle(ctx) });
     }, HEARTBEAT_INTERVAL_MS);
     heartbeatTimer.unref();
   }
@@ -81,15 +105,31 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_execution_start", (event, ctx) => {
-    report(ctx, "PreToolUse", "running_tool", event.toolName, event.toolCallId);
+    report(ctx, "PreToolUse", "running_tool", {
+      tool: event.toolName,
+      toolUseId: event.toolCallId,
+    });
   });
 
   pi.on("tool_execution_end", (event, ctx) => {
-    report(ctx, "PostToolUse", "processing", event.toolName, event.toolCallId);
+    report(ctx, "PostToolUse", "processing", {
+      tool: event.toolName,
+      toolUseId: event.toolCallId,
+    });
   });
 
   pi.on("session_before_compact", (_event, ctx) => {
     report(ctx, "PreCompact", "compacting");
+  });
+
+  // The closing boundary of a compaction. A manual `/compact` runs outside
+  // an agent run, so it never reaches `agent_settled`: without this event the
+  // row would stay Compacting until the user's next prompt. Auto compaction
+  // happens inside a run, where the runtime still reports busy and the turn's
+  // own lifecycle events stay authoritative.
+  pi.on("session_compact", (_event, ctx) => {
+    const idle = runtimeIsIdle(ctx);
+    report(ctx, "PostCompact", idle === false ? "processing" : "idle", { idle });
   });
 
   // agent_end is intentionally not a completion signal: Pi may still retry,

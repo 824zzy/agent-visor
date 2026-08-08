@@ -53,6 +53,7 @@ The pill strip maximizes the visible highest-priority session prefix inside meas
 - A shorter lower-priority pill cannot bypass a hidden higher-priority pill merely because it fits an isolated fragment.
 - Residual whitespace is valid when the next ordered session cannot fit under an approved profile.
 - Rendering, overflow counts, shortcut numbering, and click hit-testing consume one immutable packing plan.
+- Both measured safe-width boundaries hold their last reliable per-screen edge. A transient ownership loss or a momentarily narrower measurement — common during app activation or across multiple displays — must not collapse the pill bar: more room applies immediately, while less room applies only after the narrower boundary persists. Pills must not flap in and out as the boundary is re-measured.
 
 The detailed algorithm, transition rules, and test contract are defined in [Menu-Bar Space Packing](menu-bar-packing.md).
 
@@ -200,6 +201,7 @@ Within an attention tier, newer phase-entry evidence sorts first and session ID 
 - A later Ready transition also returns the pill above Working until that completion is acknowledged.
 - Navigation recency is recorded independently for `Recent` ordering and must not replace the Ready acknowledgment timestamp.
 - The attention pulse expires after seven minutes even when it is not acknowledged.
+- The Ready pulse must not saturate the compositor. Its status color is resolved once per state change, never inside the per-frame animation closure, and only opacity animates on a throttled schedule rather than the raw display refresh. This keeps per-frame cost near zero even when several indicators pulse simultaneously on a high-refresh display.
 - The brief capsule press response remains separate click feedback and is not an attention signal.
 
 ### Ready Completion Notifications
@@ -240,6 +242,14 @@ Within an attention tier, newer phase-entry evidence sorts first and session ID 
 - Routing is best effort. When a source cannot select an exact task, the UI must not claim exact routing.
 - A navigation action records recency so frequently used `Recent` sessions remain easy to reach and the current Ready completion can be acknowledged. Recent ordering applies the new recency after the two-second spatial grace.
 
+## Zed-Hosted Agent Ownership
+
+A supported external agent thread hosted through Zed remains owned by Zed even though Claude, Codex, or Pi writes the canonical transcript. Zed's exact durable-session row owns the visible title, workspace, and navigation destination; provider-derived process names and standalone desktop fallbacks cannot replace that host identity.
+
+Zed-hosted Chat is read-only. A normal pill or owner action activates the running Zed channel and target worktree. When the title query is unique and the user enables the behavior, Agent Visor may drive Zed's documented default sidebar-filter path and verify the persisted Agent Panel selection before reporting an exact reveal. Missing titles, duplicate titles, remapped keys, unsupported schemas, and failed verification degrade to activation plus an identifying toast rather than a false success or a prompt injection.
+
+The detailed read-only database, liveness, identity, channel, keyboard-safety, and acceptance contract is defined in [Zed-Hosted Agent Integration](zed-integration.md).
+
 ## Automatic Pi Reboot Restoration
 
 Automatic reboot restoration is a lifecycle capability, not a new navigation or Chat surface. When Agent Visor launches on a new macOS boot, it may recreate only the exact persisted interactive Pi sessions that it had accepted as live and Ghostty-owned before the prior boot ended.
@@ -261,6 +271,6 @@ Changes to surface purpose, state meaning, primary click behavior, or visibility
 
 Implementation policy belongs in `AgentVisorCore`; SwiftUI and AppKit views render policy results and route user intent. Each behavior change must add or update a Core test or a focused source-wiring audit. Visual-only changes still require manual verification on the menu-bar and main-window surfaces they affect.
 
-Related contracts: [Menu-Bar Space Packing](menu-bar-packing.md), [Usage Glance](usage-glance.md), and [Pi Integration](pi-integration.md).
+Related contracts: [Menu-Bar Space Packing](menu-bar-packing.md), [Usage Glance](usage-glance.md), [Pi Integration](pi-integration.md), and [Zed-Hosted Agent Integration](zed-integration.md).
 
 Full-screen visibility is specified in [Full-Screen Pill Behavior](full-screen-pills.md).

@@ -21,12 +21,15 @@ public enum TerminalHost: String, Equatable, Sendable, CaseIterable {
     /// for the two channels.
     case vscode
     case cursor
-    /// Zed editor (dev.zed.Zed). Hosts other agents (claude, codex,
-    /// cursor-agent) as ACP children — those agents write to their
-    /// canonical on-disk transcript stores, so agent-visor sees the
-    /// session via existing discovery; the host badge marks WHO is
-    /// driving the agent. Read-only: Zed exposes no public IPC for
-    /// reopening a thread, so click navigation just activates the app.
+    /// Zed editor, any release channel (see [[ZedChannel]]). Hosts other
+    /// agents (claude, codex, pi, cursor-agent) as ACP children — those
+    /// agents write to their canonical on-disk transcript stores, so
+    /// agent-visor sees the session via existing discovery; the host badge
+    /// marks WHO is driving the agent, and Zed's own `sidebar_threads`
+    /// table supplies the thread title the user recognizes.
+    /// Read-only for input: Zed exposes no public IPC for injecting a
+    /// prompt, and no thread deeplink — navigation activates the app and
+    /// drives Zed's own sidebar reveal keystrokes.
     case zed
     case unknown
 }
@@ -58,8 +61,15 @@ public enum TerminalHostDetector {
         case "com.microsoft.VSCode",
              "com.microsoft.VSCodeInsiders":        return .vscode
         case "com.todesktop.230313mzl4w4u92":       return .cursor
-        case "dev.zed.Zed":                         return .zed
-        default:                                    return nil
+        default:
+            // Zed ships four channels with distinct bundle ids that share
+            // one data directory. Knowing only stable meant Preview /
+            // Nightly / Dev users got `.unknown` — no host badge, no
+            // read-only banner, terminal-shaped navigation.
+            if ZedChannel.channel(forBundleID: bundleID) != nil {
+                return .zed
+            }
+            return nil
         }
     }
 }

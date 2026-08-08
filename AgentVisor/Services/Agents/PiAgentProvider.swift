@@ -143,7 +143,7 @@ struct PiAgentProvider: AgentProvider {
         )
 
         let fileByID = Dictionary(uniqueKeysWithValues: files.map { ($0.metadata.sessionId, $0) })
-        return matches.compactMap { match in
+        var discovered = matches.compactMap { match -> DiscoveredSession? in
             guard fileByID[match.session.id] != nil,
                   let pid = Int(match.process.id) else { return nil }
             AgentDiscoveryUtilities.writeLog(
@@ -155,6 +155,50 @@ struct PiAgentProvider: AgentProvider {
                 pid: pid,
                 tty: match.process.tty,
                 agentID: id
+            )
+        }
+        let alreadyFound = Set(discovered.map(\.sessionId))
+        discovered.append(contentsOf: Self.zedHostedSessions(
+            files: fileByID,
+            excluding: alreadyFound
+        ))
+        return discovered
+    }
+
+    /// Pi threads Zed is hosting over ACP.
+    ///
+    /// The `ps` path above cannot see these: Zed spawns `node …/pi-acp`,
+    /// so `pgrep -x pi` never matches, and the child has no tty (which the
+    /// process scan also requires). They were therefore invisible as live
+    /// sessions — they surfaced only as historical rows with no pid and no
+    /// host, which made a pill click fall through to the Claude Desktop
+    /// fallback and activate the wrong app entirely.
+    ///
+    /// Zed's own thread list is the right source here: it knows the pi
+    /// session id, the worktree, and that Zed owns the thread. Liveness
+    /// then follows the existing Zed rule (Zed running + transcript not
+    /// idle) rather than a pid that is shared across threads.
+    nonisolated private static func zedHostedSessions(
+        files: [String: SessionFile],
+        excluding excluded: Set<String>
+    ) -> [DiscoveredSession] {
+        guard ZedThreadStore.isZedRunning else { return [] }
+        return ZedThreadStore.liveThreads(agentID: .pi).compactMap { thread in
+            guard let sessionID = thread.sessionID,
+                  !excluded.contains(sessionID),
+                  let file = files[sessionID] else { return nil }
+            AgentDiscoveryUtilities.writeLog(
+                "[Discovery] Found Pi in Zed: \(sessionID.prefix(8)) cwd=\(file.metadata.cwd)"
+            )
+            return DiscoveredSession(
+                sessionId: sessionID,
+                // The transcript header is authoritative for cwd; Zed's
+                // worktree can be a parent of the session's directory.
+                cwd: file.metadata.cwd,
+                pid: 0,
+                tty: nil,
+                agentID: .pi,
+                terminalHost: .zed
             )
         }
     }

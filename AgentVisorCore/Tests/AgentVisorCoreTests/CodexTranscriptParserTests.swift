@@ -2,6 +2,61 @@ import XCTest
 @testable import AgentVisorCore
 
 final class CodexTranscriptParserTests: XCTestCase {
+    func testTracksUnresolvedRequestUserInputAsPendingAction() throws {
+        let jsonl = """
+        {"timestamp":"2026-08-06T22:39:39.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        {"timestamp":"2026-08-06T22:40:23.000Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"call-question","arguments":"{\\"questions\\":[{\\"id\\":\\"restart\\",\\"question\\":\\"Restart now?\\"}]}"}}
+        """
+
+        let parsed = CodexTranscriptParser.parse(data: Data(jsonl.utf8))
+
+        XCTAssertEqual(parsed.lastTurnMarker, .started)
+        XCTAssertEqual(parsed.pendingAction?.callId, "call-question")
+        XCTAssertEqual(parsed.pendingAction?.name, "request_user_input")
+        XCTAssertEqual(
+            parsed.pendingAction?.input["questions"],
+            #"[{"id":"restart","question":"Restart now?"}]"#
+        )
+        let pendingTimestamp = try XCTUnwrap(parsed.pendingAction?.timestamp)
+        XCTAssertEqual(pendingTimestamp.timeIntervalSince1970, 1_786_056_023, accuracy: 0.001)
+    }
+
+    func testMatchingFunctionOutputClearsPendingUserInput() throws {
+        let jsonl = """
+        {"timestamp":"2026-08-06T22:39:39.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        {"timestamp":"2026-08-06T22:40:23.000Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"call-question","arguments":"{\\"questions\\":[{\\"id\\":\\"restart\\",\\"question\\":\\"Restart now?\\"}]}"}}
+        {"timestamp":"2026-08-06T22:52:47.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-question","output":"{\\"answers\\":{\\"restart\\":{\\"answers\\":[\\"Restart now\\"]}}}"}}
+        """
+
+        let parsed = CodexTranscriptParser.parse(data: Data(jsonl.utf8))
+
+        XCTAssertNil(parsed.pendingAction)
+        XCTAssertTrue(parsed.completedToolIds.contains("call-question"))
+    }
+
+    func testTracksElevatedCommandAsPendingAction() throws {
+        let jsonl = """
+        {"timestamp":"2026-08-06T22:39:39.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        {"timestamp":"2026-08-06T22:40:23.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"call-approval","arguments":"{\\"cmd\\":\\"make install\\",\\"sandbox_permissions\\":\\"require_escalated\\"}"}}
+        """
+
+        let parsed = CodexTranscriptParser.parse(data: Data(jsonl.utf8))
+
+        XCTAssertEqual(parsed.pendingAction?.callId, "call-approval")
+        XCTAssertEqual(parsed.pendingAction?.name, "exec_command")
+    }
+
+    func testLaterAssistantContentClearsPendingActionAcrossHeadTailGap() throws {
+        let jsonl = """
+        {"timestamp":"2026-08-06T22:40:23.000Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"old-question","arguments":"{\\"questions\\":[]}"}}
+        {"timestamp":"2026-08-06T23:00:00.000Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Continuing after the omitted output."}]}}
+        """
+
+        let parsed = CodexTranscriptParser.parse(data: Data(jsonl.utf8))
+
+        XCTAssertNil(parsed.pendingAction)
+    }
+
     func testPermissionProfileDisabledInfersFullAccessWhenLegacyFieldsAreAbsent() throws {
         let jsonl = """
         {"timestamp":"2026-06-11T18:14:38.950Z","type":"turn_context","payload":{"permission_profile":{"type":"disabled"},"model":"gpt-5.5"}}

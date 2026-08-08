@@ -107,12 +107,20 @@ final class GhosttyMarkerLocatorTests: XCTestCase {
 
     func testParsesTopologyLocation() {
         XCTAssertEqual(
-            GhosttyMarkerLocator.parseTopologyOutput("2,3,4\n"),
-            .init(windowIndex: 2, tabIndex: 3, terminalIndex: 4)
+            GhosttyMarkerLocator.parseTopologyOutput("2,3,4|window-a|tab-b|terminal-c\n"),
+            .init(
+                windowIndex: 2,
+                tabIndex: 3,
+                terminalIndex: 4,
+                windowID: "window-a",
+                tabID: "tab-b",
+                terminalID: "terminal-c"
+            )
         )
         XCTAssertNil(GhosttyMarkerLocator.parseTopologyOutput("not-found"))
         XCTAssertNil(GhosttyMarkerLocator.parseTopologyOutput("1,2"))
-        XCTAssertNil(GhosttyMarkerLocator.parseTopologyOutput("1,0,2"))
+        XCTAssertNil(GhosttyMarkerLocator.parseTopologyOutput("1,0,2|window-a|tab-b|terminal-c"))
+        XCTAssertNil(GhosttyMarkerLocator.parseTopologyOutput("1,2,3|||"))
     }
 
     // MARK: - Integration: AppleScript compile-check

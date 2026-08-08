@@ -627,6 +627,7 @@ private struct PillsSection: View {
     @ObservedObject private var claudeUsageMonitor = ClaudeUsageMonitor.shared
     @ObservedObject private var fullScreenPolicy = FullScreenPolicySelector.shared
     @State private var sessionShortcutFamily = AppSettings.sessionShortcutModifierFamily
+    @State private var zedThreadRevealEnabled = AppSettings.zedThreadRevealEnabled
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -694,6 +695,25 @@ private struct PillsSection: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(width: 140)
+                }
+            }
+
+            SettingsSubheading("Navigation")
+            SettingsGroup(dividerInset: 38) {
+                SettingsRow(
+                    icon: "arrow.up.forward.app",
+                    title: "Open exact Zed thread",
+                    description: "Use Zed's standard navigation keys to select the hosted Pi, Codex, or Claude thread. Turn this off if those keys are remapped in Zed."
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { zedThreadRevealEnabled },
+                        set: { newValue in
+                            AppSettings.zedThreadRevealEnabled = newValue
+                            zedThreadRevealEnabled = newValue
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
                 }
             }
 

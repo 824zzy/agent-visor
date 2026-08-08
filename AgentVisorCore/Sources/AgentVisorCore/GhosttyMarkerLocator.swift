@@ -68,8 +68,10 @@ public enum GhosttyMarkerLocator {
         """
     }
 
-    /// AppleScript that returns the exact window/tab/terminal position for
-    /// the terminal whose temporary OSC 7 working-directory marker matches.
+    /// AppleScript that returns both the current position and Ghostty's stable
+    /// object identities for the terminal whose temporary OSC 7 marker matches.
+    /// Numeric positions change whenever a window or tab is inserted, so they
+    /// are useful only for ordering. Stable IDs are used for exact reuse.
     public static func topologyScript(marker: String) -> String {
         let escaped = marker
             .replacingOccurrences(of: "\\", with: "\\\\")
@@ -84,7 +86,7 @@ public enum GhosttyMarkerLocator {
                         set t to terminal i of currentTab
                         try
                             if working directory of t is "\(escaped)" then
-                                return (w as string) & "," & (tb as string) & "," & (i as string)
+                                return (w as string) & "," & (tb as string) & "," & (i as string) & "|" & (id of currentWindow) & "|" & (id of currentTab) & "|" & (id of t)
                             end if
                         end try
                     end repeat
@@ -127,17 +129,25 @@ public enum GhosttyMarkerLocator {
     public static func parseTopologyOutput(_ raw: String) -> PiGhosttyLayout? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != "not-found" else { return nil }
-        let parts = trimmed.split(separator: ",", omittingEmptySubsequences: false)
-        guard parts.count == 3,
-              let window = Int(parts[0]), window > 0,
-              let tab = Int(parts[1]), tab > 0,
-              let terminal = Int(parts[2]), terminal > 0 else {
+        let sections = trimmed.split(separator: "|", omittingEmptySubsequences: false)
+        guard sections.count == 4 else { return nil }
+        let indices = sections[0].split(separator: ",", omittingEmptySubsequences: false)
+        guard indices.count == 3,
+              let window = Int(indices[0]), window > 0,
+              let tab = Int(indices[1]), tab > 0,
+              let terminal = Int(indices[2]), terminal > 0,
+              !sections[1].isEmpty,
+              !sections[2].isEmpty,
+              !sections[3].isEmpty else {
             return nil
         }
         return PiGhosttyLayout(
             windowIndex: window,
             tabIndex: tab,
-            terminalIndex: terminal
+            terminalIndex: terminal,
+            windowID: String(sections[1]),
+            tabID: String(sections[2]),
+            terminalID: String(sections[3])
         )
     }
 

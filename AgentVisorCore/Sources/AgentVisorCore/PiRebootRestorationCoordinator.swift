@@ -4,11 +4,24 @@ public struct PiGhosttyLayout: Codable, Equatable, Sendable {
     public let windowIndex: Int
     public let tabIndex: Int
     public let terminalIndex: Int
+    public let windowID: String?
+    public let tabID: String?
+    public let terminalID: String?
 
-    public init(windowIndex: Int, tabIndex: Int, terminalIndex: Int) {
+    public init(
+        windowIndex: Int,
+        tabIndex: Int,
+        terminalIndex: Int,
+        windowID: String? = nil,
+        tabID: String? = nil,
+        terminalID: String? = nil
+    ) {
         self.windowIndex = windowIndex
         self.tabIndex = tabIndex
         self.terminalIndex = terminalIndex
+        self.windowID = windowID
+        self.tabID = tabID
+        self.terminalID = terminalID
     }
 }
 
@@ -47,7 +60,7 @@ public struct PiRestorationSnapshot: Codable, Equatable, Sendable {
         case invalidated
     }
 
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 3
 
     public let schemaVersion: Int
     public let bootID: String

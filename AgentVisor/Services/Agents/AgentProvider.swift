@@ -23,6 +23,11 @@ struct DiscoveredSession: Equatable, Sendable {
     let pid: Int
     let tty: String?
     let agentID: AgentID
+    /// Host the discovery source already knows, bypassing the process-tree
+    /// walk. Set when the source itself names the owner — Zed's thread list
+    /// is the case that needs it: Zed runs pi as `node …/pi-acp`, which no
+    /// `pgrep -x pi` scan can see, so there is no pid to walk.
+    var terminalHost: TerminalHost?
 }
 
 /// What a provider's `fileSync` returned after the watcher debounce.
@@ -351,7 +356,16 @@ extension AgentProvider {
         false
     }
 
-    nonisolated func skipsPidDedup(for session: SessionState) -> Bool { false }
+    nonisolated func skipsPidDedup(for session: SessionState) -> Bool {
+        // Zed pools one ACP child per agent across threads (its claude-acp
+        // process serves every claude thread), so several sessions legitimately
+        // share one pid — the same one-process-many-threads shape Codex.app and
+        // Cursor's IDE window have. Without this skip the duplicate-PID prune
+        // deleted every Zed thread but the freshest on the next sweep. Host-
+        // driven rule, so it belongs here beside `deadProcessAction` rather than
+        // in each provider.
+        session.terminalHost == .zed
+    }
 
     nonisolated var transcriptTitleAuthority: SessionTranscriptTitlePolicy.Authority { .fallback }
 

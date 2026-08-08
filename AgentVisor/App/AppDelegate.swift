@@ -146,9 +146,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Without this, the first AppleScript call happens when the user
         // types in chat — and the alert is unreachable, forcing a pkill.
         TCCPrewarm.start()
-        Task { @MainActor in
-            await PiRebootRestorationManager.shared.start()
-        }
         // Tail Cursor's claude-code extension logs to mirror the
         // auto-generated session titles (the names users see on chat
         // tabs in Cursor) into agent-visor's pill labels. Cursor's
@@ -195,6 +192,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         windowManager = WindowManager()
         _ = windowManager?.setupNotchWindow()
+        // Monitoring is app lifecycle, not pill visibility. Start it even when
+        // the strip is hidden so the hook socket can collect exact live Pi
+        // owners before reboot restoration claims a prior generation.
+        sessionMonitor?.startMonitoring()
 
         // Window mode is now the default workspace. The notch panel is
         // dead code in this build — only the menu-bar pills strip from

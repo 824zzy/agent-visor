@@ -51,10 +51,15 @@ public enum ObservedIdleClearPolicy {
 public enum ObservedApprovalRecoveryPolicy {
     public static func shouldApply(
         currentPhaseIsWaitingForApproval: Bool,
+        currentApprovalIsTranscriptDerived: Bool = false,
         inferredPhase: InferredPhase
     ) -> Bool {
         guard currentPhaseIsWaitingForApproval else { return true }
-        return inferredPhase != .processing
+        // A hook-owned approval must survive generic "turn still running"
+        // evidence. A transcript-owned approval is different: once its
+        // unresolved function call disappears, the same running marker is
+        // definitive evidence that Codex resumed.
+        return inferredPhase != .processing || currentApprovalIsTranscriptDerived
     }
 }
 

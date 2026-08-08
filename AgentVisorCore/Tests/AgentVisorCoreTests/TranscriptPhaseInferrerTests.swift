@@ -20,6 +20,16 @@ final class TranscriptPhaseInferrerTests: XCTestCase {
         )
     }
 
+    func testRunningTranscriptClearsResolvedTranscriptDerivedApproval() {
+        XCTAssertTrue(
+            ObservedApprovalRecoveryPolicy.shouldApply(
+                currentPhaseIsWaitingForApproval: true,
+                currentApprovalIsTranscriptDerived: true,
+                inferredPhase: .processing
+            )
+        )
+    }
+
     // MARK: - Deterministic (Codex marker) path
 
     func testTaskCompleteMarkerIsYourTurn() {

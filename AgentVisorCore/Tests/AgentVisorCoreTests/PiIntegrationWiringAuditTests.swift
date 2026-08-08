@@ -357,7 +357,9 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
         )
         XCTAssertTrue(source.contains("function startHeartbeat(ctx: ExtensionContext): void"))
         XCTAssertTrue(source.contains("if (ctx.mode !== \"tui\") return;"))
-        XCTAssertTrue(source.contains("report(ctx, \"SessionHeartbeat\", \"alive\")"))
+        XCTAssertTrue(source.contains(
+            "report(ctx, \"SessionHeartbeat\", \"alive\", { idle: runtimeIsIdle(ctx) })"
+        ))
         XCTAssertTrue(source.contains("HEARTBEAT_INTERVAL_MS"))
         XCTAssertTrue(source.contains("heartbeatTimer.unref()"))
         XCTAssertTrue(source.contains("clearInterval(heartbeatTimer)"))
@@ -392,9 +394,21 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
         XCTAssertTrue(source.contains("pi.on(\"agent_settled\""))
         XCTAssertTrue(source.contains("pi.on(\"session_shutdown\""))
         XCTAssertTrue(source.contains("pi.on(\"session_before_compact\""))
+        XCTAssertTrue(
+            source.contains("pi.on(\"session_compact\""),
+            "A manual /compact never reaches agent_settled, so the closing compaction boundary must be reported."
+        )
+        XCTAssertTrue(
+            source.contains("report(ctx, \"PostCompact\", idle === false ? \"processing\" : \"idle\""),
+            "Compaction completion must only stay Working while the runtime itself reports busy."
+        )
         XCTAssertTrue(source.contains("/tmp/agent-visor.sock"))
         XCTAssertTrue(source.contains("agent: \"pi\""))
         XCTAssertTrue(source.contains("session_file: ctx.sessionManager.getSessionFile()"))
+        XCTAssertTrue(
+            source.contains("is_idle: options.idle"),
+            "The runtime idle flag is lifecycle metadata and travels on the existing payload."
+        )
         XCTAssertFalse(source.contains("fetch("))
         XCTAssertFalse(source.contains("registerTool"))
         XCTAssertFalse(source.contains("registerCommand"))
@@ -402,6 +416,98 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
         XCTAssertFalse(source.contains("event.message"))
         XCTAssertFalse(source.contains("event.input"))
         XCTAssertFalse(source.contains("event.content"))
+    }
+
+    func testBundledPiExtensionProbesTheRuntimeIdleFlagDefensively() throws {
+        let root = repoRoot(from: URL(fileURLWithPath: #filePath))
+        let source = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/Resources/agent-visor-pi.ts.txt"
+        ))
+
+        guard let probeStart = source.range(of: "function runtimeIsIdle(")?.lowerBound,
+              let probeEnd = source.range(of: "\n}", range: probeStart..<source.endIndex)?.upperBound else {
+            return XCTFail("The extension must resolve the runtime idle flag through one shared probe.")
+        }
+        let probe = String(source[probeStart..<probeEnd])
+
+        XCTAssertTrue(
+            probe.contains("if (typeof probe !== \"function\") return undefined;"),
+            "A Pi runtime without isIdle must report no flag instead of crashing the heartbeat."
+        )
+        XCTAssertTrue(
+            probe.contains("} catch {") && probe.contains("return undefined;"),
+            "A stale extension context throws, and a heartbeat must never propagate that."
+        )
+        XCTAssertTrue(
+            probe.contains("=== true"),
+            "Only an explicit idle answer may be reported as idle."
+        )
+    }
+
+    func testIdlePiHeartbeatRepairsAStuckWorkingRow() throws {
+        let root = repoRoot(from: URL(fileURLWithPath: #filePath))
+        let store = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/Services/State/SessionStore.swift"
+        ))
+        let socket = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/Services/Hooks/HookSocketServer.swift"
+        ))
+
+        XCTAssertTrue(
+            socket.contains("case isIdle = \"is_idle\""),
+            "The wire payload's runtime idle flag must be decoded."
+        )
+
+        guard let recoveryStart = store.range(of: "private func recoverStuckPiWork(")?.lowerBound,
+              let recoveryEnd = store.range(
+                of: "private static func piCompletionBoundary(",
+                range: recoveryStart..<store.endIndex
+              )?.lowerBound else {
+            return XCTFail("Stuck-Working recovery must live in one reviewable seam.")
+        }
+        let recovery = String(store[recoveryStart..<recoveryEnd])
+
+        XCTAssertTrue(
+            recovery.contains("PiIdleHeartbeatRecoveryPolicy.shouldResolveCompletionBoundary("),
+            "A phase-neutral heartbeat must not pay for a filesystem probe."
+        )
+        XCTAssertTrue(recovery.contains("PiIdleHeartbeatRecoveryPolicy.outcome("))
+        XCTAssertTrue(recovery.contains("reportedIdle: event.isIdle"))
+        XCTAssertTrue(
+            recovery.contains("currentPhaseIsActive: session.phase.isActive"),
+            "Recovery applies to Working rows only: Processing and Compacting."
+        )
+        XCTAssertTrue(
+            recovery.contains("case .ready: recovered = .waitingForInput")
+                && recovery.contains("case .idle: recovered = .idle"),
+            "The policy owns whether a repaired completion still publishes a Ready episode."
+        )
+        XCTAssertTrue(
+            recovery.contains("guard session.phase.canTransition(to: recovered)"),
+            "Recovery must respect the phase state machine."
+        )
+        XCTAssertTrue(
+            recovery.contains("session.setPhase(recovered, evidenceSource: .hook, observedAt: now)"),
+            "A recovered phase keeps hook evidence so the Ready staleness ceiling still applies."
+        )
+        XCTAssertTrue(
+            recovery.contains("[Phase] pi"),
+            "Recovery must be diagnosable from the discovery log."
+        )
+
+        XCTAssertTrue(
+            store.contains("let didRecoverStuckWork = recoverStuckPiWork(")
+                && store.contains("|| didRecoverStuckWork"),
+            "The heartbeat branch must publish a repaired row."
+        )
+        guard let boundary = store.range(of: "private static func piCompletionBoundary(")?.lowerBound,
+              let boundaryEnd = store.range(of: "\n    }", range: boundary..<store.endIndex)?.upperBound else {
+            return XCTFail("The completion boundary resolver is missing.")
+        }
+        XCTAssertTrue(
+            String(store[boundary..<boundaryEnd]).contains("if let path = event.sessionFile"),
+            "Pi heartbeats carry the exact transcript path, which avoids a session-tree enumeration here."
+        )
     }
 
     private func repoRoot(from fileURL: URL) -> URL {

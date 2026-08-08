@@ -34,9 +34,19 @@ struct SessionStatusStripe: View {
 
     private static let pulsePeriod: TimeInterval = 1.5
     private static let pulseMinOpacity: Double = 0.35
+    /// Cap the pulse tick rate; a 1.5s cosine reads smoothly at 30fps and
+    /// must not relayout at a ProMotion panel's 120Hz refresh.
+    private static let pulseFrameInterval: TimeInterval = 1.0 / 30.0
 
     var body: some View {
         let acknowledgedAt = navigationRecencyStore.readyAcknowledgedAt(for: session)
+        // Resolve the status color ONCE per body evaluation — never inside the
+        // per-frame TimelineView closure. Re-resolving sessionStatusColor
+        // (NSColor colorspace conversions) every display refresh pinned
+        // WindowServer on ProMotion panels (sample-confirmed 2026-08-04).
+        // statusIdleAge fades from real conversational recency, not the
+        // mtime/default-driven lastActivity. See SessionState.statusIdleAge.
+        let color = sessionStatusColor(for: session.phase, idleAge: session.statusIdleAge)
         if session.phase == .ended {
             // Ended sessions get no stripe — the row already reads
             // dim via the gray timestamp + faded subtitle.
@@ -47,8 +57,12 @@ struct SessionStatusStripe: View {
             acknowledgedAt: acknowledgedAt,
             now: Date()
         ) {
-            TimelineView(.animation) { context in
+            // Throttled schedule + opacity-only animation over a precomputed
+            // color, so each tick is a cheap layer update, not a relayout with
+            // fresh color resolution.
+            TimelineView(.animation(minimumInterval: Self.pulseFrameInterval)) { context in
                 stripe(
+                    color: color,
                     opacity: pulseOpacity(
                         at: context.date,
                         acknowledgedAt: acknowledgedAt
@@ -56,18 +70,15 @@ struct SessionStatusStripe: View {
                 )
             }
         } else {
-            stripe(opacity: 1.0)
+            stripe(color: color, opacity: 1.0)
         }
     }
 
-    private func stripe(opacity: Double) -> some View {
-        // statusIdleAge fades from real conversational recency, not the
-        // mtime/default-driven lastActivity — so day-stale or empty
-        // GUI-spawned sessions don't glow green. See SessionState.statusIdleAge.
-        let color = sessionStatusColor(for: session.phase, idleAge: session.statusIdleAge)
-        return RoundedRectangle(cornerRadius: width / 2)
-            .fill(color.opacity(opacity))
+    private func stripe(color: Color, opacity: Double) -> some View {
+        RoundedRectangle(cornerRadius: width / 2)
+            .fill(color)
             .frame(width: width, height: height)
+            .opacity(opacity)
     }
 
     private func pulseOpacity(at now: Date, acknowledgedAt: Date?) -> Double {

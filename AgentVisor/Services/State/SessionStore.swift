@@ -405,17 +405,32 @@ actor SessionStore {
         // metadata can make the owning terminal differ. Repeated unchanged
         // heartbeats deliberately avoid a full process-tree walk.
         if shouldRefreshDerivedAttachmentMetadata {
-            if event.agentID == .codex, processMetadata.tty == nil {
-                session.terminalHost = .codexApp
-            } else if !sharesProcessAcrossSessions, let pid = processMetadata.pid {
-                let host = TerminalHostDetector.detect(pid: pid_t(pid), reader: LiveProcessInfoReader.shared)
-                // Don't overwrite a real host with `.unknown` — process
-                // walk can transiently miss when the parent chain is being
-                // re-parented mid-event (rare but happens during shell
-                // reparent / launchd handoff).
-                if host != .unknown {
-                    session.terminalHost = host
-                }
+            // Trust the process tree first. The old order short-circuited
+            // on "codex with no tty ⇒ Codex.app", which mislabeled every
+            // codex-acp child of Zed (no tty either) and sent its pill
+            // click to Codex Desktop. `HostedAgentHostPolicy` keeps the
+            // GUI-thread fallback without letting it outrank evidence.
+            let detected: TerminalHost?
+            if !sharesProcessAcrossSessions, let pid = processMetadata.pid {
+                detected = TerminalHostDetector.detect(
+                    pid: pid_t(pid),
+                    reader: LiveProcessInfoReader.shared
+                )
+            } else {
+                detected = nil
+            }
+            let host = HostedAgentHostPolicy.resolve(
+                agentID: event.agentID,
+                tty: processMetadata.tty,
+                detectedHost: detected,
+                zedHostsSession: ZedThreadStore.hostsSession(event.sessionId)
+            )
+            // Don't overwrite a real host with `.unknown` — process
+            // walk can transiently miss when the parent chain is being
+            // re-parented mid-event (rare but happens during shell
+            // reparent / launchd handoff).
+            if let host, host != .unknown {
+                session.terminalHost = host
             }
         }
         // Reconcile origin after merging live process metadata. A transcript
@@ -434,7 +449,11 @@ actor SessionStore {
         // Resolve a provider-owned name for lifecycle activity and restored
         // attachments. Active Pi renames continue through the file watcher,
         // so an unchanged heartbeat does not rescan every transcript.
+        // Zed-hosted sessions skip this: their name belongs to Zed's thread
+        // title, and an agent-derived name (claude's `codes-92`) would
+        // shadow what the user sees in Zed's sidebar.
         if shouldRefreshDerivedAttachmentMetadata,
+           !ZedHostedIdentityPolicy.suppressesAgentResolvedName(host: session.terminalHost),
            let eventProvider,
            let name = eventProvider.resolveSessionName(sessionId: event.sessionId, pid: processMetadata.pid),
            !name.isEmpty {
@@ -456,6 +475,13 @@ actor SessionStore {
         }
 
         if event.agentID == .pi {
+            await MainActor.run {
+                if event.isTerminalLifecycleStatus {
+                    PiRebootRestorationManager.shared.noteExactSessionEnded(sessionID: sessionId)
+                } else {
+                    PiRebootRestorationManager.shared.noteExactLiveSession(sessionID: sessionId)
+                }
+            }
             if event.isTerminalLifecycleStatus {
                 await MainActor.run {
                     PiRebootRestorationManager.shared.end(sessionID: sessionId)
@@ -481,7 +507,9 @@ actor SessionStore {
                 }
             } else {
                 await MainActor.run {
-                    PiRebootRestorationManager.shared.end(sessionID: sessionId)
+                    PiRebootRestorationManager.shared.removeRestorationCandidate(
+                        sessionID: sessionId
+                    )
                 }
             }
         }
@@ -503,6 +531,19 @@ actor SessionStore {
             let didChangeReattachmentState = didReattach
                 ? session.reattachAsIdleWithoutPhaseEvidence()
                 : false
+            // A heartbeat is phase-neutral in every case but one: the runtime
+            // reports that nothing is running while the row still shows work in
+            // flight. That combination means a completion event was dropped on
+            // the best-effort socket, and for a hook-tracked Pi row nothing
+            // else can ever repair it (transcript inference is off, only Ready
+            // has a staleness ceiling), so the pill would stay orange until the
+            // user's next prompt.
+            let didRecoverStuckWork = recoverStuckPiWork(
+                session: &session,
+                event: event,
+                provider: eventProvider,
+                isHeartbeat: isPiSessionHeartbeat
+            )
             sessions[sessionId] = session
             let heartbeatDidChange = hookDidRemoveStaleSession
                 || isNewSession
@@ -513,6 +554,7 @@ actor SessionStore {
                 || sessionNameBeforeHookMerge != session.sessionName
                 || tmuxBeforeHookMerge != session.isInTmux
                 || didChangeReattachmentState
+                || didRecoverStuckWork
             if didReattach {
                 let heartbeatCwd = session.cwd
                 Task { @MainActor in
@@ -523,6 +565,11 @@ actor SessionStore {
                     )
                 }
                 Self.logger.info("Reattached Pi session \(sessionId.prefix(8), privacy: .public) from SessionHeartbeat (pid \(pidBeforeHookMerge ?? -1, privacy: .public) -> \(event.pid ?? -1, privacy: .public))")
+            }
+            if didRecoverStuckWork {
+                // The dropped event would also have carried a file sync, so the
+                // chat can be missing the turn's final message.
+                scheduleFileSync(sessionId: sessionId, cwd: session.cwd)
             }
             if heartbeatDidChange {
                 publishState()
@@ -769,6 +816,74 @@ actor SessionStore {
             .contentModificationDate
     }
 
+    /// Clear a Working phase that a Pi heartbeat proves is stale.
+    ///
+    /// `PiIdleHeartbeatRecoveryPolicy` owns the decision, including whether the
+    /// repaired completion is fresh enough to still publish a Ready episode.
+    /// Returns whether the row changed.
+    private func recoverStuckPiWork(
+        session: inout SessionState,
+        event: HookEvent,
+        provider: (any AgentProvider)?,
+        isHeartbeat: Bool
+    ) -> Bool {
+        guard PiIdleHeartbeatRecoveryPolicy.shouldResolveCompletionBoundary(
+            isHeartbeat: isHeartbeat,
+            reportedIdle: event.isIdle,
+            currentPhaseIsActive: session.phase.isActive
+        ) else { return false }
+
+        let sessionId = session.sessionId
+        let now = Date()
+        let outcome = PiIdleHeartbeatRecoveryPolicy.outcome(
+            isHeartbeat: isHeartbeat,
+            reportedIdle: event.isIdle,
+            currentPhaseIsActive: session.phase.isActive,
+            transcriptModifiedAt: Self.piCompletionBoundary(
+                event: event,
+                provider: provider,
+                sessionId: sessionId,
+                cwd: session.cwd
+            )?.timeIntervalSince1970,
+            now: now.timeIntervalSince1970
+        )
+
+        let recovered: SessionPhase
+        switch outcome {
+        case .none: return false
+        case .ready: recovered = .waitingForInput
+        case .idle: recovered = .idle
+        }
+        guard session.phase.canTransition(to: recovered) else { return false }
+
+        AgentDiscoveryUtilities.writeLog(
+            "[Phase] pi \(sessionId.prefix(8)) -> \(recovered) (idle heartbeat, was \(session.phase))"
+        )
+        return session.setPhase(recovered, evidenceSource: .hook, observedAt: now)
+    }
+
+    /// The runtime's completion boundary for a Pi session. The heartbeat
+    /// carries the exact transcript path, which avoids Pi's session-tree
+    /// enumeration on this path; the provider lookup stays as the fallback.
+    private static func piCompletionBoundary(
+        event: HookEvent,
+        provider: (any AgentProvider)?,
+        sessionId: String,
+        cwd: String
+    ) -> Date? {
+        if let path = event.sessionFile, !path.isEmpty,
+           let date = try? URL(fileURLWithPath: path)
+            .resourceValues(forKeys: [.contentModificationDateKey])
+            .contentModificationDate {
+            return date
+        }
+        return transcriptModificationDate(
+            provider: provider,
+            sessionId: sessionId,
+            cwd: cwd
+        )
+    }
+
     private func createSession(from event: HookEvent) -> SessionState {
         // Prefer the launch cwd from Claude Code's session metadata file.
         // Hook events report the process's CURRENT working directory, which
@@ -779,14 +894,17 @@ actor SessionStore {
             ? (SessionState.readLaunchCwd(pid: event.pid) ?? event.cwd)
             : event.cwd
         let normalizedTTY = event.tty?.replacingOccurrences(of: "/dev/", with: "")
-        let host: TerminalHost?
-        if event.agentID == .codex, normalizedTTY == nil {
-            host = .codexApp
-        } else {
-            host = event.pid.map {
+        // Process-tree evidence first, Codex.app GUI fallback second: a
+        // codex-acp child of Zed has no tty, and the old order labeled it
+        // `.codexApp` so navigation opened Codex Desktop instead of Zed.
+        let host: TerminalHost? = HostedAgentHostPolicy.resolve(
+            agentID: event.agentID,
+            tty: normalizedTTY,
+            detectedHost: event.pid.map {
                 TerminalHostDetector.detect(pid: pid_t($0), reader: LiveProcessInfoReader.shared)
-            }
-        }
+            },
+            zedHostsSession: ZedThreadStore.hostsSession(event.sessionId)
+        )
         var session = SessionState(
             sessionId: event.sessionId,
             cwd: launchCwd,
@@ -1341,6 +1459,7 @@ actor SessionStore {
                                 let mergedStatus = mergeToolStatus(
                                     existing: existingTool.status,
                                     toolId: tool.id,
+                                    toolName: tool.name,
                                     input: tool.input,
                                     payload: payload
                                 )
@@ -1417,6 +1536,7 @@ actor SessionStore {
                                 let mergedStatus = mergeToolStatus(
                                     existing: existingTool.status,
                                     toolId: tool.id,
+                                    toolName: tool.name,
                                     input: tool.input,
                                     payload: payload
                                 )
@@ -1527,11 +1647,11 @@ actor SessionStore {
             live.totalInputTokens = session.totalInputTokens
             live.totalOutputTokens = session.totalOutputTokens
             live.lastContextTokens = session.lastContextTokens
-            applyCodexTranscriptApprovalPhaseIfNeeded(to: &live)
+            applyCodexTranscriptPendingActionPhaseIfNeeded(to: &live)
             sessions[payload.sessionId] = live
         } else {
             session.chatItems = Self.dedupedById(session.chatItems)
-            applyCodexTranscriptApprovalPhaseIfNeeded(to: &session)
+            applyCodexTranscriptPendingActionPhaseIfNeeded(to: &session)
             sessions[payload.sessionId] = session
         }
 
@@ -1668,7 +1788,11 @@ actor SessionStore {
             guard toolTracker.markSeen(tool.id) else { return nil }
 
             let isCompleted = completedTools.contains(tool.id)
-            let status = initialToolStatus(isCompleted: isCompleted, input: tool.input)
+            let status = initialToolStatus(
+                isCompleted: isCompleted,
+                toolName: tool.name,
+                input: tool.input
+            )
 
             // Extract result text for completed tools
             var resultText: String? = nil
@@ -1744,6 +1868,7 @@ actor SessionStore {
     private func mergeToolStatus(
         existing: ToolStatus,
         toolId: String,
+        toolName: String,
         input: [String: String],
         payload: FileUpdatePayload
     ) -> ToolStatus {
@@ -1755,23 +1880,33 @@ actor SessionStore {
             }
             return .success
         }
-        if isCodexTranscriptApprovalRequest(input: input) {
+        if isCodexTranscriptPendingAction(toolName: toolName, input: input) {
             return .waitingForApproval
         }
         return existing
     }
 
-    private func initialToolStatus(isCompleted: Bool, input: [String: String]) -> ToolStatus {
+    private func initialToolStatus(
+        isCompleted: Bool,
+        toolName: String,
+        input: [String: String]
+    ) -> ToolStatus {
         if isCompleted { return .success }
-        if isCodexTranscriptApprovalRequest(input: input) { return .waitingForApproval }
+        if isCodexTranscriptPendingAction(toolName: toolName, input: input) {
+            return .waitingForApproval
+        }
         return .running
     }
 
-    private func isCodexTranscriptApprovalRequest(input: [String: String]) -> Bool {
-        input["sandbox_permissions"] == "require_escalated"
+    private func isCodexTranscriptPendingAction(
+        toolName: String,
+        input: [String: String]
+    ) -> Bool {
+        PendingActionPresentation.contextualToolName(toolName) == "AskUserQuestion"
+            || input["sandbox_permissions"] == "require_escalated"
     }
 
-    private func applyCodexTranscriptApprovalPhaseIfNeeded(to session: inout SessionState) {
+    private func applyCodexTranscriptPendingActionPhaseIfNeeded(to session: inout SessionState) {
         guard session.agentID == .codex,
               session.origin != .codexAppServer,
               !session.phase.isWaitingForApproval,
@@ -1790,7 +1925,7 @@ actor SessionStore {
             toolName: pending.tool.name,
             toolInput: codexToolInput(pending.tool.input),
             receivedAt: pending.timestamp
-        )), evidenceSource: .transcriptHeuristic, observedAt: pending.timestamp)
+        )), evidenceSource: .transcriptMarker, observedAt: pending.timestamp)
     }
 
     private func firstPendingTranscriptApproval(
@@ -1799,7 +1934,7 @@ actor SessionStore {
         for item in items {
             guard case .toolCall(let tool) = item.type,
                   tool.status == .waitingForApproval,
-                  isCodexTranscriptApprovalRequest(input: tool.input) else {
+                  isCodexTranscriptPendingAction(toolName: tool.name, input: tool.input) else {
                 continue
             }
             return (item.id, tool, item.timestamp)
@@ -2641,24 +2776,25 @@ actor SessionStore {
             }
         }
 
-        // Codex marker: prefer the full-parse cache (populated when the chat
-        // is open), but fall back to a fresh head+tail summary parse for
-        // BACKGROUND threads that were never opened this run. Without this
-        // refresh the marker stays `.none` after launch — the reconcile timer
-        // would then never see a running thread's `task_started` and a live
-        // GUI thread would sit on a stale `waitingForInput`. The summary parse
-        // is signature-cached (mtime+size), so it's a no-op when the rollout
-        // hasn't grown since the last read.
+        // Codex's bounded head+tail summary keeps unresolved user actions
+        // fresh even when the chat is closed. Prefer the full parser's marker
+        // when available (it cannot lose a task_started in a very large turn),
+        // and use the summary marker for background threads never opened this
+        // run. The summary is signature-cached, so periodic reconciliation is
+        // a no-op unless the rollout grew.
         var marker: TurnMarker = .none
+        var pendingCodexAction: CodexPendingAction?
         if session.agentID == .codex {
-            marker = await CodexConversationParser.shared.lastTurnMarker(for: sessionId)
-            if marker == .none {
-                _ = await CodexConversationSummary.shared.parse(
-                    sessionId: sessionId,
-                    rolloutPath: transcriptPath
-                )
-                marker = await CodexConversationSummary.shared.lastTurnMarker(for: sessionId)
-            }
+            let fullMarker = await CodexConversationParser.shared.lastTurnMarker(for: sessionId)
+            let fullPendingAction = await CodexConversationParser.shared.pendingAction(for: sessionId)
+            _ = await CodexConversationSummary.shared.parse(
+                sessionId: sessionId,
+                rolloutPath: transcriptPath
+            )
+            let summaryMarker = await CodexConversationSummary.shared.lastTurnMarker(for: sessionId)
+            marker = fullMarker != .none ? fullMarker : summaryMarker
+            pendingCodexAction = await CodexConversationSummary.shared.pendingAction(for: sessionId)
+                ?? (summaryMarker == .none ? fullPendingAction : nil)
         } else if session.agentID == .pi {
             marker = await PiConversationParser.shared.lastTurnMarker(for: sessionId)
             if marker == .none {
@@ -2684,6 +2820,35 @@ actor SessionStore {
         let evidenceSource: SessionPhaseEvidenceSource = marker == .none
             ? .transcriptHeuristic
             : .transcriptMarker
+
+        // A pending action is stronger evidence than a still-open
+        // task_started marker. Native Codex.app emits no hook while its
+        // question card is on screen, so this explicit unresolved call is
+        // what moves observed threads from Working to Needs your input.
+        if let pending = pendingCodexAction {
+            let observedAt = pending.timestamp.timeIntervalSince1970 > 0
+                ? pending.timestamp
+                : transcriptModifiedAt
+            let pendingPhase = SessionPhase.waitingForApproval(PermissionContext(
+                toolUseId: pending.callId,
+                toolName: PendingActionPresentation.storedToolName(pending.name),
+                toolInput: codexToolInput(pending.input),
+                receivedAt: observedAt
+            ))
+            guard session.phase.canTransition(to: pendingPhase) else { return false }
+            let changed = session.setPhase(
+                pendingPhase,
+                evidenceSource: .transcriptMarker,
+                observedAt: observedAt
+            )
+            sessions[sessionId] = session
+            if changed {
+                AgentDiscoveryUtilities.writeLog(
+                    "[Phase] codex \(sessionId.prefix(8)) -> waitingForApproval (pending=\(pending.name))"
+                )
+            }
+            return changed
+        }
 
         if isEndedPiCandidate {
             let hasLiveProcess = session.pid.map { kill(Int32($0), 0) == 0 } ?? false
@@ -2719,6 +2884,8 @@ actor SessionStore {
 
         guard ObservedApprovalRecoveryPolicy.shouldApply(
             currentPhaseIsWaitingForApproval: session.phase.isWaitingForApproval,
+            currentApprovalIsTranscriptDerived: session.phaseEvidenceSource == .transcriptMarker
+                || session.phaseEvidenceSource == .transcriptHeuristic,
             inferredPhase: inferred
         ) else {
             return false
@@ -3007,9 +3174,14 @@ actor SessionStore {
 
         if session.agentID == .codex {
             let marker = await CodexConversationSummary.shared.lastTurnMarker(for: sessionId)
+            let pendingAction = await CodexConversationSummary.shared.pendingAction(for: sessionId)
             await CodexConversationParser.shared.updateLastTurnMarker(
                 sessionId: sessionId,
                 marker: marker
+            )
+            await CodexConversationParser.shared.updatePendingAction(
+                sessionId: sessionId,
+                pendingAction: pendingAction
             )
         }
         _ = await applyInferredObservedPhase(sessionId: sessionId)
@@ -3044,7 +3216,10 @@ actor SessionStore {
 
         var resolvedNames: [String: String] = [:]
         let candidates = matchingSessions.map { session in
-            if let name = provider.resolveSessionName(sessionId: session.sessionId, pid: session.pid) {
+            // Zed owns the name of the threads it hosts; an agent-derived
+            // name would replace what the user sees in Zed's sidebar.
+            if !ZedHostedIdentityPolicy.suppressesAgentResolvedName(host: session.terminalHost),
+               let name = provider.resolveSessionName(sessionId: session.sessionId, pid: session.pid) {
                 resolvedNames[session.sessionId] = name
             }
             return SessionNameRefreshCandidate(
@@ -3063,6 +3238,69 @@ actor SessionStore {
             sessions[change.sessionId]?.sessionName = change.name
         }
         publishState()
+    }
+
+    /// Reconcile every tracked session against Zed's own thread list.
+    ///
+    /// Two jobs, both host-driven:
+    ///
+    ///  1. Host attribution. A codex-acp / claude-acp thread inside Zed also
+    ///     writes a `~/.codex` rollout or `~/.claude` JSONL, so its own
+    ///     provider claims it and stamps Codex.app's pid (or a pooled pid).
+    ///     If Zed's `sidebar_threads` names the session, Zed owns it — flip
+    ///     `terminalHost` to `.zed` and drop the borrowed pid so the pill
+    ///     click routes through `ZedAdapter` instead of Codex Desktop, and
+    ///     liveness follows the Zed rule. Presence in Zed's list is the
+    ///     authority: those ids never collide with a real Codex Desktop
+    ///     thread. This self-heals within one tick regardless of which
+    ///     creation site first attributed the session.
+    ///
+    ///  2. Identity. Zed keeps the name the user sees (and renames) in that
+    ///     same row, and nothing in the hosted transcript changes when the
+    ///     title does — so there is no file event to hang this off.
+    ///
+    /// The read is signature-cached, so a tick with no Zed writes costs two
+    /// `stat` calls and no subprocess.
+    func reconcileZedHostedSessions() {
+        guard sessions.values.contains(where: { $0.terminalHost == .zed })
+            || ZedThreadStore.isZedRunning else { return }
+        let snapshot = ZedThreadStore.snapshot()
+        guard !snapshot.records.isEmpty else { return }
+
+        var didChange = false
+        for (id, session) in sessions {
+            guard let record = snapshot.bySessionID[id], !record.archived else { continue }
+            var updated = session
+            var mutated = false
+
+            if updated.terminalHost != .zed {
+                // The session's provider mis-claimed it (Codex.app / pooled
+                // pid). Zed owns it: re-host and shed the borrowed pid so no
+                // pid-based liveness or Codex-Desktop navigation applies.
+                Self.logger.debug("zed re-host sid=\(id.prefix(8), privacy: .public) agent=\(String(describing: updated.agentID), privacy: .public) from=\(String(describing: updated.terminalHost), privacy: .public) title=\(record.displayTitle ?? "nil", privacy: .public)")
+                updated.terminalHost = .zed
+                updated.pid = nil
+                mutated = true
+            }
+            let resolved = ZedHostedIdentityPolicy.sessionName(
+                zedTitle: record.displayTitle,
+                currentName: updated.sessionName
+            )
+            if ZedHostedIdentityPolicy.shouldApply(
+                resolved: resolved,
+                currentName: updated.sessionName
+            ) {
+                updated.sessionName = resolved
+                mutated = true
+            }
+            if mutated {
+                sessions[id] = updated
+                didChange = true
+            }
+        }
+        if didChange {
+            publishState()
+        }
     }
 
     func refreshCodexMetadata() async {
@@ -3386,12 +3624,16 @@ actor SessionStore {
                 continue
             }
 
-            // Discovery uses pid=0 as a sentinel for rows surfaced from
-            // disk without a per-session process. For Codex GUI threads
-            // that sentinel is still an active observed-app row within
-            // the configured window, not historical transcript state.
-            let isCodexObservedAppSentinel = info.agentID == .codex && info.tty == nil && info.pid == 0
-            let isHistorical = info.pid == 0 && !isCodexObservedAppSentinel
+            // Discovery uses pid=0 as a sentinel for rows surfaced from disk
+            // without a per-session process. App-owned thread stores are the
+            // bounded exception: Codex.app and Zed can prove current hosting
+            // even though their workers are shared or hidden behind ACP.
+            let isHistorical = SessionBootstrapLivenessPolicy.isHistorical(
+                agentID: info.agentID,
+                pid: info.pid,
+                tty: info.tty,
+                declaredHost: info.terminalHost
+            )
             let bootstrapPhase = Self.bootstrapPhase(
                 agentID: info.agentID,
                 pid: info.pid,
@@ -3421,6 +3663,7 @@ actor SessionStore {
                     )
                 }
                 if let provider = AgentRegistry.provider(for: info.agentID),
+                   !ZedHostedIdentityPolicy.suppressesAgentResolvedName(host: existing.terminalHost),
                    let resolvedName = provider.resolveSessionName(
                     sessionId: info.sessionId,
                     pid: info.pid == 0 ? nil : info.pid
@@ -3440,7 +3683,12 @@ actor SessionStore {
                     setSessionPhase(info.sessionId, .idle, evidenceSource: .rediscovery)
                     sessions[info.sessionId]?.pid = info.pid
                 }
-                if info.agentID == .codex, info.tty == nil {
+                // A codex thread Zed hosts is reconciled onto `.zed` (host +
+                // title) by reconcileZedHostedSessions; don't stamp it with
+                // Codex.app's pid here or the Zed liveness/nav is undone each
+                // rediscovery.
+                if info.agentID == .codex, info.tty == nil,
+                   !ZedThreadStore.hostsSession(info.sessionId) {
                     if existing.phase == .ended {
                         setSessionPhase(info.sessionId, .idle, evidenceSource: .rediscovery)
                     }
@@ -3512,17 +3760,23 @@ actor SessionStore {
             }
 
             let hasProcessBackedPid = info.pid != 0
-            let host: TerminalHost
-            if info.agentID == .codex, info.tty == nil {
-                host = .codexApp
-            } else if !hasProcessBackedPid {
-                host = .unknown
-            } else {
-                host = TerminalHostDetector.detect(
-                    pid: pid_t(info.pid),
-                    reader: LiveProcessInfoReader.shared
+            // Discovery may already know the host from the source it read
+            // (Zed's own thread list names the host directly, and its pi-acp
+            // children are invisible to a `ps` scan). Otherwise walk the
+            // process tree, then fall back to the Codex.app GUI rule.
+            let host: TerminalHost = info.terminalHost
+                ?? HostedAgentHostPolicy.resolve(
+                    agentID: info.agentID,
+                    tty: info.tty,
+                    detectedHost: hasProcessBackedPid
+                        ? TerminalHostDetector.detect(
+                            pid: pid_t(info.pid),
+                            reader: LiveProcessInfoReader.shared
+                        )
+                        : nil,
+                    zedHostsSession: ZedThreadStore.hostsSession(info.sessionId)
                 )
-            }
+                ?? .unknown
             var session = SessionState(
                 sessionId: info.sessionId,
                 cwd: cwd,
@@ -3534,7 +3788,10 @@ actor SessionStore {
                     agentID: info.agentID,
                     terminalHost: host
                 ),
-                pid: hasProcessBackedPid ? info.pid : nil,
+                // A Zed-hosted thread must never carry a borrowed pid
+                // (Codex.app / pooled child); Zed liveness keys on transcript
+                // idleness, and a stale pid would drive the wrong nav/prune.
+                pid: host == .zed ? nil : (hasProcessBackedPid ? info.pid : nil),
                 tty: info.tty,
                 isInTmux: hasProcessBackedPid ? ProcessTreeBuilder.shared.isInTmux(pid: info.pid, tree: tree) : false,
                 terminalHost: host,
@@ -3549,10 +3806,17 @@ actor SessionStore {
             // sqlite threads index; claude-code from `<pid>.json`
             // (no pid for historical → nil → no name set here, the
             // bootstrap parser will surface customTitle later).
+            // Zed-hosted threads take their name from Zed instead, applied
+            // just below — an agent-derived name would shadow it.
             if let provider,
+               !ZedHostedIdentityPolicy.suppressesAgentResolvedName(host: host),
                let name = provider.resolveSessionName(sessionId: info.sessionId, pid: hasProcessBackedPid ? info.pid : nil),
                !name.isEmpty {
                 session.sessionName = name
+            }
+            if host == .zed,
+               let zedTitle = ZedThreadStore.displayTitle(sessionID: info.sessionId) {
+                session.sessionName = zedTitle
             }
             sessions[info.sessionId] = session
             if info.agentID == .codex, info.tty == nil {
@@ -3625,20 +3889,35 @@ actor SessionStore {
     }
 
     private func applyConversationMetadata(_ info: ConversationInfo, to session: inout SessionState) {
-        // Most agents treat a transcript title as fallback metadata behind a
-        // process- or index-resolved name. Pi is deliberately different: the
-        // latest active-branch `session_info.name` is its canonical rename
-        // store and must replace an earlier Pi transcript name. Keep that
-        // source-specific authority in the provider rather than teaching the
-        // shared merge or menu renderer to special-case Pi.
-        let titleAuthority = AgentRegistry.provider(for: session.agentID)?
-            .transcriptTitleAuthority ?? .fallback
-        session.sessionName = SessionTranscriptTitlePolicy.preferredName(
-            sessionId: session.sessionId,
-            currentName: session.sessionName,
-            transcriptTitle: info.customTitle,
-            authority: titleAuthority
-        )
+        // Zed-hosted threads: the title the user recognizes lives in Zed's
+        // `sidebar_threads` row, not in the ACP child's transcript. Resolve
+        // it here — one funnel for every write path — so no provider's
+        // transcript authority can reorder its way past the host.
+        if session.terminalHost == .zed {
+            let resolved = ZedHostedIdentityPolicy.sessionName(
+                zedTitle: ZedThreadStore.displayTitle(sessionID: session.sessionId),
+                currentName: session.sessionName,
+                transcriptTitle: info.customTitle
+            )
+            if ZedHostedIdentityPolicy.shouldApply(resolved: resolved, currentName: session.sessionName) {
+                session.sessionName = resolved
+            }
+        } else {
+            // Most agents treat a transcript title as fallback metadata behind a
+            // process- or index-resolved name. Pi is deliberately different: the
+            // latest active-branch `session_info.name` is its canonical rename
+            // store and must replace an earlier Pi transcript name. Keep that
+            // source-specific authority in the provider rather than teaching the
+            // shared merge or menu renderer to special-case Pi.
+            let titleAuthority = AgentRegistry.provider(for: session.agentID)?
+                .transcriptTitleAuthority ?? .fallback
+            session.sessionName = SessionTranscriptTitlePolicy.preferredName(
+                sessionId: session.sessionId,
+                currentName: session.sessionName,
+                transcriptTitle: info.customTitle,
+                authority: titleAuthority
+            )
+        }
         // Most agents keep the first-set model name; codex overwrites
         // on every parse because its JSONL doesn't persist model
         // across turns (every new turn is the source of truth). The
@@ -3694,6 +3973,11 @@ actor SessionStore {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 guard !Task.isCancelled else { break }
                 await self?.pruneDeadSessions()
+                // Re-host codex/claude-acp threads Zed owns onto `.zed` and
+                // pick up Zed-side renames. No file event fires when Zed
+                // re-hosts or renames, so this polls — cheaply, since the read
+                // is signature-cached behind two `stat`s.
+                await self?.reconcileZedHostedSessions()
                 // Re-evaluate observed (hookless) sessions so cursor flips
                 // to "your turn" once its transcript goes quiet — there's
                 // no file event for "stopped writing."
@@ -3801,15 +4085,15 @@ actor SessionStore {
         let codexAppPid = hasCodex ? CodexAgentProvider.runningCodexAppPid() : nil
 
         // Zed pools its claude-acp child across threads, so PID-alive
-        // can't decide per-thread liveness — but Zed.app NOT running is a
+        // can't decide per-thread liveness — but Zed NOT running is a
         // definitive signal that every Zed thread is dead. Without this,
         // closing Zed left rows lingering for the full 42h idle window
         // (the JSONL just stops growing; nothing else fires). Computed
-        // once per sweep, only when we actually track a Zed session.
+        // once per sweep, only when we actually track a Zed session, and
+        // across every release channel (a Preview user's threads must not
+        // be pruned just because stable isn't installed).
         let hasZed = sessions.values.contains { $0.terminalHost == .zed }
-        let zedRunning = hasZed
-            ? NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == "dev.zed.Zed" }
-            : false
+        let zedRunning = hasZed ? ZedThreadStore.isZedRunning : false
 
         // Cursor IDE Agents Window threads share Cursor.app's PID, so
         // PID-alive can't decide liveness either (it's true for every
@@ -3834,6 +4118,15 @@ actor SessionStore {
 
         let deadPidIds = sessions.filter { _, session in
             if session.phase == .ended { return false }
+            // Zed host wins first — a codex-acp / claude-acp thread inside Zed
+            // must follow Zed liveness (Zed running + transcript not idle), not
+            // the per-agent codex/claude rules below, which key on Codex.app's
+            // active GUI set or a pooled pid and would wrongly prune it.
+            if session.terminalHost == .zed {
+                if !zedRunning { return true }
+                let idle = now.timeIntervalSince(session.lastActivity)
+                return idle > zedIdleSeconds
+            }
             if session.agentID == .claudeCode,
                let status = SessionState.readSessionStatus(pid: session.pid),
                ClaudeCodeSessionMetadataPolicy.isTerminalStatus(status) {
@@ -3885,16 +4178,6 @@ actor SessionStore {
                 // Cursor IDE thread: active-only by transcript recency.
                 // CLI cursor (tty != nil) uses the generic PID check below.
                 return !cursorActiveIDs.contains(session.sessionId)
-            }
-            if session.terminalHost == .zed {
-                // Zed.app closed → every Zed thread is dead; prune now
-                // instead of waiting out the idle window. (The user
-                // quit Zed; the pooled claude-acp child is gone.)
-                if !zedRunning { return true }
-                // Zed.app open: ignore PID-alive (pooled child), key on
-                // JSONL idleness — an idle-but-open thread must stay.
-                let idle = now.timeIntervalSince(session.lastActivity)
-                return idle > zedIdleSeconds
             }
             guard let pid = session.pid else { return false }
             return kill(Int32(pid), 0) != 0

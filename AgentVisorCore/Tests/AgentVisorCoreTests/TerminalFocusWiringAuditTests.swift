@@ -55,6 +55,58 @@ final class TerminalFocusWiringAuditTests: XCTestCase {
         XCTAssertTrue(adapter.contains("TerminalFocusVerificationPolicy.isSuccessful"))
     }
 
+    func testZedUsesDedicatedReadOnlyAdapter() throws {
+        let root = repoRoot(from: URL(fileURLWithPath: #filePath))
+        let terminalRoot = root
+            .appendingPathComponent("AgentVisor")
+            .appendingPathComponent("Services")
+            .appendingPathComponent("Terminal")
+        let registry = try String(contentsOf: terminalRoot
+            .appendingPathComponent("TerminalAdapterRegistry.swift"))
+        let adapter = try String(contentsOf: terminalRoot
+            .appendingPathComponent("ZedAdapter.swift"))
+
+        guard let zedCase = registry.range(of: "case .zed:")?.lowerBound,
+              let ghosttyCase = registry.range(
+                of: "case .ghostty:",
+                range: zedCase..<registry.endIndex
+              )?.lowerBound else {
+            return XCTFail("TerminalAdapterRegistry is missing its Zed branch.")
+        }
+        let zedBranch = String(registry[zedCase..<ghosttyCase])
+        XCTAssertTrue(zedBranch.contains("return ZedAdapter("))
+
+        guard let sendStart = adapter.range(
+            of: "func sendText(_ text: String, toSession session: SessionState) -> Bool"
+        )?.lowerBound,
+              let focusStart = adapter.range(
+                of: "func focusSession(_ session: SessionState) -> Bool",
+                range: sendStart..<adapter.endIndex
+              )?.lowerBound else {
+            return XCTFail("Could not isolate ZedAdapter input behavior.")
+        }
+        let sendText = String(adapter[sendStart..<focusStart])
+        XCTAssertTrue(sendText.contains("return false"))
+        XCTAssertFalse(
+            sendText.contains("return true"),
+            "Zed input must never report a successful delivery."
+        )
+        for injectionSeam in [
+            "ZedKeystrokeSender",
+            "ProcessExecutor",
+            "NSAppleScript",
+            "CGEvent",
+            "AXUIElement",
+            "osascript",
+            "sendInput"
+        ] {
+            XCTAssertFalse(
+                sendText.contains(injectionSeam),
+                "ZedAdapter.sendText must not use the \(injectionSeam) injection seam."
+            )
+        }
+    }
+
     func testFailedExactTerminalFocusDoesNotFallThroughToAnotherHost() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let navigator = try String(contentsOf: root

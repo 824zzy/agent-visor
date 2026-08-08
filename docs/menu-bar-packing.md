@@ -82,7 +82,7 @@ Usage presentation is compacted by available data, not by hiding meaningful data
 
 ### Claude
 
-The compact Claude `$used/$limit` capsule remains fixed at 84 points. Its provider identity stays in the popover and accessibility label.
+The compact Claude `CC $<remaining>` capsule remains fixed at 68 points. Its provider identity is explicit in the `CC` label and accessibility text; the full used/limit breakdown stays in the popover.
 
 ### Shared Slot
 

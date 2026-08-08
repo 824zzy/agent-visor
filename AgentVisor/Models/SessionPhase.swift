@@ -141,6 +141,8 @@ enum SessionPhase: Sendable {
         // WaitingForInput transitions
         case (.waitingForInput, .processing):
             return true
+        case (.waitingForInput, .waitingForApproval):
+            return true  // Debounced transcript may jump straight to a pending action
         case (.waitingForInput, .idle):
             return true  // Can become idle
         case (.waitingForInput, .compacting):

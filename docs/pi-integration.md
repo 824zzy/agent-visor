@@ -2,7 +2,7 @@
 
 Status: Accepted
 Last reviewed: 2026-08-02
-Implementation status: Automatic prior-boot restoration of the exact interactive Pi sessions owned by Ghostty is implemented behind Agent Visor's launch lifecycle; deterministic policy, persistence, AppleScript compilation, and wiring validation are complete, while signed deployment and a real reboot acceptance remain pending. The restart-safe liveness-heartbeat amendment is implemented, signed-deployed, and user-validated with live Pi runtimes. Native-equivalent image path submission is implemented and signed-deployed; image-only and image-plus-text delivery are user-validated with readable Pi results, while the remaining edge-case matrix has automated coverage but has not been exercised live. Provider-isolated bottom-bar behavior is also signed-deployed and user-validated: Pi exposes no Claude permission-mode chip and Agent Visor reserves Claude mode probing and cycling for Claude Code. The bounded same-session live-runtime ownership guardrail is implemented and signed-deployed: Agent Visor keeps one live owner per durable Pi session, rejects competing runtime evidence while that owner remains alive, and keys Ready attention to the durable session rather than mutable attachment metadata. The bounded transcript-refresh performance amendment is implemented, signed-deployed, and passively validated against a naturally active 100+ MB transcript.
+Implementation status: Automatic prior-boot restoration of the exact interactive Pi sessions owned by Ghostty is implemented behind Agent Visor's launch lifecycle; deterministic policy, persistence, AppleScript compilation, and wiring validation are complete, while signed deployment and a real reboot acceptance remain pending. The restart-safe liveness-heartbeat amendment is implemented, signed-deployed, and user-validated with live Pi runtimes. Native-equivalent image path submission is implemented and signed-deployed; image-only and image-plus-text delivery are user-validated with readable Pi results, while the remaining edge-case matrix has automated coverage but has not been exercised live. Provider-isolated bottom-bar behavior is also signed-deployed and user-validated: Pi exposes no Claude permission-mode chip and Agent Visor reserves Claude mode probing and cycling for Claude Code. The bounded same-session live-runtime ownership guardrail is implemented and signed-deployed: Agent Visor keeps one live owner per durable Pi session, rejects competing runtime evidence while that owner remains alive, and keys Ready attention to the durable session rather than mutable attachment metadata. The bounded transcript-refresh performance amendment is implemented, signed-deployed, and passively validated against a naturally active 100+ MB transcript. The lost-completion recovery amendment is implemented: the heartbeat carries the runtime idle flag, `session_compact` reports the closing compaction boundary, and a Working row whose completion event never arrived resolves within one heartbeat interval.
 
 ## Purpose
 
@@ -27,6 +27,8 @@ This document defines the Pi-specific discovery, lifecycle, transcript, installa
 13. Ready attention is identified by durable session ID. PID, TTY, terminal-host, or other attachment churn cannot by itself create another Ready episode, replay the completion sound, or bounce the menu-bar surface.
 14. Transcript refresh work is bounded. Repeated hook and file-watcher signals may collapse into one running refresh plus one latest pending rerun, an unchanged file performs no read or UI replay, and an append decodes only newly added complete JSONL records. Large historical Pi files use a bounded summary path until the user or a live update requires full history.
 15. Reboot restoration is exact-set and at-most-once. Agent Visor persists only accepted interactive Ghostty-owned Pi lifecycle metadata, freezes it for system power-off, removes intentionally ended sessions, gates launch on a different macOS boot identity, and never substitutes bare `pi`, `-c`, `-r`, CWD recency, or display names for the exact durable session path.
+16. Lifecycle delivery is best-effort, so a lost completion event must not permanently misreport Working. The heartbeat carries the runtime's own idle flag, and an idle runtime resolves a row that Agent Visor still shows as Working. This is exact evidence from the reporting process, not an inference from silence, and it never promotes an Idle or Ready row to Working.
+17. A compaction reports both of its boundaries. Manual `/compact` completes outside an agent run and therefore never reaches `agent_settled`, so the closing boundary — not the next user prompt — is what ends the Compacting state.
 
 ## User-Visible States
 
@@ -49,6 +51,8 @@ Agent Visor scans `~/.pi/agent/sessions/*/*.jsonl` and reads the versioned sessi
 
 It separately discovers live `pi` processes and records PID, process start time, CWD, and TTY. A process is paired with a session using normalized CWD and the closest creation time inside a narrow tolerance. Matching is one-to-one. Unmatched persisted sessions remain historical; unmatched processes do not manufacture session rows from CWD, title, recency, or other ambiguous evidence.
 
+Zed-hosted Pi is the bounded processless exception. Zed runs `pi-acp` behind a Node worker that cannot be found by `pgrep -x pi`, but Zed's read-only thread store names the exact durable Pi session ID. While Zed is running, a non-archived `pi-acp` row joined to an existing Pi session file is source-confirmed live host evidence even though it has no per-session PID or TTY. It bootstraps Idle rather than Ended and remains read-only in Agent Visor; titles and navigation follow [Zed-Hosted Agent Integration](zed-integration.md). No title, path, or recency heuristic can manufacture this exception.
+
 Creation-time matching is fallback evidence for a freshly created session, not a restart-recovery mechanism for resumed or imported sessions. The bundled extension is authoritative after `/new`, `/resume`, `/fork`, or another in-process session replacement because process start time no longer identifies the active session. Its periodic live-attachment heartbeat is also the authoritative mapping after Agent Visor itself restarts.
 
 A discovery-created row cannot claim a PID that a different non-ended session already owns. Fallback creation-time matching can only ever pair a live process with its startup transcript; after that process runs `/new`, `/resume`, or `/fork` in place, discovery keeps re-finding the stale startup transcript for the same PID. Admitting it would republish a ghost row, infer a false Ready state for it, and shadow the authoritative hook-tracked owner's heartbeats until the next prune removed the duplicate. Discovery therefore defers to the existing live owner: a Pi discovery match is admitted only when no different non-ended session already holds its PID. This mirrors the heartbeat rule that a competing runtime cannot evict a different non-ended session that already owns the same PID.
@@ -70,7 +74,16 @@ Reconciliation proceeds from strongest to weakest evidence:
 3. Creation-time process matching remains the no-extension fallback for genuinely fresh sessions only.
 4. Transcript growth may still recover a missed active turn, but user activity is not required for restart recovery.
 
-A heartbeat is not phase or activity evidence. It must not refresh `lastActivity`, reorder an already tracked session, clear or create an approval, modify tool state, or change Working/Ready/Idle for a non-ended row. When it restores an absent or historical row, Agent Visor uses Idle as the conservative live phase and retains transcript-derived activity time. A later transcript or lifecycle event may refine that phase normally.
+A heartbeat is not phase or activity evidence, with one bounded exception. It must not refresh `lastActivity`, reorder an already tracked session, clear or create an approval, modify tool state, or promote a row to Working. When it restores an absent or historical row, Agent Visor uses Idle as the conservative live phase and retains transcript-derived activity time. A later transcript or lifecycle event may refine that phase normally.
+
+The exception is the runtime's own idle flag, and it exists because lifecycle delivery is best-effort: the extension writes one short-lived socket per event with a 100 ms budget, no acknowledgement, and no retry. Every other repair path is deliberately closed for a hook-tracked Pi row — transcript inference stops once hook evidence exists, and only Ready has a staleness ceiling — so a single dropped `Stop` used to pin a finished session to Working until the user's next prompt. When a heartbeat reports that no agent run, retry, auto-compaction, or queued continuation is in flight while Agent Visor still shows Working, that row resolves:
+
+- a completion boundary inside a short freshness window publishes Ready normally, because the recovery is standing in for the event that was lost;
+- an older or unreadable boundary clears to Idle silently, so recovery never rings a notification for a turn that finished long ago;
+- the transcript's last write is the completion boundary, taken from the exact session-file path the heartbeat already reports;
+- a runtime that reports no flag keeps the previous phase-neutral behavior, which covers a live process still running an older copy of the extension.
+
+Recovery is one-directional by design. A heartbeat sampled just before a completion cannot resurrect Working after the real `Stop` landed, and an approval or Ended row is never touched.
 
 The ordinary same-PID late-event guard remains in force for heartbeats. A heartbeat may restore an Ended row only when the pre-merge attachment PID is absent or differs from the reporting PID. It also cannot evict a different non-ended session that already owns the same PID. These rules prevent an in-flight heartbeat from reviving a session after its matching `SessionEnd` or replacing a newer same-process session. Exact `SessionStart` remains the only Pi event allowed to transfer, replace, or reactivate an attachment under the same PID.
 
@@ -84,22 +97,33 @@ A live process using an older already-loaded copy of the extension cannot be upg
 
 Agent Visor maintains one atomic, schema-versioned restoration snapshot under its Application Support directory. Only accepted, persisted, interactive Pi runtimes whose canonical terminal host is Ghostty enter it. Historical rows, fallback-unmatched processes, print/JSON/RPC/SDK invocations, ephemeral sessions, subagents, other terminal hosts, and competing live owners are excluded.
 
-The snapshot is keyed by durable Pi session ID and records exact session-file path, working directory, optional display name, last accepted attachment evidence, and optional Ghostty window/tab/terminal topology. It contains no prompt, response, tool input, credential, or transcript content. PID and TTY locate the current terminal for capture but are never treated as valid authority after reboot.
+The snapshot is keyed by durable Pi session ID and records exact session-file path, working directory, optional display name, last accepted attachment evidence, and optional Ghostty window/tab/terminal topology. Topology includes Ghostty's stable object identities; numeric positions are retained only for deterministic ordering because inserting a window or tab renumbers later positions. The snapshot contains no prompt, response, tool input, credential, or transcript content. PID and TTY locate the current terminal for capture but are never treated as valid authority after reboot.
 
 Lifecycle rules are:
 
 - an accepted live Pi event adds or refreshes an eligible entry;
+- an entry whose session path stops being a persisted regular file is removed on the next accepted event or snapshot load; no negative cache prevents a later real file from being accepted again;
 - `/new`, `/resume`, and `/fork` replace the old same-process identity with the newly authoritative session;
 - `SessionEnd` or conclusive process death removes an entry while the machine remains up;
 - macOS `willPowerOff` freezes the current generation before teardown, so later shutdown-driven end events cannot erase it;
 - an app crash or power loss leaves the latest atomic active generation intact;
 - a clean Agent Visor termination outside system power-off invalidates the snapshot because later Pi lifecycle changes would be unobserved.
 
-At Agent Visor launch, a stable macOS boot identity separates ordinary same-boot reattachment from a genuine reboot. Same-boot launches never start Pi; normal heartbeats remain authoritative. A different boot may claim one active or frozen prior generation. The claim reaches disk before any AppleScript or process launch, and the generation cannot be claimed twice.
+At Agent Visor launch, macOS `kern.bootsessionuuid` separates ordinary same-boot reattachment from a genuine reboot. Agent Visor reads it through `sysctlbyname`, accepts only a valid UUID, and persists its canonical form. The same strict canonicalizer validates schema-3 snapshot authority before any snapshot is sanitized or used; malformed authority is removed, while noncanonical UUID casing is atomically rewritten before load returns. There is no boot-time, wall-clock, or uptime fallback.
+
+If the live UUID is unavailable or malformed, restoration and all restoration lifecycle recording are disabled for that app run, no in-memory coordinator is created, and Agent Visor attempts to remove existing persisted restoration authority before returning. If durable cleanup fails, stale bytes may remain on disk; the failure is logged and restoration remains disabled for the current run.
+
+When startup creates a fresh schema-3 coordinator because no authorized snapshot loaded, its initial empty baseline must reach durable storage before that coordinator can claim a prior generation or accept lifecycle mutations. If the baseline save fails, Agent Visor revokes the in-memory coordinator, leaves the baseline requirement unresolved, and disables both restoration and restoration lifecycle recording for the current app run.
+
+Schema version 3 introduces the boot-session UUID identity. Unshipped schema-2 snapshots containing decimal boot timestamps are discarded rather than migrated or compared.
+
+Same-boot launches never start Pi. An active same-boot snapshot remains in the same generation; normal heartbeats remain authoritative. A different boot may claim one active or frozen prior generation. The claim reaches disk before any AppleScript or process launch, and the generation cannot be claimed twice.
 
 Every candidate must still have a real session file and working directory. Every launch uses the resolved Pi executable plus exact `--session <path>`. Missing or invalid candidates are skipped; Agent Visor never falls back to a new session, most-recent session, or interactive selector and never replays a prompt or tool call.
 
-Ghostty's own AppKit restoration receives a bounded settle window. Agent Visor first reuses a captured window/tab/terminal only when that surface still exists and its working directory matches. It injects the exact resume command into that fresh restored shell. Unmatched sessions are reconstructed through Ghostty's supported AppleScript `new window`, `new tab`, and `split` commands. Missing topology degrades to one deterministic fallback window with one tab per session. Unrelated surfaces are never closed or repurposed.
+Before a prior-boot generation is claimed, the hook socket starts and Agent Visor waits one complete 10-second Pi heartbeat interval plus bounded scheduling slack. Exact lifecycle reports observed during that preflight are excluded from the claim regardless of their current host. Agent Visor filters exact live owners again immediately before automation, closing the race between durable claim and launch. These are durable-session-ID checks from Pi's own extension evidence; process existence, CWD, title, and transcript recency cannot suppress a required restore or authorize a duplicate.
+
+Ghostty's own AppKit restoration then receives a bounded settle window. Agent Visor first reuses a captured terminal only when its stable identity still exists and its working directory matches. It injects the exact resume command into that fresh restored shell. Unmatched sessions are reconstructed through Ghostty's supported AppleScript `new window` and `split` commands: each captured tab becomes one window, and its captured panes become splits. Missing topology degrades to one deterministic fallback window per session. This avoids Ghostty 1.3's preview `new tab` failure when native tabs are hidden, which can create a surface before reporting an error. Unrelated surfaces are never closed or repurposed.
 
 The bundled Pi extension remains socket-only and metadata-only. It writes no restoration registry. Therefore exactness is guaranteed only while Agent Visor was actively tracking the relevant lifecycle; sessions that start or end while Agent Visor is unavailable are not guessed later.
 
@@ -123,7 +147,8 @@ The extension:
 - does not register tools or commands;
 - does not modify prompts, models, tool calls, results, permissions, or session data;
 - starts at most one session-scoped, unreferenced heartbeat timer from `session_start`, never from the extension factory;
-- reports `SessionHeartbeat` at a fixed 10-second cadence while that TUI runtime remains live;
+- reports `SessionHeartbeat` at a fixed 10-second cadence while that TUI runtime remains live, carrying the runtime's idle flag as metadata;
+- probes that flag defensively, reporting none when the runtime does not expose it or the extension context has gone stale;
 - clears the timer unconditionally during `session_shutdown`, before reporting the shutdown;
 - returns immediately when Agent Visor's socket is absent, retaining no queue or deferred retry;
 - never blocks Pi on Agent Visor availability or keeps the Pi process alive.
@@ -133,15 +158,18 @@ Lifecycle mapping uses Pi's public extension events plus the bounded extension-l
 | Source | Agent Visor evidence |
 | --- | --- |
 | `session_start` | Exact live attachment; idle/recent until turn evidence arrives |
-| 10-second extension timer | `SessionHeartbeat`: attachment liveness and routing metadata only |
+| 10-second extension timer | `SessionHeartbeat`: attachment liveness, routing metadata, and the runtime idle flag |
 | `agent_start` | Working |
 | `tool_execution_start` | Working; optional tool name only |
 | `tool_execution_end` | Working until the agent settles |
 | `session_before_compact` | Working/compacting |
+| `session_compact` | `PostCompact`: Working while the runtime reports busy, otherwise Idle |
 | `agent_settled` | Ready |
 | `session_shutdown` | Ended for that live attachment |
 
 `agent_settled`, rather than low-level `agent_end`, is the completion boundary because Pi may still retry, compact, or process queued follow-up messages after `agent_end`.
+
+`session_compact` reports Idle rather than Ready: a compaction finishing is not a turn completion, so it clears Compacting without manufacturing a Ready episode. Auto compaction runs inside an agent run, where the runtime still reports busy and the turn's own events remain authoritative.
 
 ## Transcript Contract
 
@@ -355,8 +383,8 @@ Integration and source-wiring tests must prove:
 - the menu-bar completion sound and bounce track Ready session IDs rather than PID-bearing SwiftUI stable IDs;
 - installation modifies only `agent-visor.ts` and is skipped when Pi is absent;
 - reboot restoration accepts only exact interactive Ghostty-owned sessions, atomically claims a prior-boot generation before automation, and uses only `pi --session`;
-- same-boot launch, sleep/wake, intentional Pi/Ghostty closure, missing files, and already-live exact owners produce no duplicate launch;
-- captured Ghostty surfaces are reused only when position and CWD agree, with unmatched sessions routed to the deterministic fallback layout;
+- same-boot launch, sleep/wake, intentional Pi/Ghostty closure, missing files, and already-live exact owners produce no duplicate launch, including an owner reported during the bounded pre-claim heartbeat interval or the final pre-automation check;
+- captured Ghostty surfaces are reused only when stable terminal identity and CWD agree, with unmatched sessions routed to the deterministic fallback layout;
 - `agent_settled` maps to Ready and low-level `agent_end` does not;
 - terminal-owned Pi sessions route through the existing terminal adapter;
 - both shared Chat composers admit Pi images through the provider-aware route instead of hard-coded Pi exclusions;
@@ -619,4 +647,15 @@ Do not type `/reload`, launch or close a Pi TUI, or otherwise mutate a foregroun
 
 ## Change Control
 
-Changes that make the extension mandatory, add content beyond exact lifecycle metadata to its wire payload, let heartbeat evidence mutate phase or activity, increase heartbeat frequency, introduce Needs attention inference, enable arbitrary new-session launching, broaden reboot restoration beyond exact interactive Ghostty-owned sessions, weaken boot/claim/identity gates, independently represent multiple live Pi runtimes or branches under one durable session ID, or trade active-branch correctness for a flat/tail-only live transcript require an explicit design update before implementation.
+Changes that make the extension mandatory, add content beyond exact lifecycle metadata to its wire payload, let heartbeat evidence mutate activity or promote a row to Working, increase heartbeat frequency, introduce Needs attention inference, enable arbitrary new-session launching, broaden reboot restoration beyond exact interactive Ghostty-owned sessions, weaken boot/claim/identity gates, independently represent multiple live Pi runtimes or branches under one durable session ID, or trade active-branch correctness for a flat/tail-only live transcript require an explicit design update before implementation.
+
+The one accepted phase exception is the runtime idle flag clearing a stale Working row, bounded as described in [Restart Reattachment](#restart-reattachment). Widening it — promoting phases from a heartbeat, treating silence as idle, or inferring attention — requires a new design decision.
+
+## TDD Implementation Record — 2026-08-05 (Lost Completion Recovery)
+
+Observed regression: a Pi session whose turn ended at 18:07:45 still rendered the orange Working dot at 18:28. The runtime did emit `agent_settled` — an unrelated extension listening to the same event posted its request at 18:07:45.264 — but Agent Visor's row never left `.processing`, and the discovery log contained no phase line for that session at all. Delivery was lost on the best-effort socket, and no repair path existed: transcript inference is disabled once hook evidence exists, heartbeats were phase-neutral, and `HookReadyExpirationPolicy` expires only Ready.
+
+- **Slice 1 — pure recovery policy:** `PiIdleHeartbeatRecoveryPolicy` decides whether an idle heartbeat clears a Working row and whether the repaired completion is fresh enough to still publish Ready. `shouldResolveCompletionBoundary` keeps a phase-neutral heartbeat off the filesystem. 10 focused tests cover the missing flag, the busy runtime, both freshness sides, an unreadable boundary, clock skew, and the one-directional scope guard.
+- **Slice 2 — SessionStore seam:** `recoverStuckPiWork` applies the outcome inside the existing phase-neutral heartbeat branch, respects the phase state machine, keeps hook evidence so the Ready ceiling still applies, schedules the file sync the dropped event would have carried, and logs `[Phase] pi … (idle heartbeat, was …)` so the next regression is diagnosable from the same log that exposed this one.
+- **Slice 3 — compaction boundary:** the extension subscribes to `session_compact` and reports `PostCompact`, which the existing lifecycle policy maps from the reported status. This closes the deterministic sibling defect: manual `/compact` never reaches `agent_settled`, so Compacting previously persisted until the next prompt.
+- **Validation:** the complete AgentVisorCore suite passed 1,852 tests with zero failures; the bundled extension passed a strict TypeScript check against Pi's own type definitions and a transpile check.

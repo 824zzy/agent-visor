@@ -53,12 +53,22 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
     private var retryWorkItems: [DispatchWorkItem] = []
     private var isStarted = false
 
+    /// Holds the last reliable application-menu right edge for the target
+    /// screen so a transient ownership loss or a momentarily wider menu
+    /// measurement (common during app activation or across displays) cannot
+    /// collapse the left pill bar. Mirrors StatusTrayLayoutPolicy on the right.
+    private var menuEdgeHold = MenuOwnerEdgeHoldPolicy.begin(
+        targetScreenID: "unconfigured",
+        observedEdge: nil
+    )
+    @Published private(set) var stableMenuOwnerEdge: CGFloat?
+
     func safeWidth(available: CGFloat, margin: CGFloat = 28) -> CGFloat {
-        NotchMenuLayoutPolicy.safeWidth(
-            available: available,
-            snapshot: snapshot,
-            margin: margin
-        )
+        // Consume the held (stabilized) menu-owner edge rather than the raw
+        // per-probe snapshot, so a transient generation reset or a flapping
+        // owner measurement cannot momentarily collapse the pill bar.
+        guard let edge = stableMenuOwnerEdge, edge < available else { return 0 }
+        return max(0, available - edge - margin)
     }
 
     func statusTraySafeWidth(availableFrom: CGFloat, margin: CGFloat = 16) -> CGFloat {
@@ -109,6 +119,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
         guard isStarted else { return }
 
         updateStatusTrayEdge(screenRect: screenRect)
+        refreshStableEdge(screenRect: screenRect)
 
         let frontmost = NSWorkspace.shared.frontmostApplication
         let observedFrontmostPid = frontmost?.activationPolicy == .regular
@@ -204,6 +215,24 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
         )
         guard updated != statusTraySnapshot else { return }
         statusTraySnapshot = updated
+    }
+
+    /// Feed the currently-rendered menu-owner edge (or nil during a transient)
+    /// into the hold policy and publish the stabilized edge. Called on every
+    /// probe tick (to advance a pending contraction) and after each apply (to
+    /// capture a freshly measured edge immediately).
+    private func refreshStableEdge(screenRect: CGRect) {
+        let live = NotchMenuLayoutPolicy.renderedEdge(for: reconciliationSnapshot)
+        let updated = MenuOwnerEdgeHoldPolicy.applying(
+            observedEdge: live,
+            observedAt: Foundation.ProcessInfo.processInfo.systemUptime,
+            targetScreenID: Self.screenID(for: screenRect),
+            to: menuEdgeHold
+        )
+        menuEdgeHold = updated
+        if updated.heldEdge != stableMenuOwnerEdge {
+            stableMenuOwnerEdge = updated.heldEdge
+        }
     }
 
     private func establishContext(
@@ -348,6 +377,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
                     + " source=\(String(describing: evidence.source))"
             )
         }
+        refreshStableEdge(screenRect: request.targetScreenRect)
     }
 
     private func scheduleRetries(after delays: [TimeInterval], screenRect: CGRect) {
