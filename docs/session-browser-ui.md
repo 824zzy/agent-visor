@@ -170,7 +170,7 @@ The fixed owner accessory prevents rows from moving when Cmd shortcuts appear, t
 
 Color never carries state alone. Section placement and accessibility text provide the same meaning. Chips use brand or metadata tints only as quiet identification, not status.
 
-A freshly completed, unacknowledged `Ready` turn may pulse for at most seven minutes. Opening that session through Agent Visor acknowledges the current completion and makes the mark static without changing its color, browser section, or browser row position. The menu-bar pill may move below Working according to the product-surface attention order. A later Ready transition may pulse and return to the higher menu-bar tier again.
+A freshly completed, unacknowledged `Ready` turn may pulse for at most seven minutes. Opening that session through Agent Visor acknowledges the current completion and makes the browser mark static without changing its color, browser section, or browser row position. The menu-bar pill uses separate constrained-surface semantics: it stays green while unseen, turns gray when acknowledged, and joins Recent ordering after a two-second position hold. A later completion becomes unseen again.
 
 ## Row States
 

@@ -99,7 +99,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
             2,
             "Session and overflow width estimates must use the selected plan padding."
         )
-        XCTAssertTrue(source.contains("OverflowPillButton(count: overflowCount, width: overflowPillWidth)"))
+        XCTAssertTrue(source.contains("hasUnseenCompletion: overflowContainsUnseenCompletion"))
         XCTAssertTrue(source.contains("MenuBarPillMetrics.usageFontSize"))
     }
 
@@ -114,7 +114,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
         XCTAssertTrue(sideContent.contains("let renderedWidth: CGFloat"))
         XCTAssertTrue(sideContent.contains(".padding(.horizontal, horizontalPadding)"))
         XCTAssertTrue(sideContent.contains("HStack(spacing: pillSpacing)"))
-        XCTAssertTrue(sideContent.contains("OverflowPillButton(count: overflowCount, width: overflowPillWidth)"))
+        XCTAssertTrue(sideContent.contains("hasUnseenCompletion: overflowContainsUnseenCompletion"))
 
         XCTAssertTrue(notchView.contains("width: pill.renderedWidth"))
         XCTAssertTrue(notchView.contains("leftOverflowWidth: pack.leftOverflowWidth"))

@@ -385,7 +385,8 @@ struct PillButton: View {
                 SessionStatusDot(
                     session: session,
                     diameter: MenuBarPillMetrics.statusDotDiameter,
-                    colorScheme: .darkChrome
+                    colorScheme: .darkChrome,
+                    surface: .menuBarPill
                 )
                     .opacity(isRecentShortcut ? 0.55 : 1.0)
             }
@@ -448,22 +449,58 @@ final class SessionNavigationRecencyStore: ObservableObject {
 
     @Published private(set) var revision = 0
     private let defaultsKey = "sessionNavigationRecency.v1"
+    private let completionDefaultsKey = "sessionCompletions.v1"
     private let readyAcknowledgmentDefaultsKey = "sessionReadyAcknowledgments.v1"
     private let maxEntries = 256
     private let defaults: UserDefaults
     private var pendingRecentNavigationCommits: [String: PendingPillMovement] = [:]
+    private var observedReadyStates: [String: Bool] = [:]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
     }
 
+    /// Capture completion identity at the published-session boundary, before
+    /// the lifecycle's 30-minute Ready ceiling can demote the row to idle.
+    /// Persisting the date keeps unseen/seen semantics stable across relaunch.
+    func observe(_ sessions: [SessionState]) {
+        var didChange = false
+        let currentSessionIDs = Set(sessions.map(\.sessionId))
+
+        for session in sessions {
+            let key = session.sessionId
+            let isReady = session.phase == .waitingForInput
+            let previousReady = observedReadyStates[key]
+            observedReadyStates[key] = isReady
+            guard isReady else { continue }
+
+            let existingCompletion = completionDate(for: session)
+            let nextCompletion = PillCompletionObservationPolicy.completionDateAfterObservation(
+                isReady: true,
+                previousObservationWasReady: previousReady,
+                observedCompletionAt: completionEvidenceDate(for: session),
+                existingCompletedAt: existingCompletion
+            )
+            if nextCompletion != existingCompletion, let nextCompletion {
+                store(nextCompletion, for: session, defaultsKey: completionDefaultsKey)
+                didChange = true
+            }
+        }
+
+        observedReadyStates = observedReadyStates.filter {
+            currentSessionIDs.contains($0.key)
+        }
+        if didChange {
+            revision &+= 1
+        }
+    }
+
     func record(_ session: SessionState, now: Date = Date()) {
         let existingReadyAcknowledgment = readyAcknowledgedAt(for: session)
-        let nextReadyAcknowledgment = ReadyAttentionPolicy.acknowledgmentDateAfterNavigation(
-            isReady: session.phase == .waitingForInput,
-            phaseChangedAt: session.phaseChangedAt,
+        let nextReadyAcknowledgment = PillCompletionAttentionPolicy.acknowledgmentDateAfterActivation(
+            completedAt: completionDate(for: session),
             existingAcknowledgedAt: existingReadyAcknowledgment,
-            navigationAt: now
+            activatedAt: now
         )
 
         let defersNavigationRecency = session.phase == .idle
@@ -481,7 +518,7 @@ final class SessionNavigationRecencyStore: ObservableObject {
                 for: session,
                 defaultsKey: readyAcknowledgmentDefaultsKey
             )
-            scheduleReadyPositionRefresh(for: session)
+            scheduleCompletionPositionRefresh()
             publishesImmediately = true
         }
         if publishesImmediately {
@@ -491,6 +528,17 @@ final class SessionNavigationRecencyStore: ObservableObject {
 
     func date(for session: SessionState) -> Date? {
         date(for: session, defaultsKey: defaultsKey)
+    }
+
+    func completionDate(for session: SessionState) -> Date? {
+        date(for: session, defaultsKey: completionDefaultsKey)
+    }
+
+    func completionAttention(for session: SessionState) -> PillCompletionAttentionState {
+        PillCompletionAttentionPolicy.state(
+            completedAt: completionDate(for: session),
+            acknowledgedAt: readyAcknowledgedAt(for: session)
+        )
     }
 
     func readyAcknowledgedAt(for session: SessionState) -> Date? {
@@ -547,13 +595,18 @@ final class SessionNavigationRecencyStore: ObservableObject {
         }
     }
 
-    private func scheduleReadyPositionRefresh(for session: SessionState) {
-        guard session.phase == .waitingForInput else { return }
+    private func scheduleCompletionPositionRefresh() {
         DispatchQueue.main.asyncAfter(
             deadline: .now() + ReadyAttentionPolicy.defaultPositionHold
         ) { [weak self] in
             self?.revision &+= 1
         }
+    }
+
+    private func completionEvidenceDate(for session: SessionState) -> Date {
+        session.lastActivityDate
+            ?? session.phaseObservedAt
+            ?? session.phaseChangedAt
     }
 }
 
@@ -564,6 +617,7 @@ final class SessionNavigationRecencyStore: ObservableObject {
 struct OverflowPillButton: View {
     let count: Int
     let width: CGFloat
+    let hasUnseenCompletion: Bool
 
     @ObservedObject private var flashStore = PillFlashStore.shared
     @ObservedObject private var sessionShortcutManager = GlobalSessionShortcutManager.shared
@@ -590,6 +644,14 @@ struct OverflowPillButton: View {
                 Capsule()
                     .fill(isFlashing ? Color.white.opacity(0.25) : Color.black.opacity(0.25))
             )
+            .overlay(alignment: .topTrailing) {
+                if hasUnseenCompletion {
+                    Circle()
+                        .fill(CatppuccinPalette.mocha.green)
+                        .frame(width: 4, height: 4)
+                        .padding(3)
+                }
+            }
             .scaleEffect(isFlashing ? 0.93 : 1.0)
             .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isFlashing)
     }
@@ -1450,6 +1512,7 @@ struct NotchPillBar: View {
     /// Count of sessions not visible on EITHER bar. Non-zero means this
     /// side owns the +N slot. Zero means render no overflow pill here.
     let overflowCount: Int
+    let overflowContainsUnseenCompletion: Bool
     let overflowPillWidth: CGFloat?
     let maxWidth: CGFloat
     let pillSpacing: CGFloat
@@ -1497,7 +1560,11 @@ struct NotchPillBar: View {
 
                 if overflowCount > 0, let overflowPillWidth {
                     if let overflowPopover {
-                        OverflowPillButton(count: overflowCount, width: overflowPillWidth)
+                        OverflowPillButton(
+                            count: overflowCount,
+                            width: overflowPillWidth,
+                            hasUnseenCompletion: overflowContainsUnseenCompletion
+                        )
                             .popover(isPresented: overflowPopover.isPresented, arrowEdge: .top) {
                                 FirstMouseHostingContainer(
                                     content: SessionNavigatorPopover(
@@ -1520,7 +1587,11 @@ struct NotchPillBar: View {
                                 }
                             }
                     } else {
-                        OverflowPillButton(count: overflowCount, width: overflowPillWidth)
+                        OverflowPillButton(
+                            count: overflowCount,
+                            width: overflowPillWidth,
+                            hasUnseenCompletion: overflowContainsUnseenCompletion
+                        )
                     }
                 }
 
@@ -1573,6 +1644,7 @@ enum PillBarCoordinator {
         let leftPills: [VisiblePill]
         let rightPills: [VisiblePill]
         let overflowSessions: [SessionState]
+        let overflowContainsUnseenCompletion: Bool
         let leftOverflowCount: Int
         let rightOverflowCount: Int
         let leftOverflowWidth: CGFloat?
@@ -1626,6 +1698,7 @@ enum PillBarCoordinator {
                 leftPills: [],
                 rightPills: [],
                 overflowSessions: [],
+                overflowContainsUnseenCompletion: false,
                 leftOverflowCount: 0,
                 rightOverflowCount: 0,
                 leftOverflowWidth: nil,
@@ -1753,6 +1826,9 @@ enum PillBarCoordinator {
         let overflowSessions: [SessionState] = result.hiddenIds.compactMap {
             byEntry[$0]?.session
         }
+        let overflowContainsUnseenCompletion = overflowSessions.contains { session in
+            SessionNavigationRecencyStore.shared.completionAttention(for: session) == .unseen
+        }
         let hiddenVisibleCount = overflowSessions.count
         let leftOverflow = result.overflowSide == .left ? hiddenVisibleCount : 0
         let rightOverflow = result.overflowSide == .right ? hiddenVisibleCount : 0
@@ -1767,6 +1843,7 @@ enum PillBarCoordinator {
             leftPills: leftPills,
             rightPills: rightPills,
             overflowSessions: overflowSessions,
+            overflowContainsUnseenCompletion: overflowContainsUnseenCompletion,
             leftOverflowCount: leftOverflow,
             rightOverflowCount: rightOverflow,
             leftOverflowWidth: leftOverflow > 0 ? renderedOverflowWidth : nil,
@@ -1875,6 +1952,7 @@ enum PillBarCoordinator {
                 navigationDate: SessionNavigationRecencyStore.shared.date(for: session),
                 isHidden: false,
                 isTitleless: isTitleless(session),
+                completedAt: SessionNavigationRecencyStore.shared.completionDate(for: session),
                 readyAcknowledgedAt: SessionNavigationRecencyStore.shared.readyAcknowledgedAt(for: session)
             )
         }

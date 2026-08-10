@@ -25,6 +25,14 @@ enum DotColorScheme {
     case adaptive
 }
 
+/// Selects which attention semantics the shared dot presents. Browser and
+/// panel indicators keep their age-based treatment; only the constrained
+/// menu-bar pill uses durable unseen-completion state.
+enum SessionStatusSurface {
+    case standard
+    case menuBarPill
+}
+
 // MARK: - Color
 
 /// Color for a session's status indicator. For `waitingForInput`/`idle`,
@@ -109,6 +117,7 @@ struct SessionStatusDot: View {
     /// `.darkChrome` so the dot stays readable on the always-dark
     /// menu-bar capsule.
     var colorScheme: DotColorScheme = .adaptive
+    var surface: SessionStatusSurface = .standard
     @ObservedObject private var navigationRecencyStore = SessionNavigationRecencyStore.shared
 
     /// Full pulse cycle duration. Matches the feel of the previous
@@ -128,6 +137,7 @@ struct SessionStatusDot: View {
     /// across every visible session indicator.
     var body: some View {
         let acknowledgedAt = navigationRecencyStore.readyAcknowledgedAt(for: session)
+        let completedAt = navigationRecencyStore.completionDate(for: session)
         // Resolve the status color ONCE per body evaluation. It is constant
         // for the duration of a pulse (phase stays waitingForInput; idleAge
         // moves on the order of seconds), so it must NOT be re-resolved inside
@@ -139,12 +149,14 @@ struct SessionStatusDot: View {
         // sessions don't read as fresh green.
         let color = sessionStatusColor(
             for: session.phase,
-            idleAge: session.statusIdleAge,
+            idleAge: statusIdleAge(
+                completedAt: completedAt,
+                acknowledgedAt: acknowledgedAt
+            ),
             scheme: colorScheme
         )
-        if ReadyAttentionPolicy.shouldPulse(
-            isReady: session.phase == .waitingForInput,
-            phaseChangedAt: session.phaseChangedAt,
+        if shouldPulse(
+            completedAt: completedAt,
             acknowledgedAt: acknowledgedAt,
             now: Date()
         ) {
@@ -156,6 +168,7 @@ struct SessionStatusDot: View {
                     color: color,
                     pulseOpacity: pulseOpacity(
                         at: context.date,
+                        completedAt: completedAt,
                         acknowledgedAt: acknowledgedAt
                     )
                 )
@@ -166,6 +179,50 @@ struct SessionStatusDot: View {
             // display refresh for no benefit.
             dot(color: color, pulseOpacity: 1.0)
         }
+    }
+
+    private func statusIdleAge(
+        completedAt: Date?,
+        acknowledgedAt: Date?
+    ) -> TimeInterval {
+        guard surface == .menuBarPill else { return session.statusIdleAge }
+        guard session.phase == .waitingForInput || session.phase == .idle else {
+            return session.statusIdleAge
+        }
+
+        switch PillCompletionAttentionPolicy.state(
+            completedAt: completedAt,
+            acknowledgedAt: acknowledgedAt
+        ) {
+        case .unseen:
+            return 0
+        case .seen:
+            return .greatestFiniteMagnitude
+        case .none:
+            // Preserve the legacy presentation while the monitor is seeding a
+            // completion identity for a currently Ready session.
+            return session.phase == .waitingForInput ? 0 : .greatestFiniteMagnitude
+        }
+    }
+
+    private func shouldPulse(
+        completedAt: Date?,
+        acknowledgedAt: Date?,
+        now: Date
+    ) -> Bool {
+        if surface == .menuBarPill {
+            return PillCompletionAttentionPolicy.shouldPulse(
+                completedAt: completedAt,
+                acknowledgedAt: acknowledgedAt,
+                now: now
+            )
+        }
+        return ReadyAttentionPolicy.shouldPulse(
+            isReady: session.phase == .waitingForInput,
+            phaseChangedAt: session.phaseChangedAt,
+            acknowledgedAt: acknowledgedAt,
+            now: now
+        )
     }
 
     private func dot(color: Color, pulseOpacity: Double) -> some View {
@@ -179,10 +236,13 @@ struct SessionStatusDot: View {
     /// `waitingForInput` and is within the pulse window, in which case
     /// this returns a smooth cosine-shaped pulse between
     /// `pulseMinOpacity` and 1.0.
-    private func pulseOpacity(at now: Date, acknowledgedAt: Date?) -> Double {
-        guard ReadyAttentionPolicy.shouldPulse(
-            isReady: session.phase == .waitingForInput,
-            phaseChangedAt: session.phaseChangedAt,
+    private func pulseOpacity(
+        at now: Date,
+        completedAt: Date?,
+        acknowledgedAt: Date?
+    ) -> Double {
+        guard shouldPulse(
+            completedAt: completedAt,
             acknowledgedAt: acknowledgedAt,
             now: now
         ) else {
@@ -193,7 +253,10 @@ struct SessionStatusDot: View {
         // moment the session enters waitingForInput. The inverted form
         // started the pulse at the trough, so the "fresh" signal read as
         // dim at the exact moment it should have read as bright.
-        let pulseAge = now.timeIntervalSince(session.phaseChangedAt)
+        let pulseStartedAt = surface == .menuBarPill
+            ? (completedAt ?? session.phaseChangedAt)
+            : session.phaseChangedAt
+        let pulseAge = now.timeIntervalSince(pulseStartedAt)
         let phase01 = pulseAge.truncatingRemainder(dividingBy: Self.pulsePeriod) / Self.pulsePeriod
         let wave = 0.5 + 0.5 * cos(phase01 * 2 * .pi)
         return Self.pulseMinOpacity + (1.0 - Self.pulseMinOpacity) * wave
