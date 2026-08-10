@@ -29,7 +29,7 @@ Coding agents already have excellent native conversation interfaces. The hard pa
 
 Agent Visor answers three questions without becoming another chat client:
 
-- **What needs me?** Needs attention and unseen Ready sessions lead, followed by Working, seen Ready, and Recent work.
+- **What needs me?** Needs attention leads, followed by Working, unseen completed turns, and seen or Recent work.
 - **Where was I?** Recent work stays searchable even when it no longer fits in the menu bar.
 - **How do I continue?** Enter the mirrored Chat in Agent Visor or open the canonical owning app or terminal with one click.
 
@@ -42,7 +42,7 @@ The owning app remains the authoritative conversation and control surface. Agent
 The menu bar is the ambient status strip. Each pill shows a session title and state. Active sessions take priority, recent sessions fill available space, and `+N` opens the sessions that do not fit.
 
 - Click to return to the original owner.
-- Opening a Ready session acknowledges that completion and moves its pill behind Working without changing its Ready status.
+- Opening a completed session acknowledges that completion: its pill turns gray after a two-second position hold, without changing the session's underlying status.
 - Option-click to enter the session's Chat in Agent Visor.
 - Hover for full title, source, model, reasoning effort, execution policy, context usage, path, and freshness when the source provides them.
 - Hold the configured shortcut modifiers to reveal 1-9, then press a number to jump directly.

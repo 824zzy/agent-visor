@@ -18,7 +18,51 @@ final class PillSurfacePolicyTests: XCTestCase {
         XCTAssertEqual(selection.orderedVisibleIds, ["working", "recent"])
     }
 
-    func testReadyOutranksWorkingRegardlessOfRecency() {
+    func testUnseenCompletionRemainsActiveAfterItsPhaseBecomesIdle() {
+        let now = Date(timeIntervalSinceReferenceDate: 10_000)
+        let completedAt = now.addingTimeInterval(-12 * 60 * 60)
+
+        let selection = PillSurfacePolicy.select(
+            candidates: [
+                candidate(
+                    id: "overnight-unseen",
+                    phase: .idle,
+                    sortDate: completedAt,
+                    completedAt: completedAt
+                ),
+                candidate(id: "working", phase: .working, sortDate: now)
+            ],
+            now: now
+        )
+
+        XCTAssertEqual(selection.orderedActiveIds, ["working", "overnight-unseen"])
+        XCTAssertTrue(selection.orderedRecentShortcutIds.isEmpty)
+    }
+
+    func testSeenCompletionBecomesARecentShortcutAfterThePositionHold() {
+        let now = Date(timeIntervalSinceReferenceDate: 10_000)
+        let completedAt = now.addingTimeInterval(-600)
+        let acknowledgedAt = now.addingTimeInterval(-ReadyAttentionPolicy.defaultPositionHold)
+
+        let selection = PillSurfacePolicy.select(
+            candidates: [
+                candidate(
+                    id: "seen-result",
+                    phase: .idle,
+                    sortDate: completedAt,
+                    navigationDate: acknowledgedAt,
+                    completedAt: completedAt,
+                    readyAcknowledgedAt: acknowledgedAt
+                )
+            ],
+            now: now
+        )
+
+        XCTAssertTrue(selection.orderedActiveIds.isEmpty)
+        XCTAssertEqual(selection.orderedRecentShortcutIds, ["seen-result"])
+    }
+
+    func testWorkingOutranksUnseenFinishedSession() {
         let now = Date(timeIntervalSinceReferenceDate: 1_000)
 
         let selection = PillSurfacePolicy.select(
@@ -34,10 +78,10 @@ final class PillSurfacePolicyTests: XCTestCase {
             now: now
         )
 
-        XCTAssertEqual(selection.orderedActiveIds, ["older-ready", "newer-working"])
+        XCTAssertEqual(selection.orderedActiveIds, ["newer-working", "older-ready"])
     }
 
-    func testAcknowledgedReadyFollowsWorkingButRemainsAheadOfRecent() {
+    func testSeenCompletionJoinsRecentShortcutsAfterItsPositionHold() {
         let now = Date(timeIntervalSinceReferenceDate: 1_000)
         let readyDate = now.addingTimeInterval(-60)
 
@@ -50,6 +94,7 @@ final class PillSurfacePolicyTests: XCTestCase {
                     sortDate: readyDate,
                     statusDate: readyDate,
                     navigationDate: now.addingTimeInterval(-ReadyAttentionPolicy.defaultPositionHold),
+                    completedAt: readyDate,
                     readyAcknowledgedAt: now.addingTimeInterval(-ReadyAttentionPolicy.defaultPositionHold)
                 ),
                 candidate(id: "working", phase: .working, sortDate: now),
@@ -61,9 +106,9 @@ final class PillSurfacePolicyTests: XCTestCase {
 
         XCTAssertEqual(
             selection.orderedActiveIds,
-            ["attention", "unseen-ready", "working", "seen-ready"]
+            ["attention", "working", "unseen-ready"]
         )
-        XCTAssertEqual(selection.orderedRecentShortcutIds, ["recent"])
+        XCTAssertEqual(selection.orderedRecentShortcutIds, ["recent", "seen-ready"])
     }
 
     func testNavigationDoesNotReorderActiveSessionsWithinPhase() {
@@ -284,6 +329,7 @@ final class PillSurfacePolicyTests: XCTestCase {
         navigationDate: Date? = nil,
         isHidden: Bool = false,
         isTitleless: Bool = false,
+        completedAt: Date? = nil,
         readyAcknowledgedAt: Date? = nil
     ) -> PillSurfaceCandidate {
         PillSurfaceCandidate(
@@ -294,6 +340,7 @@ final class PillSurfacePolicyTests: XCTestCase {
             navigationDate: navigationDate,
             isHidden: isHidden,
             isTitleless: isTitleless,
+            completedAt: completedAt,
             readyAcknowledgedAt: readyAcknowledgedAt
         )
     }

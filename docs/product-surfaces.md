@@ -180,27 +180,27 @@ Every surface uses the same phase meanings:
   orange pill alive indefinitely.
 - Agent Visor does not scrape Claude Desktop UI to recover phase.
 
-State-grouped browser surfaces keep that literal order. The menu-bar strip additionally accounts for whether a Ready completion has been seen:
+State-grouped browser surfaces keep that literal order. The menu-bar strip uses a separate, durable attention order for constrained space:
 
 1. `Needs attention`
-2. Unacknowledged `Ready`
-3. `Working`
-4. Acknowledged `Ready`
-5. `Recent`
+2. `Working`
+3. Unseen completed turns
+4. Seen completed turns and `Recent`
 
 Within an attention tier, newer phase-entry evidence sorts first and session ID is the stable tie-breaker. Within `Recent`, navigation recency remains the first ordering signal so frequently revisited sessions stay easy to recover, but a new navigation timestamp does not become order-effective until the spatial grace period expires. Source, owner, terminal host, and project do not change priority.
 
 ## Ready Completion Attention
 
-- A pulsing `Ready` indicator means the current completed turn is recent and has not yet been acknowledged.
-- Opening the session through an Agent Visor navigation surface acknowledges that specific completion. Its indicator becomes static immediately while the session remains `Ready`, green, and active.
-- In the menu-bar strip, the first acknowledgment of a Ready transition holds the pill in its current Ready priority tier for two seconds so the clicked target does not appear to vanish. After that spatial grace period, it moves below Working pills. Reopening the same acknowledged completion does not restart the hold or promote the pill again. It may enter `+N` overflow when space is constrained, but it does not become `Recent`.
+- Menu-bar completion attention is not an age signal. An unseen completed turn stays green until the user deliberately activates that session, even after the session lifecycle ages from `Ready` into `Recent` and even across an Agent Visor relaunch.
+- A fresh unseen completion may pulse for at most seven minutes. When motion stops, the pill remains solid green; elapsed time alone never acknowledges or dims it.
+- Opening the session through an Agent Visor navigation surface acknowledges that specific completion. The menu-bar indicator becomes gray immediately without changing the underlying session phase or the browser's state grouping.
+- In the menu-bar strip, the first acknowledgment holds the pill in its current rendered position for two seconds so the clicked target does not appear to vanish. After that spatial grace period, it joins normal Recent ordering. Reopening the same acknowledged completion does not restart the hold or promote the pill again.
 - A genuine phase change takes precedence over the spatial grace period. The hold never delays new status evidence or mutates session phase.
 - State-grouped browser surfaces keep the row in `Ready` and preserve their keyboard cursor and viewport.
-- Acknowledgment is scoped to the current Ready transition. A later completion has a newer phase-entry date and pulses again.
-- A later Ready transition also returns the pill above Working until that completion is acknowledged.
+- Acknowledgment is scoped to the current completion. A later completed turn stores a newer completion identity, becomes unseen, and may pulse again.
 - Navigation recency is recorded independently for `Recent` ordering and must not replace the Ready acknowledgment timestamp.
-- The attention pulse expires after seven minutes even when it is not acknowledged.
+- The `+N` overflow pill shows a fixed-width green corner mark when any hidden session has an unseen completion. Opening `+N` alone does not acknowledge any session; selecting a session from it does.
+- Browser and sidebar indicators retain their existing phase, age, and freshness presentation. Durable unseen color is intentionally a menu-bar-pill semantic because that surface cannot afford timestamp text.
 - The Ready pulse must not saturate the compositor. Its status color is resolved once per state change, never inside the per-frame animation closure, and only opacity animates on a throttled schedule rather than the raw display refresh. This keeps per-frame cost near zero even when several indicators pulse simultaneously on a high-refresh display.
 - The brief capsule press response remains separate click feedback and is not an attention signal.
 
@@ -216,7 +216,7 @@ Within an attention tier, newer phase-entry evidence sorts first and session ID 
 ## Navigation-Driven Spatial Grace
 
 - Every pill move caused by a navigation action waits two seconds. The clicked target keeps its rendered position during that interval.
-- Ready acknowledgment uses the Ready priority hold above. Recent navigation defers the recency commit that can move a grey pill to the front of the Recent tier.
+- Completion acknowledgment uses the position hold above. Recent navigation defers the recency commit that can move a gray pill to the front of the Recent tier.
 - Repeating navigation during an existing hold does not restart its deadline. The latest navigation timestamp takes effect at the original deadline.
 - Genuine phase evidence, archiving, removal, width changes, and other non-navigation layout changes remain immediate.
 - A click that would not change ordering does not manufacture a move after the grace period.

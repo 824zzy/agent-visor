@@ -480,6 +480,7 @@ class ClaudeSessionMonitor: ObservableObject {
     // MARK: - State Update
 
     private func updateFromSessions(_ sessions: [SessionState]) {
+        SessionNavigationRecencyStore.shared.observe(sessions)
         instances = sessions
         pendingInstances = sessions.filter { $0.needsAttention }
     }

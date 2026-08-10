@@ -76,14 +76,18 @@ final class ReadyAttentionPolicyTests: XCTestCase {
         ))
     }
 
-    func testOpeningReadySessionKeepsPillAheadOfWorkingDuringPositionHold() {
+    func testOpeningReadySessionKeepsItsPositionStableDuringHold() {
         let acknowledgedAt = Date(timeIntervalSinceReferenceDate: 10_000)
         let clickedPhaseDate = acknowledgedAt.addingTimeInterval(-120)
         let duringHold = acknowledgedAt.addingTimeInterval(1.999)
 
         let before = PillSurfacePolicy.select(
             candidates: [
-                candidate(id: "clicked", statusDate: clickedPhaseDate),
+                candidate(
+                    id: "clicked",
+                    statusDate: clickedPhaseDate,
+                    completedAt: clickedPhaseDate
+                ),
                 candidate(id: "working", phase: .working, statusDate: acknowledgedAt.addingTimeInterval(-30))
             ],
             now: acknowledgedAt
@@ -94,6 +98,7 @@ final class ReadyAttentionPolicyTests: XCTestCase {
                     id: "clicked",
                     statusDate: clickedPhaseDate,
                     navigationDate: acknowledgedAt,
+                    completedAt: clickedPhaseDate,
                     readyAcknowledgedAt: acknowledgedAt
                 ),
                 candidate(id: "working", phase: .working, statusDate: acknowledgedAt.addingTimeInterval(-30))
@@ -101,7 +106,7 @@ final class ReadyAttentionPolicyTests: XCTestCase {
             now: duringHold
         )
 
-        XCTAssertEqual(before.orderedActiveIds, ["clicked", "working"])
+        XCTAssertEqual(before.orderedActiveIds, ["working", "clicked"])
         XCTAssertEqual(after.orderedActiveIds, before.orderedActiveIds)
         XCTAssertFalse(ReadyAttentionPolicy.shouldPulse(
             isReady: true,
@@ -111,7 +116,7 @@ final class ReadyAttentionPolicyTests: XCTestCase {
         ))
     }
 
-    func testAcknowledgedReadyMovesBelowWorkingWhenPositionHoldExpires() {
+    func testAcknowledgedReadyBecomesRecentWhenPositionHoldExpires() {
         let acknowledgedAt = Date(timeIntervalSinceReferenceDate: 10_000)
         let clickedPhaseDate = acknowledgedAt.addingTimeInterval(-120)
 
@@ -121,6 +126,7 @@ final class ReadyAttentionPolicyTests: XCTestCase {
                     id: "clicked",
                     statusDate: clickedPhaseDate,
                     navigationDate: acknowledgedAt,
+                    completedAt: clickedPhaseDate,
                     readyAcknowledgedAt: acknowledgedAt
                 ),
                 candidate(id: "working", phase: .working, statusDate: acknowledgedAt.addingTimeInterval(-30))
@@ -128,7 +134,8 @@ final class ReadyAttentionPolicyTests: XCTestCase {
             now: acknowledgedAt.addingTimeInterval(ReadyAttentionPolicy.defaultPositionHold)
         )
 
-        XCTAssertEqual(selection.orderedActiveIds, ["working", "clicked"])
+        XCTAssertEqual(selection.orderedActiveIds, ["working"])
+        XCTAssertEqual(selection.orderedRecentShortcutIds, ["clicked"])
     }
 
     func testRepeatedNavigationDoesNotPromoteAcknowledgedReadyAboveWorking() {
@@ -142,6 +149,7 @@ final class ReadyAttentionPolicyTests: XCTestCase {
                     id: "clicked-again",
                     statusDate: phaseChangedAt,
                     navigationDate: repeatedNavigation,
+                    completedAt: phaseChangedAt,
                     readyAcknowledgedAt: firstAcknowledgment
                 ),
                 candidate(id: "working", phase: .working, statusDate: repeatedNavigation)
@@ -149,10 +157,11 @@ final class ReadyAttentionPolicyTests: XCTestCase {
             now: repeatedNavigation
         )
 
-        XCTAssertEqual(selection.orderedActiveIds, ["working", "clicked-again"])
+        XCTAssertEqual(selection.orderedActiveIds, ["working"])
+        XCTAssertEqual(selection.orderedRecentShortcutIds, ["clicked-again"])
     }
 
-    func testLaterReadyTransitionReturnsPillAboveWorking() {
+    func testLaterReadyTransitionReturnsAsUnseenBehindWorking() {
         let now = Date(timeIntervalSinceReferenceDate: 10_000)
         let previousNavigation = now.addingTimeInterval(-120)
         let newReadyPhaseDate = now.addingTimeInterval(-30)
@@ -163,6 +172,7 @@ final class ReadyAttentionPolicyTests: XCTestCase {
                     id: "ready-again",
                     statusDate: newReadyPhaseDate,
                     navigationDate: previousNavigation,
+                    completedAt: newReadyPhaseDate,
                     readyAcknowledgedAt: previousNavigation
                 ),
                 candidate(id: "working", phase: .working, statusDate: now)
@@ -170,10 +180,9 @@ final class ReadyAttentionPolicyTests: XCTestCase {
             now: now
         )
 
-        XCTAssertEqual(selection.orderedActiveIds, ["ready-again", "working"])
-        XCTAssertTrue(ReadyAttentionPolicy.shouldPulse(
-            isReady: true,
-            phaseChangedAt: newReadyPhaseDate,
+        XCTAssertEqual(selection.orderedActiveIds, ["working", "ready-again"])
+        XCTAssertTrue(PillCompletionAttentionPolicy.shouldPulse(
+            completedAt: newReadyPhaseDate,
             acknowledgedAt: previousNavigation,
             now: now
         ))
@@ -184,6 +193,7 @@ final class ReadyAttentionPolicyTests: XCTestCase {
         phase: PillSurfacePhase = .ready,
         statusDate: Date,
         navigationDate: Date? = nil,
+        completedAt: Date? = nil,
         readyAcknowledgedAt: Date? = nil
     ) -> PillSurfaceCandidate {
         PillSurfaceCandidate(
@@ -194,6 +204,7 @@ final class ReadyAttentionPolicyTests: XCTestCase {
             navigationDate: navigationDate,
             isHidden: false,
             isTitleless: false,
+            completedAt: completedAt,
             readyAcknowledgedAt: readyAcknowledgedAt
         )
     }

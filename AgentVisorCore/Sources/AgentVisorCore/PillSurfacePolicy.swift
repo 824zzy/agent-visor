@@ -20,6 +20,7 @@ public struct PillSurfaceCandidate: Equatable, Sendable {
     public let sortDate: Date
     public let statusDate: Date?
     public let navigationDate: Date?
+    public let completedAt: Date?
     public let readyAcknowledgedAt: Date?
     public let isHidden: Bool
     public let isTitleless: Bool
@@ -32,6 +33,7 @@ public struct PillSurfaceCandidate: Equatable, Sendable {
         navigationDate: Date?,
         isHidden: Bool,
         isTitleless: Bool,
+        completedAt: Date? = nil,
         readyAcknowledgedAt: Date? = nil
     ) {
         self.id = id
@@ -39,6 +41,7 @@ public struct PillSurfaceCandidate: Equatable, Sendable {
         self.sortDate = sortDate
         self.statusDate = statusDate
         self.navigationDate = navigationDate
+        self.completedAt = completedAt
         self.readyAcknowledgedAt = readyAcknowledgedAt
         self.isHidden = isHidden
         self.isTitleless = isTitleless
@@ -62,8 +65,8 @@ public struct PillSurfaceSelection: Equatable, Sendable {
 public enum PillSurfacePolicy {
     private enum ActiveTier: Int {
         case needsAttention
-        case prominentReady
         case working
+        case prominentReady
         case acknowledgedReady
         case idle
         case ended
@@ -82,10 +85,27 @@ public enum PillSurfacePolicy {
         }
 
         switch candidate.phase {
-        case .needsAttention, .ready, .working:
+        case .needsAttention, .working:
             return .active
-        case .idle:
-            return .recentShortcut
+        case .ready, .idle:
+            switch completionAttention(for: candidate) {
+            case .unseen:
+                return .active
+            case .seen:
+                guard let completedAt = candidate.completedAt else {
+                    return candidate.phase == .ready ? .active : .recentShortcut
+                }
+                return ReadyAttentionPolicy.shouldRemainProminent(
+                    phaseChangedAt: completedAt,
+                    acknowledgedAt: candidate.readyAcknowledgedAt,
+                    now: now
+                ) ? .active : .recentShortcut
+            case .none:
+                // Compatibility for sessions created before durable completion
+                // observation. A current Ready phase is still a completion;
+                // an idle session without a recorded completion is history.
+                return candidate.phase == .ready ? .active : .recentShortcut
+            }
         case .ended:
             return .hidden
         }
@@ -149,15 +169,27 @@ public enum PillSurfacePolicy {
         switch candidate.phase {
         case .needsAttention: return .needsAttention
         case .ready:
-            let phaseDate = candidate.statusDate ?? candidate.sortDate
+            let phaseDate = candidate.completedAt ?? candidate.statusDate ?? candidate.sortDate
             return ReadyAttentionPolicy.shouldRemainProminent(
                 phaseChangedAt: phaseDate,
                 acknowledgedAt: candidate.readyAcknowledgedAt,
                 now: now
             ) ? .prominentReady : .acknowledgedReady
         case .working: return .working
-        case .idle:    return .idle
+        case .idle:
+            return completionAttention(for: candidate) == .unseen
+                ? .prominentReady
+                : .idle
         case .ended:   return .ended
         }
+    }
+
+    private static func completionAttention(
+        for candidate: PillSurfaceCandidate
+    ) -> PillCompletionAttentionState {
+        PillCompletionAttentionPolicy.state(
+            completedAt: candidate.completedAt,
+            acknowledgedAt: candidate.readyAcknowledgedAt
+        )
     }
 }

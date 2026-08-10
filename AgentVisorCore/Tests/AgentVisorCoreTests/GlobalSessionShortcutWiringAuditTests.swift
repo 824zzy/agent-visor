@@ -100,7 +100,7 @@ final class GlobalSessionShortcutWiringAuditTests: XCTestCase {
         XCTAssertTrue(manager.contains("isRevealingShortcuts = false"))
         XCTAssertTrue(sideContent.contains("if sessionShortcutManager.isRevealingShortcuts"))
         XCTAssertTrue(sideContent.contains("PillShortcutKeycap(number: 0)"))
-        XCTAssertTrue(sideContent.contains("OverflowPillButton(count: overflowCount, width: overflowPillWidth)"))
+        XCTAssertTrue(sideContent.contains("hasUnseenCompletion: overflowContainsUnseenCompletion"))
         XCTAssertTrue(sideContent.contains("width: width"))
     }
 
