@@ -72,20 +72,27 @@ final class ZedThreadRevealPlannerTests: XCTestCase {
         XCTAssertTrue(ZedThreadRevealPlanner.plan(title: " ").isEmpty)
     }
 
-    func testCleanupPlanReestablishesFocusBeforeClearingFilter() {
+    func testCleanupDefaultLeavesEnoughTimeForCommandPaletteRendering() {
+        let delays = ZedThreadRevealPlanner.cleanupPlan().compactMap { step -> Double? in
+            if case let .delay(seconds) = step { return seconds }
+            return nil
+        }
+        XCTAssertFalse(delays.isEmpty)
+        XCTAssertTrue(delays.allSatisfy { $0 >= 0.3 })
+    }
+
+    func testCleanupPlanClearsFilterThenFocusesActiveAgentComposer() {
         XCTAssertEqual(ZedThreadRevealPlanner.cleanupPlan(settleDelay: 0.1), [
+            .key(.cancel),
+            .delay(0.1),
             .key(.openCommandPalette),
             .delay(0.1),
             .key(.selectAll),
             .key(.deleteBackward),
-            .text(ZedThreadRevealPlanner.focusSidebarAction),
+            .text("Focus Agent"),
             .delay(0.1),
             .key(.confirm),
-            .delay(0.1),
-            .key(.focusSidebarFilter),
-            .delay(0.1),
-            .key(.selectAll),
-            .key(.deleteBackward)
+            .delay(0.1)
         ])
     }
 }

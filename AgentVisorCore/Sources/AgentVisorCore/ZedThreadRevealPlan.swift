@@ -30,6 +30,9 @@
 //                  (`selection.take()`), so Confirm without this is a
 //                  no-op
 //      enter       menu::Confirm — activates the selected thread
+//
+//  After verification, cleanup clears the filter and dispatches Zed's
+//  `agent::FocusAgent` action so typing lands in the active thread composer.
 //  The plan is pure so the sequence, its delays, and its refusal cases
 //  are testable without driving CGEvents. Execution, focus checks, and
 //  verification live in the app layer.
@@ -51,6 +54,9 @@ public enum ZedRevealKey: Equatable, Sendable {
     case selectAll
     /// Delete the selected filter text.
     case deleteBackward
+    /// `menu::Cancel` (default escape). In Zed's ThreadsSidebar this clears
+    /// a non-empty filter whether the filter editor or a result owns focus.
+    case cancel
     /// `menu::SelectNext` (default down).
     case selectNext
     /// `menu::Confirm` (default enter).
@@ -69,6 +75,11 @@ public enum ZedThreadRevealPlanner {
     /// Display label of Zed's `multi_workspace::FocusWorkspaceSidebar`
     /// action in the command palette.
     public static let focusSidebarAction = "Focus Workspace Sidebar"
+
+    /// Display label of Zed's `agent::FocusAgent` action. Unlike
+    /// `agent::ToggleFocus`, this always focuses the active composer rather
+    /// than potentially closing the Agent Panel.
+    public static let focusAgentAction = "Focus Agent"
 
     /// Long titles are truncated: Zed's filter is a fuzzy subsequence
     /// match, so a prefix selects the same thread while keeping the typed
@@ -108,14 +119,22 @@ public enum ZedThreadRevealPlanner {
         ]
     }
 
-    /// Clears the search after a verified reveal. The command palette owns
-    /// focus before it dispatches FocusWorkspaceSidebar, so the action can
-    /// never take the "sidebar already focused" branch that restores the
-    /// previous editor focus.
-    public static func cleanupPlan(settleDelay: Double = 0.12) -> [ZedRevealStep] {
-        focusSidebarFilterSteps(settleDelay: settleDelay) + [
+    /// Clears the search after a verified reveal, then focuses the active
+    /// thread composer. ThreadsSidebar's Cancel action clears a non-empty
+    /// filter regardless of whether its editor or the confirmed result owns
+    /// focus, avoiding another focus transition before cleanup.
+    public static func cleanupPlan(settleDelay: Double = 0.3) -> [ZedRevealStep] {
+        [
+            .key(.cancel),
+            .delay(settleDelay),
+            .key(.openCommandPalette),
+            .delay(settleDelay),
             .key(.selectAll),
-            .key(.deleteBackward)
+            .key(.deleteBackward),
+            .text(focusAgentAction),
+            .delay(settleDelay),
+            .key(.confirm),
+            .delay(settleDelay)
         ]
     }
 
