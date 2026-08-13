@@ -57,7 +57,7 @@ Navigation proceeds as follows:
 3. Verify Zed is frontmost.
 4. If exact reveal is enabled and the normalized 48-character title query is unique, use the command palette only as a transient non-sidebar focus anchor, then dispatch Zed's direct workspace-sidebar shortcut and filter by title. Filtering clears the list selection and retains the matching project header before its thread, so advance past both the empty selection and project header before confirming.
 5. Read the frontmost window's active workspace and Agent Panel selection from Zed's persisted state.
-6. After verified selection, clear the sidebar filter and use Zed's direct Agent Panel shortcut to focus the active composer.
+6. After verified selection, reanchor focus in the workspace sidebar because activating a different thread may return focus to the editor; then clear the sidebar filter and use Zed's direct Agent Panel shortcut to focus the active composer.
 7. Report success only when the selected thread or session ID equals the target; otherwise show an actionable fallback toast.
 
 The reveal must not type action names into a visible command palette. Deliberate cleanup waits stay bounded to 240 milliseconds under default settings. Focus is checked before every synthetic step so text cannot spill into another application. Users with remapped Zed keys can disable **Open exact Zed thread** in Settings; activation and the identifying toast remain available.
@@ -90,7 +90,7 @@ Automated coverage must prove:
 - Zed-hosted sessions skip shared-PID deduplication and provider-specific desktop attribution;
 - reveal refuses empty and ambiguous queries;
 - reveal planning orders focus, replacement, two-step selection past Zed's project header, and confirmation deterministically;
-- reveal planning uses direct Zed shortcuts rather than typed action queries, and composer cleanup adds no more than 240 milliseconds of deliberate waits;
+- reveal planning uses direct Zed shortcuts rather than typed action queries, reanchors the sidebar before composer cleanup, and adds no more than 240 milliseconds of deliberate cleanup waits;
 - verification accepts equivalent UUID/hex thread IDs and reports a different selection honestly;
 - the Zed adapter never reports successful text delivery;
 - terminal routing uses the dedicated Zed adapter and does not fall through to another host.

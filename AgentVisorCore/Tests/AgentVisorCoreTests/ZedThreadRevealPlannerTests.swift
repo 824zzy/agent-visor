@@ -76,10 +76,12 @@ final class ZedThreadRevealPlannerTests: XCTestCase {
         XCTAssertEqual(delays.reduce(0, +), 0.24, accuracy: 0.001)
     }
 
-    func testCleanupPlanClearsFilterThenUsesDirectAgentShortcut() {
+    func testCleanupPlanReanchorsSidebarBeforeClearingFilterAndFocusingAgent() {
         XCTAssertEqual(ZedThreadRevealPlanner.cleanupPlan(settleDelay: 0.1), [
-            .key(.cancel),
+            .key(.openCommandPalette),
+            .key(.focusWorkspaceSidebar),
             .delay(0.1),
+            .key(.cancel),
             .key(.focusAgentFromSidebar),
             .delay(0.1)
         ])

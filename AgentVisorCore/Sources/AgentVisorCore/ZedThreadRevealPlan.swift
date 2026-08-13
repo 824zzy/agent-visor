@@ -32,9 +32,10 @@
 //                  header and the second selects the thread
 //      enter       menu::Confirm — activates the selected thread
 //
-//  After verification, cleanup clears the filter and uses Zed's direct
-//  `agent::ToggleFocus` shortcut. A confirmed reveal leaves focus in the
-//  ThreadsSidebar, so this deterministically moves it to the composer.
+//  After verification, cleanup reanchors focus in the ThreadsSidebar,
+//  clears the filter, and uses Zed's direct `agent::ToggleFocus` shortcut.
+//  Activating a different thread can move focus back to the workspace
+//  editor, so cleanup must not assume Confirm left the sidebar focused.
 //  The plan is pure so the sequence, its delays, and its refusal cases
 //  are testable without driving CGEvents. Execution, focus checks, and
 //  verification live in the app layer.
@@ -122,13 +123,17 @@ public enum ZedThreadRevealPlanner {
     }
 
     /// Clears the search after a verified reveal, then focuses the active
-    /// thread composer. Confirm leaves focus in ThreadsSidebar, making Zed's
-    /// direct ToggleFocus shortcut deterministic and avoiding a second
-    /// command-palette animation and typed action query.
+    /// thread composer. Activating a different thread can return focus to the
+    /// workspace editor, so the transient palette anchor restores a known
+    /// ThreadsSidebar state before Cancel and the direct ToggleFocus shortcut.
+    /// No action name is typed, and the synchronous Cancel needs no extra wait,
+    /// keeping deliberate cleanup latency at two settle delays.
     public static func cleanupPlan(settleDelay: Double = 0.12) -> [ZedRevealStep] {
         [
-            .key(.cancel),
+            .key(.openCommandPalette),
+            .key(.focusWorkspaceSidebar),
             .delay(settleDelay),
+            .key(.cancel),
             .key(.focusAgentFromSidebar),
             .delay(settleDelay)
         ]
