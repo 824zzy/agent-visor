@@ -5,6 +5,7 @@
 //  Dynamic Island for monitoring Claude Code instances
 //
 
+import AgentVisorCore
 import SwiftUI
 
 @main
@@ -28,6 +29,31 @@ struct AgentVisorApp: App {
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+            CommandGroup(after: .toolbar) {
+                Button("Zoom In") {
+                    applyContentScale(.zoomIn)
+                }
+                .keyboardShortcut("=", modifiers: .command)
+
+                Button("Zoom Out") {
+                    applyContentScale(.zoomOut)
+                }
+                .keyboardShortcut("-", modifiers: .command)
+
+                Button("Actual Size") {
+                    applyContentScale(.reset)
+                }
+                .keyboardShortcut("0", modifiers: .command)
+            }
         }
+    }
+
+    private func applyContentScale(_ command: ContentFontScaleCommand) {
+        AppSettings.contentFontScale = command.apply(
+            to: AppSettings.contentFontScale,
+            step: AppSettings.contentFontScaleStep,
+            min: AppSettings.contentFontScaleMin,
+            max: AppSettings.contentFontScaleMax
+        )
     }
 }

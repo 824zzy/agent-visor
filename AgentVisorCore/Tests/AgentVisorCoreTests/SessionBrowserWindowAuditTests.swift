@@ -277,7 +277,7 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         )
     }
 
-    func testSettingsPresentsOneSharedContentScaleAndPreservesTheLegacyPreferenceKey() throws {
+    func testAppearanceKeepsSharedContentSizeCompactInsideDisplayAndPreservesTheLegacyPreferenceKey() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let settings = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/Core/Settings.swift"))
@@ -285,16 +285,44 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor/UI/Window/SettingsWindowView.swift"))
         let split = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
+        let appearanceStart = try XCTUnwrap(settingsView.range(of: "private struct AppearanceSection: View"))
+        let appearanceEnd = try XCTUnwrap(settingsView.range(
+            of: "private struct PillsSection: View",
+            range: appearanceStart.upperBound..<settingsView.endIndex
+        ))
+        let appearance = String(settingsView[appearanceStart.lowerBound..<appearanceEnd.lowerBound])
+        let displayStart = try XCTUnwrap(appearance.range(of: "SettingsSubheading(\"Display\")"))
+        let displayGroup = String(appearance[displayStart.lowerBound...])
 
         XCTAssertTrue(settings.contains("static let chatFontScale = \"chatFontScale\""))
         XCTAssertTrue(settings.contains("static var contentFontScale: Double"))
         XCTAssertTrue(settings.contains("static let contentFontScaleMin: Double = 0.8"))
         XCTAssertTrue(settings.contains("static let contentFontScaleMax: Double = 2.5"))
-        XCTAssertTrue(settingsView.contains("SettingsSubheading(\"Content font size\""))
-        XCTAssertTrue(settingsView.contains("in Sessions or Chat"))
-        XCTAssertTrue(settingsView.contains("Sessions browser and Chat content"))
-        XCTAssertFalse(settingsView.contains("SettingsSubheading(\"Chat font size\""))
+        XCTAssertTrue(displayGroup.contains("title: \"Content size\""))
+        XCTAssertTrue(displayGroup.contains("description: \"Sessions and Chat\""))
+        XCTAssertTrue(displayGroup.contains("value: $contentFontScale"))
+        XCTAssertFalse(appearance.contains("SettingsSubheading(\"Content font size\""))
+        XCTAssertFalse(appearance.contains("SettingsSubheading(\"Chat font size\""))
+        XCTAssertFalse(appearance.contains("Button(\"Reset\")"))
         XCTAssertTrue(split.contains("AppSettings.contentFontScale = command.apply("))
+    }
+
+    func testViewMenuExposesSharedContentSizeCommands() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let app = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/App/AgentVisorApp.swift"))
+
+        XCTAssertTrue(app.contains("CommandGroup(after: .toolbar)"))
+        XCTAssertTrue(app.contains("Button(\"Zoom In\")"))
+        XCTAssertTrue(app.contains("Button(\"Zoom Out\")"))
+        XCTAssertTrue(app.contains("Button(\"Actual Size\")"))
+        XCTAssertTrue(app.contains(".keyboardShortcut(\"=\", modifiers: .command)"))
+        XCTAssertTrue(app.contains(".keyboardShortcut(\"-\", modifiers: .command)"))
+        XCTAssertTrue(app.contains(".keyboardShortcut(\"0\", modifiers: .command)"))
+        XCTAssertTrue(app.contains("AppSettings.contentFontScale = command.apply("))
+        XCTAssertTrue(app.contains("step: AppSettings.contentFontScaleStep"))
+        XCTAssertTrue(app.contains("min: AppSettings.contentFontScaleMin"))
+        XCTAssertTrue(app.contains("max: AppSettings.contentFontScaleMax"))
     }
 
     func testSessionsAndBothChatSurfacesUseTheSharedScaleDecoder() throws {
