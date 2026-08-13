@@ -26,9 +26,10 @@
 //      cmd-f       agents_sidebar::FocusSidebarFilter
 //      cmd-a, del  replace any filter left by the user
 //      <title>     filters the thread list
-//      down        menu::SelectNext — filtering CLEARS the selection
-//                  (`selection.take()`), so Confirm without this is a
-//                  no-op
+//      down ×2     menu::SelectNext — filtering CLEARS the selection
+//                  (`selection.take()`) and keeps the matching project
+//                  header before its thread, so the first Down selects the
+//                  header and the second selects the thread
 //      enter       menu::Confirm — activates the selected thread
 //
 //  After verification, cleanup clears the filter and uses Zed's direct
@@ -113,6 +114,7 @@ public enum ZedThreadRevealPlanner {
             .key(.deleteBackward),
             .text(query),
             .delay(settleDelay),
+            .key(.selectNext),
             .key(.selectNext),
             .delay(settleDelay),
             .key(.confirm)

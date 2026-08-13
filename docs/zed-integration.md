@@ -1,7 +1,7 @@
 # Zed-Hosted Agent Integration
 
 Status: Accepted
-Last reviewed: 2026-08-12
+Last reviewed: 2026-08-13
 Implementation status: First-class identity, discovery, read-only Chat, and verified best-effort thread reveal are implemented for external ACP agents whose canonical transcripts Agent Visor already supports. Signed development deployment is complete; the full live acceptance matrix remains pending.
 
 ## Purpose
@@ -55,7 +55,7 @@ Navigation proceeds as follows:
 1. Resolve the running Zed channel and the thread's recorded worktree.
 2. Open or raise that worktree through Launch Services.
 3. Verify Zed is frontmost.
-4. If exact reveal is enabled and the normalized 48-character title query is unique, use the command palette only as a transient non-sidebar focus anchor, then dispatch Zed's direct workspace-sidebar shortcut and filter by title.
+4. If exact reveal is enabled and the normalized 48-character title query is unique, use the command palette only as a transient non-sidebar focus anchor, then dispatch Zed's direct workspace-sidebar shortcut and filter by title. Filtering clears the list selection and retains the matching project header before its thread, so advance past both the empty selection and project header before confirming.
 5. Read the frontmost window's active workspace and Agent Panel selection from Zed's persisted state.
 6. After verified selection, clear the sidebar filter and use Zed's direct Agent Panel shortcut to focus the active composer.
 7. Report success only when the selected thread or session ID equals the target; otherwise show an actionable fallback toast.
@@ -89,7 +89,7 @@ Automated coverage must prove:
 - source-confirmed pid-zero Pi threads bootstrap live rather than Ended;
 - Zed-hosted sessions skip shared-PID deduplication and provider-specific desktop attribution;
 - reveal refuses empty and ambiguous queries;
-- reveal planning orders focus, replacement, selection, and confirmation deterministically;
+- reveal planning orders focus, replacement, two-step selection past Zed's project header, and confirmation deterministically;
 - reveal planning uses direct Zed shortcuts rather than typed action queries, and composer cleanup adds no more than 240 milliseconds of deliberate waits;
 - verification accepts equivalent UUID/hex thread IDs and reports a different selection honestly;
 - the Zed adapter never reports successful text delivery;

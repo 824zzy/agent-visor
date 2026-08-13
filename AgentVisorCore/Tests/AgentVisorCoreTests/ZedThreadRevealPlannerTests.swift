@@ -36,14 +36,16 @@ final class ZedThreadRevealPlannerTests: XCTestCase {
             .text("pi-test-2"),
             .delay(0.2),
             .key(.selectNext),
+            .key(.selectNext),
             .delay(0.2),
             .key(.confirm)
         ])
     }
 
-    func testPlanIncludesSelectNextBecauseFilteringClearsSelection() {
-        // Zed's sidebar calls `selection.take()` on every filter edit, so
-        // Confirm alone is a no-op.
+    func testPlanSelectsPastProjectHeaderToMatchingThread() {
+        // Zed clears selection after every filter edit, then places the
+        // matching project's header before its matching thread. The first
+        // SelectNext lands on that header; the second lands on the thread.
         let plan = ZedThreadRevealPlanner.plan(title: "hi")
         let keys = plan.compactMap { step -> ZedRevealKey? in
             if case let .key(key) = step { return key }
@@ -55,6 +57,7 @@ final class ZedThreadRevealPlannerTests: XCTestCase {
             .focusSidebarFilter,
             .selectAll,
             .deleteBackward,
+            .selectNext,
             .selectNext,
             .confirm
         ])
