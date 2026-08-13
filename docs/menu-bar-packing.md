@@ -52,7 +52,7 @@ Space efficiency must not weaken collision safety.
 2. Keep the right system-status margin at `16` points.
 3. Keep the existing `8`-point per-side notch-edge padding.
 4. Unknown or unreliable menu/status evidence continues to fail safe to less space, including zero.
-5. A wider application menu or a newly occupied status-tray region contracts capacity immediately according to the existing boundary policies.
+5. A wider application menu or a newly occupied status-tray region contracts capacity immediately according to the existing boundary policies. Status-tray evidence must come from the configured pill display; items on another display cannot reduce its right-side capacity.
 6. Packing never extends outside `leftSafeWidth` or `rightSafeWidth` and never borrows width across the hardware/rendered notch.
 7. Render geometry and click hit-testing consume the same packing plan; a pressure layout must not be reconstructed independently in the view or click resolver.
 
@@ -200,6 +200,7 @@ Core tests must prove:
 17. Exactly one 8-point notch-edge padding layer separates pills from each notch edge. Removing the duplicate layer increases the Core budget by 8 points per side while preserving the existing far-side application-menu and status-item collision boundaries.
 18. One top-level pack invokes the overflow-width callback no more than once for each distinct count, even when standard, pressure, and release-headroom paths are all evaluated.
 19. App wiring uses the shared process-lifetime text-width cache for full, compact, tight, selected render, and overflow labels without changing fixed menu-bar typography.
+20. A multi-display fixture ignores status-item windows outside the configured pill display when resolving the right safe boundary.
 
 Source-wiring audits must reject independent hard-coded session padding, spacing, Codex width, a second notch-edge padding layer, or uncached duplicate text measurement in rendering and hit testing once the packing plan owns those values.
 

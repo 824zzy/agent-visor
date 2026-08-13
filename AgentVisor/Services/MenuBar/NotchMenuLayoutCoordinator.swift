@@ -448,19 +448,26 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
             return nil
         }
 
-        var minLeft = screenRect.width
-        for window in windows {
+        let statusItemFrames = windows.compactMap { window -> CGRect? in
             let layer = window[kCGWindowLayer as String] as? Int ?? 0
-            guard layer == 25 else { continue }
+            guard layer == 25 else { return nil }
 
             let bounds = window[kCGWindowBounds as String] as? [String: CGFloat] ?? [:]
-            let x = (bounds["X"] ?? 0) - screenRect.origin.x
-            let height = bounds["Height"] ?? 0
-            if height < 50, x > screenRect.width / 2 {
-                minLeft = min(minLeft, x)
-            }
+            return CGRect(
+                x: bounds["X"] ?? 0,
+                y: bounds["Y"] ?? 0,
+                width: bounds["Width"] ?? 0,
+                height: bounds["Height"] ?? 0
+            )
         }
-        return minLeft < screenRect.width ? minLeft : nil
+        let targetScreenRect = cgScreenRect(
+            from: screenRect,
+            primaryScreenHeight: NSScreen.screens.first?.frame.height ?? screenRect.height
+        )
+        return StatusTrayLayoutPolicy.observedLeftEdge(
+            targetScreenRect: targetScreenRect,
+            statusItemFrames: statusItemFrames
+        )
     }
 
     private static func appHasWindow(
