@@ -1,8 +1,8 @@
 # Zed-Hosted Agent Integration
 
 Status: Accepted
-Last reviewed: 2026-08-08
-Implementation status: First-class identity, discovery, read-only Chat, and verified best-effort thread reveal are implemented for external ACP agents whose canonical transcripts Agent Visor already supports. Signed deployment and the full live acceptance matrix remain pending.
+Last reviewed: 2026-08-12
+Implementation status: First-class identity, discovery, read-only Chat, and verified best-effort thread reveal are implemented for external ACP agents whose canonical transcripts Agent Visor already supports. Signed development deployment is complete; the full live acceptance matrix remains pending.
 
 ## Purpose
 
@@ -16,7 +16,7 @@ This document defines the Zed-specific identity, discovery, liveness, navigation
 2. The Zed title shown to the user, including `title_override`, owns the Agent Visor session name. Agent-derived names cannot replace it while Zed hosts the thread.
 3. Zed-hosted sessions are read-only in Agent Visor Chat. Agent Visor does not inject prompts into Zed's ACP composer.
 4. A normal pill or owner action returns to Zed. Agent Visor attempts an exact thread reveal only when the title query identifies one non-archived row and the user has not disabled Zed thread reveal.
-5. Exact reveal uses Zed's documented default keyboard path because Zed exposes no existing-thread deep link, CLI flag, or accessible sidebar-row tree. Every attempt verifies the resulting persisted Agent Panel selection before claiming success.
+5. Exact reveal uses Zed's documented default keyboard path because Zed exposes no existing-thread deep link, CLI flag, or accessible sidebar-row tree. The path must minimize visible transitions and must not type command-palette action names when direct shortcuts exist. Every attempt verifies the resulting persisted Agent Panel selection before claiming success.
 6. Failure is honest and non-destructive. Agent Visor activates the correct Zed channel and worktree, then shows a thread-name toast when exact reveal is unavailable, ambiguous, remapped, or unverified.
 7. Zed's SQLite stores are read-only implementation evidence. Agent Visor uses `/usr/bin/sqlite3 -readonly`, observes the WAL signature, never migrates or writes Zed state, and fails closed when the expected schema is unavailable.
 8. Zed-native threads without a supported external transcript owner remain out of scope. Agent Visor does not fabricate mirrored history from Zed's private conversation storage.
@@ -55,11 +55,12 @@ Navigation proceeds as follows:
 1. Resolve the running Zed channel and the thread's recorded worktree.
 2. Open or raise that worktree through Launch Services.
 3. Verify Zed is frontmost.
-4. If exact reveal is enabled and the normalized 48-character title query is unique, drive Zed's default command-palette and sidebar-filter path.
+4. If exact reveal is enabled and the normalized 48-character title query is unique, use the command palette only as a transient non-sidebar focus anchor, then dispatch Zed's direct workspace-sidebar shortcut and filter by title.
 5. Read the frontmost window's active workspace and Agent Panel selection from Zed's persisted state.
-6. Report success only when the selected thread or session ID equals the target; otherwise show an actionable fallback toast.
+6. After verified selection, clear the sidebar filter and use Zed's direct Agent Panel shortcut to focus the active composer.
+7. Report success only when the selected thread or session ID equals the target; otherwise show an actionable fallback toast.
 
-Focus is checked before every synthetic step so text cannot spill into another application. Users with remapped Zed keys can disable **Open exact Zed thread** in Settings; activation and the identifying toast remain available.
+The reveal must not type action names into a visible command palette. Deliberate cleanup waits stay bounded to 240 milliseconds under default settings. Focus is checked before every synthetic step so text cannot spill into another application. Users with remapped Zed keys can disable **Open exact Zed thread** in Settings; activation and the identifying toast remain available.
 
 ## Privacy And Security
 
@@ -89,6 +90,7 @@ Automated coverage must prove:
 - Zed-hosted sessions skip shared-PID deduplication and provider-specific desktop attribution;
 - reveal refuses empty and ambiguous queries;
 - reveal planning orders focus, replacement, selection, and confirmation deterministically;
+- reveal planning uses direct Zed shortcuts rather than typed action queries, and composer cleanup adds no more than 240 milliseconds of deliberate waits;
 - verification accepts equivalent UUID/hex thread IDs and reports a different selection honestly;
 - the Zed adapter never reports successful text delivery;
 - terminal routing uses the dedicated Zed adapter and does not fall through to another host.

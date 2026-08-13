@@ -21,8 +21,8 @@
 //
 //      cmd-shift-p opens the command palette, establishing a known
 //                  non-sidebar focus state
-//      <action>    selects multi_workspace::FocusWorkspaceSidebar
-//      enter       runs the selected action
+//      cmd-alt-;   multi_workspace::FocusWorkspaceSidebar; dispatched
+//                  immediately so the palette never needs a typed query
 //      cmd-f       agents_sidebar::FocusSidebarFilter
 //      cmd-a, del  replace any filter left by the user
 //      <title>     filters the thread list
@@ -31,8 +31,9 @@
 //                  no-op
 //      enter       menu::Confirm — activates the selected thread
 //
-//  After verification, cleanup clears the filter and dispatches Zed's
-//  `agent::FocusAgent` action so typing lands in the active thread composer.
+//  After verification, cleanup clears the filter and uses Zed's direct
+//  `agent::ToggleFocus` shortcut. A confirmed reveal leaves focus in the
+//  ThreadsSidebar, so this deterministically moves it to the composer.
 //  The plan is pure so the sequence, its delays, and its refusal cases
 //  are testable without driving CGEvents. Execution, focus checks, and
 //  verification live in the app layer.
@@ -47,6 +48,10 @@ public enum ZedRevealKey: Equatable, Sendable {
     /// punctuation-key layout differences, the palette takes focus before
     /// the sidebar action runs, making FocusWorkspaceSidebar deterministic.
     case openCommandPalette
+    /// `multi_workspace::FocusWorkspaceSidebar` (default cmd-alt-;).
+    /// The command palette establishes the non-sidebar precondition that
+    /// makes this otherwise-toggle-like action deterministic.
+    case focusWorkspaceSidebar
     /// `agents_sidebar::FocusSidebarFilter` (default cmd-f in the
     /// ThreadsSidebar context).
     case focusSidebarFilter
@@ -57,6 +62,10 @@ public enum ZedRevealKey: Equatable, Sendable {
     /// `menu::Cancel` (default escape). In Zed's ThreadsSidebar this clears
     /// a non-empty filter whether the filter editor or a result owns focus.
     case cancel
+    /// `agent::ToggleFocus` (default cmd-?). Only used after a confirmed
+    /// reveal, whose focus is known to be in ThreadsSidebar, so it focuses
+    /// the Agent Panel instead of closing it.
+    case focusAgentFromSidebar
     /// `menu::SelectNext` (default down).
     case selectNext
     /// `menu::Confirm` (default enter).
@@ -72,15 +81,6 @@ public enum ZedRevealStep: Equatable, Sendable {
 }
 
 public enum ZedThreadRevealPlanner {
-    /// Display label of Zed's `multi_workspace::FocusWorkspaceSidebar`
-    /// action in the command palette.
-    public static let focusSidebarAction = "Focus Workspace Sidebar"
-
-    /// Display label of Zed's `agent::FocusAgent` action. Unlike
-    /// `agent::ToggleFocus`, this always focuses the active composer rather
-    /// than potentially closing the Agent Panel.
-    public static let focusAgentAction = "Focus Agent"
-
     /// Long titles are truncated: Zed's filter is a fuzzy subsequence
     /// match, so a prefix selects the same thread while keeping the typed
     /// burst short.
@@ -105,7 +105,7 @@ public enum ZedThreadRevealPlanner {
     /// `settleDelay` is the pause GPUI needs after a state transition.
     public static func plan(
         title: String?,
-        settleDelay: Double = 0.18
+        settleDelay: Double = 0.12
     ) -> [ZedRevealStep] {
         guard let query = query(forTitle: title) else { return [] }
         return focusSidebarFilterSteps(settleDelay: settleDelay) + [
@@ -120,20 +120,14 @@ public enum ZedThreadRevealPlanner {
     }
 
     /// Clears the search after a verified reveal, then focuses the active
-    /// thread composer. ThreadsSidebar's Cancel action clears a non-empty
-    /// filter regardless of whether its editor or the confirmed result owns
-    /// focus, avoiding another focus transition before cleanup.
-    public static func cleanupPlan(settleDelay: Double = 0.3) -> [ZedRevealStep] {
+    /// thread composer. Confirm leaves focus in ThreadsSidebar, making Zed's
+    /// direct ToggleFocus shortcut deterministic and avoiding a second
+    /// command-palette animation and typed action query.
+    public static func cleanupPlan(settleDelay: Double = 0.12) -> [ZedRevealStep] {
         [
             .key(.cancel),
             .delay(settleDelay),
-            .key(.openCommandPalette),
-            .delay(settleDelay),
-            .key(.selectAll),
-            .key(.deleteBackward),
-            .text(focusAgentAction),
-            .delay(settleDelay),
-            .key(.confirm),
+            .key(.focusAgentFromSidebar),
             .delay(settleDelay)
         ]
     }
@@ -143,12 +137,7 @@ public enum ZedThreadRevealPlanner {
     ) -> [ZedRevealStep] {
         [
             .key(.openCommandPalette),
-            .delay(settleDelay),
-            .key(.selectAll),
-            .key(.deleteBackward),
-            .text(focusSidebarAction),
-            .delay(settleDelay),
-            .key(.confirm),
+            .key(.focusWorkspaceSidebar),
             .delay(settleDelay),
             .key(.focusSidebarFilter),
             .delay(settleDelay)

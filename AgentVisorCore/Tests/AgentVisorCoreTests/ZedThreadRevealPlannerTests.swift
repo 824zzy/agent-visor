@@ -23,16 +23,11 @@ final class ZedThreadRevealPlannerTests: XCTestCase {
         XCTAssertNil(ZedThreadRevealPlanner.query(forTitle: "  \n "))
     }
 
-    func testPlanOrdersFocusTypeSelectConfirm() {
+    func testPlanUsesDirectSidebarShortcutInsteadOfTypingAnAction() {
         let plan = ZedThreadRevealPlanner.plan(title: "pi-test-2", settleDelay: 0.2)
         XCTAssertEqual(plan, [
             .key(.openCommandPalette),
-            .delay(0.2),
-            .key(.selectAll),
-            .key(.deleteBackward),
-            .text(ZedThreadRevealPlanner.focusSidebarAction),
-            .delay(0.2),
-            .key(.confirm),
+            .key(.focusWorkspaceSidebar),
             .delay(0.2),
             .key(.focusSidebarFilter),
             .delay(0.2),
@@ -56,9 +51,7 @@ final class ZedThreadRevealPlannerTests: XCTestCase {
         }
         XCTAssertEqual(keys, [
             .openCommandPalette,
-            .selectAll,
-            .deleteBackward,
-            .confirm,
+            .focusWorkspaceSidebar,
             .focusSidebarFilter,
             .selectAll,
             .deleteBackward,
@@ -72,26 +65,19 @@ final class ZedThreadRevealPlannerTests: XCTestCase {
         XCTAssertTrue(ZedThreadRevealPlanner.plan(title: " ").isEmpty)
     }
 
-    func testCleanupDefaultLeavesEnoughTimeForCommandPaletteRendering() {
+    func testCleanupDefaultCompletesWithoutVisiblePaletteLatency() {
         let delays = ZedThreadRevealPlanner.cleanupPlan().compactMap { step -> Double? in
             if case let .delay(seconds) = step { return seconds }
             return nil
         }
-        XCTAssertFalse(delays.isEmpty)
-        XCTAssertTrue(delays.allSatisfy { $0 >= 0.3 })
+        XCTAssertEqual(delays.reduce(0, +), 0.24, accuracy: 0.001)
     }
 
-    func testCleanupPlanClearsFilterThenFocusesActiveAgentComposer() {
+    func testCleanupPlanClearsFilterThenUsesDirectAgentShortcut() {
         XCTAssertEqual(ZedThreadRevealPlanner.cleanupPlan(settleDelay: 0.1), [
             .key(.cancel),
             .delay(0.1),
-            .key(.openCommandPalette),
-            .delay(0.1),
-            .key(.selectAll),
-            .key(.deleteBackward),
-            .text("Focus Agent"),
-            .delay(0.1),
-            .key(.confirm),
+            .key(.focusAgentFromSidebar),
             .delay(0.1)
         ])
     }
