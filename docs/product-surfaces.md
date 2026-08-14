@@ -71,6 +71,15 @@ The Agent Sessions browser is the durable teaching surface for global session sh
 - Generic copy such as `Find a session, then return to the app that owns it.` and `Codex history included` is omitted. The browser structure, source chips, and history rows already communicate those facts.
 - Pill hover hints remain as contextual reinforcement for users who rarely open the browser.
 
+## Display Notch Adaptation
+
+The menu-bar strip adapts to whether its display has a physical notch. The synthetic notch was originally drawn on every display as the pills' visual home and as the click target that opens the session browser. On a display without a physical notch that produced an *invisible* click target in empty top-center menu-bar space: clicking near the center of an external display opened the session browser with no visible affordance explaining why.
+
+- On a display **with** a physical notch, the strip renders the notch shape behind the hardware cutout, and clicking the notch opens the session browser. This click-to-open gesture exists only where there is a physical notch.
+- On a display **without** a physical notch, Agent Visor renders no synthetic notch. The pills consolidate at center with no center gap, and the top-center region has no click-to-open target. A click in empty menu-bar space never opens a window.
+- On a notch-less display the session browser is reached through a discoverable, always-visible menu-bar status item, alongside the Dock icon and the global window hotkey. That status item uses the same open action as the notch gesture and VoiceOver navigator item.
+- The menu-bar status item is also shown whenever VoiceOver is enabled, regardless of notch hardware, preserving the accessible navigator entry point.
+
 ## Transient Menu-Bar Popovers
 
 The `+N` sessions popover and Usage glance are nonactivating menu-bar surfaces. Opening either surface must not activate Agent Visor or show or raise the Agent Sessions browser.

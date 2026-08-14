@@ -29,7 +29,7 @@ public enum NotchClickAction: Sendable, Equatable {
 /// thin shim that translates geometry queries into these flags and
 /// performs the resulting action.
 ///
-/// Truth table:
+/// Truth table (with a physical notch):
 ///
 /// | status         | inNotch | inVisiblePanel | action |
 /// |----------------|---------|----------------|--------|
@@ -38,12 +38,22 @@ public enum NotchClickAction: Sendable, Equatable {
 /// | closed/popping |  false  |  any           | ignore |
 /// | opened         |  true   |  any           | close  |
 /// | opened         |  false  |  any           | ignore |
+///
+/// Displays without a physical notch have no synthetic notch surface and
+/// no click-to-open target, so every global click is `ignore` regardless
+/// of status or region. The session browser opens instead through the
+/// always-visible menu-bar status item, the Dock, or the global window
+/// hotkey. Without this gate, the invisible top-center hit region opened
+/// the main window whenever the user clicked empty menu-bar space near the
+/// center of an external display.
 public enum NotchClickPolicy {
     public static func action(
         status: NotchStatusInput,
         inNotch: Bool,
-        inVisiblePanel: Bool
+        inVisiblePanel: Bool,
+        hasPhysicalNotch: Bool
     ) -> NotchClickAction {
+        guard hasPhysicalNotch else { return .ignore }
         switch status {
         case .closed, .popping:
             return inNotch ? .open : .ignore

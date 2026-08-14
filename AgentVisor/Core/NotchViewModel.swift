@@ -419,7 +419,8 @@ class NotchViewModel: ObservableObject {
         let action = NotchClickPolicy.action(
             status: NotchStatusInput(status),
             inNotch: geometry.isPointInNotch(location),
-            inVisiblePanel: isPointInVisiblePanel(location)
+            inVisiblePanel: isPointInVisiblePanel(location),
+            hasPhysicalNotch: hasPhysicalNotch
         )
 
         switch action {

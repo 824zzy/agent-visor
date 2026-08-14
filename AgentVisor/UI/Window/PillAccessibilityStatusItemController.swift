@@ -8,7 +8,9 @@ final class PillAccessibilityStatusItemController {
 
     private var statusItem: NSStatusItem?
     private var accessibilityObserver: NSObjectProtocol?
+    private var screenObserver: NSObjectProtocol?
     private var permissionCancellable: AnyCancellable?
+    private var pillScreenCancellable: AnyCancellable?
 
     private init() {}
 
@@ -23,6 +25,18 @@ final class PillAccessibilityStatusItemController {
                 PillAccessibilityStatusItemController.shared.updateStatusItem()
             }
         }
+        // The open-window affordance appears whenever the pill screen has no
+        // physical notch, so re-evaluate when displays are attached/detached
+        // or their arrangement changes.
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                PillAccessibilityStatusItemController.shared.updateStatusItem()
+            }
+        }
         permissionCancellable = PermissionHealthMonitor.shared.$health
             .removeDuplicates()
             .sink { _ in
@@ -30,7 +44,28 @@ final class PillAccessibilityStatusItemController {
                     PillAccessibilityStatusItemController.shared.updateStatusItem()
                 }
             }
+        // The user can move the pills to a different screen at runtime, which
+        // changes whether that screen has a physical notch.
+        pillScreenCancellable = ScreenSelector.shared.$selectedScreen
+            .sink { _ in
+                Task { @MainActor in
+                    PillAccessibilityStatusItemController.shared.updateStatusItem()
+                }
+            }
         updateStatusItem()
+    }
+
+    /// The open-window menu-bar item is shown when VoiceOver is on (its
+    /// original accessibility role) or when the pill screen has no physical
+    /// notch. On a notch-less external display there is no synthetic notch
+    /// to click, so this item is the discoverable menu-bar path to the
+    /// session browser alongside the Dock icon and the global hotkey.
+    private var shouldShowOpenWindowItem: Bool {
+        if NSWorkspace.shared.isVoiceOverEnabled { return true }
+        if let pillScreen = ScreenSelector.shared.selectedScreen {
+            return !pillScreen.hasPhysicalNotch
+        }
+        return false
     }
 
     private func updateStatusItem() {
@@ -53,7 +88,7 @@ final class PillAccessibilityStatusItemController {
             return
         }
 
-        if NSWorkspace.shared.isVoiceOverEnabled {
+        if shouldShowOpenWindowItem {
             let item = ensureStatusItem(length: NSStatusItem.squareLength)
             if let button = item.button {
                 button.image = NSImage(
@@ -66,7 +101,7 @@ final class PillAccessibilityStatusItemController {
                 button.action = #selector(openMainWindow)
                 button.toolTip = "Open Agent Visor sessions"
                 button.setAccessibilityLabel("Agent Visor sessions")
-                button.setAccessibilityHelp("Opens the accessible session navigator")
+                button.setAccessibilityHelp("Opens the session navigator")
             }
             statusItem = item
         } else if let statusItem {

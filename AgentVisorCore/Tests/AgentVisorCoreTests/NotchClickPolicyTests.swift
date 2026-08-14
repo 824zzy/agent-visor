@@ -13,14 +13,14 @@ final class NotchClickPolicyTests: XCTestCase {
 
     func test_closed_clickOnNotch_opens() {
         XCTAssertEqual(
-            NotchClickPolicy.action(status: .closed, inNotch: true, inVisiblePanel: false),
+            NotchClickPolicy.action(status: .closed, inNotch: true, inVisiblePanel: false, hasPhysicalNotch: true),
             .open
         )
     }
 
     func test_closed_clickOutsideNotch_doesNothing() {
         XCTAssertEqual(
-            NotchClickPolicy.action(status: .closed, inNotch: false, inVisiblePanel: false),
+            NotchClickPolicy.action(status: .closed, inNotch: false, inVisiblePanel: false, hasPhysicalNotch: true),
             .ignore
         )
     }
@@ -28,9 +28,41 @@ final class NotchClickPolicyTests: XCTestCase {
     func test_popping_clickOnNotch_opens() {
         // Status during the open animation. Treat like closed.
         XCTAssertEqual(
-            NotchClickPolicy.action(status: .popping, inNotch: true, inVisiblePanel: false),
+            NotchClickPolicy.action(status: .popping, inNotch: true, inVisiblePanel: false, hasPhysicalNotch: true),
             .open
         )
+    }
+
+    // MARK: - No physical notch (external display)
+
+    func test_noPhysicalNotch_clickInNotchRegion_isIgnored() {
+        // On an external display there is no synthetic notch and no
+        // click-to-open target. A click that geometry still classifies
+        // as "in notch" (the vestigial center hit region) must not open
+        // the main window — that was the empty-menu-bar-space bug.
+        XCTAssertEqual(
+            NotchClickPolicy.action(status: .closed, inNotch: true, inVisiblePanel: false, hasPhysicalNotch: false),
+            .ignore
+        )
+    }
+
+    func test_noPhysicalNotch_neverOpensOrCloses_acrossStates() {
+        for status in [NotchStatusInput.closed, .popping, .opened] {
+            for inNotch in [true, false] {
+                for inVisiblePanel in [true, false] {
+                    XCTAssertEqual(
+                        NotchClickPolicy.action(
+                            status: status,
+                            inNotch: inNotch,
+                            inVisiblePanel: inVisiblePanel,
+                            hasPhysicalNotch: false
+                        ),
+                        .ignore,
+                        "status=\(status) inNotch=\(inNotch) inVisiblePanel=\(inVisiblePanel) should ignore without a physical notch"
+                    )
+                }
+            }
+        }
     }
 
     // MARK: - Opened — uniform persistence
@@ -40,7 +72,7 @@ final class NotchClickPolicyTests: XCTestCase {
         // content type. Users need to operate in another app while
         // keeping the panel visible.
         XCTAssertEqual(
-            NotchClickPolicy.action(status: .opened, inNotch: false, inVisiblePanel: false),
+            NotchClickPolicy.action(status: .opened, inNotch: false, inVisiblePanel: false, hasPhysicalNotch: true),
             .ignore
         )
     }
@@ -49,7 +81,7 @@ final class NotchClickPolicyTests: XCTestCase {
         // Inside-panel clicks are handled by SwiftUI; the policy stays
         // out of the way.
         XCTAssertEqual(
-            NotchClickPolicy.action(status: .opened, inNotch: false, inVisiblePanel: true),
+            NotchClickPolicy.action(status: .opened, inNotch: false, inVisiblePanel: true, hasPhysicalNotch: true),
             .ignore
         )
     }
@@ -59,7 +91,7 @@ final class NotchClickPolicyTests: XCTestCase {
         // gesture (click the notch). Notch shape sits inside the
         // visible panel when opened.
         XCTAssertEqual(
-            NotchClickPolicy.action(status: .opened, inNotch: true, inVisiblePanel: true),
+            NotchClickPolicy.action(status: .opened, inNotch: true, inVisiblePanel: true, hasPhysicalNotch: true),
             .close
         )
     }
@@ -69,7 +101,7 @@ final class NotchClickPolicyTests: XCTestCase {
         // valid close gesture (defensive — covers the closed→opened
         // race where panel geometry hasn't expanded yet).
         XCTAssertEqual(
-            NotchClickPolicy.action(status: .opened, inNotch: true, inVisiblePanel: false),
+            NotchClickPolicy.action(status: .opened, inNotch: true, inVisiblePanel: false, hasPhysicalNotch: true),
             .close
         )
     }

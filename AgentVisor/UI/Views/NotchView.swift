@@ -309,7 +309,12 @@ struct NotchView: View {
 
     private var closedNotchSize: CGSize {
         CGSize(
-            width: viewModel.deviceNotchRect.width,
+            // On a display without a physical notch there is no synthetic
+            // notch, so the center reserves zero width and the left/right
+            // pill groups consolidate at center instead of straddling an
+            // empty gap. The height still tracks the menu-bar strip so the
+            // interaction band and pill row keep their vertical extent.
+            width: viewModel.hasPhysicalNotch ? viewModel.deviceNotchRect.width : 0,
             height: viewModel.deviceNotchRect.height
         )
     }
@@ -496,15 +501,18 @@ struct NotchView: View {
     }
 
     /// Whether to render the small black notch shape between the left
-    /// and right pill groups. With the chat panel retired, this is the
-    /// only "notch" visible to the user — without it, external displays
-    /// (no physical notch hardware) show an empty gap between the pill
-    /// groups. On the built-in display the rendered shape sits behind
-    /// the hardware cutout and is invisible. Always on whenever pills
-    /// render so left/right groups always have a visual anchor.
+    /// and right pill groups. This is drawn only on a display that has a
+    /// physical notch, where it sits behind the hardware cutout and reads
+    /// as the natural home for the pills. On displays without a physical
+    /// notch (external monitors) Agent Visor shows no synthetic notch at
+    /// all — the pills consolidate at center and the session browser is
+    /// reached through the menu-bar status item, the Dock, or the global
+    /// hotkey. Rendering a fake notch there also created an invisible
+    /// click-to-open target in empty menu-bar space; see NotchClickPolicy.
     private var shouldRenderNotchIndicator: Bool {
         displayMode == .pillsOnlyOpenState
             && hasPillContent
+            && viewModel.hasPhysicalNotch
     }
 
     var body: some View {

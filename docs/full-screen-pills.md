@@ -37,7 +37,7 @@ Session discovery, status changes, approvals, and completed turns do not reveal 
 - Hidden pills do not accept global hit-test actions. Pointer movement and clicks continue to reach the full-screen application.
 - Direct `1-9` session shortcuts and the `0` More Sessions shortcut remain functional while the strip is hidden.
 - Reveal and hide animate opacity only. Pill size, order, side assignment, and hit regions do not move as part of the transition.
-- The synthetic center notch indicator follows the same visibility decision as the pills.
+- The center notch indicator renders only on a display with a physical notch, where it follows the same visibility decision as the pills. Displays without a physical notch show no synthetic notch; their pills consolidate at center and reveal/hide as one group.
 
 ## Detection
 
