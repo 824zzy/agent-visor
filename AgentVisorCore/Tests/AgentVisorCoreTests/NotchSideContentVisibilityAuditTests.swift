@@ -134,11 +134,20 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
         )
         XCTAssertTrue(sideContent.contains("let leftUsable = max(0, leftMax)"))
         XCTAssertTrue(sideContent.contains("usableWidth: Double(max(0, rightMax))"))
+        // Rendering and hit-testing must consume the same single seam-padding
+        // layer. It is notch-aware (`seamEdgePadding`) so a notch-less display
+        // collapses the center gap to the normal pill spacing, but both the
+        // overlay padding and the snapshot anchors read it from one helper.
         XCTAssertTrue(
-            notchView.contains("let leftAnchor = pillLeftEdge - PillBarCoordinator.edgePadding")
+            notchView.contains("let leftAnchor = pillLeftEdge - seamEdgePadding(pillSpacing: pack.pillSpacing)")
         )
         XCTAssertTrue(
-            notchView.contains("let rightAnchor = pillRightEdge + PillBarCoordinator.edgePadding")
+            notchView.contains("let rightAnchor = pillRightEdge + seamEdgePadding(pillSpacing: pack.pillSpacing)")
+        )
+        XCTAssertEqual(
+            notchView.components(separatedBy: "seamEdgePadding(pillSpacing: pack.pillSpacing)").count - 1,
+            4,
+            "Both pill overlays and both hit-test anchors must share the one seam-padding helper."
         )
         XCTAssertFalse(notchView.contains("2 * PillBarCoordinator.edgePadding"))
         XCTAssertTrue(notchView.contains("leftBarWidth: leftSafeWidth,"))

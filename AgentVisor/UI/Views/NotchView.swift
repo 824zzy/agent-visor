@@ -425,16 +425,34 @@ struct NotchView: View {
         viewModel.deviceNotchRect.origin.x + viewModel.deviceNotchRect.width
     }
 
+    /// Half of the fixed gap that separates each pill group from the notch
+    /// center. On a physical notch this holds the pills 4px off the
+    /// hardware cutout; without a notch there is nothing to clear, so the
+    /// groups meet at center and the seam is governed purely by
+    /// `seamEdgePadding` below (kept at the normal pill spacing).
+    private var notchCenterGap: CGFloat {
+        viewModel.hasPhysicalNotch ? 4 : 0
+    }
+
     /// Left edge of the actual pill (accounts for expansion beyond hardware notch)
     private var pillLeftEdge: CGFloat {
         let totalPillWidth = closedNotchSize.width + expansionWidth
-        return (viewModel.screenRect.width - totalPillWidth) / 2 - 4  // 4px gap
+        return (viewModel.screenRect.width - totalPillWidth) / 2 - notchCenterGap
     }
 
     /// Right edge of the actual pill (accounts for expansion beyond hardware notch)
     private var pillRightEdge: CGFloat {
         let totalPillWidth = closedNotchSize.width + expansionWidth
-        return (viewModel.screenRect.width + totalPillWidth) / 2 + 4  // 4px gap
+        return (viewModel.screenRect.width + totalPillWidth) / 2 + notchCenterGap
+    }
+
+    /// Inner padding between each pill group and the notch center. On a
+    /// physical notch this keeps pills `edgePadding` off the cutout. Without
+    /// a notch the two groups form one contiguous strip, so the padding
+    /// shrinks to half the pill spacing and the center seam matches the gap
+    /// between any other two pills instead of leaving a notch-sized hole.
+    private func seamEdgePadding(pillSpacing: CGFloat) -> CGFloat {
+        viewModel.hasPhysicalNotch ? PillBarCoordinator.edgePadding : pillSpacing / 2
     }
 
     /// Safe width for left side content (avoids app menus).
@@ -621,7 +639,7 @@ struct NotchView: View {
                         .padding(
                             .trailing,
                             viewModel.screenRect.width - pillLeftEdge
-                                + PillBarCoordinator.edgePadding
+                                + seamEdgePadding(pillSpacing: pack.pillSpacing)
                         )
                     }
                     .overlay(alignment: .leading) {
@@ -646,7 +664,7 @@ struct NotchView: View {
                         .clipped()
                         .padding(
                             .leading,
-                            pillRightEdge + PillBarCoordinator.edgePadding
+                            pillRightEdge + seamEdgePadding(pillSpacing: pack.pillSpacing)
                         )
                     }
                     // Diagnostic: collect actual rendered pill frames
@@ -994,9 +1012,11 @@ struct NotchView: View {
 
         // Rendering owns one outer notch-edge padding layer. Snapshot anchors
         // use that same offset so a click resolves against the exact pill the
-        // user saw rather than the adjacent session.
-        let leftAnchor = pillLeftEdge - PillBarCoordinator.edgePadding
-        let rightAnchor = pillRightEdge + PillBarCoordinator.edgePadding
+        // user saw rather than the adjacent session. Both must consume the
+        // notch-aware seam padding; using the raw edgePadding here while the
+        // overlays use the collapsed non-notch seam would shift every click.
+        let leftAnchor = pillLeftEdge - seamEdgePadding(pillSpacing: pack.pillSpacing)
+        let rightAnchor = pillRightEdge + seamEdgePadding(pillSpacing: pack.pillSpacing)
 
         return PillBarHitTest.PillBarSnapshot(
             leftSlots: leftSlots,
