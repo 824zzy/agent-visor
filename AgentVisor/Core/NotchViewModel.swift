@@ -19,16 +19,6 @@ enum NotchStatus: Equatable {
     case popping
 }
 
-extension NotchStatusInput {
-    init(_ status: NotchStatus) {
-        switch status {
-        case .closed: self = .closed
-        case .opened: self = .opened
-        case .popping: self = .popping
-        }
-    }
-}
-
 enum NotchOpenReason {
     case click
     case notification
@@ -57,7 +47,6 @@ class NotchViewModel: ObservableObject {
     @Published var status: NotchStatus = .closed
     @Published var openReason: NotchOpenReason = .unknown
     @Published var contentType: NotchContentType = .instances
-    @Published var isHovering: Bool = false
 
     /// True when a native full-screen window covers this screen. The view
     /// combines this evidence with the user's visibility policy and current
@@ -95,6 +84,28 @@ class NotchViewModel: ObservableObject {
     let geometry: NotchGeometry
     let spacing: CGFloat = 12
     let hasPhysicalNotch: Bool
+
+    /// Display this geometry was captured from. Click routing compares the
+    /// captured `screenRect` against this display's live frame, so geometry
+    /// left over from an earlier display arrangement can never claim a click
+    /// (see `MenuBarGeometryFreshness`).
+    let displayID: CGDirectDisplayID?
+
+    /// True when the captured geometry no longer matches the display it came
+    /// from — display detached, moved, or resized. Callers that resolve global
+    /// clicks must ignore them while this is true; a rebuilt controller with
+    /// fresh geometry takes over.
+    var isGeometryStale: Bool {
+        MenuBarGeometryFreshness.isStale(
+            captured: geometry.screenRect,
+            live: liveScreenFrame
+        )
+    }
+
+    private var liveScreenFrame: CGRect? {
+        guard let displayID else { return nil }
+        return NSScreen.screens.first { $0.displayID == displayID }?.frame
+    }
 
     var deviceNotchRect: CGRect { geometry.deviceNotchRect }
     var screenRect: CGRect { geometry.screenRect }
@@ -219,11 +230,17 @@ class NotchViewModel: ObservableObject {
     // MARK: - Private
 
     private var cancellables = Set<AnyCancellable>()
-    private let events = EventMonitors.shared
 
     // MARK: - Initialization
 
-    init(deviceNotchRect: CGRect, screenRect: CGRect, visibleFrame: CGRect, windowHeight: CGFloat, hasPhysicalNotch: Bool) {
+    init(
+        deviceNotchRect: CGRect,
+        screenRect: CGRect,
+        visibleFrame: CGRect,
+        windowHeight: CGFloat,
+        hasPhysicalNotch: Bool,
+        displayID: CGDirectDisplayID?
+    ) {
         self.geometry = NotchGeometry(
             deviceNotchRect: deviceNotchRect,
             screenRect: screenRect,
@@ -231,10 +248,23 @@ class NotchViewModel: ObservableObject {
             windowHeight: windowHeight
         )
         self.hasPhysicalNotch = hasPhysicalNotch
-        setupEventHandlers()
+        self.displayID = displayID
         observeSelectors()
         observeFullScreenSignals()
         recomputeFullScreenState()
+    }
+
+    /// Stop every observation this model owns. Called by the owning window
+    /// controller when it is replaced, so a superseded model cannot keep
+    /// reacting to workspace events with geometry from an old display
+    /// arrangement. Without this the replaced model stayed subscribed for the
+    /// life of the process, because the closed strip window kept its hosting
+    /// view — and its view model — alive.
+    func teardown() {
+        cancellables.removeAll()
+        pendingCloseWork?.cancel()
+        pendingCloseWork = nil
+        prioritySessionProvider = nil
     }
 
     // MARK: - Full-screen detection
@@ -365,142 +395,8 @@ class NotchViewModel: ObservableObject {
             .store(in: &cancellables)
     }
 
-    // MARK: - Event Handling
-
-    private func setupEventHandlers() {
-        events.mouseLocation
-            .throttle(for: .milliseconds(50), scheduler: DispatchQueue.main, latest: true)
-            .sink { [weak self] location in
-                self?.handleMouseMove(location)
-            }
-            .store(in: &cancellables)
-
-        events.mouseDown
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.handleMouseDown()
-            }
-            .store(in: &cancellables)
-
-    }
-
-    /// Whether we're in chat mode (sticky behavior)
-    private var isInChatMode: Bool {
-        if case .chat = contentType { return true }
-        return false
-    }
-
     /// The chat session we're viewing (persists across close/open)
     private var currentChatSession: SessionState?
-
-    private func handleMouseMove(_ location: CGPoint) {
-        let inNotch = geometry.isPointInNotch(location)
-        let inOpened = status == .opened && geometry.isPointInOpenedPanel(location, size: openedSize)
-
-        let newHovering = inNotch || inOpened
-
-        // Only update if changed to prevent unnecessary re-renders.
-        // Hovering used to auto-expand the panel after 1s; that produced
-        // accidental opens whenever the cursor brushed the pill on the way
-        // to the menu bar. Click-to-open is the only entry point now.
-        guard newHovering != isHovering else { return }
-        isHovering = newHovering
-    }
-
-    private func handleMouseDown() {
-        let location = NSEvent.mouseLocation
-
-        // Test against the visible NotchShape, not the bounding rect.
-        // The window frame is wider than the visible black panel because
-        // NotchShape carves 19×19pt concave cutouts at the top corners
-        // and 24pt rounded cutouts at the bottom. Without shape-accurate
-        // testing, clicks in those transparent cutouts (visually outside
-        // the border) are classified as inside and don't close.
-        let action = NotchClickPolicy.action(
-            status: NotchStatusInput(status),
-            inNotch: geometry.isPointInNotch(location),
-            inVisiblePanel: isPointInVisiblePanel(location),
-            hasPhysicalNotch: hasPhysicalNotch
-        )
-
-        switch action {
-        case .open:
-            // Notch chat panel was retired; clicking the visible notch
-            // shape now hands off to the main window via the same
-            // bridge the redirect callbacks installed by AppDelegate
-            // use. Falling through to `notchOpen` would mount the
-            // (intentionally empty) panel content view and pop a
-            // blank container under the menu bar.
-            NotchPanelRedirect.openMainWindow?()
-        case .close:
-            notchClose()
-        case .ignore:
-            break
-        }
-    }
-
-    /// Whether `screenPoint` (Cocoa screen coords, origin bottom-left) lies
-    /// inside the visible NotchShape of the opened panel. Used by both the
-    /// click-outside-to-close check and the hit-test gate so SwiftUI never
-    /// receives clicks in the transparent corner cutouts.
-    func isPointInVisiblePanel(_ screenPoint: CGPoint) -> Bool {
-        let size = openedSize
-        let panelRect = CGRect(
-            x: geometry.screenRect.midX - size.width / 2,
-            y: geometry.openedPanelTopY - size.height,
-            width: size.width,
-            height: size.height
-        )
-        guard panelRect.contains(screenPoint) else { return false }
-
-        // The opened panel is now clipped to a uniform RoundedRectangle
-        // (matches `NotchView.panelCornerRadius`). Hit-test against a
-        // BezierPath of the same rounded rect so clicks in the corner
-        // cutouts pass through to the menu bar / app behind us instead
-        // of being classified as inside-panel. Radius mirrors
-        // `cornerRadiusInsets.opened.top` in NotchView.swift.
-        let localX = screenPoint.x - panelRect.minX
-        let localY = panelRect.maxY - screenPoint.y
-        let openedRadius: CGFloat = 19
-        let path = CGPath(
-            roundedRect: CGRect(origin: .zero, size: size),
-            cornerWidth: openedRadius,
-            cornerHeight: openedRadius,
-            transform: nil
-        )
-        return path.contains(CGPoint(x: localX, y: localY))
-    }
-
-    /// Re-posts a mouse click at the given screen location so it reaches windows behind us
-    private func repostClickAt(_ location: CGPoint) {
-        // Small delay to let the window's ignoresMouseEvents update
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            // Convert to CGEvent coordinate system (screen coordinates with Y from top-left)
-            guard let screen = NSScreen.main else { return }
-            let screenHeight = screen.frame.height
-            let cgPoint = CGPoint(x: location.x, y: screenHeight - location.y)
-
-            // Create and post mouse down event
-            if let mouseDown = CGEvent(
-                mouseEventSource: nil,
-                mouseType: .leftMouseDown,
-                mouseCursorPosition: cgPoint,
-                mouseButton: .left
-            ) {
-                mouseDown.post(tap: .cghidEventTap)
-            }
-
-            // Create and post mouse up event
-            if let mouseUp = CGEvent(
-                mouseEventSource: nil,
-                mouseType: .leftMouseUp,
-                mouseCursorPosition: cgPoint,
-                mouseButton: .left
-            ) {
-                mouseUp.post(tap: .cghidEventTap)
-            }
-        }
-    }
 
     // MARK: - Actions
 

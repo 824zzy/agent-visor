@@ -525,8 +525,9 @@ struct NotchView: View {
     /// notch (external monitors) Agent Visor shows no synthetic notch at
     /// all — the pills consolidate at center and the session browser is
     /// reached through the menu-bar status item, the Dock, or the global
-    /// hotkey. Rendering a fake notch there also created an invisible
-    /// click-to-open target in empty menu-bar space; see NotchClickPolicy.
+    /// hotkey. The shape is decorative in every case: it does not hit-test,
+    /// and no global click monitor turns menu-bar clicks into window
+    /// summons any more.
     private var shouldRenderNotchIndicator: Bool {
         displayMode == .pillsOnlyOpenState
             && hasPillContent
@@ -1267,6 +1268,16 @@ struct NotchView: View {
             return
         }
         guard let snapshot = pillSnapshotStore.snapshot else {
+            applyTransientPopoverPolicy(.outsideClick)
+            return
+        }
+        // Geometry is captured once, when the strip is built for a display.
+        // If that display has since moved, resized, or been detached, every
+        // rect below describes the wrong region of the desktop — on a
+        // multi-display setup the stale rect can land in the middle of
+        // another monitor. Ignore the click and let the rebuilt strip, which
+        // carries fresh geometry, own it.
+        guard !viewModel.isGeometryStale else {
             applyTransientPopoverPolicy(.outsideClick)
             return
         }

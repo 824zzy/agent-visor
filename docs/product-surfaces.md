@@ -75,10 +75,13 @@ The Agent Sessions browser is the durable teaching surface for global session sh
 
 The menu-bar strip adapts to whether its display has a physical notch. The synthetic notch was originally drawn on every display as the pills' visual home and as the click target that opens the session browser. On a display without a physical notch that produced an *invisible* click target in empty top-center menu-bar space: clicking near the center of an external display opened the session browser with no visible affordance explaining why.
 
-- On a display **with** a physical notch, the strip renders the notch shape behind the hardware cutout, and clicking the notch opens the session browser. This click-to-open gesture exists only where there is a physical notch.
-- On a display **without** a physical notch, Agent Visor renders no synthetic notch. The pills consolidate at center with no center gap, and the top-center region has no click-to-open target. A click in empty menu-bar space never opens a window.
-- On a notch-less display the session browser is reached through a discoverable, always-visible menu-bar status item, alongside the Dock icon and the global window hotkey. That status item uses the same open action as the notch gesture and VoiceOver navigator item.
-- The menu-bar status item is also shown whenever VoiceOver is enabled, regardless of notch hardware, preserving the accessible navigator entry point.
+- The notch shape is **decoration only**. It is drawn on a display with a physical notch, behind the hardware cutout, and it does not hit-test. Clicking it does nothing.
+- On a display **without** a physical notch, Agent Visor renders no synthetic notch. The pills consolidate at center with no center gap.
+- **No global pointer monitor turns a menu-bar click into a window summon.** Clicks in empty menu-bar space never open a window, on any display.
+- The session browser is reached through the always-visible menu-bar status item, the Dock icon, and the global window hotkey. The status item is present on every display and whatever the VoiceOver state, so keyboard and VoiceOver users have the same standard entry point.
+- Pill clicks are the one global click route that remains. They resolve against geometry captured for the pill display, so they are ignored whenever that display has moved, been resized, or been detached since capture. A rebuilt strip with fresh geometry takes over.
+
+The reason for the last two rules: a click target derived from captured screen geometry keeps claiming the *coordinates* it was built for, even after the display moves. Geometry captured while the built-in display was the main display kept a 244x38 band alive at global coordinates that later belonged to empty space in the middle of an external monitor, and clicks there summoned the session window with nothing on screen to explain it.
 
 ## Transient Menu-Bar Popovers
 

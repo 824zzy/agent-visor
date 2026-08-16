@@ -114,7 +114,8 @@ class PillsStripWindowController: NSWindowController {
             screenRect: screenFrame,
             visibleFrame: screen.visibleFrame,
             windowHeight: 750,
-            hasPhysicalNotch: screen.hasPhysicalNotch
+            hasPhysicalNotch: screen.hasPhysicalNotch,
+            displayID: screen.displayID
         )
 
         let notchHeight = notchSize.height
@@ -204,5 +205,37 @@ class PillsStripWindowController: NSWindowController {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Retire this controller for good.
+    ///
+    /// `WindowManager` rebuilds the strip whenever the pill display's identity
+    /// or frame changes. Dropping the reference is not enough: the closed panel
+    /// kept its `NSHostingController`, and therefore the SwiftUI view and the
+    /// `NotchViewModel`, alive for the rest of the process — so a superseded
+    /// controller went on observing workspace events and answering click
+    /// questions with geometry from the previous display arrangement.
+    ///
+    /// Clearing `contentViewController` unmounts the SwiftUI view, which runs
+    /// its `onDisappear` teardown (global click monitors, menu-layout
+    /// coordinator), then the view model drops its own subscriptions.
+    ///
+    /// The `ClaudeSessionMonitor` this controller owns is intentionally left
+    /// running: `stopMonitoring()` also stops process-wide singletons
+    /// (`HookSocketServer`, `CodexMetadataWatcher`) that the replacement
+    /// controller depends on. Session-monitor ownership needs its own change.
+    func teardown() {
+        if let token = backingPropertiesObserver {
+            NotificationCenter.default.removeObserver(token)
+            backingPropertiesObserver = nil
+        }
+        if let token = didChangeScreenObserver {
+            NotificationCenter.default.removeObserver(token)
+            didChangeScreenObserver = nil
+        }
+        window?.contentViewController = nil
+        viewModel.teardown()
+        window?.orderOut(nil)
+        window?.close()
     }
 }

@@ -55,8 +55,10 @@ class WindowManager {
         }
 
         if let existingStrip = pillsStripController {
-            existingStrip.window?.orderOut(nil)
-            existingStrip.window?.close()
+            // Full teardown, not just a window close: the superseded
+            // controller must stop observing global events. See
+            // `PillsStripWindowController.teardown()`.
+            existingStrip.teardown()
             pillsStripController = nil
         }
 
@@ -86,11 +88,5 @@ class WindowManager {
         lastScreenFrame = newFrame
 
         return strip
-    }
-}
-
-private extension NSScreen {
-    var displayID: CGDirectDisplayID? {
-        deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
     }
 }

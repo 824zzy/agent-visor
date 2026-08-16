@@ -43,7 +43,10 @@ final class PermissionHealthWiringAuditTests: XCTestCase {
         XCTAssertTrue(controller.contains("button.title = \"Setup\""))
         XCTAssertTrue(controller.contains("#selector(performSetup)"))
         XCTAssertTrue(controller.contains("performPrimarySetupAction()"))
-        XCTAssertTrue(controller.contains("NSWorkspace.shared.isVoiceOverEnabled"))
+        // The sessions entry point used to be conditional on VoiceOver; it is
+        // unconditional now, so only the Setup branch is state-driven.
+        // `SessionNavigationAccessibilityAuditTests` pins that.
+        XCTAssertTrue(controller.contains("#selector(openMainWindow)"))
     }
 
     func testExplicitSetupRequestsNativePromptWithoutPersistedSuppression() throws {
