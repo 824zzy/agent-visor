@@ -1920,11 +1920,6 @@ enum PillBarCoordinator {
 
 /// Shared logic for session sorting and priority
 enum SessionPriority {
-    /// Returns the highest-priority session for display and navigation
-    static func prioritySession(from sessions: [SessionState]) -> SessionState? {
-        sortedByPriority(sessions).first
-    }
-
     /// Sort sessions by priority (same order as dots are rendered).
     /// Within the same priority tier, most recently active sessions come first.
     static func sortedByPriority(_ sessions: [SessionState]) -> [SessionState] {

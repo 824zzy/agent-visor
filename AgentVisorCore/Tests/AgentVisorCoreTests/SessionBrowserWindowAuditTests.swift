@@ -325,16 +325,14 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         XCTAssertTrue(app.contains("max: AppSettings.contentFontScaleMax"))
     }
 
-    func testSessionsAndBothChatSurfacesUseTheSharedScaleDecoder() throws {
+    func testSessionsAndTheChatSurfaceUseTheSharedScaleDecoder() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let split = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
         let windowChat = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/UI/Window/WindowChatView.swift"))
-        let notchChat = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor/UI/Views/ChatView.swift"))
 
-        for source in [split, windowChat, notchChat] {
+        for source in [split, windowChat] {
             XCTAssertTrue(source.contains("ContentFontScaleCommand.decode("))
             XCTAssertTrue(source.contains("optionHeld:"))
             XCTAssertTrue(source.contains("controlHeld:"))

@@ -75,7 +75,7 @@ The Agent Sessions browser is the durable teaching surface for global session sh
 
 The menu-bar strip adapts to whether its display has a physical notch. The synthetic notch was originally drawn on every display as the pills' visual home and as the click target that opens the session browser. On a display without a physical notch that produced an *invisible* click target in empty top-center menu-bar space: clicking near the center of an external display opened the session browser with no visible affordance explaining why.
 
-- The notch shape is **decoration only**. It is drawn on a display with a physical notch, behind the hardware cutout, and it does not hit-test. Clicking it does nothing.
+- The notch shape is **decoration only**. It is drawn on a display with a physical notch, behind the hardware cutout, and it does not hit-test. Clicking it does nothing. There is no panel behind it: the strip renders pills and nothing else.
 - On a display **without** a physical notch, Agent Visor renders no synthetic notch. The pills consolidate at center with no center gap.
 - **No global pointer monitor turns a menu-bar click into a window summon.** Clicks in empty menu-bar space never open a window, on any display.
 - The session browser is reached through the always-visible menu-bar status item, the Dock icon, and the global window hotkey. The status item is present on every display and whatever the VoiceOver state, so keyboard and VoiceOver users have the same standard entry point.

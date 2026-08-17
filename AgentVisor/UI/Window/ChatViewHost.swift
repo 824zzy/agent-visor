@@ -2,12 +2,9 @@
 //  ChatViewHost.swift
 //  AgentVisor
 //
-//  Phase 5 (apple2apple): mounts the existing notch ChatView inside
-//  the window's detail pane. Shares the live NotchViewModel +
-//  ClaudeSessionMonitor instances owned by NotchWindowController so
-//  both surfaces observe the same state. Looks up the SessionState
-//  from SessionStore on appear; shows a placeholder until the store
-//  has finished bootstrapping.
+//  Mounts the window chat surface inside the window's detail pane.
+//  Looks up the SessionState from SessionStore on appear; shows a
+//  placeholder until the store has finished bootstrapping.
 //
 
 import AgentVisorCore

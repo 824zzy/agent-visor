@@ -2,7 +2,10 @@
 //  NotchViewModel.swift
 //  AgentVisor
 //
-//  State management for the dynamic island
+//  Display identity, geometry and full-screen state for the menu-bar
+//  pills strip. The in-notch chat panel it was originally written for is
+//  gone, so this model holds no open/close state: the strip is either
+//  rendered or hidden by the full-screen visibility policy.
 //
 
 import AppKit
@@ -13,65 +16,14 @@ import SwiftUI
 
 private let fsLogger = Logger(subsystem: AppBranding.loggerSubsystem, category: "FullScreenDetector")
 
-enum NotchStatus: Equatable {
-    case closed
-    case opened
-    case popping
-}
-
-enum NotchOpenReason {
-    case click
-    case notification
-    case hotkey
-    case unknown
-}
-
-enum NotchContentType: Equatable {
-    case instances
-    case menu
-    case chat(SessionState)
-
-    var id: String {
-        switch self {
-        case .instances: return "instances"
-        case .menu: return "menu"
-        case .chat(let session): return "chat-\(session.sessionId)"
-        }
-    }
-}
-
 @MainActor
 class NotchViewModel: ObservableObject {
     // MARK: - Published State
-
-    @Published var status: NotchStatus = .closed
-    @Published var openReason: NotchOpenReason = .unknown
-    @Published var contentType: NotchContentType = .instances
 
     /// True when a native full-screen window covers this screen. The view
     /// combines this evidence with the user's visibility policy and current
     /// reveal intent.
     @Published private(set) var isFullScreenAppActive: Bool = false
-
-    /// Drives the contentView's insertion/removal transition.
-    /// Decoupled from `status` so that on close we can hide content
-    /// (triggering its 0.25s removal transition) while keeping the panel
-    /// frame at its open size, then collapse the frame after the
-    /// transition finishes. Without this split, the frame snapped to
-    /// the closed-notch size the instant `status` changed, clipping the
-    /// inner removal animation into a tiny area and reading as a cliff.
-    @Published private(set) var contentVisible: Bool = false
-
-    /// Pending delayed status flip from a close. Tracked so an
-    /// intervening open can cancel it (otherwise the delayed close
-    /// would land after the user has already reopened).
-    private var pendingCloseWork: DispatchWorkItem?
-
-    /// The app that was frontmost before the notch opened (for restoring after message send)
-    var appBeforeNotchOpened: NSRunningApplication?
-
-    /// Provides the highest-priority session for auto-chat on pill click (set by NotchView)
-    var prioritySessionProvider: (() -> SessionState?)?
 
     // MARK: - Dependencies
 
@@ -82,7 +34,6 @@ class NotchViewModel: ObservableObject {
     // MARK: - Geometry
 
     let geometry: NotchGeometry
-    let spacing: CGFloat = 12
     let hasPhysicalNotch: Bool
 
     /// Display this geometry was captured from. Click routing compares the
@@ -109,123 +60,6 @@ class NotchViewModel: ObservableObject {
 
     var deviceNotchRect: CGRect { geometry.deviceNotchRect }
     var screenRect: CGRect { geometry.screenRect }
-    var windowHeight: CGFloat { geometry.windowHeight }
-
-    /// Bumped any time the user-overridden size changes for the current content type.
-    /// Window controller observes this to push a new frame.
-    @Published private(set) var sizeRevision: Int = 0
-
-    /// Default size per content type before user override
-    private var defaultOpenedSize: CGSize {
-        switch contentType {
-        case .chat:
-            return CGSize(
-                width: min(screenRect.width * 0.5, 600),
-                height: 580
-            )
-        case .menu:
-            // Bumped from 500 → 540 to accommodate the Light Mode
-            // toggle row added next to the picker rows. Picker
-            // expansions still add on top.
-            return CGSize(
-                width: min(screenRect.width * 0.4, 480),
-                height: 540
-                    + screenSelector.expandedPickerHeight
-                    + soundSelector.expandedPickerHeight
-                    + hotkeySelector.expandedPickerHeight
-            )
-        case .instances:
-            return CGSize(
-                width: min(screenRect.width * 0.4, 480),
-                height: 320
-            )
-        }
-    }
-
-    /// Final opened size: user override (clamped) if present, otherwise default
-    var openedSize: CGSize {
-        if let override = userSize(for: sizeStorageKey) {
-            return clamp(size: override)
-        }
-        return defaultOpenedSize
-    }
-
-    /// Floor on the resizable panel size
-    var minOpenedSize: CGSize {
-        CGSize(width: 380, height: 360)
-    }
-
-    /// Ceiling on the resizable panel size, derived from screen bounds.
-    /// Height is bounded by the distance from `geometry.openedPanelTopY`
-    /// (where the panel now anchors — just below the menu bar) down to
-    /// `visibleFrame.minY` (top of dock, or bottom of screen when dock
-    /// is hidden) so the user can drag the panel all the way to the
-    /// dock without overlapping it. Previously this used
-    /// `screenRect.maxY` as the top anchor — when we moved the anchor
-    /// down by `menuBarHeight` to keep the menu bar reachable, this
-    /// ceiling stayed too tall by the same amount and pushed the
-    /// panel's bottom (status bar) `menuBarHeight` past the dock,
-    /// clipping the status bar off-screen.
-    var maxOpenedSize: CGSize {
-        let visibleFrame = geometry.visibleFrame
-        let availableHeight = geometry.openedPanelTopY - visibleFrame.minY
-        return CGSize(
-            width: max(minOpenedSize.width, screenRect.width - 80),
-            height: max(minOpenedSize.height, availableHeight)
-        )
-    }
-
-    private func clamp(size: CGSize) -> CGSize {
-        let lo = minOpenedSize
-        let hi = maxOpenedSize
-        return CGSize(
-            width: max(lo.width, min(hi.width, size.width)),
-            height: max(lo.height, min(hi.height, size.height))
-        )
-    }
-
-    // MARK: - Size persistence
-
-    private static let sizeDefaultsKeyPrefix = "notch.userSize."
-
-    /// Stable storage key for the current content type. Nil if we don't persist this type.
-    private var sizeStorageKey: String {
-        switch contentType {
-        case .chat: return "chat"
-        case .menu: return "menu"
-        case .instances: return "instances"
-        }
-    }
-
-    private func defaultsKey(for storageKey: String) -> String {
-        Self.sizeDefaultsKeyPrefix + storageKey
-    }
-
-    private func userSize(for storageKey: String) -> CGSize? {
-        guard let arr = UserDefaults.standard.array(forKey: defaultsKey(for: storageKey)) as? [Double],
-              arr.count == 2 else { return nil }
-        return CGSize(width: arr[0], height: arr[1])
-    }
-
-    /// Persist a user-chosen size for the current content type. Clamps to min/max.
-    func applyUserSize(_ size: CGSize) {
-        let clamped = clamp(size: size)
-        let key = defaultsKey(for: sizeStorageKey)
-        UserDefaults.standard.set([Double(clamped.width), Double(clamped.height)], forKey: key)
-        sizeRevision &+= 1
-    }
-
-    /// Drop the user override for the current content type, returning to default.
-    func resetUserSize() {
-        UserDefaults.standard.removeObject(forKey: defaultsKey(for: sizeStorageKey))
-        sizeRevision &+= 1
-    }
-
-    // MARK: - Animation
-
-    var animation: Animation {
-        .easeOut(duration: 0.25)
-    }
 
     // MARK: - Private
 
@@ -237,15 +71,13 @@ class NotchViewModel: ObservableObject {
         deviceNotchRect: CGRect,
         screenRect: CGRect,
         visibleFrame: CGRect,
-        windowHeight: CGFloat,
         hasPhysicalNotch: Bool,
         displayID: CGDirectDisplayID?
     ) {
         self.geometry = NotchGeometry(
             deviceNotchRect: deviceNotchRect,
             screenRect: screenRect,
-            visibleFrame: visibleFrame,
-            windowHeight: windowHeight
+            visibleFrame: visibleFrame
         )
         self.hasPhysicalNotch = hasPhysicalNotch
         self.displayID = displayID
@@ -262,9 +94,6 @@ class NotchViewModel: ObservableObject {
     /// view — and its view model — alive.
     func teardown() {
         cancellables.removeAll()
-        pendingCloseWork?.cancel()
-        pendingCloseWork = nil
-        prioritySessionProvider = nil
     }
 
     // MARK: - Full-screen detection
@@ -395,148 +224,5 @@ class NotchViewModel: ObservableObject {
             .store(in: &cancellables)
     }
 
-    /// The chat session we're viewing (persists across close/open)
-    private var currentChatSession: SessionState?
-
-    // MARK: - Actions
-
-    func notchOpen(reason: NotchOpenReason = .unknown) {
-        openReason = reason
-        // Cancel any in-flight close so a fast close→open sequence
-        // doesn't get its delayed `status = .closed` running after we've
-        // re-opened.
-        pendingCloseWork?.cancel()
-        pendingCloseWork = nil
-        // Save the current frontmost app before we activate AgentVisor.
-        // Read this BEFORE the deferred status flip below so we capture the
-        // app that was frontmost at gesture time, not at +50ms.
-        if status == .closed {
-            appBeforeNotchOpened = NSWorkspace.shared.frontmostApplication
-        }
-        // Flip contentVisible immediately. NotchView's .animation(_:value:)
-        // modifier on the contentView drives the opacity/scale animation.
-        // No withAnimation here — having two animation contexts (this and
-        // the modifier) compete on the same property change is what
-        // deadlocked the open animation for ~10s on external displays in
-        // the prior always-mount attempt.
-        contentVisible = true
-
-        // Don't restore chat on notification - show instances list instead
-        if reason == .notification {
-            currentChatSession = nil
-            contentType = .instances
-        } else if let chatSession = currentChatSession {
-            // Restore chat session if we had one open before. Avoid
-            // unnecessary updates if already showing this chat.
-            if case .chat(let current) = contentType, current.sessionId != chatSession.sessionId {
-                contentType = .chat(chatSession)
-            } else if case .chat = contentType {
-                // already on this chat, no-op
-            } else {
-                contentType = .chat(chatSession)
-            }
-        }
-        // Otherwise: show instances list (the default contentType)
-
-        // Defer the status flip so the contentView's animation transaction
-        // commits before the window-resize sink in NotchWindowController
-        // calls setFrame against the WindowServer. The synchronous flip +
-        // resize race was a contributing factor to the prior deadlock.
-        // 50ms is enough for SwiftUI to commit the contentVisible change
-        // and start the animation; the window resize then lands cleanly
-        // mid-animation without contention.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            guard let self = self else { return }
-            self.status = .opened
-        }
-    }
-
-    func notchClose() {
-        // Save or clear chat session based on what's currently showing
-        if case .chat(let session) = contentType {
-            currentChatSession = session
-        } else {
-            currentChatSession = nil
-        }
-        // Don't reset contentType to .instances here. Closing from chat
-        // would otherwise swap ChatView for ClaudeInstancesView mid-fade,
-        // making the close animation visibly janky. Menu is transient by
-        // design — reset that to instances so it doesn't persist across
-        // close. Chat persists; the next open() restores it.
-        if case .menu = contentType {
-            contentType = .instances
-        }
-        pendingCloseWork?.cancel()
-        // Synchronized close: a single 0.25s ambient animation drives the
-        // frame size, corner radii, padding, and shadow toward their
-        // closed values via NotchView's `contentVisible`-keyed properties.
-        // The contentView's removal `.transition` has its own matched
-        // 0.25s smooth curve so border and content collapse as one.
-        withAnimation(.smooth(duration: 0.25)) {
-            contentVisible = false
-        }
-        // Defer the logical `status` flip to .closed until after the
-        // close animation finishes. Side content (left/right pills) is
-        // gated on `status == .closed`, so flipping early would expose
-        // pills next to a still-collapsing panel and overlap during the
-        // animation. The window-resize sink also runs on `status`, so
-        // deferring keeps the window at panel size during the visual
-        // collapse and avoids reparenting cracks.
-        let work = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
-            // Confirm we're still meant to be closing; an open during the
-            // window would have cancelled this work item via notchOpen.
-            self.status = .closed
-            self.pendingCloseWork = nil
-        }
-        pendingCloseWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
-    }
-
-    /// Open if closed, close if open. Used by the global hotkey so the
-    /// same gesture both summons and dismisses the notch.
-    func toggleViaHotkey() {
-        switch status {
-        case .opened:
-            notchClose()
-        case .closed, .popping:
-            notchOpen(reason: .hotkey)
-        }
-    }
-
-    func notchPop() {
-        guard status == .closed else { return }
-        status = .popping
-    }
-
-    func notchUnpop() {
-        guard status == .popping else { return }
-        status = .closed
-    }
-
-    func toggleMenu() {
-        contentType = contentType == .menu ? .instances : .menu
-    }
-
-    func showChat(for session: SessionState) {
-        // Avoid unnecessary updates if already showing this chat
-        if case .chat(let current) = contentType, current.sessionId == session.sessionId {
-            return
-        }
-        contentType = .chat(session)
-    }
-
-    /// Go back to instances list and clear saved chat state.
-    /// Wrap the contentType flip in a spring so the chat→instances swap
-    /// animates the same way the hamburger menu's chat→menu swap does
-    /// (NotchView.swift:1228 uses the same spring for toggleMenu). Without
-    /// this, the back-button path is an instant snap while the menu
-    /// button is a 300ms spring — visibly inconsistent.
-    func exitChat() {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-            currentChatSession = nil
-            contentType = .instances
-        }
-    }
 
 }

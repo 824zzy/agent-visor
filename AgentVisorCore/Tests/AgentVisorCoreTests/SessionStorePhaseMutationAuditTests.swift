@@ -769,18 +769,18 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
 
     func testChatModeProbeDoesNotReadMonitorInstancesFromTimerClosure() throws {
         let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
-        let chatViewSource = try String(contentsOf: root
+        let windowChatSource = try String(contentsOf: root
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
-            .appendingPathComponent("Views")
-            .appendingPathComponent("ChatView.swift"))
+            .appendingPathComponent("Window")
+            .appendingPathComponent("WindowChatView.swift"))
 
         XCTAssertFalse(
-            chatViewSource.contains("capturedMonitor.instances"),
+            windowChatSource.contains("capturedMonitor.instances"),
             "Mode probing runs from a timer closure; it should fetch a Sendable session snapshot through SessionStore instead of reading MainActor monitor state."
         )
         XCTAssertTrue(
-            chatViewSource.contains("SessionStore.shared.getSession(id: capturedSessionId)"),
+            windowChatSource.contains("await SessionStore.shared.currentSessions()"),
             "Mode probing should snapshot the live session through the SessionStore actor before dispatching off-main AX reads."
         )
     }

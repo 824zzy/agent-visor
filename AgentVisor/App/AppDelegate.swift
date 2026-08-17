@@ -205,11 +205,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         requestMainWindowActivation(.appLaunch)
         ApprovalNotifier.shared.start()
 
-        // Bridge legacy notch-panel "open" call sites (notch-shape tap,
-        // overflow pill, etc.) to the main window. Without this the
-        // pills-strip click-on-notch geometry handler would still
-        // invoke `notchOpen` via `NotchViewModel.handleMouseDown` and
-        // pop an empty panel container under the menu bar.
+        // The menu-bar status item summons the session browser through
+        // this bridge. It survives from the retired notch panel's open
+        // path; candidate C will replace it with one router.
         NotchPanelRedirect.openMainWindow = { [weak self] in
             DispatchQueue.main.async { self?.requestMainWindowActivation(.notchClick) }
         }

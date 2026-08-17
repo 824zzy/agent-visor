@@ -105,15 +105,11 @@ class PillsStripWindowController: NSWindowController {
             width: notchSize.width,
             height: notchSize.height
         )
-        // Window height is unused by the pills strip itself but the
-        // viewModel's geometry helpers expect a non-zero panel height.
-        // The legacy NotchWindowController used 750; we keep the same
-        // value so geometry math stays identical for the pills layout.
+        // Window height is unused by the pills strip itself.
         self.viewModel = NotchViewModel(
             deviceNotchRect: deviceNotchRect,
             screenRect: screenFrame,
             visibleFrame: screen.visibleFrame,
-            windowHeight: 750,
             hasPhysicalNotch: screen.hasPhysicalNotch,
             displayID: screen.displayID
         )
@@ -139,21 +135,13 @@ class PillsStripWindowController: NSWindowController {
 
         super.init(window: panel)
 
-        // `.pillsOnlyOpenState` is the lighter mode: it renders pills
-        // and skips the panel layout (`notchLayout` / `contentView`)
-        // entirely. With the chat panel retired, the heavier `.full`
-        // mode pulled in expensive menu-owner and tray scans on every
-        // body re-render — pinning CPU at
-        // 20-100% during streaming. Switching to the lighter variant
-        // is correct because the panel never opens and the only role
-        // left is "render the pills row in the menu-bar strip."
-        // Bootstrap (sessionMonitor.startMonitoring + click monitor +
-        // prioritySessionProvider) was previously gated on `.full`;
-        // it now runs unconditionally inside `NotchView.onAppear`.
+        // `.pillsOnlyOpenState` is gone with the notch panel: this is the
+        // only NotchView in the app and it renders the pills row in the
+        // menu-bar strip. Bootstrap (sessionMonitor.startMonitoring +
+        // click monitor) runs inside `NotchView.onAppear`.
         let hostingController = NSHostingController(
             rootView: NotchView(
                 viewModel: viewModel,
-                displayMode: .pillsOnlyOpenState,
                 sessionMonitor: sessionMonitor
             )
         )
@@ -165,11 +153,8 @@ class PillsStripWindowController: NSWindowController {
         // Opt out of the screen-top safe-area inset. The strip window
         // sits across the menu-bar / hardware-notch region, which on
         // notched MacBooks reports `safeAreaInsets.top ≈ 32pt`. Without
-        // this, SwiftUI insets the pillsOnlyOpenState NotchView's
-        // content downward by that 32pt, so each open/close cycle
-        // visibly shifts the rendered pill row vs. mainWindow's pills
-        // (which already opt out via NotchViewController's hosting
-        // setup). Matches the equivalent line on the main hosting view.
+        // this, SwiftUI insets the NotchView's content downward by that
+        // 32pt, so the rendered pill row visibly shifts.
         if #available(macOS 13.3, *) {
             hostingController.safeAreaRegions = []
         }

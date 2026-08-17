@@ -32,7 +32,6 @@ final class SessionHoverDetailWiringAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor/Services/Shared/ClaudeSettings.swift"))
         let surfacePaths = [
             "AgentVisor/UI/Components/SessionDetailPopover.swift",
-            "AgentVisor/UI/Views/ChatView.swift",
             "AgentVisor/UI/Window/WindowChatView.swift",
         ]
 

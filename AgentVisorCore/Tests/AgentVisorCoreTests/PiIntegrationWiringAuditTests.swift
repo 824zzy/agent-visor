@@ -273,16 +273,13 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
         let imageSender = try String(contentsOf: root.appendingPathComponent(
             "AgentVisor/Services/Chat/ImagePasteSender.swift"
         ))
-        let chat = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Views/ChatView.swift"
-        ))
         let composer = try String(contentsOf: root.appendingPathComponent(
             "AgentVisor/UI/Window/WindowComposer.swift"
         ))
 
         XCTAssertTrue(state.contains("var imageSubmissionRoute: ImageSubmissionRoute"))
         XCTAssertTrue(state.contains("ImageSubmissionRoutePolicy.route("))
-        for source in [chat, composer] {
+        for source in [composer] {
             XCTAssertTrue(source.contains("guard session.imageSubmissionRoute != .unavailable else { return }"))
             XCTAssertTrue(source.contains("ImageAttachmentRetentionPolicy.cleanupDelay("))
             XCTAssertFalse(source.contains("guard session.agentID != .pi else { return }"))

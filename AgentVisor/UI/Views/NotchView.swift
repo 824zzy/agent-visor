@@ -96,10 +96,7 @@ private let cornerRadiusInsets = (
 ///   panel hangs below the menu bar. The mainWindow already shows
 ///   pills when closed, so this gate keeps them mutually exclusive
 ///   and avoids double-rendering.
-enum NotchViewDisplayMode {
-    case full
-    case pillsOnlyOpenState
-}
+
 
 /// Holds the most recently rendered pill-bar snapshot for the click
 /// handler to read. Reference type so writes from inside `body` don't
@@ -211,10 +208,8 @@ final class TransientPopoverWindowTracker: ObservableObject {
 
 struct NotchView: View {
     @ObservedObject var viewModel: NotchViewModel
-    var displayMode: NotchViewDisplayMode = .full
-    /// Shared session monitor. Both the primary `.full` instance in
-    /// `NotchWindow` and the parallel `.pillsOnlyOpenState` instance in
-    /// `PillsStripWindow` need to look at the SAME `instances` array
+    /// Shared session monitor. The pills strip is the only instance in
+    /// the app, and it needs the SAME `instances` array
     /// at click time — otherwise a one-tick lag between the two
     /// `@StateObject` instances' subscriber callbacks could let
     /// `handleSideClick`'s pack diverge from the visually rendered
@@ -321,44 +316,14 @@ struct NotchView: View {
 
     /// Extra width for expanding activities
     /// When closed: no expansion (side content uses all available space)
-    /// When opened: not used (panel has its own sizing)
     private var expansionWidth: CGFloat {
         0
     }
 
-    /// Outer panel size for the visual notch. Tracks `contentVisible` (an
-    /// animatable @Published bool) rather than `status` so the frame
-    /// collapses in lock-step with the content fade. Flipping on `status`
-    /// instead would snap because the window-resize Combine sink runs on
-    /// `status` and the surrounding layout depends on it for side content.
+    /// Outer size for the visual notch shape. The panel is gone, so this
+    /// is always the closed size.
     private var notchSize: CGSize {
-        viewModel.contentVisible ? viewModel.openedSize : closedNotchSize
-    }
-
-    private var openedHorizontalPadding: CGFloat {
-        cornerRadiusInsets.opened.top + 12
-    }
-
-    /// Inner content width is keyed off `openedSize`, not the animated
-    /// `notchSize`, so contentView's own width stays steady while the
-    /// outer panel shrinks. Otherwise content would shrink twice (once
-    /// from the parent frame, once from the .scale(0.8) transition).
-    private var openedContentWidth: CGFloat {
-        max(0, viewModel.openedSize.width - openedHorizontalPadding * 2)
-    }
-
-    /// Inner content height pinned to the open panel height (minus the
-    /// header row) for the same reason `openedContentWidth` is keyed off
-    /// `openedSize`. When the outer notch collapses on close, the inner
-    /// VStack would otherwise shrink contentView's proposed height to
-    /// near zero, which makes the LazyVStack inside ChatView derealize
-    /// most of its rows. On reopen the rows get realized with actual
-    /// heights different from the prior estimates, shifting
-    /// NSScrollView's preserved contentOffset to a visually wrong row —
-    /// the drift we're trying to avoid. Holding the inner height steady
-    /// keeps LazyVStack's realization stable across notch state.
-    private var openedContentHeight: CGFloat {
-        max(0, viewModel.openedSize.height - closedNotchSize.height)
+        closedNotchSize
     }
 
     private var menuBarInteractionHeight: CGFloat {
@@ -380,15 +345,11 @@ struct NotchView: View {
     // MARK: - Corner Radii
 
     private var topCornerRadius: CGFloat {
-        viewModel.contentVisible
-            ? cornerRadiusInsets.opened.top
-            : cornerRadiusInsets.closed.top
+        cornerRadiusInsets.closed.top
     }
 
     private var bottomCornerRadius: CGFloat {
-        viewModel.contentVisible
-            ? cornerRadiusInsets.opened.bottom
-            : cornerRadiusInsets.closed.bottom
+        cornerRadiusInsets.closed.bottom
     }
 
     /// Corner radius for the panel's rounded-rect clip. Single value
@@ -400,9 +361,7 @@ struct NotchView: View {
     /// against the hardware notch, which is a niche read. Standard
     /// rounded corners look right everywhere.
     private var panelCornerRadius: CGFloat {
-        viewModel.contentVisible
-            ? cornerRadiusInsets.opened.top
-            : cornerRadiusInsets.closed.bottom
+        cornerRadiusInsets.closed.bottom
     }
 
     private var currentNotchShape: RoundedRectangle {
@@ -483,15 +442,7 @@ struct NotchView: View {
     /// `status != .closed` — now needs to render unconditionally.
     /// `.full` keeps its original "show pills while closed" semantics.
     private var hasPillContent: Bool {
-        guard !sessionMonitor.instances.isEmpty || codexUsageMonitor.showsPill || claudeUsageMonitor.showsPill else {
-            return false
-        }
-        switch displayMode {
-        case .full:
-            return viewModel.status == .closed
-        case .pillsOnlyOpenState:
-            return true
-        }
+        !sessionMonitor.instances.isEmpty || codexUsageMonitor.showsPill || claudeUsageMonitor.showsPill
     }
 
     private var codexUsagePresentation: CodexUsageMenuBarPresentation? {
@@ -511,13 +462,6 @@ struct NotchView: View {
         )
     }
 
-    /// Whether the centered notch shape + panel content should render
-    /// in this instance. Always true in `.full`; never in
-    /// `.pillsOnlyOpenState` — that variant is a pill-only spectator.
-    private var shouldRenderCenter: Bool {
-        displayMode == .full
-    }
-
     /// Whether to render the small black notch shape between the left
     /// and right pill groups. This is drawn only on a display that has a
     /// physical notch, where it sits behind the hardware cutout and reads
@@ -529,9 +473,7 @@ struct NotchView: View {
     /// and no global click monitor turns menu-bar clicks into window
     /// summons any more.
     private var shouldRenderNotchIndicator: Bool {
-        displayMode == .pillsOnlyOpenState
-            && hasPillContent
-            && viewModel.hasPhysicalNotch
+        hasPillContent && viewModel.hasPhysicalNotch
     }
 
     var body: some View {
@@ -701,105 +643,6 @@ struct NotchView: View {
                 .animation(.easeOut(duration: 0.16), value: pillsAreVisible)
             }
 
-            // Notch pill overlay
-            if shouldRenderCenter {
-                VStack(spacing: 0) {
-                    notchLayout
-                    // Block ambient animations on the inner content only
-                    // (header row state, processing/waiting indicators).
-                    // The outer frame, padding, and clipShape sit ABOVE
-                    // this modifier so they remain animatable, which is
-                    // what lets the border collapse in sync with the
-                    // content fade on close. Keeping it inside addresses
-                    // the original v1.6.1 stale-cache bug (ghost crab
-                    // rendering from per-value .animation modifiers on
-                    // hasWaitingForInput / isBouncing) without freezing
-                    // the geometry.
-                    .transaction { $0.animation = nil }
-                    .padding(
-                        .horizontal,
-                        viewModel.contentVisible
-                            ? cornerRadiusInsets.opened.top
-                            : cornerRadiusInsets.closed.bottom
-                    )
-                    .padding([.horizontal, .bottom], viewModel.contentVisible ? 12 : 0)
-                    .frame(
-                        // Width pinned explicitly even when closed: ChatView
-                        // stays mounted across notch close (so NSScrollView's
-                        // contentOffset preserves verbatim), which means
-                        // contentView still claims openedContentWidth in
-                        // SwiftUI layout even at maxHeight 0. Without this
-                        // override the parent VStack inherits that width and
-                        // the closed-pill notch shape balloons across the menu
-                        // bar. clipShape below masks the off-screen content.
-                        width: viewModel.contentVisible ? notchSize.width : closedNotchSize.width,
-                        height: viewModel.contentVisible ? notchSize.height : closedNotchSize.height,
-                        alignment: .top
-                    )
-                    // When the panel is closed, the only visible portion is
-                    // the small notch shape between the menu-bar pills.
-                    // That sits flush against the macOS hardware notch
-                    // (the physical camera cutout, true black). Fill it
-                    // with pure black so the two visually merge regardless
-                    // of theme. When the panel is open, the body content
-                    // (ChatView / ClaudeInstancesView / NotchMenuView)
-                    // paints its own theme-aware backgrounds on top, so
-                    // the outer fill rarely shows through. Fall back to
-                    // ChatTheme.headerBg so any uncovered gap matches
-                    // the surrounding panel canvas tone.
-                    .background(viewModel.contentVisible ? ChatTheme.headerBg : Color.black)
-                    .clipShape(currentNotchShape)
-                    .overlay(alignment: .top) {
-                        // Anti-aliasing mask along the top edge where the
-                        // panel meets the macOS hardware notch. When the
-                        // panel is closed it should be true black to merge
-                        // with the hardware. When open it should match the
-                        // panel canvas (headerBg) so it doesn't show as a
-                        // dark seam against Latte's light mantle.
-                        Rectangle()
-                            .fill(viewModel.contentVisible ? ChatTheme.headerBg : Color.black)
-                            .frame(height: 1)
-                            .padding(.horizontal, panelCornerRadius)
-                    }
-                    .shadow(
-                        // Heavy 70% black shadow looks fine on Mocha (the
-                        // dark panel absorbs most of the halo), but on
-                        // Latte's light bg it reads as a thick dark border
-                        // around the entire window. Drop to 20% in Latte
-                        // for a soft elevation effect that matches typical
-                        // light-mode UI conventions.
-                        color: (viewModel.contentVisible || isHovering)
-                            ? .black.opacity(appearance.mode == .light ? 0.20 : 0.7)
-                            : .clear,
-                        radius: 6
-                    )
-                    .frame(
-                        // Same override as the inner frame above — see
-                        // comment there for why width must be explicit when
-                        // closed.
-                        width: viewModel.contentVisible ? notchSize.width : closedNotchSize.width,
-                        height: viewModel.contentVisible ? notchSize.height : closedNotchSize.height,
-                        alignment: .top
-                    )
-                    .contentShape(Rectangle())
-                    .onHover { hovering in
-                        withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
-                            isHovering = hovering
-                        }
-                    }
-                    .onTapGesture {
-                        // Phase 1 of notch-panel retirement: tapping the
-                        // visible notch shape now opens the main window
-                        // instead of expanding the in-notch chat panel.
-                        AppDelegate.shared?.requestMainWindowActivation(.notchClick)
-                    }
-                    .opacity(
-                        !pillsAreVisible && viewModel.status == .closed
-                            ? 0 : 1
-                    )
-                    .animation(.easeOut(duration: 0.16), value: pillsAreVisible)
-                }
-            }
         }
         .opacity(isVisible ? 1 : 0)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -818,30 +661,12 @@ struct NotchView: View {
         .onAppear {
             isVisible = true
             // Several pieces of bootstrap belong to the primary `.full`
-            // NotchView instance only — running them on the parallel
-            // `.pillsOnlyOpenState` instance would:
-            //   - double-start `sessionMonitor` (re-bootstrap sessions,
-            //     re-bind HookSocketServer.shared.onEvent, re-start the
-            //     SessionFileWatcher fleet)
-            //   - install a second global click `EventMonitor` that
-            //     fires `handleSideClick` twice per click (double pill
-            //     navigation)
-            //   - reassign `prioritySessionProvider` to a different
-            //     `sessionMonitor` instance so the hotkey opens onto
-            //     the wrong session list
-            // With the notch panel retired, the pills strip mounts
-            // NotchView in `.pillsOnlyOpenState`, and that's the
-            // only NotchView instance in the app. Bootstrap runs
-            // unconditionally now — there is no parallel `.full`
-            // instance to defer to.
+            // Bootstrap for the pills strip — the only NotchView
+            // instance in the app.
             sessionMonitor.startMonitoring()
             startSideClickMonitor()
             startFullScreenPointerMonitor()
             syncFullScreenRevealState()
-            viewModel.prioritySessionProvider = { [weak sessionMonitor] in
-                guard let monitor = sessionMonitor else { return nil }
-                return SessionPriority.prioritySession(from: monitor.instances)
-            }
             GlobalSessionShortcutManager.shared.onToggleOverflow = {
                 toggleSessionNavigatorPopover()
             }
@@ -858,9 +683,6 @@ struct NotchView: View {
             transientPopoverKeyMonitor?.stop()
             transientPopoverKeyMonitor = nil
             menuLayoutCoordinator.stop()
-        }
-        .onChange(of: viewModel.status) { oldStatus, newStatus in
-            handleStatusChange(from: oldStatus, to: newStatus)
         }
         .onChange(of: sessionMonitor.pendingInstances) { _, sessions in
             handlePendingSessionsChange(sessions)
@@ -925,25 +747,11 @@ struct NotchView: View {
             menuLayoutCoordinator.probe(screenRect: viewModel.screenRect)
         }
         .onReceive(menuProbeTimer) { _ in
-            // Re-probe only when pills are actually rendered. When the
-            // notch is opened or there are no sessions, leftSafeWidth
-            // isn't displayed and the probe traffic is wasted.
-            guard viewModel.status == .closed,
-                  (!sessionMonitor.instances.isEmpty || codexUsageMonitor.showsPill || claudeUsageMonitor.showsPill) else { return }
+            // Re-probe only when pills are actually rendered. With no
+            // sessions, leftSafeWidth isn't displayed and the probe
+            // traffic is wasted.
+            guard !sessionMonitor.instances.isEmpty || codexUsageMonitor.showsPill || claudeUsageMonitor.showsPill else { return }
             menuLayoutCoordinator.probe(screenRect: viewModel.screenRect)
-        }
-        // Legacy notch-panel notifications (.notchClickOutside,
-        // .notchEscapePressed) used to trigger panel close. The panel
-        // is gone — observers removed.
-        .onReceive(
-            NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
-        ) { _ in
-            // Swiping to another Space leaves the overlay visible but
-            // unfocused on the new Space — confusing and unactionable.
-            // Treat it like a click-outside.
-            if viewModel.status == .opened {
-                viewModel.notchClose()
-            }
         }
     }
 
@@ -975,8 +783,7 @@ struct NotchView: View {
         if previousSnapshot != renderedSnapshot {
             let leftIds = pack.leftPills.map { String($0.session.sessionId.prefix(8)) }.joined(separator: ",")
             let rightIds = pack.rightPills.map { String($0.session.sessionId.prefix(8)) }.joined(separator: ",")
-            let mode = displayMode == .full ? "full" : "stripOpen"
-            pillRaceLog.notice("render mode=\(mode, privacy: .public) leftSafe=\(Int(self.leftSafeWidth)) rightSafe=\(Int(self.rightSafeWidth)) density=\(String(describing: pack.density), privacy: .public) spacing=\(Int(pack.pillSpacing)) padding=\(Int(pack.horizontalPadding)) usage=\(Int(pack.usageSlotWidth)) hidden=\(pack.overflowSessions.count) left=[\(leftIds, privacy: .public)] right=[\(rightIds, privacy: .public)]")
+            pillRaceLog.notice("render leftSafe=\(Int(self.leftSafeWidth)) rightSafe=\(Int(self.rightSafeWidth)) density=\(String(describing: pack.density), privacy: .public) spacing=\(Int(pack.pillSpacing)) padding=\(Int(pack.horizontalPadding)) usage=\(Int(pack.usageSlotWidth)) hidden=\(pack.overflowSessions.count) left=[\(leftIds, privacy: .public)] right=[\(rightIds, privacy: .public)]")
         }
         #endif
         return true
@@ -1558,212 +1365,6 @@ struct NotchView: View {
         activityCoordinator.expandingActivity.show && activityCoordinator.expandingActivity.type == .claude
     }
 
-    /// Whether to show the expanded closed state (processing, pending permission, or waiting for input)
-    private var showClosedActivity: Bool {
-        isProcessing || hasPendingPermission || hasWaitingForInput
-    }
-
-    @ViewBuilder
-    private var notchLayout: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header row - always present, contains crab and spinner that persist across states
-            // Tapping the header when opened closes the notch (like clicking the pill)
-            headerRow
-                // Opened: 4pt taller so the bottom hairline divider drops
-                // a touch below the icon row. HStack vertical-centers, so
-                // the chrome stays middle-aligned in the taller row.
-                .frame(height: max(24, closedNotchSize.height) + (viewModel.contentVisible ? 4 : 0))
-                .onTapGesture {
-                    if viewModel.status == .opened {
-                        viewModel.notchClose()
-                    }
-                }
-
-            // Always-mount contentView so ChatView's underlying NSScrollView
-            // keeps its contentOffset across notch close/reopen within a
-            // single process — the "reopen to old location" UX. Animation
-            // is opacity + scale only; the frame stays at maxHeight: .infinity
-            // throughout, and the outer panel frame (controlled by the
-            // .frame call further up the view chain) animates between
-            // notchSize.height and closedNotchSize.height as a clean
-            // finite-to-finite transition.
-            //
-            // This replaces an earlier always-mount attempt (commit 2e84a68)
-            // that deadlocked the open animation by ~10s on external
-            // displays. Four lessons applied here together:
-            //   1. No `.frame(maxHeight: 0 ↔ .infinity)` animation — that
-            //      .infinity edge case was a likely root cause.
-            //   2. No `withAnimation` in NotchViewModel.notchOpen — the
-            //      .animation modifier below is the only animation source,
-            //      so SwiftUI never has two contexts competing for the
-            //      same property change.
-            //   3. NotchViewModel.notchOpen defers `status = .opened` by
-            //      50ms so the contentView's animation transaction commits
-            //      before AppKit invalidates layout for the window resize
-            //      driven by the status sink. Mirrors how notchClose
-            //      already defers `status = .closed`.
-            //   4. Outer frame's closed-state height is explicit
-            //      (`closedNotchSize.height`) rather than `nil`, so it
-            //      doesn't try to compute intrinsic from a contentView
-            //      that claims `.infinity`.
-            contentView
-                .frame(width: openedContentWidth, alignment: .top)
-                .frame(height: openedContentHeight, alignment: .top)
-                .clipped() // Prevent content (tables, code blocks) from overflowing panel bounds
-                .scaleEffect(viewModel.contentVisible ? 1.0 : 0.8, anchor: .top)
-                .opacity(viewModel.contentVisible ? 1.0 : 0.0)
-                .allowsHitTesting(viewModel.contentVisible)
-                .animation(
-                    .easeOut(duration: viewModel.contentVisible ? 0.35 : 0.25),
-                    value: viewModel.contentVisible
-                )
-        }
-    }
-
-    // MARK: - Header Row (persists across states)
-
-    @ViewBuilder
-    private var headerRow: some View {
-        HStack(spacing: 0) {
-            if viewModel.contentVisible {
-                openedHeaderContent
-            } else {
-                Color.clear
-                    .frame(width: closedNotchSize.width - 20, height: closedNotchSize.height)
-            }
-        }
-        // Opened: grow the chrome row by 4pt so the bottom divider sits a
-        // hair below the icon row, giving the title + ≡ × cluster a touch
-        // of breathing room. HStack centers vertically by default, so the
-        // icons stay middle-aligned in the now-taller row. Closed state
-        // keeps the original height so the notch silhouette is unchanged.
-        .frame(height: closedNotchSize.height + (viewModel.contentVisible ? 4 : 0))
-        // Hairline divider at the bottom of the chrome row when opened.
-        // Earlier tries painted a contrasting fill (`surface0`) here,
-        // but a darker strip stacked between the macOS menu bar and the
-        // chat body produced three competing greys in ~60pt of vertical
-        // space — muddy rather than hierarchical. Using the panel's own
-        // `headerBg` for the chrome row + a 1pt divider matches the
-        // standard macOS pattern (Safari, Notes, Mail) and reads as a
-        // clean separator without the tonal stack-up.
-        .overlay(alignment: .bottom) {
-            if viewModel.contentVisible {
-                Rectangle()
-                    .fill(ChatTheme.muted.opacity(0.45))
-                    .frame(height: 1)
-            }
-        }
-    }
-
-    private var sideWidth: CGFloat {
-        max(0, closedNotchSize.height - 12) + 10
-    }
-
-    // MARK: - Opened Header Content
-
-    @State private var isOpenedCloseHovered = false
-    @State private var isOpenedChatBackHovered = false
-
-    @ViewBuilder
-    private var openedHeaderContent: some View {
-        HStack(spacing: 8) {
-            // Per-content leading area. Folds the chat back-button +
-            // session title into this single chrome row instead of
-            // stacking a second `chatHeader` row below it (which left
-            // ~32 pt of empty space between the `≡ ×` icons and the
-            // chat title). Sessions list / menu have nothing leading,
-            // so they fall through to a Spacer.
-            switch viewModel.contentType {
-            case .chat(let session):
-                Button {
-                    viewModel.exitChat()
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(isOpenedChatBackHovered ? ChatTheme.primary : ChatTheme.secondary)
-                            .frame(width: 22, height: 22)
-
-                        Text(session.displayTitle)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(ChatTheme.primary)
-                            .lineLimit(1)
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(isOpenedChatBackHovered ? ChatTheme.headerHover : Color.clear)
-                    )
-                }
-                .buttonStyle(.plain)
-                .onHover { isOpenedChatBackHovered = $0 }
-            case .instances, .menu:
-                EmptyView()
-            }
-
-            Spacer()
-
-            // Menu toggle. When the menu is already open, the icon flips
-            // to a back-chevron so it reads as "leave the menu" — that
-            // way it doesn't collide visually with the trailing
-            // close-panel `xmark` (two adjacent `xmark` buttons would
-            // be ambiguous).
-            Button {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                    viewModel.toggleMenu()
-                    if viewModel.contentType == .menu {
-                        updateManager.markUpdateSeen()
-                    }
-                }
-            } label: {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: viewModel.contentType == .menu ? "chevron.left" : "line.3.horizontal")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(ChatTheme.tertiary)
-                        .frame(width: 22, height: 22)
-                        .contentShape(Rectangle())
-
-                    // Green dot for unseen update
-                    if updateManager.hasUnseenUpdate && viewModel.contentType != .menu {
-                        Circle()
-                            .fill(TerminalColors.green)
-                            .frame(width: 6, height: 6)
-                            .offset(x: -2, y: 2)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-
-            // Universal trailing chrome — was the close-panel button.
-            // The notch panel doesn't open anymore, so this branch is
-            // never visible. Kept as `EmptyView` to preserve the
-            // surrounding layout while compiling without
-            // `NotchCloseButton`.
-            EmptyView()
-        }
-        .padding(.horizontal, 8)
-    }
-
-    // MARK: - Content View (Opened State)
-
-    @ViewBuilder
-    private var contentView: some View {
-        // The notch chat panel was retired in favor of the main window.
-        // The panel never opens (no caller invokes `viewModel.notchOpen`),
-        // so this view tree is unreachable — but `notchLayout` still
-        // mounts it because the closed-state animation keys off the
-        // same VStack. EmptyView() keeps the layout stable without
-        // dragging the legacy ChatView/ClaudeInstancesView/NotchMenuView
-        // surfaces into the build.
-        Group {
-            EmptyView()
-        }
-        .frame(width: openedContentWidth, alignment: .top)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .clipped() // Clip any overflowing content (markdown tables, code blocks)
-    }
-
     // MARK: - Event Handlers
 
     private func handleProcessingChange() {
@@ -1781,25 +1382,11 @@ struct NotchView: View {
         }
     }
 
-    private func handleStatusChange(from oldStatus: NotchStatus, to newStatus: NotchStatus) {
-        switch newStatus {
-        case .opened, .popping:
-            isVisible = true
-            // Clear waiting-for-input timestamps only when manually opened (user acknowledged)
-            if viewModel.openReason == .click || viewModel.openReason == .hotkey {
-                waitingForInputTimestamps.removeAll()
-            }
-        case .closed:
-            break  // Notch stays visible in all states
-        }
-    }
-
     private func handlePendingSessionsChange(_ sessions: [SessionState]) {
         let currentIds = Set(sessions.map { $0.stableId })
         let newPendingIds = currentIds.subtracting(previousPendingIds)
 
         if !newPendingIds.isEmpty &&
-           viewModel.status == .closed &&
            !TerminalVisibilityDetector.isTerminalVisibleOnCurrentSpace() {
             AppDelegate.shared?.requestMainWindowActivation(.pendingApprovalDetected)
         }

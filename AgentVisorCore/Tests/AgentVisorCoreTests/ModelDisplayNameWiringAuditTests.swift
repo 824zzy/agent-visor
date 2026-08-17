@@ -36,7 +36,6 @@ final class ModelDisplayNameWiringAuditTests: XCTestCase {
     func testEveryUserFacingSurfaceConsumesTheResolvedSessionLabel() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let status = try source(root, "AgentVisor/UI/Components/ChatStatusBar.swift")
-        let chat = try source(root, "AgentVisor/UI/Views/ChatView.swift")
         let windowChat = try source(root, "AgentVisor/UI/Window/WindowChatView.swift")
         let hover = try source(root, "AgentVisor/UI/Components/SessionDetailPopover.swift")
         let details = try source(root, "AgentVisor/UI/Window/SessionWorkspaceDetail.swift")
@@ -44,7 +43,6 @@ final class ModelDisplayNameWiringAuditTests: XCTestCase {
         XCTAssertTrue(status.contains("let modelDisplayName: String?"))
         XCTAssertTrue(status.contains("if let display = modelDisplayName"))
         XCTAssertFalse(status.contains("private var displayModel"))
-        XCTAssertTrue(chat.contains("modelDisplayName: session.displayModelName"))
         XCTAssertTrue(windowChat.contains("modelDisplayName: session.displayModelName"))
         XCTAssertTrue(hover.contains("modelDisplayName: session.displayModelName"))
         XCTAssertTrue(details.contains("Text(\"Model: \\(displayModelName)\")"))

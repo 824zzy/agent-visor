@@ -19,17 +19,8 @@ import Foundation
 struct NotchGeometry: Sendable {
     let deviceNotchRect: CGRect
     let screenRect: CGRect
-    /// Region of `screenRect` not occupied by the menu bar / dock —
-    /// canonical AppKit answer for "where can a window draw without
-    /// covering chrome." Used to floor `maxOpenedSize` so the user can
-    /// resize the panel all the way to the dock (or to the bottom of
-    /// the screen when the dock is hidden / auto-hidden) instead of
-    /// stopping at a hard-coded buffer.
+    /// Region of `screenRect` not occupied by the menu bar / dock. The
+    /// pills strip measures the menu-bar strip height from the gap
+    /// between this and `screenRect`.
     let visibleFrame: CGRect
-    let windowHeight: CGFloat
-
-    /// Top edge of the opened panel in screen coords. Anchored to
-    /// `visibleFrame.maxY` (just below the menu bar) so the panel
-    /// never covers Apple/File menus or status icons.
-    var openedPanelTopY: CGFloat { visibleFrame.maxY }
 }
