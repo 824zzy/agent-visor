@@ -174,6 +174,59 @@ struct ClaudeCodeAgentProvider: AgentProvider {
 
     // MARK: - Lifecycle
 
+    /// Claude-code liveness has three answers, in order.
+    ///
+    /// The status file wins first: claude-code writes a terminal status there
+    /// before the process finishes winding down, so it names death earlier
+    /// than the pid does.
+    ///
+    /// A cursor-observed row is next. Those run under Cursor's VS Code host,
+    /// so a live pid belongs to the host and not to the thread; the shared
+    /// hosted-liveness rule reads transcript recency and any pending user
+    /// action instead.
+    ///
+    /// Everything else is one process per session, where a dead pid is death.
+    func deadSessionIDs(among sessions: [SessionState], now: Date) -> Set<String> {
+        var dead: Set<String> = []
+        for session in sessions {
+            let status = SessionState.readSessionStatus(pid: session.pid)
+            let isTerminalStatus = ClaudeCodeSessionMetadataPolicy.isTerminalStatus(status)
+            if isTerminalStatus {
+                dead.insert(session.sessionId)
+                continue
+            }
+            let processAlive = session.pid.map { kill(Int32($0), 0) == 0 } ?? false
+            if session.origin == .cursorObserved {
+                let liveness = CursorHostedSessionLivenessPolicy.classify(
+                    hasTTY: session.tty != nil,
+                    entrypoint: "claude-vscode",
+                    processAlive: processAlive,
+                    isTerminalStatus: isTerminalStatus,
+                    transcriptModifiedAt: transcriptModifiedAt(for: session),
+                    now: now.timeIntervalSince1970,
+                    observedWindowSeconds: AppSettings.observedWindowSeconds,
+                    hasPendingUserAction: session.phase.isWaitingForApproval
+                        || session.phase == .processing
+                        || session.phase == .compacting
+                )
+                if liveness == .drop {
+                    dead.insert(session.sessionId)
+                }
+                continue
+            }
+            if session.pid != nil, !processAlive {
+                dead.insert(session.sessionId)
+            }
+        }
+        return dead
+    }
+
+    private func transcriptModifiedAt(for session: SessionState) -> TimeInterval? {
+        let path = transcriptURL(sessionId: session.sessionId, cwd: session.cwd).path
+        let modified = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate]
+        return (modified as? Date)?.timeIntervalSince1970
+    }
+
     /// Claude-code session ids are pid-bound: once the pid dies, the
     /// transcript file is final and nothing else will append to it.
     /// Stop the watcher to free the resource.

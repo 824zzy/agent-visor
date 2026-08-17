@@ -270,7 +270,9 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
     }
 
     func testPruneReconcilesClaudeTerminalMetadataStatus() throws {
-        let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        // The rule lives with the agent that owns the status file. The store
+        // asks the seam; the claude provider reads the file.
+        let source = try String(contentsOf: agentProviderURL(named: "ClaudeCodeAgentProvider"))
         XCTAssertTrue(
             source.contains("SessionState.readSessionStatus(pid: session.pid)"),
             "Already-tracked Claude rows must re-read session metadata during pruning; discovery-only filtering cannot hide existing rows."
@@ -279,26 +281,31 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
             source.contains("ClaudeCodeSessionMetadataPolicy.isTerminalStatus"),
             "Pruning should treat ended/deactivated Claude metadata status as a dead-session signal even while the process is winding down."
         )
+        let store = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        XCTAssertTrue(
+            store.contains("provider.deadSessionIDs(among: group, now: now)"),
+            "The prune sweep must reach the per-agent rule through the provider seam, once per agent group."
+        )
     }
 
     func testCodexPrunePassesExplicitArchiveRelocationToRetentionPolicy() throws {
-        let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: agentProviderURL(named: "CodexAgentProvider"))
 
         XCTAssertTrue(
-            source.contains("isExplicitlyArchived = thread.isExplicitlyArchived"),
-            "SessionStore must derive the definitive archive signal from the relocated rollout path."
+            source.contains("thread?.isExplicitlyArchived"),
+            "Codex liveness must derive the definitive archive signal from the relocated rollout path."
         )
         XCTAssertTrue(
-            source.contains("isExplicitlyArchived: isExplicitlyArchived"),
+            source.contains("isExplicitlyArchived: thread?.isExplicitlyArchived"),
             "Codex retention must receive the explicit archive signal instead of relying only on sqlite archived state."
         )
     }
 
     func testCursorObservedClaudeRowsPruneThroughTranscriptLivenessPolicy() throws {
-        let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: agentProviderURL(named: "ClaudeCodeAgentProvider"))
         XCTAssertTrue(
-            source.contains("private func shouldPruneCursorObservedClaudeSession"),
-            "Cursor-hosted Claude rows need their own prune gate; PID-alive alone is not a real session signal for claude-vscode."
+            source.contains("func deadSessionIDs(among sessions: [SessionState], now: Date)"),
+            "Cursor-hosted Claude rows need their own liveness answer; PID-alive alone is not a real session signal for claude-vscode."
         )
         XCTAssertTrue(
             source.contains("CursorHostedSessionLivenessPolicy.classify"),
@@ -308,6 +315,38 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
             source.contains("session.origin == .cursorObserved"),
             "The prune path should key on the observed host origin, not only agent id or terminal host."
         )
+    }
+
+    /// The sweep must keep two questions apart: who hosts the process, and
+    /// which agent runs in it. The host answer comes first, and the rows it
+    /// claims never reach a provider.
+    func testPruneAsksTheHostRuleBeforeAnyAgentRule() throws {
+        let store = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        guard let sweep = bracedBlock(in: store, startingAt: "private func pruneDeadSessions") else {
+            return XCTFail("pruneDeadSessions not found")
+        }
+        XCTAssertTrue(
+            sweep.contains("ZedHostedSessionLivenessPolicy.isDead"),
+            "A pooled ACP child means a live pid proves nothing per thread, so the Zed host rule must answer first."
+        )
+        guard let hostIndex = sweep.range(of: "ZedHostedSessionLivenessPolicy.isDead"),
+              let seamIndex = sweep.range(of: "provider.deadSessionIDs") else {
+            return XCTFail("the sweep must apply the host rule and then ask the providers")
+        }
+        XCTAssertTrue(
+            hostIndex.lowerBound < seamIndex.lowerBound,
+            "Agent rules key on an app pid or an active-thread set and would keep a closed Zed thread forever."
+        )
+        XCTAssertTrue(
+            sweep.contains("filter { $0.terminalHost != .zed }"),
+            "Rows the host rule owns must not be handed to a provider as well."
+        )
+        for check in ["agentID == .codex", "agentID == .cursor", "agentID == .claudeCode,\n               let status"] {
+            XCTAssertFalse(
+                sweep.contains("if session.\(check)"),
+                "Liveness detection belongs behind the provider seam, not in a branch inside the sweep."
+            )
+        }
     }
 
     func testCursorObservedDeadProcessActionRemovesInsteadOfEnding() throws {
@@ -1072,6 +1111,14 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
             source.contains("reportedHookPhase(for: newPhase)"),
             "SessionStore should map SessionPhase into the pure hook-phase policy instead of open-coding phase cases."
         )
+    }
+
+    private func agentProviderURL(named name: String) -> URL {
+        repoRootURL(from: URL(fileURLWithPath: #filePath))
+            .appendingPathComponent("AgentVisor")
+            .appendingPathComponent("Services")
+            .appendingPathComponent("Agents")
+            .appendingPathComponent("\(name).swift")
     }
 
     private func sessionStoreURL(from testFile: URL) -> URL {

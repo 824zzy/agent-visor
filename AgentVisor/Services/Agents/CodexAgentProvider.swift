@@ -295,6 +295,61 @@ struct CodexAgentProvider: AgentProvider {
         []
     }
 
+    /// Codex liveness cannot use a pid: every GUI thread carries Codex.app's
+    /// one process. The thread database is the evidence instead, read once for
+    /// the whole group.
+    ///
+    /// A GUI row (no tty) whose thread is not an interactive GUI source is
+    /// dead, and a CLI row (real tty) whose thread is no longer a `cli` source
+    /// is dead: in both cases the row and the thread no longer agree about
+    /// where the work runs. Anything past those two checks goes to the shared
+    /// retention rule, which weighs the active GUI set, a non-app pid, the
+    /// archive flags and the observed window.
+    nonisolated func deadSessionIDs(among sessions: [SessionState], now: Date) -> Set<String> {
+        guard !sessions.isEmpty else { return [] }
+        // Re-derive the active set the same way discovery does. Recent GUI rows
+        // stay as a fallback when the active-set query has a transient miss.
+        let activeGUIThreadIds = Self.activeGUIThreadIDs()
+        let codexAppPid = Self.runningCodexAppPid()
+        let observedWindowSeconds = AppSettings.observedWindowSeconds
+
+        var dead: Set<String> = []
+        for session in sessions {
+            let thread = CodexThreadStore.thread(id: session.sessionId)
+            if let thread {
+                if session.tty == nil,
+                   !CodexActiveThreadSelector.isInteractiveGUISource(thread.source) {
+                    dead.insert(session.sessionId)
+                    continue
+                }
+                if session.tty != nil, thread.source != "cli" {
+                    dead.insert(session.sessionId)
+                    continue
+                }
+            }
+            let isNonAppPidAlive: Bool
+            if let pid = session.pid, pid != 0, pid != codexAppPid {
+                isNonAppPidAlive = kill(Int32(pid), 0) == 0
+            } else {
+                isNonAppPidAlive = false
+            }
+            let keep = CodexSessionRetentionPolicy.shouldKeep(
+                session: session,
+                codexAppPid: codexAppPid,
+                isNonAppPidAlive: isNonAppPidAlive,
+                activeGUIThreadIds: activeGUIThreadIds,
+                now: now,
+                observedWindowSeconds: observedWindowSeconds,
+                isKnownArchived: thread?.archived ?? false,
+                isExplicitlyArchived: thread?.isExplicitlyArchived ?? false
+            )
+            if !keep {
+                dead.insert(session.sessionId)
+            }
+        }
+        return dead
+    }
+
     /// Codex threads have no recovery path once they drop out of the
     /// active set — Codex.app owns re-opening them. Remove on death
     /// rather than keeping an ended row (active-only everywhere).

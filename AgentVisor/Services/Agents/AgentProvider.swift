@@ -215,6 +215,25 @@ protocol AgentProvider: Sendable {
     /// no deeplink or reveal path) override to `.remove`.
     nonisolated func deadProcessAction(for session: SessionState) -> DeadProcessAction
 
+    /// Which of these sessions have no live agent behind them any more.
+    ///
+    /// Detecting death is per-agent, because the evidence is per-agent: a
+    /// claude-code row reads its own status file, a Codex.app thread is judged
+    /// against Codex's active-thread set, and a Cursor IDE thread is judged by
+    /// transcript recency. A plain pid check answers only for agents that run
+    /// one process per session.
+    ///
+    /// The whole group arrives in one call so a provider can gather its
+    /// evidence once per sweep — an app pid, an active-thread set, one
+    /// database read — instead of once per row.
+    ///
+    /// Callers apply host rules first and pass only the rows this agent's own
+    /// process model can answer for. `deadProcessAction` then decides what
+    /// happens to the ids returned here.
+    ///
+    /// - Returns: the session ids judged dead. An unknown pid is not death.
+    nonisolated func deadSessionIDs(among sessions: [SessionState], now: Date) -> Set<String>
+
     /// Whether the file watcher should stop tailing this session's
     /// transcript when its CLI process exits. claude-code returns
     /// `true` because its session id is pid-bound (transcript can't
@@ -354,6 +373,19 @@ extension AgentProvider {
         // after the cli exits if the user re-attaches the same
         // session id; the file watcher needs to keep firing.
         false
+    }
+
+    nonisolated func deadSessionIDs(among sessions: [SessionState], now: Date) -> Set<String> {
+        // One process per session: a pid we know to be gone is death, and a row
+        // with no pid is not yet evidence of anything.
+        Set(
+            sessions
+                .filter { session in
+                    guard let pid = session.pid else { return false }
+                    return kill(Int32(pid), 0) != 0
+                }
+                .map(\.sessionId)
+        )
     }
 
     nonisolated func skipsPidDedup(for session: SessionState) -> Bool {

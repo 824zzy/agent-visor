@@ -4060,125 +4060,43 @@ actor SessionStore {
         //    its session ids are pid-bound; codex/cursor keep watching
         //    in case the same session id reattaches.
         //
-        // Zed-hosted sessions get special-cased: Zed pools its
-        // claude-acp child process across threads, so closing a thread
-        // does NOT reliably kill the PID. PID-alive ⇒ live-row was wrong
-        // for Zed (rows lingered indefinitely after thread close), so we
-        // key Zed liveness on transcript idleness instead. The window is
-        // the observed-agent window (default 42h): an idle-but-open Zed
-        // thread must stay visible. The old 30s window pruned a thread the
-        // moment you stopped typing for half a minute — exactly the bug
-        // where an open Zed session vanished. Genuine thread close is
-        // caught promptly by the claude SessionEnd hook; this is only the
-        // fallback cleanup for a thread that went away without one.
+        // Detection is per-provider too, through `deadSessionIDs`, because
+        // the evidence differs per agent and a pid answers only for agents
+        // that run one process per session. Each provider is asked once for
+        // its whole group, so it gathers its evidence a single time.
+        //
+        // The Zed host rule is asked first and its rows never reach a
+        // provider. Zed pools one ACP child across threads, so closing a
+        // thread does not reliably kill the pid, and the per-agent rules
+        // would keep a closed thread forever. Where the process lives is a
+        // host question, so the store answers it.
         let now = Date()
-        let zedIdleSeconds: TimeInterval = AppSettings.observedWindowSeconds
+        let liveSessions = sessions.filter { $0.value.phase != .ended }
+        var deadIds: Set<String> = []
 
-        // Codex.app runs all GUI threads in one process, so PID-alive
-        // can't decide per-thread liveness. Re-derive the active set the
-        // SAME way discovery does, but keep recent GUI rows as a fallback
-        // when the sqlite active-set query has a transient miss.
-        let hasCodex = sessions.values.contains { $0.agentID == .codex }
-        let codexActiveIDs: Set<String> = hasCodex
-            ? CodexAgentProvider.activeGUIThreadIDs()
-            : []
-        let codexAppPid = hasCodex ? CodexAgentProvider.runningCodexAppPid() : nil
+        let zedHosted = liveSessions.values.filter { $0.terminalHost == .zed }
+        if !zedHosted.isEmpty {
+            let zedRunning = ZedThreadStore.isZedRunning
+            let idleWindow = AppSettings.observedWindowSeconds
+            for session in zedHosted where ZedHostedSessionLivenessPolicy.isDead(
+                zedRunning: zedRunning,
+                idleSeconds: now.timeIntervalSince(session.lastActivity),
+                idleWindow: idleWindow
+            ) {
+                deadIds.insert(session.sessionId)
+            }
+        }
 
-        // Zed pools its claude-acp child across threads, so PID-alive
-        // can't decide per-thread liveness — but Zed NOT running is a
-        // definitive signal that every Zed thread is dead. Without this,
-        // closing Zed left rows lingering for the full 42h idle window
-        // (the JSONL just stops growing; nothing else fires). Computed
-        // once per sweep, only when we actually track a Zed session, and
-        // across every release channel (a Preview user's threads must not
-        // be pruned just because stable isn't installed).
-        let hasZed = sessions.values.contains { $0.terminalHost == .zed }
-        let zedRunning = hasZed ? ZedThreadStore.isZedRunning : false
+        let byAgent = Dictionary(
+            grouping: liveSessions.values.filter { $0.terminalHost != .zed },
+            by: \.agentID
+        )
+        for (agentID, group) in byAgent {
+            guard let provider = AgentRegistry.provider(for: agentID) else { continue }
+            deadIds.formUnion(provider.deadSessionIDs(among: group, now: now))
+        }
 
-        // Cursor IDE Agents Window threads share Cursor.app's PID, so
-        // PID-alive can't decide liveness either (it's true for every
-        // thread whenever Cursor.app runs). Re-derive the active set by
-        // transcript recency — same window discovery uses — over only the
-        // tracked IDE sessions (a handful of stats, not a tree walk).
-        let cursorIDESessions = sessions.values.filter { $0.agentID == .cursor && $0.tty == nil }
-        let cursorActiveIDs: Set<String> = {
-            guard !cursorIDESessions.isEmpty,
-                  CursorAgentProvider.isAppRunning(),
-                  let provider = AgentRegistry.provider(for: .cursor) else { return [] }
-            let cutoff = now.addingTimeInterval(-CursorAgentProvider.activeWindowSeconds)
-            let fm = FileManager.default
-            return Set(cursorIDESessions.compactMap { s -> String? in
-                let path = provider.transcriptURL(sessionId: s.sessionId, cwd: s.cwd).path
-                guard let attrs = try? fm.attributesOfItem(atPath: path),
-                      let mtime = attrs[.modificationDate] as? Date,
-                      mtime >= cutoff else { return nil }
-                return s.sessionId
-            })
-        }()
-
-        let deadPidIds = sessions.filter { _, session in
-            if session.phase == .ended { return false }
-            // Zed host wins first — a codex-acp / claude-acp thread inside Zed
-            // must follow Zed liveness (Zed running + transcript not idle), not
-            // the per-agent codex/claude rules below, which key on Codex.app's
-            // active GUI set or a pooled pid and would wrongly prune it.
-            if session.terminalHost == .zed {
-                if !zedRunning { return true }
-                let idle = now.timeIntervalSince(session.lastActivity)
-                return idle > zedIdleSeconds
-            }
-            if session.agentID == .claudeCode,
-               let status = SessionState.readSessionStatus(pid: session.pid),
-               ClaudeCodeSessionMetadataPolicy.isTerminalStatus(status) {
-                return true
-            }
-            if session.agentID == .claudeCode,
-               session.origin == .cursorObserved {
-                return shouldPruneCursorObservedClaudeSession(session, now: now)
-            }
-            if session.agentID == .codex {
-                let isKnownArchived: Bool
-                let isExplicitlyArchived: Bool
-                if let thread = CodexThreadStore.thread(id: session.sessionId) {
-                    isKnownArchived = thread.archived
-                    isExplicitlyArchived = thread.isExplicitlyArchived
-                    if session.tty == nil,
-                       !CodexActiveThreadSelector.isInteractiveGUISource(thread.source) {
-                        return true
-                    }
-                    if session.tty != nil,
-                       thread.source != "cli" {
-                        return true
-                    }
-                } else {
-                    isKnownArchived = false
-                    isExplicitlyArchived = false
-                }
-                let nonAppPidAlive: Bool
-                if let pid = session.pid, pid != 0, pid != codexAppPid {
-                    nonAppPidAlive = kill(Int32(pid), 0) == 0
-                } else {
-                    nonAppPidAlive = false
-                }
-                return !CodexSessionRetentionPolicy.shouldKeep(
-                    session: session,
-                    codexAppPid: codexAppPid,
-                    isNonAppPidAlive: nonAppPidAlive,
-                    activeGUIThreadIds: codexActiveIDs,
-                    now: now,
-                    observedWindowSeconds: AppSettings.observedWindowSeconds,
-                    isKnownArchived: isKnownArchived,
-                    isExplicitlyArchived: isExplicitlyArchived
-                )
-            }
-            if session.agentID == .cursor && session.tty == nil {
-                // Cursor IDE thread: active-only by transcript recency.
-                // CLI cursor (tty != nil) uses the generic PID check below.
-                return !cursorActiveIDs.contains(session.sessionId)
-            }
-            guard let pid = session.pid else { return false }
-            return kill(Int32(pid), 0) != 0
-        }.map(\.key)
+        let deadPidIds = liveSessions.keys.filter { deadIds.contains($0) }
 
         for sessionId in deadPidIds {
             guard let session = sessions[sessionId],
@@ -4320,32 +4238,6 @@ actor SessionStore {
         if didMark {
             publishStateWithoutPrune()
         }
-    }
-
-    private func shouldPruneCursorObservedClaudeSession(_ session: SessionState, now: Date) -> Bool {
-        let processAlive = session.pid.map { kill(Int32($0), 0) == 0 } ?? false
-        let transcriptModifiedAt: Date? = {
-            guard let provider = AgentRegistry.provider(for: .claudeCode) else {
-                return nil
-            }
-            let path = provider.transcriptURL(sessionId: session.sessionId, cwd: session.cwd).path
-            return (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
-        }()
-        let liveness = CursorHostedSessionLivenessPolicy.classify(
-            hasTTY: session.tty != nil,
-            entrypoint: "claude-vscode",
-            processAlive: processAlive,
-            isTerminalStatus: ClaudeCodeSessionMetadataPolicy.isTerminalStatus(
-                SessionState.readSessionStatus(pid: session.pid)
-            ),
-            transcriptModifiedAt: transcriptModifiedAt?.timeIntervalSince1970,
-            now: now.timeIntervalSince1970,
-            observedWindowSeconds: AppSettings.observedWindowSeconds,
-            hasPendingUserAction: session.phase.isWaitingForApproval
-                || session.phase == .processing
-                || session.phase == .compacting
-        )
-        return liveness == .drop
     }
 
     /// Publish state without triggering another prune cycle

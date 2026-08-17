@@ -52,6 +52,41 @@ struct CursorAgentProvider: AgentProvider {
         !NSRunningApplication.runningApplications(withBundleIdentifier: appBundleID).isEmpty
     }
 
+    /// Cursor liveness splits by surface. IDE Agents Window threads (no tty)
+    /// all carry Cursor.app's one pid, so a live pid is true for every thread
+    /// whenever Cursor runs and decides nothing. Those rows are active-only,
+    /// judged by transcript recency inside `activeWindowSeconds`, the same
+    /// window discovery uses. With Cursor not running, every IDE thread is
+    /// dead. The cursor-agent CLI (real tty, own process) keeps the plain pid
+    /// rule.
+    nonisolated func deadSessionIDs(among sessions: [SessionState], now: Date) -> Set<String> {
+        var dead: Set<String> = []
+        let ideSessions = sessions.filter { $0.tty == nil }
+        if !ideSessions.isEmpty {
+            let cutoff = now.addingTimeInterval(-Self.activeWindowSeconds)
+            let appRunning = Self.isAppRunning()
+            let fileManager = FileManager.default
+            for session in ideSessions {
+                guard appRunning else {
+                    dead.insert(session.sessionId)
+                    continue
+                }
+                let path = transcriptURL(sessionId: session.sessionId, cwd: session.cwd).path
+                let modified = (try? fileManager.attributesOfItem(atPath: path))?[.modificationDate]
+                guard let modifiedAt = modified as? Date, modifiedAt >= cutoff else {
+                    dead.insert(session.sessionId)
+                    continue
+                }
+            }
+        }
+        for session in sessions where session.tty != nil {
+            if let pid = session.pid, kill(Int32(pid), 0) != 0 {
+                dead.insert(session.sessionId)
+            }
+        }
+        return dead
+    }
+
     /// Cursor IDE Agents Window threads (no TTY) are active-only: once
     /// their transcript goes quiet past `activeWindowSeconds`, they're
     /// removed rather than kept as ended rows — mirrors Codex.app GUI
