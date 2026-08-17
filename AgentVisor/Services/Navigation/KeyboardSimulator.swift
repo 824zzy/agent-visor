@@ -7,6 +7,7 @@
 
 import AppKit
 import CoreGraphics
+import AgentVisorCore
 
 struct KeyboardSimulator {
     /// Type a string to the frontmost application

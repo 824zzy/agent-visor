@@ -47,8 +47,9 @@ final class SessionPhasePriorityAuditTests: XCTestCase {
 
     private func sessionPhaseURL(from testFile: URL) -> URL {
         repoRoot(from: testFile)
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("SessionPhase.swift")
     }
 

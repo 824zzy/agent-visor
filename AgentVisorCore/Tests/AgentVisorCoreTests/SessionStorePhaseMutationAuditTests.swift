@@ -42,8 +42,9 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
     func testReadySessionCanJumpDirectlyToPendingTranscriptAction() throws {
         let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
         let source = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("SessionPhase.swift"))
 
         XCTAssertTrue(
@@ -114,12 +115,14 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
     func testSessionStateTracksPhaseEvidenceSeparatelyFromPhaseChanges() throws {
         let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
         let sessionStateSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("SessionState.swift"))
         let sessionPhaseSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("SessionPhase.swift"))
         let sessionStoreSource = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
 
@@ -261,8 +264,9 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
         XCTAssertTrue(hookPath.contains("if heartbeatDidChange {\n                publishState()"))
 
         let sessionState = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("SessionState.swift"))
         XCTAssertTrue(
             sessionState.contains("mutating func reattachAsIdleWithoutPhaseEvidence"),
@@ -569,8 +573,9 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
     func testPermissionContextIsNonisolatedForHookPhaseInference() throws {
         let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
         let sessionPhaseSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("SessionPhase.swift"))
 
         XCTAssertTrue(
@@ -582,12 +587,14 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
     func testSessionValueHelpersUsedByStoreAreNonisolated() throws {
         let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
         let sessionStateSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("SessionState.swift"))
         let sessionPhaseSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("SessionPhase.swift"))
 
         for required in [
@@ -960,8 +967,9 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
             .appendingPathComponent("Navigation")
             .appendingPathComponent("PermissionModeCycler.swift"))
         let toolResultDataSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("ToolResultData.swift"))
 
         for required in [

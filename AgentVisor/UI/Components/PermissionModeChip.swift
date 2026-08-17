@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import AgentVisorCore
 
 struct PermissionModeChip: View {
     let permissionMode: String?

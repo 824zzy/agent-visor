@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AgentVisorCore
 
 struct SessionPhaseHelpers {
     /// Get color for session phase

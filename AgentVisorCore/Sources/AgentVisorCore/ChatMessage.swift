@@ -7,23 +7,45 @@
 
 import Foundation
 
-struct ChatMessage: Identifiable, Equatable, Codable {
-    let id: String
-    let role: ChatRole
-    let timestamp: Date
-    let content: [MessageBlock]
-    var model: String?
-    var inputTokens: Int?
-    var outputTokens: Int?
-    var cacheReadTokens: Int?
-    var cacheCreationTokens: Int?
+public struct ChatMessage: Identifiable, Equatable, Codable {
 
-    static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
+    public init(
+        id: String,
+        role: ChatRole,
+        timestamp: Date,
+        content: [MessageBlock],
+        model: String? = nil,
+        inputTokens: Int? = nil,
+        outputTokens: Int? = nil,
+        cacheReadTokens: Int? = nil,
+        cacheCreationTokens: Int? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.timestamp = timestamp
+        self.content = content
+        self.model = model
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.cacheReadTokens = cacheReadTokens
+        self.cacheCreationTokens = cacheCreationTokens
+    }
+    public let id: String
+    public let role: ChatRole
+    public let timestamp: Date
+    public let content: [MessageBlock]
+    public var model: String?
+    public var inputTokens: Int?
+    public var outputTokens: Int?
+    public var cacheReadTokens: Int?
+    public var cacheCreationTokens: Int?
+
+    public static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id
     }
 
     /// Plain text content combined
-    nonisolated var textContent: String {
+    public nonisolated var textContent: String {
         let textParts = content.compactMap { block in
             if case .text(let text) = block {
                 return text
@@ -40,13 +62,13 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     }
 }
 
-enum ChatRole: String, Equatable, Codable {
+public enum ChatRole: String, Equatable, Codable {
     case user
     case assistant
     case system
 }
 
-enum MessageBlock: Equatable, Identifiable, Codable {
+public enum MessageBlock: Equatable, Identifiable, Codable {
     case text(String)
     case image(ChatImageAttachment)
     case toolUse(ToolUseBlock)
@@ -57,7 +79,7 @@ enum MessageBlock: Equatable, Identifiable, Codable {
     case compactBoundary(summary: String?, preTokens: Int?, trigger: String?)
     case localCommandOutput(String)
 
-    var id: String {
+    public var id: String {
         switch self {
         case .text(let text):
             return "text-\(text.prefix(20).hashValue)"
@@ -81,7 +103,7 @@ enum MessageBlock: Equatable, Identifiable, Codable {
     }
 
     /// Type prefix for generating stable IDs
-    nonisolated var typePrefix: String {
+    public nonisolated var typePrefix: String {
         switch self {
         case .text: return "text"
         case .image: return "image"
@@ -96,16 +118,24 @@ enum MessageBlock: Equatable, Identifiable, Codable {
     }
 }
 
-struct ChatImageAttachment: Equatable, Codable, Sendable {
-    enum Source: String, Codable, Sendable {
+public struct ChatImageAttachment: Equatable, Codable, Sendable {
+
+    public init(
+        source: Source,
+        value: String
+    ) {
+        self.source = source
+        self.value = value
+    }
+    public enum Source: String, Codable, Sendable {
         case localPath
         case dataURI
     }
 
-    let source: Source
-    let value: String
+    public let source: Source
+    public let value: String
 
-    nonisolated var displayName: String {
+    public nonisolated var displayName: String {
         switch source {
         case .localPath:
             return URL(fileURLWithPath: value).lastPathComponent
@@ -115,13 +145,23 @@ struct ChatImageAttachment: Equatable, Codable, Sendable {
     }
 }
 
-struct ToolUseBlock: Equatable, Codable {
-    let id: String
-    let name: String
-    let input: [String: String]
+public struct ToolUseBlock: Equatable, Codable {
+
+    public init(
+        id: String,
+        name: String,
+        input: [String: String]
+    ) {
+        self.id = id
+        self.name = name
+        self.input = input
+    }
+    public let id: String
+    public let name: String
+    public let input: [String: String]
 
     /// Short preview of the tool input
-    var preview: String {
+    public var preview: String {
         if let filePath = input["file_path"] ?? input["path"] {
             return filePath
         }

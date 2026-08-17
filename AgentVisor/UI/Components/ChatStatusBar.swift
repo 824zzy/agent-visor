@@ -8,6 +8,7 @@
 
 import AppKit
 import SwiftUI
+import AgentVisorCore
 
 struct ChatStatusBar: View {
     let modelDisplayName: String?

@@ -3,7 +3,7 @@ import XCTest
 final class PermissionModeProviderIsolationWiringAuditTests: XCTestCase {
     func testSessionStateAndStoreEnforceTheSharedProviderDecision() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
-        let sessionState = try source(root, "AgentVisor/Models/SessionState.swift")
+        let sessionState = try source(root, "AgentVisorCore/Sources/AgentVisorCore/SessionState.swift")
         let sessionStore = try source(root, "AgentVisor/Services/State/SessionStore.swift")
 
         XCTAssertTrue(

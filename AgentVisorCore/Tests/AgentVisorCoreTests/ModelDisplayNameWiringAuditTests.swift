@@ -3,9 +3,9 @@ import XCTest
 final class ModelDisplayNameWiringAuditTests: XCTestCase {
     func testPiCatalogDisplayNameFlowsIntoSessionPresentationMetadata() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
-        let conversationInfo = try source(root, "AgentVisor/Services/Session/ConversationParser.swift")
+        let conversationInfo = try source(root, "AgentVisorCore/Sources/AgentVisorCore/ConversationInfo.swift")
         let piParser = try source(root, "AgentVisor/Services/Session/PiConversationParser.swift")
-        let sessionState = try source(root, "AgentVisor/Models/SessionState.swift")
+        let sessionState = try source(root, "AgentVisorCore/Sources/AgentVisorCore/SessionState.swift")
         let sessionStore = try source(root, "AgentVisor/Services/State/SessionStore.swift")
 
         XCTAssertTrue(conversationInfo.contains("let lastModelDisplayName: String?"))

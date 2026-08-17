@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import AgentVisorCore
 
 protocol TerminalAdapter {
     /// Send text to the session's pane in the background. Implementations

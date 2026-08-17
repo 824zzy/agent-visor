@@ -265,7 +265,7 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
     func testPiComposerUsesProviderAwareImagePathSubmission() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let state = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/Models/SessionState.swift"
+            "AgentVisorCore/Sources/AgentVisorCore/SessionState.swift"
         ))
         let sender = try String(contentsOf: root.appendingPathComponent(
             "AgentVisor/Services/Chat/SessionSender.swift"

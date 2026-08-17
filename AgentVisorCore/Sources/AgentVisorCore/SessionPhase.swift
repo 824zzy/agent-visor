@@ -6,10 +6,9 @@
 //  All state transitions are validated before being applied.
 //
 
-import AgentVisorCore
 import Foundation
 
-enum SessionPhaseEvidenceSource: String, Equatable, Sendable {
+public enum SessionPhaseEvidenceSource: String, Equatable, Sendable {
     case hook
     case transcriptMarker
     case transcriptHeuristic
@@ -18,11 +17,11 @@ enum SessionPhaseEvidenceSource: String, Equatable, Sendable {
 }
 
 /// Permission context for tools waiting for approval
-struct PermissionContext: Sendable {
-    let toolUseId: String
-    let toolName: String
-    let toolInput: [String: AnyCodable]?
-    let receivedAt: Date
+public struct PermissionContext: Sendable {
+    public let toolUseId: String
+    public let toolName: String
+    public let toolInput: [String: AnyCodable]?
+    public let receivedAt: Date
     /// Presence-only gate for the third "Yes, and don't ask again…"
     /// approval option. Mirrors `HookEvent.permissionSuggestions`:
     /// nil → claude-code's TUI hid option 2 (unsafe compound,
@@ -30,9 +29,9 @@ struct PermissionContext: Sendable {
     /// the label + rule are derived locally by `PermissionSuggestionBuilder`
     /// (the array's contents are routinely Read rules even for Bash
     /// invocations and don't match what the user expects).
-    let permissionSuggestions: [AnyCodable]?
+    public let permissionSuggestions: [AnyCodable]?
 
-    nonisolated init(
+    public nonisolated init(
         toolUseId: String,
         toolName: String,
         toolInput: [String: AnyCodable]?,
@@ -51,7 +50,7 @@ struct PermissionContext: Sendable {
     /// scrollable container so the user sees exactly what the terminal would
     /// show, no silent truncation. Stable key order so the same input always
     /// renders identically.
-    nonisolated var formattedInput: String? {
+    public nonisolated var formattedInput: String? {
         guard let input = toolInput else { return nil }
         let sortedKeys = input.keys.sorted()
         var parts: [String] = []
@@ -77,7 +76,7 @@ struct PermissionContext: Sendable {
 }
 
 extension PermissionContext: Equatable {
-    nonisolated static func == (lhs: PermissionContext, rhs: PermissionContext) -> Bool {
+    public nonisolated static func == (lhs: PermissionContext, rhs: PermissionContext) -> Bool {
         // Compare by identity fields only (AnyCodable doesn't conform to Equatable)
         lhs.toolUseId == rhs.toolUseId &&
         lhs.toolName == rhs.toolName &&
@@ -86,7 +85,7 @@ extension PermissionContext: Equatable {
 }
 
 /// Explicit session phases - the state machine
-enum SessionPhase: Sendable {
+public enum SessionPhase: Sendable {
     /// Session is idle, waiting for user input or new activity
     case idle
 
@@ -108,7 +107,7 @@ enum SessionPhase: Sendable {
     // MARK: - State Machine Transitions
 
     /// Check if a transition to the target phase is valid
-    nonisolated func canTransition(to next: SessionPhase) -> Bool {
+    public nonisolated func canTransition(to next: SessionPhase) -> Bool {
         switch (self, next) {
         // Terminal state - no transitions out
         case (.ended, _):
@@ -173,12 +172,12 @@ enum SessionPhase: Sendable {
     }
 
     /// Attempt to transition to a new phase, returns the new phase if valid
-    nonisolated func transition(to next: SessionPhase) -> SessionPhase? {
+    public nonisolated func transition(to next: SessionPhase) -> SessionPhase? {
         canTransition(to: next) ? next : nil
     }
 
     /// Whether this phase indicates the session needs user attention
-    nonisolated var needsAttention: Bool {
+    public nonisolated var needsAttention: Bool {
         switch self {
         case .waitingForApproval, .waitingForInput:
             return true
@@ -188,7 +187,7 @@ enum SessionPhase: Sendable {
     }
 
     /// Whether this phase indicates active processing
-    nonisolated var isActive: Bool {
+    public nonisolated var isActive: Bool {
         switch self {
         case .processing, .compacting:
             return true
@@ -199,7 +198,7 @@ enum SessionPhase: Sendable {
 
     /// Display ordering priority used by compact menu-bar pills.
     /// Lower numbers sort first.
-    nonisolated var displayPriority: Int {
+    public nonisolated var displayPriority: Int {
         switch self {
         case .waitingForApproval: return 0
         case .processing, .compacting: return 1
@@ -209,7 +208,7 @@ enum SessionPhase: Sendable {
     }
 
     /// Whether this is a waitingForApproval phase
-    nonisolated var isWaitingForApproval: Bool {
+    public nonisolated var isWaitingForApproval: Bool {
         if case .waitingForApproval = self {
             return true
         }
@@ -217,7 +216,7 @@ enum SessionPhase: Sendable {
     }
 
     /// Extract tool name if waiting for approval
-    nonisolated var approvalToolName: String? {
+    public nonisolated var approvalToolName: String? {
         if case .waitingForApproval(let ctx) = self {
             return ctx.toolName
         }
@@ -228,7 +227,7 @@ enum SessionPhase: Sendable {
 // MARK: - Equatable
 
 extension SessionPhase: Equatable {
-    nonisolated static func == (lhs: SessionPhase, rhs: SessionPhase) -> Bool {
+    public nonisolated static func == (lhs: SessionPhase, rhs: SessionPhase) -> Bool {
         switch (lhs, rhs) {
         case (.idle, .idle): return true
         case (.processing, .processing): return true
@@ -245,7 +244,7 @@ extension SessionPhase: Equatable {
 // MARK: - Debug Description
 
 extension SessionPhase: CustomStringConvertible {
-    nonisolated var description: String {
+    public nonisolated var description: String {
         switch self {
         case .idle:
             return "idle"

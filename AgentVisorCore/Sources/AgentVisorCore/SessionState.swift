@@ -7,21 +7,20 @@
 //
 
 import Foundation
-import AgentVisorCore
 
 /// Complete state for a single Claude session
 /// This is the single source of truth - all state reads and writes go through SessionStore
-struct SessionState: Equatable, Identifiable, Sendable {
+public struct SessionState: Equatable, Identifiable, Sendable {
     // MARK: - Identity
 
-    let sessionId: String
-    let cwd: String
-    let projectName: String
+    public let sessionId: String
+    public let cwd: String
+    public let projectName: String
     /// Which coding-agent CLI is hosting this session. Threaded from the
     /// hook event's `agent` stamp; defaults to claude-code when discovered
     /// from disk (claude-code is the only agent that writes session
     /// metadata to ~/.claude/sessions/ today).
-    let agentID: AgentID
+    public let agentID: AgentID
 
     /// Provenance of this session — distinguishes who spawned the
     /// underlying `claude` process. Drives chat-input routing:
@@ -29,22 +28,22 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// writes silently to the pty owned by `SpawnedSessionManager`;
     /// `.cursorObserved` hides the composer (Cursor's extension owns the
     /// process and we can't inject into its stdin).
-    var origin: SessionOrigin
+    public var origin: SessionOrigin
 
     /// Runtime control is independent from ownership. A Codex Desktop
     /// session remains `.observed` in origin even when both apps attach to
     /// one shared app-server and Agent Visor can safely drive it.
-    var codexControlCapability: CodexControlCapability
+    public var codexControlCapability: CodexControlCapability
 
     // MARK: - Instance Metadata
 
-    var pid: Int?
-    var tty: String?
-    var isInTmux: Bool
+    public var pid: Int?
+    public var tty: String?
+    public var isInTmux: Bool
 
     /// Session name set by the user via `/rename` in Claude Code.
     /// Read from ~/.claude/sessions/<pid>.json.
-    var sessionName: String?
+    public var sessionName: String?
 
     /// Which terminal application is hosting the `claude` process —
     /// resolved by walking the parent PID chain via
@@ -53,65 +52,65 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// (Ghostty + Cursor + iTerm2) can tell them apart at a glance.
     /// `nil` until the discovery pass resolves it; `.unknown` once
     /// resolved against a bundle ID we don't recognize.
-    var terminalHost: TerminalHost?
+    public var terminalHost: TerminalHost?
 
     // MARK: - State Machine
 
     /// Current phase in the session lifecycle
-    var phase: SessionPhase
+    public var phase: SessionPhase
 
     // MARK: - Chat History
 
     /// All chat items for this session (replaces ChatHistoryManager.histories)
-    var chatItems: [ChatHistoryItem]
+    public var chatItems: [ChatHistoryItem]
 
     // MARK: - Tool Tracking
 
     /// Unified tool tracker (replaces 6+ dictionaries in ChatHistoryManager)
-    var toolTracker: ToolTracker
+    public var toolTracker: ToolTracker
 
     // MARK: - Subagent State
 
     /// State for Task tools and their nested subagent tools
-    var subagentState: SubagentState
+    public var subagentState: SubagentState
 
     // MARK: - Conversation Info (from JSONL parsing)
 
-    var conversationInfo: ConversationInfo
+    public var conversationInfo: ConversationInfo
 
     // MARK: - Dynamic Project Name (from latest cwd in JSONL)
 
     /// The current working project, derived from the latest cwd in the JSONL.
     /// More accurate than projectName when sessions navigate between directories.
-    var currentProject: String?
+    public var currentProject: String?
 
     // MARK: - Model & Usage Stats
 
     /// Raw provider model identifier used for matching and usage metadata.
-    var modelName: String?
+    public var modelName: String?
     /// Canonical human-facing name supplied by the owning provider's catalog.
-    var modelDisplayName: String?
+    public var modelDisplayName: String?
 
-    nonisolated var displayModelName: String? {
+    public nonisolated var displayModelName: String? {
         ModelDisplayName.resolve(
             modelID: modelName,
             catalogDisplayName: modelDisplayName
         )
     }
 
-    var totalInputTokens: Int = 0
-    var totalOutputTokens: Int = 0
+    public var totalInputTokens: Int = 0
+    public var totalOutputTokens: Int = 0
 
     /// Latest Claude Code permission mode for this session, read from
     /// `permission-mode` JSONL entries. Stored as a raw string so unknown
     /// future modes render gracefully (UI maps known values via
     /// `PermissionMode.from(raw:)`).
-    var permissionMode: String?
+    public var permissionMode: String?
 
     /// One provider-aware decision shared by every permission-mode surface.
     /// A stale or falsely probed Claude mode remains invisible and inert for
     /// Pi, Codex, Cursor, and other providers.
-    nonisolated var permissionModeSurfaceDecision: PermissionModeSurfaceDecision {
+    public nonisolated var permissionModeSurfaceDecision: PermissionModeSurfaceDecision {
         PermissionModeSurfacePolicy.decision(
             agentID: agentID,
             rawMode: permissionMode,
@@ -123,27 +122,27 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// Tokens in the most recent assistant message's context window
     /// (input + cache_read + cache_creation). Used to display current
     /// context usage as a percentage of the model's window.
-    var lastContextTokens: Int = 0
-    var contextWindowTokens: Int = 0
-    var effortLevel: String?
+    public var lastContextTokens: Int = 0
+    public var contextWindowTokens: Int = 0
+    public var effortLevel: String?
 
     // MARK: - Clear Reconciliation
 
     /// When true, the next file update should reconcile chatItems with parser state
     /// This removes pre-/clear items that no longer exist in the JSONL
-    var needsClearReconciliation: Bool
+    public var needsClearReconciliation: Bool
 
     // MARK: - Timestamps
 
-    var lastActivity: Date
-    var createdAt: Date
-    var phaseChangedAt: Date
-    var phaseObservedAt: Date?
-    var phaseEvidenceSource: SessionPhaseEvidenceSource?
+    public var lastActivity: Date
+    public var createdAt: Date
+    public var phaseChangedAt: Date
+    public var phaseObservedAt: Date?
+    public var phaseEvidenceSource: SessionPhaseEvidenceSource?
 
     // MARK: - Identifiable
 
-    nonisolated var id: String { sessionId }
+    public nonisolated var id: String { sessionId }
 
     /// Composite key for SwiftUI sidebar ForEach — sessionId + a
     /// phase case-tag. Including the phase tag in the row's identity
@@ -155,7 +154,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// ONLY field worth keying off for row identity — others (tool
     /// name, last message) update via input flow without needing
     /// row recreation.
-    nonisolated var sidebarRowKey: String {
+    public nonisolated var sidebarRowKey: String {
         let tag: String
         switch phase {
         case .idle: tag = "idle"
@@ -170,7 +169,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
 
     // MARK: - Initialization
 
-    nonisolated init(
+    public nonisolated init(
         sessionId: String,
         cwd: String,
         projectName: String? = nil,
@@ -224,7 +223,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.sessionName = Self.readSessionName(pid: pid)
     }
 
-    nonisolated mutating func applyModelMetadata(
+    public nonisolated mutating func applyModelMetadata(
         modelID: String,
         catalogDisplayName: String? = nil
     ) {
@@ -240,7 +239,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     }
 
     @discardableResult
-    nonisolated mutating func setPhase(
+    public nonisolated mutating func setPhase(
         _ newPhase: SessionPhase,
         evidenceSource: SessionPhaseEvidenceSource,
         observedAt: Date = Date(),
@@ -261,7 +260,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// evidence lets transcript inference resume instead of treating a stale
     /// SessionEnd hook as current after Agent Visor relaunches.
     @discardableResult
-    nonisolated mutating func reattachAsIdleWithoutPhaseEvidence(
+    public nonisolated mutating func reattachAsIdleWithoutPhaseEvidence(
         changedAt: Date = Date()
     ) -> Bool {
         var didChange = false
@@ -279,7 +278,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     }
 
     @discardableResult
-    nonisolated mutating func markPhaseEvidence(
+    public nonisolated mutating func markPhaseEvidence(
         _ source: SessionPhaseEvidenceSource,
         observedAt: Date = Date()
     ) -> Bool {
@@ -297,7 +296,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// Read the session name from ~/.claude/sessions/<pid>.json.
     /// Claude Code writes this file for every interactive session;
     /// the `name` field is set when the user runs `/rename`.
-    nonisolated static func readSessionName(pid: Int?) -> String? {
+    public nonisolated static func readSessionName(pid: Int?) -> String? {
         guard let pid = pid else { return nil }
         let path = NSHomeDirectory() + "/.claude/sessions/\(pid).json"
         guard let data = FileManager.default.contents(atPath: path),
@@ -314,7 +313,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// determines the JSONL storage path. Hook events can report a different
     /// cwd after Claude runs `cd`, but the JSONL always lives under the
     /// launch directory.
-    nonisolated static func readLaunchCwd(pid: Int?) -> String? {
+    public nonisolated static func readLaunchCwd(pid: Int?) -> String? {
         guard let pid = pid else { return nil }
         let path = NSHomeDirectory() + "/.claude/sessions/\(pid).json"
         guard let data = FileManager.default.contents(atPath: path),
@@ -330,7 +329,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// Claude may mark a session ended/deactivated before the PID fully
     /// exits; pruning uses this to hide rows without waiting for process
     /// teardown.
-    nonisolated static func readSessionStatus(pid: Int?) -> String? {
+    public nonisolated static func readSessionStatus(pid: Int?) -> String? {
         guard let pid = pid else { return nil }
         let path = NSHomeDirectory() + "/.claude/sessions/\(pid).json"
         guard let data = FileManager.default.contents(atPath: path),
@@ -345,12 +344,12 @@ struct SessionState: Equatable, Identifiable, Sendable {
     // MARK: - Derived Properties
 
     /// Whether this session needs user attention
-    nonisolated var needsAttention: Bool {
+    public nonisolated var needsAttention: Bool {
         phase.needsAttention
     }
 
     /// The active permission context, if any
-    nonisolated var activePermission: PermissionContext? {
+    public nonisolated var activePermission: PermissionContext? {
         if case .waitingForApproval(let ctx) = phase {
             return ctx
         }
@@ -360,7 +359,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     // MARK: - UI Convenience Properties
 
     /// Stable identity for SwiftUI (combines PID and sessionId for animation stability)
-    nonisolated var stableId: String {
+    public nonisolated var stableId: String {
         if let pid = pid {
             return "\(pid)-\(sessionId)"
         }
@@ -368,12 +367,12 @@ struct SessionState: Equatable, Identifiable, Sendable {
     }
 
     /// Best available project name: currentProject > projectName
-    nonisolated var bestProjectName: String {
+    public nonisolated var bestProjectName: String {
         currentProject ?? projectName
     }
 
     /// Display title: session name > currentProject > first user message > project name
-    nonisolated var displayTitle: String {
+    public nonisolated var displayTitle: String {
         if let name = sessionName {
             return name
         }
@@ -384,52 +383,52 @@ struct SessionState: Equatable, Identifiable, Sendable {
     }
 
     /// Best hint for matching window title
-    nonisolated var windowHint: String {
+    public nonisolated var windowHint: String {
         conversationInfo.summary ?? projectName
     }
 
     /// Pending tool name if waiting for approval
-    nonisolated var pendingToolName: String? {
+    public nonisolated var pendingToolName: String? {
         activePermission?.toolName
     }
 
     /// Pending tool use ID
-    nonisolated var pendingToolId: String? {
+    public nonisolated var pendingToolId: String? {
         activePermission?.toolUseId
     }
 
     /// Formatted pending tool input for display
-    nonisolated var pendingToolInput: String? {
+    public nonisolated var pendingToolInput: String? {
         activePermission?.formattedInput
     }
 
     /// Last message content
-    nonisolated var lastMessage: String? {
+    public nonisolated var lastMessage: String? {
         conversationInfo.lastMessage
     }
 
     /// Last message role
-    nonisolated var lastMessageRole: String? {
+    public nonisolated var lastMessageRole: String? {
         conversationInfo.lastMessageRole
     }
 
     /// Last tool name
-    nonisolated var lastToolName: String? {
+    public nonisolated var lastToolName: String? {
         conversationInfo.lastToolName
     }
 
     /// Summary
-    nonisolated var summary: String? {
+    public nonisolated var summary: String? {
         conversationInfo.summary
     }
 
     /// First user message
-    nonisolated var firstUserMessage: String? {
+    public nonisolated var firstUserMessage: String? {
         conversationInfo.firstUserMessage
     }
 
     /// Last user message date
-    nonisolated var lastUserMessageDate: Date? {
+    public nonisolated var lastUserMessageDate: Date? {
         conversationInfo.lastUserMessageDate
     }
 
@@ -437,7 +436,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// status-color staleness fade — `lastActivity` is unreliable for it
     /// because GUI-spawned sessions bump the JSONL mtime with non-message
     /// rows. See ConversationInfo.lastActivityDate.
-    nonisolated var lastActivityDate: Date? {
+    public nonisolated var lastActivityDate: Date? {
         conversationInfo.lastActivityDate
     }
 
@@ -448,13 +447,13 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// has no transcript at all so its `lastActivity` defaults to "now". Both
     /// would otherwise fake a fresh green on a session with no real activity.
     /// A session with no turns yet has nothing to be fresh about → fully stale.
-    nonisolated var statusIdleAge: TimeInterval {
+    public nonisolated var statusIdleAge: TimeInterval {
         guard let date = lastActivityDate else { return .greatestFiniteMagnitude }
         return Date().timeIntervalSince(date)
     }
 
     /// Whether the session can be interacted with
-    nonisolated var canInteract: Bool {
+    public nonisolated var canInteract: Bool {
         phase.needsAttention
     }
 
@@ -467,7 +466,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// without focus theft. `.visorSpawned` writes directly to its
     /// owned pty. `.terminal` needs a real TTY for the AppleScript /
     /// tmux send paths.
-    nonisolated var supportsSilentSend: Bool {
+    public nonisolated var supportsSilentSend: Bool {
         // Codex threads are drivable ONLY through the app-server origin
         // (CodexAppServerClient). A plain `.observed` codex thread —
         // actively running inside Codex.app or a live CLI — stays
@@ -488,7 +487,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// Provider semantics for image input are independent from ordinary
     /// text sendability. In particular, Pi consumes one local-path prompt
     /// while Claude's terminal TUI recognizes attachment-aware pastes.
-    nonisolated var imageSubmissionRoute: ImageSubmissionRoute {
+    public nonisolated var imageSubmissionRoute: ImageSubmissionRoute {
         ImageSubmissionRoutePolicy.route(
             agent: agentID,
             canSend: supportsSilentSend,
@@ -498,7 +497,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
 }
 
 /// Provenance of a Claude session — see `SessionState.origin`.
-enum SessionOrigin: String, Codable, Equatable, Sendable {
+public enum SessionOrigin: String, Codable, Equatable, Sendable {
     /// User launched `claude` in a real terminal (Ghostty, iTerm2,
     /// Terminal.app). agent-visor drives input via the host's
     /// AppleScript adapter.
@@ -531,20 +530,20 @@ enum SessionOrigin: String, Codable, Equatable, Sendable {
 // MARK: - Tool Tracker
 
 /// Unified tool tracking - replaces multiple dictionaries in ChatHistoryManager
-struct ToolTracker: Equatable, Sendable {
+public struct ToolTracker: Equatable, Sendable {
     /// Tools currently in progress, keyed by tool_use_id
-    var inProgress: [String: ToolInProgress]
+    public var inProgress: [String: ToolInProgress]
 
     /// All tool IDs we've seen (for deduplication)
-    var seenIds: Set<String>
+    public var seenIds: Set<String>
 
     /// Last JSONL file offset for incremental parsing
-    var lastSyncOffset: UInt64
+    public var lastSyncOffset: UInt64
 
     /// Last sync timestamp
-    var lastSyncTime: Date?
+    public var lastSyncTime: Date?
 
-    nonisolated init(
+    public nonisolated init(
         inProgress: [String: ToolInProgress] = [:],
         seenIds: Set<String> = [],
         lastSyncOffset: UInt64 = 0,
@@ -557,17 +556,17 @@ struct ToolTracker: Equatable, Sendable {
     }
 
     /// Mark a tool ID as seen, returns true if it was new
-    nonisolated mutating func markSeen(_ id: String) -> Bool {
+    public nonisolated mutating func markSeen(_ id: String) -> Bool {
         seenIds.insert(id).inserted
     }
 
     /// Check if a tool ID has been seen
-    nonisolated func hasSeen(_ id: String) -> Bool {
+    public nonisolated func hasSeen(_ id: String) -> Bool {
         seenIds.contains(id)
     }
 
     /// Start tracking a tool
-    nonisolated mutating func startTool(id: String, name: String) {
+    public nonisolated mutating func startTool(id: String, name: String) {
         guard markSeen(id) else { return }
         inProgress[id] = ToolInProgress(
             id: id,
@@ -578,21 +577,33 @@ struct ToolTracker: Equatable, Sendable {
     }
 
     /// Complete a tool
-    nonisolated mutating func completeTool(id: String, success: Bool) {
+    public nonisolated mutating func completeTool(id: String, success: Bool) {
         inProgress.removeValue(forKey: id)
     }
 }
 
 /// A tool currently in progress
-struct ToolInProgress: Equatable, Sendable {
-    let id: String
-    let name: String
-    let startTime: Date
-    var phase: ToolInProgressPhase
+public struct ToolInProgress: Equatable, Sendable {
+
+    public init(
+        id: String,
+        name: String,
+        startTime: Date,
+        phase: ToolInProgressPhase
+    ) {
+        self.id = id
+        self.name = name
+        self.startTime = startTime
+        self.phase = phase
+    }
+    public let id: String
+    public let name: String
+    public let startTime: Date
+    public var phase: ToolInProgressPhase
 }
 
 /// Phase of a tool in progress
-enum ToolInProgressPhase: Equatable, Sendable {
+public enum ToolInProgressPhase: Equatable, Sendable {
     case starting
     case running
     case pendingApproval
@@ -601,30 +612,30 @@ enum ToolInProgressPhase: Equatable, Sendable {
 // MARK: - Subagent State
 
 /// State for Task (subagent) tools
-struct SubagentState: Equatable, Sendable {
+public struct SubagentState: Equatable, Sendable {
     /// Active Task tools, keyed by task tool_use_id
-    var activeTasks: [String: TaskContext]
+    public var activeTasks: [String: TaskContext]
 
     /// Ordered stack of active task IDs (most recent last) - used for proper tool assignment
     /// When multiple Tasks run in parallel, we use insertion order rather than timestamps
-    var taskStack: [String]
+    public var taskStack: [String]
 
     /// Mapping of agentId to Task description (for AgentOutputTool display)
-    var agentDescriptions: [String: String]
+    public var agentDescriptions: [String: String]
 
-    nonisolated init(activeTasks: [String: TaskContext] = [:], taskStack: [String] = [], agentDescriptions: [String: String] = [:]) {
+    public nonisolated init(activeTasks: [String: TaskContext] = [:], taskStack: [String] = [], agentDescriptions: [String: String] = [:]) {
         self.activeTasks = activeTasks
         self.taskStack = taskStack
         self.agentDescriptions = agentDescriptions
     }
 
     /// Whether there's an active subagent
-    nonisolated var hasActiveSubagent: Bool {
+    public nonisolated var hasActiveSubagent: Bool {
         !activeTasks.isEmpty
     }
 
     /// Start tracking a Task tool
-    nonisolated mutating func startTask(taskToolId: String, description: String? = nil) {
+    public nonisolated mutating func startTask(taskToolId: String, description: String? = nil) {
         activeTasks[taskToolId] = TaskContext(
             taskToolId: taskToolId,
             startTime: Date(),
@@ -635,12 +646,12 @@ struct SubagentState: Equatable, Sendable {
     }
 
     /// Stop tracking a Task tool
-    nonisolated mutating func stopTask(taskToolId: String) {
+    public nonisolated mutating func stopTask(taskToolId: String) {
         activeTasks.removeValue(forKey: taskToolId)
     }
 
     /// Set the agentId for a Task (called when agent file is discovered)
-    nonisolated mutating func setAgentId(_ agentId: String, for taskToolId: String) {
+    public nonisolated mutating func setAgentId(_ agentId: String, for taskToolId: String) {
         activeTasks[taskToolId]?.agentId = agentId
         if let description = activeTasks[taskToolId]?.description {
             agentDescriptions[agentId] = description
@@ -648,17 +659,17 @@ struct SubagentState: Equatable, Sendable {
     }
 
     /// Add a subagent tool to a specific Task by ID
-    nonisolated mutating func addSubagentToolToTask(_ tool: SubagentToolCall, taskId: String) {
+    public nonisolated mutating func addSubagentToolToTask(_ tool: SubagentToolCall, taskId: String) {
         activeTasks[taskId]?.subagentTools.append(tool)
     }
 
     /// Set all subagent tools for a specific Task (used when updating from agent file)
-    nonisolated mutating func setSubagentTools(_ tools: [SubagentToolCall], for taskId: String) {
+    public nonisolated mutating func setSubagentTools(_ tools: [SubagentToolCall], for taskId: String) {
         activeTasks[taskId]?.subagentTools = tools
     }
 
     /// Add a subagent tool to the most recent active Task
-    nonisolated mutating func addSubagentTool(_ tool: SubagentToolCall) {
+    public nonisolated mutating func addSubagentTool(_ tool: SubagentToolCall) {
         // Find most recent active task (for parallel Task support)
         guard let mostRecentTaskId = activeTasks.keys.max(by: {
             (activeTasks[$0]?.startTime ?? .distantPast) < (activeTasks[$1]?.startTime ?? .distantPast)
@@ -668,7 +679,7 @@ struct SubagentState: Equatable, Sendable {
     }
 
     /// Update the status of a subagent tool across all active Tasks
-    nonisolated mutating func updateSubagentToolStatus(toolId: String, status: ToolStatus) {
+    public nonisolated mutating func updateSubagentToolStatus(toolId: String, status: ToolStatus) {
         for taskId in activeTasks.keys {
             if let index = activeTasks[taskId]?.subagentTools.firstIndex(where: { $0.id == toolId }) {
                 activeTasks[taskId]?.subagentTools[index].status = status
@@ -679,10 +690,24 @@ struct SubagentState: Equatable, Sendable {
 }
 
 /// Context for an active Task tool
-struct TaskContext: Equatable, Sendable {
-    let taskToolId: String
-    let startTime: Date
-    var agentId: String?
-    var description: String?
-    var subagentTools: [SubagentToolCall]
+public struct TaskContext: Equatable, Sendable {
+
+    public init(
+        taskToolId: String,
+        startTime: Date,
+        agentId: String? = nil,
+        description: String? = nil,
+        subagentTools: [SubagentToolCall]
+    ) {
+        self.taskToolId = taskToolId
+        self.startTime = startTime
+        self.agentId = agentId
+        self.description = description
+        self.subagentTools = subagentTools
+    }
+    public let taskToolId: String
+    public let startTime: Date
+    public var agentId: String?
+    public var description: String?
+    public var subagentTools: [SubagentToolCall]
 }
