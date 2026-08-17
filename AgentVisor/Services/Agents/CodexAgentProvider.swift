@@ -350,6 +350,26 @@ struct CodexAgentProvider: AgentProvider {
         return dead
     }
 
+    /// Read the whole group from the thread database at once. The bounded live
+    /// list comes first, because it is one statement that serves most rows and
+    /// stays cached until Codex writes again. Ids it misses go into a single
+    /// group read, and ids that read cannot find are remembered as absent, so
+    /// the per-row questions that follow cost nothing.
+    nonisolated func prewarmMetadata(sessionIds: [String]) {
+        guard !sessionIds.isEmpty else { return }
+        let live = Set(CodexThreadStore.liveThreadCandidates().map(\.id))
+        let missing = sessionIds.filter { !live.contains($0) }
+        guard !missing.isEmpty else { return }
+        _ = CodexThreadStore.threads(ids: missing)
+    }
+
+    /// Codex.app GUI threads (no tty) share one process and fire no per-thread
+    /// turn hooks, so the rollout file is the only live signal for them. CLI
+    /// codex sessions have their own process and their own hooks.
+    nonisolated func watchesTranscriptOnDiscovery(for session: SessionState) -> Bool {
+        session.tty == nil && !ZedThreadStore.hostsSession(session.sessionId)
+    }
+
     /// Codex threads have no recovery path once they drop out of the
     /// active set — Codex.app owns re-opening them. Remove on death
     /// rather than keeping an ended row (active-only everywhere).

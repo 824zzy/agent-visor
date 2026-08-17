@@ -69,12 +69,34 @@ final class CodexThreadLookupCostAuditTests: XCTestCase {
     func testBootstrapPreWarmsTheWholeGroup() throws {
         let store = try source("AgentVisor/Services/State/SessionStore.swift")
         XCTAssertTrue(
-            store.contains("CodexThreadStore.threads(ids: missing)"),
-            "The bootstrap must resolve the ids its bounded live list misses in one read, before hydration asks per row."
+            store.contains(".prewarmMetadata(sessionIds: group.map(\\.sessionId))"),
+            "The bootstrap must give each provider one group pre-read before hydration asks per row."
+        )
+        let provider = try source("AgentVisor/Services/Agents/CodexAgentProvider.swift")
+        XCTAssertTrue(
+            provider.contains("CodexThreadStore.threads(ids: missing)"),
+            "Codex must resolve the ids its bounded live list misses in one read."
         )
         XCTAssertTrue(
-            store.contains("CodexThreadStore.liveThreadCandidates()"),
+            provider.contains("CodexThreadStore.liveThreadCandidates()"),
             "The bounded live list stays the first source; the group read only covers what it misses."
+        )
+    }
+
+    func testTranscriptPathAndWatcherAreProviderQuestions() throws {
+        let store = try source("AgentVisor/Services/State/SessionStore.swift")
+        XCTAssertFalse(
+            store.contains("if info.agentID == .codex, let path = codexThread?.rolloutPath"),
+            "Where a transcript lives is the provider's answer; Codex already reads its rollout path there."
+        )
+        XCTAssertTrue(
+            store.contains("provider?.watchesTranscriptOnDiscovery(for: session) == true"),
+            "Whether discovery starts a transcript watcher depends on the agent's process model, so the provider decides."
+        )
+        let provider = try source("AgentVisor/Services/Agents/CodexAgentProvider.swift")
+        XCTAssertTrue(
+            provider.contains("func watchesTranscriptOnDiscovery(for session: SessionState) -> Bool"),
+            "Codex.app threads share one process and fire no per-thread hooks, so they need the watcher."
         )
     }
 }

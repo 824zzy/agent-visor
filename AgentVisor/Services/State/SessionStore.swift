@@ -3573,33 +3573,15 @@ actor SessionStore {
 
         let tree = ProcessTreeBuilder.shared.buildTree()
 
-        // Pre-warm the codex thread list once instead of running a
-        // per-id sqlite3 fork in the loop below. `liveThreadCandidates`
-        // is a single bounded query (limit 200) cached by `(sql, mtime)`,
-        // so subsequent codex bootstraps within the same mtime window
-        // pay zero subprocesses.
-        //
-        // The bounded list cannot hold every discovered thread, and the
-        // hydration below asks the provider for a rollout path and a name
-        // per row. Each id the list misses used to cost its own subprocess,
-        // and a few hundred of those blocked every thread that ran them
-        // until the app stopped applying agent events. One batch read for
-        // the whole group, plus the store's memory of absent ids, keeps the
-        // cost at one read whatever the row count.
-        let codexThreadsById: [String: CodexThreadCandidate]
-        let codexIds = discovered.filter { $0.agentID == .codex }.map(\.sessionId)
-        if !codexIds.isEmpty {
-            let liveCandidates = CodexThreadStore.liveThreadCandidates()
-            var byId = Dictionary(
-                uniqueKeysWithValues: liveCandidates.map { ($0.id, $0) }
-            )
-            let missing = codexIds.filter { byId[$0] == nil }
-            if !missing.isEmpty {
-                byId.merge(CodexThreadStore.threads(ids: missing)) { current, _ in current }
-            }
-            codexThreadsById = byId
-        } else {
-            codexThreadsById = [:]
+        // Let every provider read what its whole group needs before the
+        // per-row questions below ask for it one at a time. Codex keeps its
+        // transcript paths in a database, where a lookup by id costs a
+        // subprocess whenever the cached list misses; a scan of a few hundred
+        // rows used to pay that per row and stalled the app. Providers with
+        // nothing to pre-read do nothing here.
+        for (agentID, group) in Dictionary(grouping: discovered, by: \.agentID) {
+            AgentRegistry.provider(for: agentID)?
+                .prewarmMetadata(sessionIds: group.map(\.sessionId))
         }
 
         for info in discovered {
@@ -3707,7 +3689,8 @@ actor SessionStore {
                         setSessionPhase(info.sessionId, .idle, evidenceSource: .rediscovery)
                     }
                     sessions[info.sessionId]?.pid = info.pid == 0 ? nil : info.pid
-                    if let rolloutPath = codexThreadsById[info.sessionId]?.rolloutPath,
+                    if let rolloutPath = AgentRegistry.provider(for: info.agentID)?
+                        .transcriptURL(sessionId: info.sessionId, cwd: info.cwd).path,
                        let attrs = try? FileManager.default.attributesOfItem(atPath: rolloutPath),
                        let modDate = attrs[.modificationDate] as? Date,
                        modDate > existing.lastActivity {
@@ -3748,22 +3731,16 @@ actor SessionStore {
             }
 
             let cwd = info.cwd
-            let codexThread = info.agentID == .codex ? codexThreadsById[info.sessionId] : nil
             let projectName = ProjectDisplayNamePolicy.displayName(forCwd: cwd)
                 ?? URL(fileURLWithPath: cwd).lastPathComponent
             debugLog("[Scan] Session: \(info.sessionId.prefix(8)) pid=\(info.pid) tty=\(info.tty ?? "none") cwd=\(cwd)")
 
-            // Codex stores its rollout path in sqlite; everyone else
-            // derives the path from sessionId+cwd via the provider.
+            // The provider owns where a transcript lives. Codex reads a rollout
+            // path out of its thread database and falls back to a dated scan of
+            // the rollout layout; everyone else derives the path from session id
+            // and cwd. The group pre-read above makes the database answer cheap.
             let provider = AgentRegistry.provider(for: info.agentID)
-            let jsonlPath: String
-            if info.agentID == .codex, let path = codexThread?.rolloutPath {
-                jsonlPath = path
-            } else if let provider {
-                jsonlPath = provider.transcriptURL(sessionId: info.sessionId, cwd: cwd).path
-            } else {
-                jsonlPath = ""
-            }
+            let jsonlPath = provider?.transcriptURL(sessionId: info.sessionId, cwd: cwd).path ?? ""
             let fileDate: Date?
             if !jsonlPath.isEmpty,
                let attrs = try? FileManager.default.attributesOfItem(atPath: jsonlPath),
@@ -3833,14 +3810,19 @@ actor SessionStore {
                 session.sessionName = zedTitle
             }
             sessions[info.sessionId] = session
-            if info.agentID == .codex, info.tty == nil {
+            // Rows inside a shared app process fire no turn hooks of their
+            // own, so their transcript is the only live signal and the
+            // provider asks for a watcher. Rows with their own process report
+            // through hooks already.
+            if provider?.watchesTranscriptOnDiscovery(for: session) == true {
                 let sessionId = info.sessionId
                 let sessionCwd = cwd
+                let watchedAgentID = info.agentID
                 Task { @MainActor in
                     SessionFileWatcherManager.shared.startWatching(
                         sessionId: sessionId,
                         cwd: sessionCwd,
-                        agentID: .codex
+                        agentID: watchedAgentID
                     )
                 }
             }

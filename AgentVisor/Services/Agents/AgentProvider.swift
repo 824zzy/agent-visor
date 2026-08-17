@@ -213,6 +213,22 @@ protocol AgentProvider: Sendable {
     /// dictionary so chat history stays browsable. Providers whose
     /// dead sessions can't be revived from the sidebar (e.g. Zed —
     /// no deeplink or reveal path) override to `.remove`.
+    /// Give a provider one chance to read what a whole group needs before the
+    /// per-row questions below ask for it one at a time.
+    ///
+    /// Codex keeps its transcript paths and titles in a database, and a lookup
+    /// by id costs a subprocess whenever the cached list misses. Without this
+    /// call a scan of a few hundred rows paid that cost per row. Providers
+    /// with nothing to pre-read do nothing here.
+    nonisolated func prewarmMetadata(sessionIds: [String])
+
+    /// Whether discovering this session should start a transcript watcher.
+    ///
+    /// A row with its own process reports through hooks, so the file watcher
+    /// would only duplicate that. Rows inside a shared app process have no
+    /// hooks of their own, and the transcript is the only live signal.
+    nonisolated func watchesTranscriptOnDiscovery(for session: SessionState) -> Bool
+
     nonisolated func deadProcessAction(for session: SessionState) -> DeadProcessAction
 
     /// Which of these sessions have no live agent behind them any more.
@@ -374,6 +390,10 @@ extension AgentProvider {
         // session id; the file watcher needs to keep firing.
         false
     }
+
+    nonisolated func prewarmMetadata(sessionIds: [String]) {}
+
+    nonisolated func watchesTranscriptOnDiscovery(for session: SessionState) -> Bool { false }
 
     nonisolated func deadSessionIDs(among sessions: [SessionState], now: Date) -> Set<String> {
         // One process per session: a pid we know to be gone is death, and a row
