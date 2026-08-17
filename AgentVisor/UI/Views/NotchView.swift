@@ -28,56 +28,6 @@ private final class PillMenuActionTarget: NSObject {
     }
 }
 
-enum SessionOpenRouter {
-    static func smartOpen(
-        _ session: SessionState,
-        modifierIntent: PillClickModifierIntent = .standard
-    ) {
-        let action = PillClickNavigationPolicy.action(
-            ownership: ownership(for: session),
-            modifierIntent: modifierIntent
-        )
-        switch action {
-        case .openAgentVisor:
-            openAgentVisor(session)
-        case .openOriginal:
-            openOriginal(session)
-        }
-    }
-
-    static func openAgentVisor(_ session: SessionState) {
-        AppDelegate.shared?.openSessionInMainWindow(session.sessionId)
-    }
-
-    static func openOriginal(_ session: SessionState) {
-        SessionNavigator.navigateToSession(session)
-    }
-
-    static func ownership(for session: SessionState) -> AgentControlSessionOwnership {
-        switch session.origin {
-        case .codexAppServer, .visorSpawned:
-            return .agentVisorAppServer
-        case .terminal:
-            return .terminal(host: session.terminalHost)
-        case .cursorObserved:
-            return .ownerApp(host: session.terminalHost ?? .cursor)
-        case .observed:
-            if session.agentID == .codex {
-                return .ownerApp(host: codexOwnerHost(for: session))
-            }
-            return .opaqueHost(host: session.terminalHost)
-        }
-    }
-
-    private static func codexOwnerHost(for session: SessionState) -> TerminalHost? {
-        switch session.terminalHost {
-        case .codexApp, .unknown, .none:
-            return .codexApp
-        default:
-            return session.terminalHost
-        }
-    }
-}
 
 // Corner radius constants
 private let cornerRadiusInsets = (
