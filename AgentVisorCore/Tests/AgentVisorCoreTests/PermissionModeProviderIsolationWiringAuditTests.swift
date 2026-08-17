@@ -3,18 +3,12 @@ import XCTest
 final class PermissionModeProviderIsolationWiringAuditTests: XCTestCase {
     func testSessionStateAndStoreEnforceTheSharedProviderDecision() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
-        let sessionState = try source(root, "AgentVisorCore/Sources/AgentVisorCore/SessionState.swift")
         let sessionStore = try source(root, "AgentVisor/Services/State/SessionStore.swift")
 
-        XCTAssertTrue(
-            sessionState.contains("var permissionModeSurfaceDecision: PermissionModeSurfaceDecision"),
-            "SessionState must expose one provider-aware mode decision to every UI surface."
-        )
-        XCTAssertTrue(sessionState.contains("PermissionModeSurfacePolicy.decision("))
-        XCTAssertTrue(sessionState.contains("agentID: agentID"))
-        XCTAssertTrue(sessionState.contains("rawMode: permissionMode"))
-        XCTAssertTrue(sessionState.contains("hasTTY: tty != nil"))
-        XCTAssertTrue(sessionState.contains("isInTmux: isInTmux"))
+        // The SessionState half of this rule is covered by behaviour now, in
+        // SessionStateBehaviourTests: every non-Claude provider gets no mode and no cycling, a
+        // Claude session without a terminal cannot cycle, and a tmux session is never probed.
+        // Those tests call the property, so they also prove which fields it passes to the policy.
 
         XCTAssertGreaterThanOrEqual(
             sessionStore.components(

@@ -113,38 +113,16 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
     }
 
     func testSessionStateTracksPhaseEvidenceSeparatelyFromPhaseChanges() throws {
-        let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
-        let sessionStateSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisorCore")
-            .appendingPathComponent("Sources")
-            .appendingPathComponent("AgentVisorCore")
-            .appendingPathComponent("SessionState.swift"))
-        let sessionPhaseSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisorCore")
-            .appendingPathComponent("Sources")
-            .appendingPathComponent("AgentVisorCore")
-            .appendingPathComponent("SessionPhase.swift"))
         let sessionStoreSource = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
 
-        XCTAssertTrue(
-            sessionPhaseSource.contains("enum SessionPhaseEvidenceSource"),
-            "Phase freshness should have an explicit evidence source rather than overloading phaseChangedAt."
-        )
-        XCTAssertTrue(
-            sessionStateSource.contains("var phaseObservedAt: Date?"),
-            "SessionState should track when the current phase was last observed, even if the phase did not change."
-        )
-        XCTAssertTrue(
-            sessionStateSource.contains("var phaseEvidenceSource: SessionPhaseEvidenceSource?"),
-            "SessionState should track whether phase evidence came from hooks, transcript markers, heuristics, or rediscovery."
-        )
+        // The model half of this rule is covered by behaviour now, in SessionStateBehaviourTests:
+        // markPhaseEvidence stores the source and the observation time, identical evidence for the
+        // same phase reports no change, and a later observation of the same phase does. Those
+        // tests also prove the evidence-source enum and both properties exist, by using them.
+
         XCTAssertTrue(
             sessionStoreSource.contains("markPhaseEvidence"),
             "Transcript inference should refresh phase evidence on same-phase syncs without forcing a phase transition."
-        )
-        XCTAssertTrue(
-            sessionStateSource.contains("PhaseEvidenceMutationPolicy.didChange"),
-            "Same evidence should not trigger a redundant publish on every reconciliation tick."
         )
         XCTAssertTrue(
             sessionStoreSource.contains("guard let transcriptModifiedAt"),
@@ -263,17 +241,10 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
         XCTAssertTrue(hookPath.contains("heartbeatDidChange"))
         XCTAssertTrue(hookPath.contains("if heartbeatDidChange {\n                publishState()"))
 
-        let sessionState = try String(contentsOf: root
-            .appendingPathComponent("AgentVisorCore")
-            .appendingPathComponent("Sources")
-            .appendingPathComponent("AgentVisorCore")
-            .appendingPathComponent("SessionState.swift"))
-        XCTAssertTrue(
-            sessionState.contains("mutating func reattachAsIdleWithoutPhaseEvidence"),
-            "A liveness-only reattachment must clear stale Ended evidence instead of stamping a fresh phase observation."
-        )
-        XCTAssertTrue(sessionState.contains("phaseObservedAt = nil"))
-        XCTAssertTrue(sessionState.contains("phaseEvidenceSource = nil"))
+        // What that call does is covered by behaviour now, in SessionStateBehaviourTests:
+        // a reattachment moves the phase to idle, clears phaseObservedAt and phaseEvidenceSource,
+        // and reports no change when the session is already idle and bare. The text checks here
+        // could only prove that those two assignments existed somewhere in the file.
     }
 
     func testHookPidDedupRespectsSharedProcessSessions() throws {

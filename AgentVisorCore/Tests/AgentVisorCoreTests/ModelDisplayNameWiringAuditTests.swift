@@ -5,16 +5,16 @@ final class ModelDisplayNameWiringAuditTests: XCTestCase {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let conversationInfo = try source(root, "AgentVisorCore/Sources/AgentVisorCore/ConversationInfo.swift")
         let piParser = try source(root, "AgentVisor/Services/Session/PiConversationParser.swift")
-        let sessionState = try source(root, "AgentVisorCore/Sources/AgentVisorCore/SessionState.swift")
         let sessionStore = try source(root, "AgentVisor/Services/State/SessionStore.swift")
 
         XCTAssertTrue(conversationInfo.contains("let lastModelDisplayName: String?"))
         XCTAssertTrue(piParser.contains("lastModelDisplayName: catalogMetadata?.displayName"))
-        XCTAssertTrue(sessionState.contains("var modelDisplayName: String?"))
-        XCTAssertTrue(sessionState.contains("var displayModelName: String?"))
-        XCTAssertTrue(sessionState.contains("if modelName != modelID"))
-        XCTAssertTrue(sessionState.contains("modelDisplayName = nil"))
         XCTAssertTrue(sessionStore.contains("catalogDisplayName: info.lastModelDisplayName"))
+
+        // The SessionState half of this rule is covered by behaviour now, in
+        // SessionStateBehaviourTests: displayModelName resolution and fallback, a placeholder id
+        // being ignored, and a new model clearing the previous catalog name. Those tests run the
+        // code, so the text checks that used to stand in for them are gone.
     }
 
     func testCodexCatalogDisplayNameFlowsIntoConversationMetadataReadOnly() throws {

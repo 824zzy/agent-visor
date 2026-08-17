@@ -264,9 +264,6 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
 
     func testPiComposerUsesProviderAwareImagePathSubmission() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
-        let state = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisorCore/Sources/AgentVisorCore/SessionState.swift"
-        ))
         let sender = try String(contentsOf: root.appendingPathComponent(
             "AgentVisor/Services/Chat/SessionSender.swift"
         ))
@@ -277,8 +274,10 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
             "AgentVisor/UI/Window/WindowComposer.swift"
         ))
 
-        XCTAssertTrue(state.contains("var imageSubmissionRoute: ImageSubmissionRoute"))
-        XCTAssertTrue(state.contains("ImageSubmissionRoutePolicy.route("))
+        // The route itself is covered by behaviour now, in SessionStateBehaviourTests: no terminal
+        // gives no route, Claude with a terminal attaches, Pi with a terminal prompts with a path,
+        // and Cursor has no route at all.
+
         for source in [composer] {
             XCTAssertTrue(source.contains("guard session.imageSubmissionRoute != .unavailable else { return }"))
             XCTAssertTrue(source.contains("ImageAttachmentRetentionPolicy.cleanupDelay("))
