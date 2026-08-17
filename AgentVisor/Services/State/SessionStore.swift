@@ -3578,12 +3578,26 @@ actor SessionStore {
         // is a single bounded query (limit 200) cached by `(sql, mtime)`,
         // so subsequent codex bootstraps within the same mtime window
         // pay zero subprocesses.
+        //
+        // The bounded list cannot hold every discovered thread, and the
+        // hydration below asks the provider for a rollout path and a name
+        // per row. Each id the list misses used to cost its own subprocess,
+        // and a few hundred of those blocked every thread that ran them
+        // until the app stopped applying agent events. One batch read for
+        // the whole group, plus the store's memory of absent ids, keeps the
+        // cost at one read whatever the row count.
         let codexThreadsById: [String: CodexThreadCandidate]
-        if discovered.contains(where: { $0.agentID == .codex }) {
+        let codexIds = discovered.filter { $0.agentID == .codex }.map(\.sessionId)
+        if !codexIds.isEmpty {
             let liveCandidates = CodexThreadStore.liveThreadCandidates()
-            codexThreadsById = Dictionary(
+            var byId = Dictionary(
                 uniqueKeysWithValues: liveCandidates.map { ($0.id, $0) }
             )
+            let missing = codexIds.filter { byId[$0] == nil }
+            if !missing.isEmpty {
+                byId.merge(CodexThreadStore.threads(ids: missing)) { current, _ in current }
+            }
+            codexThreadsById = byId
         } else {
             codexThreadsById = [:]
         }
