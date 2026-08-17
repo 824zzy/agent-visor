@@ -20,10 +20,7 @@ struct SessionDetailPopover: View {
     private var presentation: SessionHoverDetailPresentation {
         SessionHoverDetailPolicy.presentation(
             phase: inspectorPhase,
-            sourceDisplayName: SessionHoverDetailPolicy.sourceDisplayName(
-                agentID: session.agentID,
-                terminalHost: session.terminalHost
-            ),
+            sourceDisplayName: SessionHoverDetailPolicy.sourceDisplayName(session: session),
             modelDisplayName: session.displayModelName,
             effortLevel: session.effortLevel,
             permissionMode: session.permissionModeSurfaceDecision.displayMode,

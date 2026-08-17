@@ -4161,13 +4161,10 @@ actor SessionStore {
                     nonAppPidAlive = false
                 }
                 return !CodexSessionRetentionPolicy.shouldKeep(
-                    sessionId: session.sessionId,
-                    tty: session.tty,
-                    pid: session.pid,
+                    session: session,
                     codexAppPid: codexAppPid,
                     isNonAppPidAlive: nonAppPidAlive,
                     activeGUIThreadIds: codexActiveIDs,
-                    lastActivity: session.lastActivity,
                     now: now,
                     observedWindowSeconds: AppSettings.observedWindowSeconds,
                     isKnownArchived: isKnownArchived,

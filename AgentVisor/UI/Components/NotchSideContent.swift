@@ -1196,10 +1196,7 @@ struct SessionNavigatorPopover: View {
         if session.origin == .visorSpawned { return "Agent Visor" }
         if session.origin == .cursorObserved { return "Cursor" }
         if session.agentID == .codex, session.tty == nil { return "Codex" }
-        if let host = SessionHostDisplayPolicy.displayHost(
-            agentID: session.agentID,
-            terminalHost: session.terminalHost
-        ), host != .unknown {
+        if let host = SessionHostDisplayPolicy.displayHost(session: session), host != .unknown {
             return HostMetadata.metadata(for: host).displayName
         }
         return sourceName(for: session)
@@ -1883,15 +1880,9 @@ enum PillBarCoordinator {
 
     private static func isTitleless(_ session: SessionState) -> Bool {
         let isTitleless = SidebarTitlelessPolicy.shouldHide(
+            session: session,
             isSelected: false,
-            needsAttention: session.phase.isWaitingForApproval,
-            agentID: session.agentID,
-            terminalHost: session.terminalHost,
-            hasTTY: session.tty != nil,
-            hasSessionName: !(session.sessionName ?? "").isEmpty,
-            hasFirstUserMessage: !(session.conversationInfo.firstUserMessage ?? "").isEmpty,
-            hasChatItems: !session.chatItems.isEmpty,
-            hasLastActivityDate: session.conversationInfo.lastActivityDate != nil
+            needsAttention: session.phase.isWaitingForApproval
         )
         return SidebarSessionVisibilityPolicy.shouldHideInPills(
             isEnded: false,
