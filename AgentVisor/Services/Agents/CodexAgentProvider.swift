@@ -350,6 +350,31 @@ struct CodexAgentProvider: AgentProvider {
         return dead
     }
 
+    /// A Codex.app GUI thread has no process of its own: every thread carries
+    /// Codex.app's pid, so discovery finding the thread again is the only proof
+    /// that it is live. That proof revives an ended row, replaces the row's
+    /// process identity, and lets the rollout file set the activity time, since
+    /// these threads fire no turn hooks.
+    ///
+    /// A thread Zed hosts is excluded. Zed reconciles host and title itself,
+    /// and stamping Codex.app's pid here would undo the Zed liveness rule and
+    /// its navigation on every scan.
+    ///
+    /// CLI codex sessions have their own process, so the plain pid rule already
+    /// answers for them and rediscovery changes nothing.
+    nonisolated func rediscoveredAttachment(
+        for session: SessionState,
+        discovered: DiscoveredSession
+    ) -> RediscoveredAttachment? {
+        guard discovered.tty == nil,
+              !ZedThreadStore.hostsSession(discovered.sessionId) else { return nil }
+        return RediscoveredAttachment(
+            revivesEndedRow: true,
+            pid: discovered.pid == 0 ? .clear : .set(discovered.pid),
+            refreshesActivityFromTranscript: true
+        )
+    }
+
     /// Read the whole group from the thread database at once. The bounded live
     /// list comes first, because it is one statement that serves most rows and
     /// stays cached until Codex writes again. Ids it misses go into a single

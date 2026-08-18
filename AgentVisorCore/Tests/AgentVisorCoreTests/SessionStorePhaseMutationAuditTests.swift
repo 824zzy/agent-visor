@@ -414,16 +414,22 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
     func testExistingClaudeRowsReconcileBusyAndIdleMetadata() throws {
         let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
-            source.contains("reconcileClaudeMetadataPhase("),
-            "Periodic rediscovery must reconcile authoritative Claude metadata for sessions already in the store."
+            source.contains("rediscoveredActivity("),
+            "Periodic rediscovery must read the agent's own busy-or-idle record for rows already in the store."
         )
         XCTAssertTrue(
-            source.contains("case (.working, .idle), (.working, .waitingForInput):"),
-            "A passive existing Claude session must become Working when metadata reports busy."
+            source.contains("RediscoveredActivityPhasePolicy.phase("),
+            "The store must apply the shared rule rather than its own phase mapping."
         )
+        // The mapping itself is pinned by RediscoveredActivityPhasePolicyTests:
+        // busy lifts an idle or ready row to working, idle settles a working row
+        // to ready, an agreeing record changes nothing, and no record never
+        // moves a row. Those are behaviour checks, so the text checks that used
+        // to stand in for them are retired here.
+        let provider = try String(contentsOf: agentProviderURL(named: "ClaudeCodeAgentProvider"))
         XCTAssertTrue(
-            source.contains("case (.idle, .processing):"),
-            "Only a previously Working Claude session should become Ready when metadata returns to idle."
+            provider.contains("ClaudeCodeSessionMetadataPolicy.activity(for: SessionState.readSessionStatus(pid: pid))"),
+            "Claude Code keeps that record beside the session, so its provider reads it."
         )
     }
 

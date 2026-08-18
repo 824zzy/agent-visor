@@ -174,6 +174,13 @@ struct ClaudeCodeAgentProvider: AgentProvider {
 
     // MARK: - Lifecycle
 
+    /// Claude Code writes a busy-or-idle record in `~/.claude/sessions/<pid>.json`,
+    /// so rediscovery can correct a row whose phase drifted while no hook
+    /// arrived.
+    func rediscoveredActivity(sessionId: String, pid: Int) -> ClaudeCodeSessionMetadataActivity {
+        ClaudeCodeSessionMetadataPolicy.activity(for: SessionState.readSessionStatus(pid: pid))
+    }
+
     /// Claude-code liveness has three answers, in order.
     ///
     /// The status file wins first: claude-code writes a terminal status there

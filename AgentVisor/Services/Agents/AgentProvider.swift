@@ -220,6 +220,25 @@ protocol AgentProvider: Sendable {
     /// by id costs a subprocess whenever the cached list misses. Without this
     /// call a scan of a few hundred rows paid that cost per row. Providers
     /// with nothing to pre-read do nothing here.
+    /// What this agent's own record says about a rediscovered row's activity.
+    ///
+    /// Some agents keep a busy-or-idle record beside the session. Rediscovery
+    /// reads it to correct a row whose phase drifted while no hook arrived.
+    /// Agents that keep no such record report `.unknown`.
+    nonisolated func rediscoveredActivity(sessionId: String, pid: Int) -> ClaudeCodeSessionMetadataActivity
+
+    /// What rediscovery should change on a row this agent owns.
+    ///
+    /// Discovery can find a session the store believes ended. Whether that
+    /// proves the session is back depends on the agent's process model: a
+    /// thread inside a shared app process has no pid of its own to check, while
+    /// an agent with one process per session is answered by the pid alone.
+    /// `nil` leaves the row untouched.
+    nonisolated func rediscoveredAttachment(
+        for session: SessionState,
+        discovered: DiscoveredSession
+    ) -> RediscoveredAttachment?
+
     nonisolated func prewarmMetadata(sessionIds: [String])
 
     /// Whether discovering this session should start a transcript watcher.
@@ -389,6 +408,17 @@ extension AgentProvider {
         // after the cli exits if the user re-attaches the same
         // session id; the file watcher needs to keep firing.
         false
+    }
+
+    nonisolated func rediscoveredActivity(sessionId: String, pid: Int) -> ClaudeCodeSessionMetadataActivity {
+        .unknown
+    }
+
+    nonisolated func rediscoveredAttachment(
+        for session: SessionState,
+        discovered: DiscoveredSession
+    ) -> RediscoveredAttachment? {
+        nil
     }
 
     nonisolated func prewarmMetadata(sessionIds: [String]) {}

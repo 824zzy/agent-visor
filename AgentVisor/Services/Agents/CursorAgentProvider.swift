@@ -52,6 +52,22 @@ struct CursorAgentProvider: AgentProvider {
         !NSRunningApplication.runningApplications(withBundleIdentifier: appBundleID).isEmpty
     }
 
+    /// A Cursor IDE thread shares Cursor.app's process, so a row that lost its
+    /// pid and ended can only be proven live by discovery finding it again.
+    /// Adopt the reported pid and revive the row.
+    ///
+    /// A row that still holds a pid is left alone: it either never ended, or it
+    /// ended with its process, and re-stamping would fight the liveness rule.
+    nonisolated func rediscoveredAttachment(
+        for session: SessionState,
+        discovered: DiscoveredSession
+    ) -> RediscoveredAttachment? {
+        guard discovered.pid != 0,
+              session.phase == .ended,
+              session.pid == nil else { return nil }
+        return RediscoveredAttachment(revivesEndedRow: true, pid: .set(discovered.pid))
+    }
+
     /// Cursor liveness splits by surface. IDE Agents Window threads (no tty)
     /// all carry Cursor.app's one pid, so a live pid is true for every thread
     /// whenever Cursor runs and decides nothing. Those rows are active-only,

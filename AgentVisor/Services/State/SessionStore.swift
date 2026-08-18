@@ -3536,21 +3536,6 @@ actor SessionStore {
         return isHistorical ? .ended : .idle
     }
 
-    private func reconcileClaudeMetadataPhase(sessionId: String, pid: Int) {
-        guard let currentPhase = sessions[sessionId]?.phase else { return }
-        let activity = ClaudeCodeSessionMetadataPolicy.activity(
-            for: SessionState.readSessionStatus(pid: pid)
-        )
-        switch (activity, currentPhase) {
-        case (.working, .idle), (.working, .waitingForInput):
-            setSessionPhase(sessionId, .processing, evidenceSource: .rediscovery)
-        case (.idle, .processing):
-            setSessionPhase(sessionId, .waitingForInput, evidenceSource: .rediscovery)
-        default:
-            break
-        }
-    }
-
     private static func bootstrapLastActivity(fileDate: Date?, pid: Int, tty: String?) -> Date {
         if let fileDate {
             return fileDate
@@ -3652,11 +3637,18 @@ actor SessionStore {
                         }
                     }
                 }
-                if info.agentID == .claudeCode {
-                    reconcileClaudeMetadataPhase(
+                let rediscoveryProvider = AgentRegistry.provider(for: info.agentID)
+                // An agent that keeps its own busy-or-idle record can correct a
+                // row whose phase drifted while no hook arrived. Agents without
+                // such a record report nothing and change nothing.
+                if let phase = RediscoveredActivityPhasePolicy.phase(
+                    for: rediscoveryProvider?.rediscoveredActivity(
                         sessionId: info.sessionId,
                         pid: info.pid
-                    )
+                    ) ?? .unknown,
+                    currentPhase: existing.phase
+                ) {
+                    setSessionPhase(info.sessionId, phase, evidenceSource: .rediscovery)
                 }
                 if let provider = AgentRegistry.provider(for: info.agentID),
                    !ZedHostedIdentityPolicy.suppressesAgentResolvedName(host: existing.terminalHost),
@@ -3674,36 +3666,48 @@ actor SessionStore {
                    ).first {
                     sessions[change.sessionId]?.sessionName = change.name
                 }
-                if info.agentID == .cursor, info.pid != 0,
-                   existing.phase == .ended, existing.pid == nil {
-                    setSessionPhase(info.sessionId, .idle, evidenceSource: .rediscovery)
-                    sessions[info.sessionId]?.pid = info.pid
-                }
-                // A codex thread Zed hosts is reconciled onto `.zed` (host +
-                // title) by reconcileZedHostedSessions; don't stamp it with
-                // Codex.app's pid here or the Zed liveness/nav is undone each
-                // rediscovery.
-                if info.agentID == .codex, info.tty == nil,
-                   !ZedThreadStore.hostsSession(info.sessionId) {
-                    if existing.phase == .ended {
+                // Discovery can find a session the store believes ended. Only
+                // the agent knows whether that proves the session is back: a
+                // thread inside a shared app process has no pid of its own, so
+                // being found again is the proof, while one process per session
+                // is already answered by the pid. A Zed-hosted thread is
+                // excluded by its provider, because reconcileZedHostedSessions
+                // owns that row's host, title and liveness.
+                if let attachment = rediscoveryProvider?.rediscoveredAttachment(
+                    for: existing,
+                    discovered: info
+                ) {
+                    if attachment.revivesEndedRow, existing.phase == .ended {
                         setSessionPhase(info.sessionId, .idle, evidenceSource: .rediscovery)
                     }
-                    sessions[info.sessionId]?.pid = info.pid == 0 ? nil : info.pid
-                    if let rolloutPath = AgentRegistry.provider(for: info.agentID)?
+                    switch attachment.pid {
+                    case .leave:
+                        break
+                    case .clear:
+                        sessions[info.sessionId]?.pid = nil
+                    case .set(let pid):
+                        sessions[info.sessionId]?.pid = pid
+                    }
+                    if attachment.refreshesActivityFromTranscript,
+                       let path = rediscoveryProvider?
                         .transcriptURL(sessionId: info.sessionId, cwd: info.cwd).path,
-                       let attrs = try? FileManager.default.attributesOfItem(atPath: rolloutPath),
+                       let attrs = try? FileManager.default.attributesOfItem(atPath: path),
                        let modDate = attrs[.modificationDate] as? Date,
                        modDate > existing.lastActivity {
                         sessions[info.sessionId]?.lastActivity = modDate
                     }
-                    let sessionId = info.sessionId
-                    let sessionCwd = info.cwd
-                    Task { @MainActor in
-                        SessionFileWatcherManager.shared.startWatching(
-                            sessionId: sessionId,
-                            cwd: sessionCwd,
-                            agentID: .codex
-                        )
+                    if let session = sessions[info.sessionId],
+                       rediscoveryProvider?.watchesTranscriptOnDiscovery(for: session) == true {
+                        let sessionId = info.sessionId
+                        let sessionCwd = info.cwd
+                        let watchedAgentID = info.agentID
+                        Task { @MainActor in
+                            SessionFileWatcherManager.shared.startWatching(
+                                sessionId: sessionId,
+                                cwd: sessionCwd,
+                                agentID: watchedAgentID
+                            )
+                        }
                     }
                 }
                 // Hook-created sessions can already have a resolved process
