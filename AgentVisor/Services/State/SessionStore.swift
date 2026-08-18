@@ -4061,15 +4061,31 @@ actor SessionStore {
         )
         for (agentID, group) in byAgent {
             guard let provider = AgentRegistry.provider(for: agentID) else { continue }
-            deadIds.formUnion(provider.deadSessionIDs(among: group, now: now))
+            // Away from the threads that serve `await`. Codex reads its thread
+            // database and Cursor asks about a running app, so this question
+            // blocks, and it is asked every few seconds.
+            let answer = await BlockingWork.run("deadSessionIDs") {
+                provider.deadSessionIDs(among: group, now: now)
+            }
+            deadIds.formUnion(answer)
         }
 
         let deadPidIds = liveSessions.keys.filter { deadIds.contains($0) }
 
         for sessionId in deadPidIds {
             guard let session = sessions[sessionId],
-                  let provider = AgentRegistry.provider(for: session.agentID)
+                  let provider = AgentRegistry.provider(for: session.agentID),
+                  let asked = liveSessions[sessionId]
             else { continue }
+
+            // The answer describes the row as it was when we asked. Other work
+            // ran while we waited, so a row may have reported in since then.
+            guard LivenessAnswerFreshnessPolicy.stillApplies(asked: asked, current: session) else {
+                Self.logger.debug(
+                    "Prune skipped \(sessionId.prefix(8), privacy: .public): the row changed while we asked"
+                )
+                continue
+            }
 
             await provider.noteSessionGone(sessionId: sessionId)
 
@@ -4083,19 +4099,30 @@ actor SessionStore {
             // sessions reuse their own session ids on respawn but
             // their argvs don't carry the id, so they go through the
             // existing dead-process action.
-            if session.agentID == .claudeCode,
-               let attachment = ClaudeSessionPidRebinder.findLiveAttachment(
-                    sessionId: sessionId,
-                    sessionName: session.sessionName,
-                    excludePid: session.pid
-               )
-            {
-                Self.logger.info(
-                    "Rebound \(sessionId.prefix(8), privacy: .public) to live PID \(attachment.pid, privacy: .public) (was \(session.pid ?? -1, privacy: .public))"
-                )
-                applyClaudeReattachment(attachment, sessionId: sessionId)
-                didMark = true
-                continue
+            if session.agentID == .claudeCode {
+                // Another blocking question: this one walks Claude's session
+                // files and may run `ps`. It only asks for a row already found
+                // dead, so it is rare, but a burst of deaths would ask it once
+                // per row.
+                let attachment = await BlockingWork.run("findLiveAttachment") {
+                    ClaudeSessionPidRebinder.findLiveAttachment(
+                        sessionId: sessionId,
+                        sessionName: session.sessionName,
+                        excludePid: session.pid
+                    )
+                }
+                // The row may have moved on while we asked, exactly as above.
+                guard let current = sessions[sessionId],
+                      LivenessAnswerFreshnessPolicy.stillApplies(asked: asked, current: current)
+                else { continue }
+                if let attachment {
+                    Self.logger.info(
+                        "Rebound \(sessionId.prefix(8), privacy: .public) to live PID \(attachment.pid, privacy: .public) (was \(session.pid ?? -1, privacy: .public))"
+                    )
+                    applyClaudeReattachment(attachment, sessionId: sessionId)
+                    didMark = true
+                    continue
+                }
             }
 
             switch provider.deadProcessAction(for: session) {
