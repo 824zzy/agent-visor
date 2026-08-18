@@ -590,8 +590,14 @@ actor SessionStore {
         // .waitingForApproval to .success *before* the phase decision,
         // otherwise we would incorrectly hold the session in
         // .waitingForApproval forever.
+        // The placeholder exists so a pending approval renders. Agents that
+        // report tools through hooks always get one. An agent whose tool state
+        // comes from its own transcript gets one only for the request that asks
+        // the user a question: that hook carries the questions, and nothing else
+        // would draw them before the parser catches up.
+        let reportsToolsThroughHooks = eventProvider?.reportsToolsThroughHooks ?? true
         let shouldCreateApprovalPlaceholder = event.event == "PermissionRequest"
-            && (event.agentID != .codex || event.tool == "AskUserQuestion")
+            && (reportsToolsThroughHooks || event.tool == "AskUserQuestion")
         if shouldCreateApprovalPlaceholder, let toolUseId = event.toolUseId {
             Self.logger.debug("Setting tool \(toolUseId.prefix(12), privacy: .public) status to waitingForApproval")
             updateToolStatus(in: &session, toolId: toolUseId, status: .waitingForApproval)
@@ -627,7 +633,10 @@ actor SessionStore {
             }
         }
 
-        if event.agentID != .codex {
+        // Tool and subagent tracking build chat items from hook events. An
+        // agent whose tool state lives in its own transcript is skipped here, or
+        // the two records would fight over the same rows.
+        if reportsToolsThroughHooks {
             processToolTracking(event: event, session: &session)
             processSubagentTracking(event: event, session: &session)
         }

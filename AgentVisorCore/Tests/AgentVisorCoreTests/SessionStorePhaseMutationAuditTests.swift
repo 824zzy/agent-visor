@@ -411,6 +411,38 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
         )
     }
 
+    /// Codex keeps its tool state in its own rollout transcript, and its parser
+    /// builds the chat items from it. The hook path must not build them a second
+    /// time. That fact used to be written twice, as two Codex branches; it is
+    /// one provider answer now.
+    func testToolTrackingFollowsTheProviderNotAnAgentBranch() throws {
+        let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        guard let hookPath = bracedBlock(in: source, startingAt: "private func processHookEvent") else {
+            return XCTFail("processHookEvent not found")
+        }
+        XCTAssertTrue(
+            hookPath.contains("eventProvider?.reportsToolsThroughHooks ?? true"),
+            "The hook path must ask the provider whether its tool state arrives through hooks."
+        )
+        XCTAssertFalse(
+            hookPath.contains("if event.agentID != .codex {"),
+            "Skipping tool tracking is a fact about the agent's record, so the provider states it once."
+        )
+        XCTAssertFalse(
+            hookPath.contains("(event.agentID != .codex || event.tool =="),
+            "The approval placeholder must key on the same provider answer, not on a second Codex branch."
+        )
+        XCTAssertTrue(
+            hookPath.contains("reportsToolsThroughHooks || event.tool == \"AskUserQuestion\""),
+            "The request that asks the user a question still needs a placeholder, because that hook carries the questions."
+        )
+        let provider = try String(contentsOf: agentProviderURL(named: "CodexAgentProvider"))
+        XCTAssertTrue(
+            provider.contains("var reportsToolsThroughHooks: Bool { false }"),
+            "Codex is the agent whose tool state comes from its transcript."
+        )
+    }
+
     func testExistingClaudeRowsReconcileBusyAndIdleMetadata() throws {
         let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(

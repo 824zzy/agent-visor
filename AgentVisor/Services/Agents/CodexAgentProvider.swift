@@ -350,6 +350,13 @@ struct CodexAgentProvider: AgentProvider {
         return dead
     }
 
+    /// Codex reports no tool state through hooks. The rollout transcript is the
+    /// record, and `CodexConversationParser` builds the chat items, the tool
+    /// results and the pending action from it. The only hook that still carries
+    /// tool identity is the request that asks the user a question, which the
+    /// store handles on its own.
+    nonisolated var reportsToolsThroughHooks: Bool { false }
+
     /// A Codex.app GUI thread has no process of its own: every thread carries
     /// Codex.app's pid, so discovery finding the thread again is the only proof
     /// that it is live. That proof revives an ended row, replaces the row's

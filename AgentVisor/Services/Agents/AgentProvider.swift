@@ -220,6 +220,15 @@ protocol AgentProvider: Sendable {
     /// by id costs a subprocess whenever the cached list misses. Without this
     /// call a scan of a few hundred rows paid that cost per row. Providers
     /// with nothing to pre-read do nothing here.
+    /// Whether this agent reports its tool calls and results through hooks.
+    ///
+    /// Most agents do, and the store builds their chat items and pending
+    /// actions from those events. Codex does not: its rollout transcript is the
+    /// record, and its own parser builds the items, the tool results and the
+    /// pending action from that file. Applying hook tool tracking on top would
+    /// duplicate rows and fight the parser for the same state.
+    nonisolated var reportsToolsThroughHooks: Bool { get }
+
     /// What this agent's own record says about a rediscovered row's activity.
     ///
     /// Some agents keep a busy-or-idle record beside the session. Rediscovery
@@ -409,6 +418,8 @@ extension AgentProvider {
         // session id; the file watcher needs to keep firing.
         false
     }
+
+    nonisolated var reportsToolsThroughHooks: Bool { true }
 
     nonisolated func rediscoveredActivity(sessionId: String, pid: Int) -> ClaudeCodeSessionMetadataActivity {
         .unknown
