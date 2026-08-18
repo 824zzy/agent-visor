@@ -71,7 +71,10 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
         XCTAssertTrue(store.contains("case .pi:"))
         XCTAssertTrue(store.contains("return s.phaseEvidenceSource != .hook"))
         XCTAssertTrue(store.contains("PiConversationParser.shared.lastTurnMarker"))
-        XCTAssertTrue(store.contains("event.agentID == .pi && event.event == \"SessionStart\""))
+        // The one hook event that may still set the phase is named by
+        // SessionRebindCandidatePolicy, which its own tests cover. The store must
+        // read that name rather than repeat the agent-and-event test.
+        XCTAssertTrue(store.contains("rebindEvidence == .exactSessionStart"))
     }
 
     func testSessionFileWatcherUsesProviderResolvedPiTranscript() throws {

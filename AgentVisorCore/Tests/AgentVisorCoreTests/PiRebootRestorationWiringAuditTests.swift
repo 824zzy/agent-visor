@@ -62,6 +62,28 @@ final class PiRebootRestorationWiringAuditTests: XCTestCase {
         XCTAssertTrue(store.contains("noteHookEvent(event, session: session)"))
     }
 
+    /// An exact SessionStart is the one hook event allowed to set the phase of a
+    /// row whose phase is otherwise read from the transcript. The store must read
+    /// that from the named evidence, not from its own agent-and-event test, and it
+    /// must read it once: the same evidence decides resurrection.
+    func testTranscriptAuthorityIsOverriddenByNamedEvidence() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let store = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/Services/State/SessionStore.swift"))
+        XCTAssertTrue(
+            store.contains("let overridesTranscriptAuthority = rebindEvidence == .exactSessionStart"),
+            "The override must come from SessionRebindCandidatePolicy evidence, which is already tested."
+        )
+        XCTAssertFalse(
+            store.contains("event.agentID == .pi && event.event == \"SessionStart\""),
+            "That test is what the evidence already names, and repeating it lets the two drift apart."
+        )
+    }
+
     func testAcceptedPiLifecycleFeedsTheRestorationCoordinator() throws {
         let root = repoRoot()
         let store = try String(contentsOf: root.appendingPathComponent("AgentVisor/Services/State/SessionStore.swift"))

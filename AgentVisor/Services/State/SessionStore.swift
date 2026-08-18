@@ -603,14 +603,18 @@ actor SessionStore {
         }
 
         let newPhase = event.determinePhase()
-        let isAuthoritativePiHeartbeat = event.agentID == .pi && event.event == "SessionStart"
         let rebindEvidence = SessionRebindCandidatePolicy.evidence(
             agentID: event.agentID,
             lifecycleEvent: event.event
         )
+        // An exact SessionStart names a new live attachment, so it is stronger
+        // than transcript quiescence and may set the phase even for a row whose
+        // phase is normally read from the transcript. The same evidence decides
+        // resurrection below, so it is read once here.
+        let overridesTranscriptAuthority = rebindEvidence == .exactSessionStart
         if !ObservedHookPhasePolicy.shouldApplyHookPhase(
             usesTranscriptPhaseInference: usesTranscriptAsAuthoritativeSource(session)
-                && !isAuthoritativePiHeartbeat,
+                && !overridesTranscriptAuthority,
             reportedPhase: Self.reportedHookPhase(for: newPhase),
             isCurrentlyWaitingForApproval: session.phase.isWaitingForApproval
         ) {
