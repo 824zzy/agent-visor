@@ -218,9 +218,15 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
             readers.leave()
         }
 
-        let deadline = timeout.map { DispatchTime.now() + $0 } ?? .distantFuture
-        let timedOut = termination.wait(timeout: deadline) == .timedOut
+        // Every wait has a deadline. A child that never exits used to hold this
+        // thread for the life of the app; now it becomes a missing answer, which
+        // every caller already handles, because a command can also fail.
+        let seconds = SubprocessDeadlinePolicy.deadline(requested: timeout)
+        let timedOut = termination.wait(timeout: .now() + seconds) == .timedOut
         if timedOut {
+            Self.logger.warning(
+                "Gave up after \(Int(seconds))s: \(executable, privacy: .public)"
+            )
             process.terminate()
             if termination.wait(timeout: .now() + 1) == .timedOut {
                 Darwin.kill(process.processIdentifier, SIGKILL)

@@ -3979,26 +3979,22 @@ actor SessionStore {
         }
     }
 
-    /// Run the (blocking, `ps`-based) discovery scan off the actor and
-    /// off the main thread, then hand the result back for a merge. Process
-    /// needs a run loop, so it can't run inline on the actor.
+    /// Run the (blocking, `ps`-based) discovery scan away from the threads that
+    /// serve `await`, then hand the result back for a merge. Process needs a run
+    /// loop, so it cannot run inline on the actor.
     private static func discoverInBackground() async -> [DiscoveredSession] {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                continuation.resume(returning: ClaudeSessionMonitor.discoverExistingSessions())
-            }
+        await BlockingWork.run("discoverExistingSessions") {
+            ClaudeSessionMonitor.discoverExistingSessions()
         }
     }
 
     private static func discoverCodexInBackground() async -> [DiscoveredSession] {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                let provider = CodexAgentProvider()
-                let live = provider.discoverLiveSessions()
-                let liveIds = Set(live.map(\.sessionId))
-                let historical = provider.discoverHistoricalSessions(excluding: liveIds, limit: 30)
-                continuation.resume(returning: live + historical)
-            }
+        await BlockingWork.run("discoverCodexSessions") {
+            let provider = CodexAgentProvider()
+            let live = provider.discoverLiveSessions()
+            let liveIds = Set(live.map(\.sessionId))
+            let historical = provider.discoverHistoricalSessions(excluding: liveIds, limit: 30)
+            return live + historical
         }
     }
 
