@@ -220,6 +220,24 @@ protocol AgentProvider: Sendable {
     /// by id costs a subprocess whenever the cached list misses. Without this
     /// call a scan of a few hundred rows paid that cost per row. Providers
     /// with nothing to pre-read do nothing here.
+    /// An event from this agent arrived, whatever the store later does with it.
+    ///
+    /// Called before any rule can drop the event, because an agent may keep a
+    /// flag that its own reporter is alive, and a dropped event still proves
+    /// that. Agents that keep no such flag do nothing.
+    nonisolated func noteRuntimeReportedIn() async
+
+    /// Let this agent keep its own notes about one of its sessions.
+    ///
+    /// Called after the store merges the event into the row, so the session
+    /// carries the process identity and host the notes may need. Pi keeps the
+    /// record used to restore its sessions after a reboot; other agents keep
+    /// nothing and do nothing.
+    nonisolated func noteHookEvent(_ event: HookEvent, session: SessionState) async
+
+    /// This session is finished, removed, or dead, so drop any notes about it.
+    nonisolated func noteSessionGone(sessionId: String) async
+
     /// Whether this agent reports its tool calls and results through hooks.
     ///
     /// Most agents do, and the store builds their chat items and pending
@@ -418,6 +436,12 @@ extension AgentProvider {
         // session id; the file watcher needs to keep firing.
         false
     }
+
+    nonisolated func noteRuntimeReportedIn() async {}
+
+    nonisolated func noteHookEvent(_ event: HookEvent, session: SessionState) async {}
+
+    nonisolated func noteSessionGone(sessionId: String) async {}
 
     nonisolated var reportsToolsThroughHooks: Bool { true }
 

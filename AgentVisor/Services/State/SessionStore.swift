@@ -256,11 +256,9 @@ actor SessionStore {
 
     private func processHookEvent(_ event: HookEvent) async {
         guard let event = codexBackedHookEvent(event) else { return }
-        if event.agentID == .pi {
-            await MainActor.run {
-                PiIntegrationMonitor.shared.recordHeartbeat()
-            }
-        }
+        // Before any rule can drop this event. An agent may keep a flag that its
+        // own reporter is alive, and a dropped event still proves that.
+        await AgentRegistry.provider(for: event.agentID)?.noteRuntimeReportedIn()
 
         let sessionId = event.sessionId
         let existingSessionBeforeHook = sessions[sessionId]
@@ -338,10 +336,9 @@ actor SessionStore {
             }
             for staleId in staleIds {
                 Self.logger.debug("Dedup: removing stale session \(staleId.prefix(8), privacy: .public) (PID \(pid) now belongs to \(sessionId.prefix(8), privacy: .public))")
-                if sessions[staleId]?.agentID == .pi {
-                    await MainActor.run {
-                        PiRebootRestorationManager.shared.end(sessionID: staleId)
-                    }
+                if let staleAgentID = sessions[staleId]?.agentID {
+                    await AgentRegistry.provider(for: staleAgentID)?
+                        .noteSessionGone(sessionId: staleId)
                 }
                 sessions.removeValue(forKey: staleId)
                 hookDidRemoveStaleSession = true
@@ -474,45 +471,9 @@ actor SessionStore {
             session.lastActivity = Date()
         }
 
-        if event.agentID == .pi {
-            await MainActor.run {
-                if event.isTerminalLifecycleStatus {
-                    PiRebootRestorationManager.shared.noteExactSessionEnded(sessionID: sessionId)
-                } else {
-                    PiRebootRestorationManager.shared.noteExactLiveSession(sessionID: sessionId)
-                }
-            }
-            if event.isTerminalLifecycleStatus {
-                await MainActor.run {
-                    PiRebootRestorationManager.shared.end(sessionID: sessionId)
-                }
-            } else if session.terminalHost == .ghostty,
-                      session.origin == .terminal,
-                      let pid = session.pid, pid > 0,
-                      let tty = session.tty, !tty.isEmpty {
-                let sessionFile = event.sessionFile
-                    ?? eventProvider?.transcriptURL(sessionId: sessionId, cwd: session.cwd).path
-                    ?? ""
-                let sessionName = session.sessionName
-                let cwd = session.cwd
-                await MainActor.run {
-                    PiRebootRestorationManager.shared.recordAcceptedSession(
-                        sessionID: sessionId,
-                        sessionFile: sessionFile,
-                        cwd: cwd,
-                        sessionName: sessionName,
-                        tty: tty,
-                        allowTopologyRefresh: !isPiSessionHeartbeat
-                    )
-                }
-            } else {
-                await MainActor.run {
-                    PiRebootRestorationManager.shared.removeRestorationCandidate(
-                        sessionID: sessionId
-                    )
-                }
-            }
-        }
+        // The row now carries the process identity and host from this event, so
+        // an agent that keeps its own notes can write them.
+        await eventProvider?.noteHookEvent(event, session: session)
 
         if event.isTerminalLifecycleStatus {
             // Keep the ended state in the store for recovery/history
@@ -2401,10 +2362,8 @@ actor SessionStore {
     // MARK: - Session End Processing
 
     private func processSessionEnd(sessionId: String) async {
-        if sessions[sessionId]?.agentID == .pi {
-            await MainActor.run {
-                PiRebootRestorationManager.shared.end(sessionID: sessionId)
-            }
+        if let agentID = sessions[sessionId]?.agentID {
+            await AgentRegistry.provider(for: agentID)?.noteSessionGone(sessionId: sessionId)
         }
         // Mark ended but DO NOT remove. The user can still browse the
         // chat history, send a message (which fails fast if the TTY is
@@ -4112,11 +4071,7 @@ actor SessionStore {
                   let provider = AgentRegistry.provider(for: session.agentID)
             else { continue }
 
-            if session.agentID == .pi {
-                await MainActor.run {
-                    PiRebootRestorationManager.shared.end(sessionID: sessionId)
-                }
-            }
+            await provider.noteSessionGone(sessionId: sessionId)
 
             // Before marking ended, try to rebind to a NEW live PID for
             // the same session. Users routinely close a terminal pane

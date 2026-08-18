@@ -354,4 +354,75 @@ struct PiAgentProvider: AgentProvider {
     }
 
     nonisolated func overwritesModelName() -> Bool { true }
+
+    // MARK: - Pi's own notes
+
+    /// Pi ships a bundled extension that reports over a unix socket. One event
+    /// of any kind proves the extension is loaded and reporting, which the
+    /// integration health check reads. A dropped event still proves it, so the
+    /// store calls this before any rule can drop one.
+    nonisolated func noteRuntimeReportedIn() async {
+        await MainActor.run {
+            PiIntegrationMonitor.shared.recordHeartbeat()
+        }
+    }
+
+    /// Keep the record used to restore Pi sessions after a reboot.
+    ///
+    /// A terminal status ends the record. A live event marks the session live,
+    /// and a session running in Ghostty with its own process and tty becomes a
+    /// restoration candidate, because those three facts are what a restore
+    /// needs to reopen it. Anything else drops the candidate: a session with no
+    /// tty or no process cannot be reopened, and keeping it would restore a row
+    /// that cannot run.
+    ///
+    /// A heartbeat must not refresh the terminal topology. It arrives every ten
+    /// seconds and would keep re-reading window layout for no new information.
+    nonisolated func noteHookEvent(_ event: HookEvent, session: SessionState) async {
+        let sessionId = session.sessionId
+        if event.isTerminalLifecycleStatus {
+            await MainActor.run {
+                PiRebootRestorationManager.shared.noteExactSessionEnded(sessionID: sessionId)
+                PiRebootRestorationManager.shared.end(sessionID: sessionId)
+            }
+            return
+        }
+        await MainActor.run {
+            PiRebootRestorationManager.shared.noteExactLiveSession(sessionID: sessionId)
+        }
+        guard session.terminalHost == .ghostty,
+              session.origin == .terminal,
+              let pid = session.pid, pid > 0,
+              let tty = session.tty, !tty.isEmpty
+        else {
+            await MainActor.run {
+                PiRebootRestorationManager.shared.removeRestorationCandidate(sessionID: sessionId)
+            }
+            return
+        }
+        let sessionFile = event.sessionFile
+            ?? transcriptURL(sessionId: sessionId, cwd: session.cwd).path
+        let allowTopologyRefresh = !PiSessionHeartbeatPolicy.isHeartbeat(
+            agentID: event.agentID,
+            lifecycleEvent: event.event
+        )
+        let cwd = session.cwd
+        let sessionName = session.sessionName
+        await MainActor.run {
+            PiRebootRestorationManager.shared.recordAcceptedSession(
+                sessionID: sessionId,
+                sessionFile: sessionFile,
+                cwd: cwd,
+                sessionName: sessionName,
+                tty: tty,
+                allowTopologyRefresh: allowTopologyRefresh
+            )
+        }
+    }
+
+    nonisolated func noteSessionGone(sessionId: String) async {
+        await MainActor.run {
+            PiRebootRestorationManager.shared.end(sessionID: sessionId)
+        }
+    }
 }

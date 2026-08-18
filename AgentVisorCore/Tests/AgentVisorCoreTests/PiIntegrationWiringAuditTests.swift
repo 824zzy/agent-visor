@@ -32,7 +32,12 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
         XCTAssertTrue(settings.contains("Pi — Not detected"))
         XCTAssertTrue(settings.contains("Pi — Observing"))
         XCTAssertTrue(settings.contains("Pi — Connected"))
-        XCTAssertTrue(store.contains("PiIntegrationMonitor.shared.recordHeartbeat"))
+        // The store tells the provider that its runtime reported in; the Pi
+        // provider owns the flag, because the flag is Pi's own note.
+        XCTAssertTrue(store.contains("noteRuntimeReportedIn()"))
+        let piProvider = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/Services/Agents/PiAgentProvider.swift"))
+        XCTAssertTrue(piProvider.contains("PiIntegrationMonitor.shared.recordHeartbeat"))
     }
 
     func testEndedPiSessionCanRecoverFromLivePostEndTranscriptEvidence() throws {

@@ -55,8 +55,11 @@ final class PiRebootRestorationWiringAuditTests: XCTestCase {
         XCTAssertTrue(
             manager.contains("plan.removeAll { exactLiveSessionIDs.contains($0.sessionId) }")
         )
-        XCTAssertTrue(store.contains("noteExactLiveSession(sessionID: sessionId)"))
-        XCTAssertTrue(store.contains("noteExactSessionEnded(sessionID: sessionId)"))
+        let piProvider = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/Services/Agents/PiAgentProvider.swift"))
+        XCTAssertTrue(piProvider.contains("noteExactLiveSession(sessionID: sessionId)"))
+        XCTAssertTrue(piProvider.contains("noteExactSessionEnded(sessionID: sessionId)"))
+        XCTAssertTrue(store.contains("noteHookEvent(event, session: session)"))
     }
 
     func testAcceptedPiLifecycleFeedsTheRestorationCoordinator() throws {
@@ -66,9 +69,13 @@ final class PiRebootRestorationWiringAuditTests: XCTestCase {
 
         XCTAssertTrue(hook.contains("let sessionFile: String?"))
         XCTAssertTrue(hook.contains("case sessionFile = \"session_file\""))
-        XCTAssertTrue(store.contains("PiRebootRestorationManager.shared.recordAcceptedSession"))
-        XCTAssertTrue(store.contains("PiRebootRestorationManager.shared.end"))
-        XCTAssertTrue(store.contains("PiRebootRestorationManager.shared.removeRestorationCandidate"))
+        let piProvider = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/Services/Agents/PiAgentProvider.swift"))
+        XCTAssertTrue(piProvider.contains("PiRebootRestorationManager.shared.recordAcceptedSession"))
+        XCTAssertTrue(piProvider.contains("PiRebootRestorationManager.shared.end"))
+        XCTAssertTrue(piProvider.contains("PiRebootRestorationManager.shared.removeRestorationCandidate"))
+        XCTAssertTrue(store.contains("noteHookEvent(event, session: session)"))
+        XCTAssertTrue(store.contains("noteSessionGone(sessionId:"))
         XCTAssertTrue(store.contains("runtimeOwnershipDisposition == .ignoreCompetingRuntime"))
 
         let manager = try String(contentsOf: root.appendingPathComponent(
