@@ -47,15 +47,9 @@ class SessionMonitor: ObservableObject {
             Task {
                 await SessionStore.shared.bootstrapSessions(discovered)
                 await SessionStore.shared.startPeriodicPruning()
-                await MainActor.run {
-                    for info in discovered {
-                        SessionFileWatcherManager.shared.startWatching(
-                            sessionId: info.sessionId,
-                            cwd: info.cwd,
-                            agentID: info.agentID
-                        )
-                    }
-                }
+                // Bootstrap starts only the watchers each provider requests.
+                // Hook-driven rows start one after their first event below, so
+                // delayed transcript writes such as compaction still arrive.
                 // Replay any PermissionRequest sidecars left by a prior
                 // run. Must happen AFTER bootstrap or discovery would
                 // overwrite the synthesized .waitingForApproval phase

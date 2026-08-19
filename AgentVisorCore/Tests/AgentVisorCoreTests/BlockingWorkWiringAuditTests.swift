@@ -87,7 +87,11 @@ final class BlockingWorkWiringAuditTests: XCTestCase {
         // This question runs every few seconds. Codex reads its thread database
         // and Cursor asks about a running app, so it blocks the thread it is on.
         XCTAssertTrue(store.contains("await BlockingWork.run(\"deadSessionIDs\")"))
-        XCTAssertTrue(store.contains("await BlockingWork.run(\"findLiveAttachment\")"))
+        XCTAssertEqual(
+            store.components(separatedBy: "await BlockingWork.run(\"findLiveAttachment\")").count - 1,
+            2,
+            "Both live-row rebind and ended-row resurrection walk files and may run ps."
+        )
         // Waiting away from the actor lets other work run, so the answer must be
         // checked against the row before the sweep acts on it.
         guard let start = store.range(of: "private func pruneDeadSessions()"),
@@ -96,7 +100,7 @@ final class BlockingWorkWiringAuditTests: XCTestCase {
         let sweep = String(store[start.lowerBound..<end.lowerBound])
         XCTAssertEqual(
             sweep.components(separatedBy: "SessionReadFreshnessPolicy.stillApplies").count - 1,
-            2,
+            3,
             "Each awaited answer in the sweep needs its own freshness check."
         )
     }

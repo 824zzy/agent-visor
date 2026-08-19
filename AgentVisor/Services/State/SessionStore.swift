@@ -4218,14 +4218,20 @@ actor SessionStore {
             let excludePid = SessionRebindCandidatePolicy.excludePidForEndedResurrection(
                 currentPid: session.pid
             )
-            guard let attachment = ClaudeSessionPidRebinder.findLiveAttachment(
-                sessionId: sessionId,
-                sessionName: session.sessionName,
-                excludePid: excludePid
-            ) else { continue }
+            let attachment = await BlockingWork.run("findLiveAttachment") {
+                ClaudeSessionPidRebinder.findLiveAttachment(
+                    sessionId: sessionId,
+                    sessionName: session.sessionName,
+                    excludePid: excludePid
+                )
+            }
+            guard let attachment,
+                  let current = sessions[sessionId],
+                  SessionReadFreshnessPolicy.stillApplies(asked: session, current: current)
+            else { continue }
 
             Self.logger.info(
-                "Resurrected ended session \(sessionId.prefix(8), privacy: .public) → live PID \(attachment.pid, privacy: .public) (was \(session.pid ?? -1, privacy: .public))"
+                "Resurrected ended session \(sessionId.prefix(8), privacy: .public) → live PID \(attachment.pid, privacy: .public) (was \(current.pid ?? -1, privacy: .public))"
             )
             applyClaudeReattachment(attachment, sessionId: sessionId)
             didMark = true

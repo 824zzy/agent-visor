@@ -68,6 +68,13 @@ struct CursorAgentProvider: AgentProvider {
         return RediscoveredAttachment(revivesEndedRow: true, pid: .set(discovered.pid))
     }
 
+    /// Cursor exposes no hook seam. Its transcript is the only live signal for
+    /// both CLI and IDE rows, so every discovered Cursor session needs a watcher.
+    /// SessionStore excludes Zed-hosted rows before it asks this provider.
+    nonisolated func watchesTranscriptOnDiscovery(for session: SessionState) -> Bool {
+        true
+    }
+
     /// Cursor liveness splits by surface. IDE Agents Window threads (no tty)
     /// all carry Cursor.app's one pid, so a live pid is true for every thread
     /// whenever Cursor runs and decides nothing. Those rows are active-only,
