@@ -25,6 +25,13 @@ final class BlockingWorkWiringAuditTests: XCTestCase {
             executor.contains("SubprocessDeadlinePolicy.deadline(requested: timeout)"),
             "The deadline must come from the policy, so callers cannot opt out of having one."
         )
+        XCTAssertFalse(
+            executor.contains("readers.wait()"),
+            "A descendant can retain a pipe after the child exits, so reader drain also needs a deadline."
+        )
+        XCTAssertTrue(executor.contains("readers.wait(timeout:"))
+        XCTAssertTrue(executor.contains("stdoutPipe.fileHandleForReading.closeFile()"))
+        XCTAssertTrue(executor.contains("stderrPipe.fileHandleForReading.closeFile()"))
     }
 
     func testTheRunnerKeepsItsOwnThreadsAndBoundsThem() throws {

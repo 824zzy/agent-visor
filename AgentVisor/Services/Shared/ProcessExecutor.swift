@@ -233,11 +233,25 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
                 _ = termination.wait(timeout: .now() + 1)
             }
         }
-        readers.wait()
+
+        // A child can exit while one of its descendants keeps stdout or stderr
+        // open. Draining without a deadline would then defeat the process
+        // deadline above. On process timeout, close our read ends immediately;
+        // otherwise allow one short drain before closing a retained pipe.
+        if timedOut {
+            stdoutPipe.fileHandleForReading.closeFile()
+            stderrPipe.fileHandleForReading.closeFile()
+        }
+        let readerDrainTimedOut = readers.wait(timeout: .now() + 1) == .timedOut
+        if readerDrainTimedOut && !timedOut {
+            stdoutPipe.fileHandleForReading.closeFile()
+            stderrPipe.fileHandleForReading.closeFile()
+            _ = readers.wait(timeout: .now() + 1)
+        }
         process.terminationHandler = nil
 
-        if timedOut {
-            Self.logger.error("Command timed out: \(executable, privacy: .public)")
+        if timedOut || readerDrainTimedOut {
+            Self.logger.error("Command or output drain timed out: \(executable, privacy: .public)")
             return .failure(.timedOut(command: executable))
         }
 
