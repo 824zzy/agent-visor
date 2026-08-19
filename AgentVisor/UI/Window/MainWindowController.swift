@@ -121,9 +121,8 @@ final class MainWindowController: NSWindowController {
         show()
     }
 
-    /// Hotkey-friendly toggle: bring the window forward when hidden or
-    /// not key, otherwise hide it. Replaces the legacy notch panel
-    /// toggle so the global hotkey now drives the main window.
+    /// Bring the Sessions browser forward when hidden or not key. Hide it when
+    /// the user invokes the toggle while it is already active.
     func toggleSessions() {
         guard let window else { return }
         if window.isVisible && window.isKeyWindow {

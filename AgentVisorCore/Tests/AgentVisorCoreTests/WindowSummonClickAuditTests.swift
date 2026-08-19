@@ -27,11 +27,11 @@ final class WindowSummonClickAuditTests: XCTestCase {
             "The always-on mouseMoved/leftMouseDown/leftMouseDragged aggregator is retired; nothing should reintroduce it."
         )
 
-        let viewModel = try source(root, "AgentVisor/Core/NotchViewModel.swift")
+        let viewModel = try source(root, "AgentVisor/Core/PillStripViewModel.swift")
         for banned in ["EventMonitors", "handleMouseDown", "handleMouseMove", "isPointInNotch"] {
             XCTAssertFalse(
                 viewModel.contains(banned),
-                "NotchViewModel must not resolve global pointer events (\(banned)); it holds captured geometry that outlives display arrangements."
+                "PillStripViewModel must not resolve global pointer events (\(banned)); it holds captured geometry that outlives display arrangements."
             )
         }
     }
@@ -50,11 +50,11 @@ final class WindowSummonClickAuditTests: XCTestCase {
 
     func testPillClickRoutingRejectsStaleDisplayGeometry() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
-        let notchView = try source(root, "AgentVisor/UI/Views/NotchView.swift")
-        let viewModel = try source(root, "AgentVisor/Core/NotchViewModel.swift")
+        let pillStrip = try source(root, "AgentVisor/UI/Views/PillStripView.swift")
+        let viewModel = try source(root, "AgentVisor/Core/PillStripViewModel.swift")
 
         XCTAssertTrue(
-            notchView.contains("guard !viewModel.isGeometryStale else {"),
+            pillStrip.contains("guard !viewModel.isGeometryStale else {"),
             "handleSideClick must ignore clicks while its captured geometry no longer matches its display."
         )
         XCTAssertTrue(

@@ -4,8 +4,8 @@ import Combine
 import CoreGraphics
 
 @MainActor
-final class NotchMenuLayoutCoordinator: ObservableObject {
-    private static let initialSnapshot = NotchMenuLayoutPolicy.begin(
+final class MenuBarLayoutCoordinator: ObservableObject {
+    private static let initialSnapshot = MenuBarLayoutPolicy.begin(
         generation: 0,
         targetScreenID: "unconfigured",
         ownerBundleID: nil,
@@ -25,7 +25,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
         let ownerPid: pid_t?
         let ownerBundleID: String?
         let ownerIsResolved: Bool
-        let resolutionSource: NotchMenuOwnerResolver.Resolution.Source
+        let resolutionSource: MenuBarOwnerResolver.Resolution.Source
     }
 
     private struct ProbeRequest: Sendable {
@@ -101,7 +101,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
             return
         }
         guard app.activationPolicy == .regular else {
-            NotchMenuDiagnostics.log("activation skip non-regular app=\(app.bundleIdentifier ?? "?")")
+            MenuBarDiagnostics.log("activation skip non-regular app=\(app.bundleIdentifier ?? "?")")
             return
         }
 
@@ -130,7 +130,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
             frontmostPid: observedFrontmostPid,
             screenRect: screenRect
         )
-        if NotchMenuContextRefreshPolicy.shouldResolveOwner(
+        if MenuBarContextRefreshPolicy.shouldResolveOwner(
             hasContext: context != nil,
             contextFrontmostPid: context?.frontmostPid,
             observedFrontmostPid: observedFrontmostPid,
@@ -180,7 +180,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
                let ownerPid = request.ownerPid,
                ownerPid != ownPid,
                let ownerBundleID = request.ownerBundleID,
-               let measured = NotchMenuProbe.menuBarRightEdge(
+               let measured = MenuBarProbe.menuBarRightEdge(
                    for: ownerPid,
                    targetScreenRect: request.targetScreenRect,
                    screenFrames: request.screenFrames,
@@ -192,7 +192,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
                     bundleID: ownerBundleID
                 )
             } else {
-                let edge = NotchMenuProbe.screenMenuRightEdge(
+                let edge = MenuBarProbe.screenMenuRightEdge(
                     screenRect: request.targetScreenRect,
                     primaryScreenHeight: request.primaryScreenHeight
                 )
@@ -222,7 +222,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
     /// probe tick (to advance a pending contraction) and after each apply (to
     /// capture a freshly measured edge immediately).
     private func refreshStableEdge(screenRect: CGRect) {
-        let live = NotchMenuLayoutPolicy.renderedEdge(for: reconciliationSnapshot)
+        let live = MenuBarLayoutPolicy.renderedEdge(for: reconciliationSnapshot)
         let updated = MenuOwnerEdgeHoldPolicy.applying(
             observedEdge: live,
             observedAt: Foundation.ProcessInfo.processInfo.systemUptime,
@@ -263,7 +263,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
         let localOwnerEdge = newContext.ownerPid == getpid()
             ? Self.localMenuBarRightEdge(screenRect: screenRect)
             : nil
-        let initial = NotchMenuLayoutPolicy.begin(
+        let initial = MenuBarLayoutPolicy.begin(
             generation: generation,
             targetScreenID: newContext.targetScreenID,
             ownerBundleID: newContext.ownerBundleID,
@@ -274,7 +274,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
         reconciliationSnapshot = initial
         snapshot = initial
 
-        NotchMenuDiagnostics.log(
+        MenuBarDiagnostics.log(
             "context generation=\(generation) owner=\(newContext.ownerBundleID ?? "nil")"
                 + " source=\(String(describing: newContext.resolutionSource))"
                 + " resolved=\(newContext.ownerIsResolved) cached=\(Int(cachedEdge ?? 0))"
@@ -294,10 +294,10 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
         let topmost = needsWindowInfo
             ? Self.topmostAppPid(on: screenRect, primaryScreenHeight: primaryHeight)
             : nil
-        let resolution = NotchMenuOwnerResolver.resolve(
+        let resolution = MenuBarOwnerResolver.resolve(
             frontmostPid: frontmostPid,
-            frontmostHasWindowOnNotchScreen: frontmostHasWindow,
-            topmostOnNotchPid: topmost,
+            frontmostHasWindowOnTargetScreen: frontmostHasWindow,
+            topmostOnTargetPid: topmost,
             separateSpaces: separateSpaces,
             isSingleScreen: isSingleScreen
         )
@@ -316,10 +316,10 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
     }
 
     private func apply(_ result: ProbeResult, request: ProbeRequest) {
-        let evidence: NotchMenuEdgeEvidence
+        let evidence: MenuBarEdgeEvidence
         switch result {
         case .owner(let edge, let onTargetScreen, let bundleID):
-            evidence = NotchMenuEdgeEvidence(
+            evidence = MenuBarEdgeEvidence(
                 generation: request.generation,
                 requestID: request.requestID,
                 ownerBundleID: bundleID,
@@ -327,7 +327,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
                 source: .ownerAccessibility(onTargetScreen: onTargetScreen)
             )
         case .localOwner(let edge, let bundleID):
-            evidence = NotchMenuEdgeEvidence(
+            evidence = MenuBarEdgeEvidence(
                 generation: request.generation,
                 requestID: request.requestID,
                 ownerBundleID: bundleID,
@@ -335,7 +335,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
                 source: .ownerLocalMenu
             )
         case .screen(let edge):
-            evidence = NotchMenuEdgeEvidence(
+            evidence = MenuBarEdgeEvidence(
                 generation: request.generation,
                 requestID: request.requestID,
                 ownerBundleID: nil,
@@ -343,16 +343,16 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
                 source: .screenWindowList
             )
         case .unavailable:
-            NotchMenuDiagnostics.log(
+            MenuBarDiagnostics.log(
                 "probe unavailable generation=\(request.generation) request=\(request.requestID)"
             )
             return
         }
 
         let previous = reconciliationSnapshot
-        let updated = NotchMenuLayoutPolicy.applying(evidence, to: previous)
+        let updated = MenuBarLayoutPolicy.applying(evidence, to: previous)
         guard updated.evidence == evidence else {
-            NotchMenuDiagnostics.log(
+            MenuBarDiagnostics.log(
                 "probe rejected generation=\(request.generation) request=\(request.requestID)"
                     + " currentGeneration=\(reconciliationSnapshot.generation)"
                     + " owner=\(request.ownerBundleID ?? "nil")"
@@ -361,8 +361,8 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
         }
 
         reconciliationSnapshot = updated
-        let previousEdge = NotchMenuLayoutPolicy.renderedEdge(for: previous)
-        let updatedEdge = NotchMenuLayoutPolicy.renderedEdge(for: updated)
+        let previousEdge = MenuBarLayoutPolicy.renderedEdge(for: previous)
+        let updatedEdge = MenuBarLayoutPolicy.renderedEdge(for: updated)
         if previousEdge != updatedEdge {
             snapshot = updated
         }
@@ -371,7 +371,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
             MenuBarWidthCache.write(evidence.edge, bundleID: ownerBundleID)
         }
         if previous.evidence?.source != evidence.source || previousEdge != updatedEdge {
-            NotchMenuDiagnostics.log(
+            MenuBarDiagnostics.log(
                 "probe accepted generation=\(evidence.generation) request=\(evidence.requestID)"
                     + " owner=\(evidence.ownerBundleID ?? "screen") edge=\(Int(evidence.edge))"
                     + " source=\(String(describing: evidence.source))"
@@ -515,7 +515,7 @@ final class NotchMenuLayoutCoordinator: ObservableObject {
                 continue
             }
             let app = NSRunningApplication(processIdentifier: pid)
-            guard NotchMenuOwnerCandidatePolicy.canOwnTargetMenu(
+            guard MenuBarOwnerCandidatePolicy.canOwnTargetMenu(
                 windowLayer: window[kCGWindowLayer as String] as? Int ?? 0,
                 isOwnProcess: pid == ownPid,
                 isOnTargetScreen: target.contains(windowCenter(bounds)),
@@ -570,7 +570,7 @@ private enum MenuBarWidthCache {
     }
 }
 
-private enum NotchMenuProbe {
+private enum MenuBarProbe {
     struct Measurement: Sendable {
         let edge: CGFloat
         let onTargetScreen: Bool
@@ -766,7 +766,7 @@ private enum NotchMenuProbe {
     }
 }
 
-private enum NotchMenuDiagnostics {
+private enum MenuBarDiagnostics {
     private static let enabled = UserDefaults.standard.bool(forKey: "menuDetectLog")
     private static let queue = DispatchQueue(label: "com.824zzy.AgentVisor.menuDetectLog")
     private static let url = FileManager.default.homeDirectoryForCurrentUser

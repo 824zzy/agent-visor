@@ -7,12 +7,12 @@ final class SessionNavigatorKeyboardWiringAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Components")
-            .appendingPathComponent("NotchSideContent.swift"))
-        let notchView = try String(contentsOf: root
+            .appendingPathComponent("PillStripContent.swift"))
+        let pillStrip = try String(contentsOf: root
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Views")
-            .appendingPathComponent("NotchView.swift"))
+            .appendingPathComponent("PillStripView.swift"))
 
         XCTAssertTrue(sideContent.contains("SessionNavigatorKeyboardEventMonitor"))
         XCTAssertTrue(sideContent.contains("CGEvent.tapCreate("))
@@ -28,7 +28,7 @@ final class SessionNavigatorKeyboardWiringAuditTests: XCTestCase {
         XCTAssertTrue(sideContent.contains("searchQuery = decision.query"))
         XCTAssertTrue(sideContent.contains("isKeyboardSelected:"))
         XCTAssertFalse(sideContent.contains("super.keyDown(with: event)"))
-        XCTAssertTrue(notchView.contains("onDismiss: {\n                        dismissTransientPopovers()"))
+        XCTAssertTrue(pillStrip.contains("onDismiss: {\n                        dismissTransientPopovers()"))
     }
 
     private func repoRoot(from testFile: URL) -> URL {

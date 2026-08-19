@@ -3,8 +3,8 @@
 //  AgentVisor
 //
 //  Monitors screen configuration changes and wake from sleep events.
-//  Both trigger a window recreate because the NotchPanel can end up in a
-//  stale or misaligned state after the system wakes from lid-close sleep.
+//  Both rebuild the pill strip because saved display geometry can become stale
+//  after wake or a display arrangement change.
 //
 
 import AppKit

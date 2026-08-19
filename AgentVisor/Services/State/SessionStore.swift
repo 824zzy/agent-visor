@@ -2,7 +2,7 @@
 //  SessionStore.swift
 //  AgentVisor
 //
-//  Central state manager for all Claude sessions.
+//  Central state manager for all coding-agent sessions.
 //  Single source of truth - all state mutations flow through process().
 //
 
@@ -13,7 +13,7 @@ import Foundation
 import Mixpanel
 import os.log
 
-/// Central state manager for all Claude sessions
+/// Central state manager for all coding-agent sessions.
 /// Uses Swift actor for thread-safe state mutations
 actor SessionStore {
     static let shared = SessionStore()
@@ -3378,7 +3378,7 @@ actor SessionStore {
 
     /// Single publish boundary. Drops hidden sessions before sending so BOTH
     /// subscribers — the window sidebar (`MainWindowViewModel`) and the
-    /// menu-bar pills (`ClaudeSessionMonitor`) — honor the hidden set without
+    /// menu-bar pills (`SessionMonitor`) — honor the hidden set without
     /// each re-implementing the filter. Sort matches the prior behavior.
     private func send(_ sessionsToPublish: [SessionState]) {
         let visible = hiddenSessionIds.isEmpty
@@ -3549,7 +3549,7 @@ actor SessionStore {
     private var pruneTask: Task<Void, Never>?
 
     /// Start periodic pruning of dead sessions (every 10 seconds)
-    /// Bootstrap discovered sessions (called with results from ClaudeSessionMonitor.discoverExistingSessions)
+    /// Bootstrap discovered sessions (called with results from SessionMonitor.discoverExistingSessions)
     func bootstrapSessions(_ discovered: [DiscoveredSession]) async {
         guard !discovered.isEmpty else { return }
         debugLog("[Scan] Bootstrapping \(discovered.count) discovered sessions")
@@ -4016,7 +4016,7 @@ actor SessionStore {
     /// loop, so it cannot run inline on the actor.
     private static func discoverInBackground() async -> [DiscoveredSession] {
         await BlockingWork.run("discoverExistingSessions") {
-            ClaudeSessionMonitor.discoverExistingSessions()
+            SessionMonitor.discoverExistingSessions()
         }
     }
 

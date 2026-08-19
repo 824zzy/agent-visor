@@ -1,9 +1,9 @@
 import XCTest
 @testable import AgentVisorCore
 
-final class NotchMenuOwnerCandidatePolicyTests: XCTestCase {
+final class MenuBarOwnerCandidatePolicyTests: XCTestCase {
     func testRegularBundleBackedWindowCanOwnTargetMenu() {
-        XCTAssertTrue(NotchMenuOwnerCandidatePolicy.canOwnTargetMenu(
+        XCTAssertTrue(MenuBarOwnerCandidatePolicy.canOwnTargetMenu(
             windowLayer: 0,
             isOwnProcess: false,
             isOnTargetScreen: true,
@@ -13,7 +13,7 @@ final class NotchMenuOwnerCandidatePolicyTests: XCTestCase {
     }
 
     func testHelperWithoutBundleIdentifierCannotOwnTargetMenu() {
-        XCTAssertFalse(NotchMenuOwnerCandidatePolicy.canOwnTargetMenu(
+        XCTAssertFalse(MenuBarOwnerCandidatePolicy.canOwnTargetMenu(
             windowLayer: 0,
             isOwnProcess: false,
             isOnTargetScreen: true,
@@ -23,7 +23,7 @@ final class NotchMenuOwnerCandidatePolicyTests: XCTestCase {
     }
 
     func testNonRegularHelperCannotOwnTargetMenu() {
-        XCTAssertFalse(NotchMenuOwnerCandidatePolicy.canOwnTargetMenu(
+        XCTAssertFalse(MenuBarOwnerCandidatePolicy.canOwnTargetMenu(
             windowLayer: 0,
             isOwnProcess: false,
             isOnTargetScreen: true,

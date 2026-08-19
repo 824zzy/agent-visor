@@ -171,7 +171,7 @@ final class PendingEchoLogicTests: XCTestCase {
     }
 
     func test_reconcile_echoWithPlainImagePrefix_matchesNumberedReal() {
-        // Notch path's optimistic echo decorates with [Image] (no number).
+        // Chat's optimistic echo decorates with [Image] without a number.
         // Be tolerant on both sides.
         let state: [String: [PendingEchoItem]] = [
             "S1": [PendingEchoItem(id: "echo:1", text: "[Image] hello")]

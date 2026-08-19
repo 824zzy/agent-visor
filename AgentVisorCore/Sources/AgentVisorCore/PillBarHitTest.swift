@@ -64,7 +64,7 @@ public enum PillBarHitTest {
     ///     left bar's *right* edge or the right bar's *left* edge. The
     ///     bar's pills extend away from this anchor.
     ///   - barWidth: Maximum width of the bar (matches `leftSafeWidth` /
-    ///     `rightSafeWidth` from `NotchView`).
+    ///     `rightSafeWidth` from `PillStripView`).
     public static func resolve(
         clickX: CGFloat,
         side: Side,
@@ -85,7 +85,7 @@ public enum PillBarHitTest {
         //
         // The +N overflow pill, when present, is the *outermost* slot —
         // it always sits at the far end of the row, away from the notch.
-        // (Matches the `HStack` layout in `NotchPillBar`, which places
+        // (Matches the `HStack` layout in `PillBar`, which places
         // the overflow button after all session pills.)
         enum SlotTarget {
             case session(String)

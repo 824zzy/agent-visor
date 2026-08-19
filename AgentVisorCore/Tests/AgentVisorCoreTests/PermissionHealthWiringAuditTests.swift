@@ -12,13 +12,13 @@ final class PermissionHealthWiringAuditTests: XCTestCase {
     func testAccessibilityRecoveryRearmsHotkeysAndReprobesMenuLayout() throws {
         let appDelegate = try source("AgentVisor/App/AppDelegate.swift")
         let hotkeyManager = try source("AgentVisor/Events/HotkeyManager.swift")
-        let notchView = try source("AgentVisor/UI/Views/NotchView.swift")
+        let pillStrip = try source("AgentVisor/UI/Views/PillStripView.swift")
 
         XCTAssertTrue(appDelegate.contains("PermissionHealthMonitor.shared.onReadyTransition"))
         XCTAssertTrue(appDelegate.contains("HotkeyManager.shared.rearmAfterAccessibilityRecovery()"))
         XCTAssertTrue(hotkeyManager.contains("func rearmAfterAccessibilityRecovery()"))
-        XCTAssertTrue(notchView.contains("publisher(for: .agentVisorAccessibilityRecovered)"))
-        XCTAssertTrue(notchView.contains("menuLayoutCoordinator.probe(screenRect: viewModel.screenRect)"))
+        XCTAssertTrue(pillStrip.contains("publisher(for: .agentVisorAccessibilityRecovered)"))
+        XCTAssertTrue(pillStrip.contains("menuLayoutCoordinator.probe(screenRect: viewModel.screenRect)"))
     }
 
     func testMainWindowAndSettingsRenderTheSharedPermissionHealth() throws {

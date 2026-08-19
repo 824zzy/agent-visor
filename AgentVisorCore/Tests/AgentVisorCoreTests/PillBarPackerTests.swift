@@ -34,7 +34,7 @@ final class PillBarPackerTests: XCTestCase {
     // T3: two pills that both fit are balanced ACROSS the notch (one per
     // side) rather than stacked on the left — the pills should flank the
     // notch. a(40) on the left, b(50) on the right minimizes imbalance.
-    func testTwoPillsBalancedAcrossNotch() {
+    func testTwoPillsBalancedAcrossCenter() {
         let result = PillBarPacker.pack(
             candidates: [
                 .init(id: "a", pillWidth: 40),
@@ -53,7 +53,7 @@ final class PillBarPackerTests: XCTestCase {
     // T4: three pills with room on both sides split for balance, keeping
     // reading order: a left of the notch, b+c right of it. (Left width 40
     // vs right width 84 is the most balanced feasible contiguous split.)
-    func testThreePillsBalancedAcrossNotch() {
+    func testThreePillsBalancedAcrossCenter() {
         let result = PillBarPacker.pack(
             candidates: [
                 .init(id: "a", pillWidth: 40),
@@ -72,7 +72,7 @@ final class PillBarPackerTests: XCTestCase {
 
     // T4b: many equal-width pills with ample room split roughly in half so
     // they spread evenly around the notch instead of clustering left.
-    func testManyPillsSplitEvenlyAroundNotch() {
+    func testManyPillsSplitEvenlyAroundCenter() {
         let result = PillBarPacker.pack(
             candidates: (0..<6).map { .init(id: "p\($0)", pillWidth: 40) },
             leftMax: 1000,

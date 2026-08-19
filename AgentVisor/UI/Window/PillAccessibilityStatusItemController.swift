@@ -89,7 +89,7 @@ final class PillAccessibilityStatusItemController {
     @objc private func performSetup() {
         let monitor = PermissionHealthMonitor.shared
         if PermissionSetupPolicy.primaryAction(for: monitor.health) == .requestAccessibility {
-            NotchPanelRedirect.openMainWindow?()
+            SessionBrowserRedirect.openMainWindow?()
             DispatchQueue.main.async {
                 monitor.performPrimarySetupAction()
             }
@@ -99,6 +99,6 @@ final class PillAccessibilityStatusItemController {
     }
 
     @objc private func openMainWindow() {
-        NotchPanelRedirect.openMainWindow?()
+        SessionBrowserRedirect.openMainWindow?()
     }
 }

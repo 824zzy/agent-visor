@@ -20,7 +20,7 @@ final class MainWindowActivationPolicyTests: XCTestCase {
         for reason in [
             MainWindowActivationReason.appReopen,
             .settings,
-            .notchClick,
+            .menuBarStatusItem,
             .overflowPill,
             .approvalNotificationTap,
         ] {

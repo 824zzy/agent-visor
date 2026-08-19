@@ -1,11 +1,11 @@
 //
-//  NotchSideContent.swift
+//  PillStripContent.swift
 //  AgentVisor
 //
-//  Session pill bars that flank the hardware notch in the menu bar.
-//  Both left and right bars render the same pill content (project name +
+//  Session pills packed between app menus and system status items.
+//  Both left and right groups render the same pill content: session title and
 //  status dot). PillBarCoordinator splits sessions across the two sides
-//  based on the safe widths reported by NotchView (which accounts for
+//  based on the safe widths reported by PillStripView (which accounts for
 //  app menu items on the left and system tray icons on the right).
 //
 
@@ -304,7 +304,7 @@ struct FirstMouseActionOverlay: NSViewRepresentable {
 // MARK: - Pill Frame Reporting (diagnostic)
 //
 // Each rendered pill publishes its actual screen-space frame via this
-// PreferenceKey. NotchView aggregates them so the click handler can
+// PreferenceKey. PillStripView aggregates them so the click handler can
 // compare math vs reality at log time. Diagnostic-only — no behavior
 // depends on it.
 
@@ -341,13 +341,13 @@ private struct PillShortcutKeycap: View {
 }
 
 /// Pill-shaped, presentation-only view for a session. NOT a Button —
-/// click handling lives in `NotchView.handleSideClick` which resolves
+/// click handling lives in `PillStripView.handleSideClick` which resolves
 /// against a snapshot and dispatches via `dispatchHit`. The flash is
 /// a derived effect of that dispatch: `PillFlashStore.shared.flashingId`
 /// gates the animation, and is set on the same code path that runs
 /// the navigation. Two effects, one source.
 ///
-/// Why no Button: the host windows (`NotchPanel`, `PillsStripPanel`)
+/// Why no Button: the host window (`PillsStripPanel`)
 /// use `ignoresMouseEvents = true`, so SwiftUI hit-testing never
 /// receives the click anyway. The earlier Button-with-action layout
 /// was dead surface that created a silent failure mode where the
@@ -1435,11 +1435,11 @@ struct UsagePopoverConfiguration {
     let onWindowChange: (NSWindow?) -> Void
 }
 
-/// Renders a row of session pills on one side of the notch. The caller
+/// Renders one ordered group of session pills. The caller
 /// (`PillBarCoordinator.pack`) decides which pills go on which side and
 /// where the +N overflow slot lives. This view just renders what it's
 /// handed, so packing math is testable in `AgentVisorCore`.
-struct NotchPillBar: View {
+struct PillBar: View {
     enum Side { case left, right }
 
     let side: Side
@@ -1460,7 +1460,7 @@ struct NotchPillBar: View {
     var showsClaudeUsage: Bool = false
     // No `onOverflowTap` — the overflow pill is presentation-only,
     // same as the session pills. The `.overflow` hit case in
-    // `NotchView.dispatchHit` toggles the Sessions popover state.
+    // `PillStripView.dispatchHit` toggles the Sessions popover state.
 
     var body: some View {
         if visiblePills.isEmpty && overflowCount == 0 && usagePopover == nil {
@@ -1476,7 +1476,7 @@ struct NotchPillBar: View {
                         horizontalPadding: horizontalPadding
                     )
                         // Diagnostic: report each pill's actual rendered
-                        // global frame so NotchView's click handler can
+                        // global frame so PillStripView's click handler can
                         // compare math-width vs SwiftUI-width.
                         .background(
                             GeometryReader { geo in

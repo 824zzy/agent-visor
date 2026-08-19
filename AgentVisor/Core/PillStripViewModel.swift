@@ -1,11 +1,9 @@
 //
-//  NotchViewModel.swift
+//  PillStripViewModel.swift
 //  AgentVisor
 //
-//  Display identity, geometry and full-screen state for the menu-bar
-//  pills strip. The in-notch chat panel it was originally written for is
-//  gone, so this model holds no open/close state: the strip is either
-//  rendered or hidden by the full-screen visibility policy.
+//  Display identity, geometry, and full-screen state for the menu-bar pill
+//  strip. The model has no browser or Chat state.
 //
 
 import AppKit
@@ -17,7 +15,7 @@ import SwiftUI
 private let fsLogger = Logger(subsystem: AppBranding.loggerSubsystem, category: "FullScreenDetector")
 
 @MainActor
-class NotchViewModel: ObservableObject {
+class PillStripViewModel: ObservableObject {
     // MARK: - Published State
 
     /// True when a native full-screen window covers this screen. The view

@@ -3,7 +3,7 @@ import Foundation
 /// Drops Cursor IDE Agents Window transcripts that are older than a
 /// configurable cutoff before they reach the agent-visor sidebar.
 ///
-/// The discovery walker (`ClaudeSessionMonitor.discoverHistoricalCursorSessions`)
+/// The discovery walker (`SessionMonitor.discoverHistoricalCursorSessions`)
 /// previously sorted every transcript under `~/.cursor/projects/*/agent-transcripts/`
 /// by mtime and kept the top-N. With no age cap, a user with only a
 /// handful of historical Cursor transcripts saw rows weeks-old stuck

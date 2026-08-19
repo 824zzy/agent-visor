@@ -2485,7 +2485,7 @@ struct ChatApprovalBar: View {
                     .padding(10)
                 }
                 // Shrink the detail viewport when the feedback field is shown so
-                // the inline TextField has room to render — NotchView clips
+                // the inline TextField has room to render — PillStripView clips
                 // overflow, so without yielding space here the field would be
                 // pushed below the visible panel bottom.
                 .frame(maxHeight: state.expandedIndex != nil ? 90 : 200)
@@ -2643,18 +2643,15 @@ struct ChatApprovalBar: View {
         let options = approvalOptions
         let denyHandler = onDeny
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // Originally gated on NotchPanel; with the panel retired,
-            // the approval bar lives in the main window. Local monitors
-            // are already scoped to the app, and the bar only mounts
-            // when a permission approval is live, so accepting any
-            // window is correct.
+            // Local monitors are app-scoped, and the approval bar mounts only
+            // while a permission approval is live.
             guard event.window != nil else { return event }
 
             // Ctrl+C — deny the approval with no reason. Mirrors the
             // AskUserQuestion form's Ctrl+C-cancels behavior so the
             // muscle memory is the same across both approval surfaces.
             // Goes through `onDeny`, which routes to
-            // `ClaudeSessionMonitor.denyPermission` → socket "deny"
+            // `SessionMonitor.denyPermission` → socket "deny"
             // (or TUI Esc fallback for replayed sidecars) +
             // `.permissionDenied` dispatch.
             let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -3194,11 +3191,8 @@ class SubmittableTextView: NSTextView {
         super.paste(sender)
     }
 
-    /// The notch panel is a .nonactivatingPanel with no app menu bar, so
-    /// Cmd+V has no Edit > Paste menu item to dispatch through and the
-    /// normal NSTextView clipboard shortcuts never fire. Intercept the
-    /// standard editing shortcuts here and route them to the corresponding
-    /// actions directly.
+    /// Handle editing shortcuts in the embedded text view, including image
+    /// paste, before AppKit routes them through the window menu.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.modifierFlags.contains(.command),
               window?.firstResponder === self else {
@@ -3287,13 +3281,9 @@ class SubmittableTextView: NSTextView {
             handler()
             return
         }
-        // ESC: leave the chat view immediately. The ChatView's onDisappear
-        // persists the current text + attachments to DraftStore, so the
-        // user's draft survives and is restored on re-entry.
+        // The window owns Escape navigation. Swallow it here so the embedded
+        // text view does not beep when no text action applies.
         if event.keyCode == 53 {
-            // ESC: legacy notch panel exited via .notchEscapePressed.
-            // The notch panel is gone; window-mode owns its own ESC
-            // handling. Swallow here so the textview doesn't beep.
             return
         }
         // Enter/Return without Shift = submit
@@ -3373,7 +3363,7 @@ struct IdentityScrollAnchor: ViewModifier {
             // to the visual TOP of the panel after the outer
             // `.scaleEffect(y: -1)` flip — i.e. the row the user is
             // reading. Pinning that row's id keeps it visually fixed
-            // across history mutations and notch close/reopen.
+            // across history mutations and view refreshes.
             content.scrollPosition(id: $anchorItemId, anchor: .bottom)
         } else {
             content
@@ -3381,29 +3371,12 @@ struct IdentityScrollAnchor: ViewModifier {
     }
 }
 
-/// Window-mode (un-flipped) helper: tells the ScrollView its default
-/// anchor is the bottom so freshly mounted content lands on the
-/// newest message, matching the notch's perceived behavior. Notch
-/// itself doesn't need this — its content-top IS visual-bottom after
-/// the y-flip, so the ScrollView's default content-top anchor already
-/// gives the right thing.
-struct WindowDefaultScrollAnchor: ViewModifier {
-    let active: Bool
-
-    func body(content: Content) -> some View {
-        if active, #available(macOS 15.0, *) {
-            content.defaultScrollAnchor(.bottom)
-        } else {
-            content
-        }
-    }
-}
 /// Walks up to the enclosing NSScrollView and registers it with
 /// `ChatScrollBridge`. The bridge is consumed by the PgUp/PgDn keyboard
 /// monitor (paging) and by the "already at bottom?" check in the
 /// auto-scroll path. No save/restore happens here — within-session scroll
 /// preservation is provided by NSScrollView's own contentOffset memory
-/// because ChatView is always-mounted in the panel hierarchy.
+/// because ChatView stays mounted in the main-window hierarchy.
 @available(macOS 15.0, *)
 private struct ChatScrollBridgeRegistrar: NSViewRepresentable {
     let sessionId: String
@@ -3614,8 +3587,7 @@ struct ToolResultDetailView: View {
 /// plan, plus a "back" button that returns to the previous state. The
 /// Yes/No decision is still made in the approval bar — this view is
 /// read-only by design, so the user can examine the plan without
-/// committing to a verdict yet. ESC dismisses too via the global ESC
-/// handler that NotchPanel installs.
+/// committing to a verdict yet. The main window also routes Escape back.
 struct PlanDetailView: View {
     let plan: String
     let onDismiss: () -> Void

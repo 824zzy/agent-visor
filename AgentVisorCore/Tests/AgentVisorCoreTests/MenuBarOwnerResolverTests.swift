@@ -1,7 +1,7 @@
 import XCTest
 @testable import AgentVisorCore
 
-final class NotchMenuOwnerResolverTests: XCTestCase {
+final class MenuBarOwnerResolverTests: XCTestCase {
     private func owner(
         frontmost: pid_t? = 100,
         frontmostHasWindow: Bool = true,
@@ -9,10 +9,10 @@ final class NotchMenuOwnerResolverTests: XCTestCase {
         separateSpaces: Bool = true,
         single: Bool = false
     ) -> pid_t? {
-        NotchMenuOwnerResolver.owner(
+        MenuBarOwnerResolver.owner(
             frontmostPid: frontmost,
-            frontmostHasWindowOnNotchScreen: frontmostHasWindow,
-            topmostOnNotchPid: topmost,
+            frontmostHasWindowOnTargetScreen: frontmostHasWindow,
+            topmostOnTargetPid: topmost,
             separateSpaces: separateSpaces,
             isSingleScreen: single
         )
@@ -27,23 +27,23 @@ final class NotchMenuOwnerResolverTests: XCTestCase {
         XCTAssertEqual(owner(frontmost: 100, topmost: 200, separateSpaces: false), 100)
     }
 
-    func testFrontmostWithWindowOnNotchScreenOwnsMenu() {
-        // The regression case: Chrome (frontmost, has a window on the notch
+    func testFrontmostWithWindowOnTargetScreenOwnsMenu() {
+        // The regression case: Chrome (frontmost, has a window on the target
         // screen) owns the menu — NOT Obsidian (topmost background window).
         XCTAssertEqual(owner(frontmost: 100, frontmostHasWindow: true, topmost: 200), 100)
     }
 
     func testFrontmostOnOtherDisplayFallsBackToTopmost() {
-        // Frontmost app has no window on the notch screen (it's active on an
-        // external display) → notch menu belongs to the topmost-on-notch app.
+        // Frontmost app has no window on the target screen (it's active on an
+        // external display) → target menu belongs to the topmost-on-target app.
         XCTAssertEqual(owner(frontmost: 100, frontmostHasWindow: false, topmost: 200), 200)
     }
 
     func testTopmostOnTargetScreenIsAConfidentResolution() {
-        let resolution = NotchMenuOwnerResolver.resolve(
+        let resolution = MenuBarOwnerResolver.resolve(
             frontmostPid: 100,
-            frontmostHasWindowOnNotchScreen: false,
-            topmostOnNotchPid: 200,
+            frontmostHasWindowOnTargetScreen: false,
+            topmostOnTargetPid: 200,
             separateSpaces: true,
             isSingleScreen: false
         )
@@ -58,10 +58,10 @@ final class NotchMenuOwnerResolverTests: XCTestCase {
     }
 
     func testFrontmostFallbackIsMarkedUnresolved() {
-        let resolution = NotchMenuOwnerResolver.resolve(
+        let resolution = MenuBarOwnerResolver.resolve(
             frontmostPid: 100,
-            frontmostHasWindowOnNotchScreen: false,
-            topmostOnNotchPid: nil,
+            frontmostHasWindowOnTargetScreen: false,
+            topmostOnTargetPid: nil,
             separateSpaces: true,
             isSingleScreen: false
         )

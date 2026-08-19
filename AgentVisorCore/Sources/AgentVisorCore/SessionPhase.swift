@@ -2,7 +2,7 @@
 //  SessionPhase.swift
 //  AgentVisor
 //
-//  Explicit state machine for Claude session lifecycle.
+//  Explicit state machine for coding-agent session lifecycle.
 //  All state transitions are validated before being applied.
 //
 

@@ -15,7 +15,7 @@ import Foundation
 /// happily answer "yes, that point is mine" for a point that is physically on
 /// another display, which is how an invisible click target ended up floating
 /// in the middle of an external monitor. Global click routing lives in
-/// `NotchView.handleSideClick`, which checks `MenuBarGeometryFreshness` first.
+/// `PillStripView.handleSideClick`, which checks `MenuBarGeometryFreshness` first.
 struct NotchGeometry: Sendable {
     let deviceNotchRect: CGRect
     let screenRect: CGRect

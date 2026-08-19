@@ -1,8 +1,8 @@
 import XCTest
 
-final class NotchSideContentVisibilityAuditTests: XCTestCase {
+final class PillStripContentVisibilityAuditTests: XCTestCase {
     func testPillVisibilityUsesHybridSurfacePolicy() throws {
-        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripContentURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
             source.contains("PillSurfacePolicy.select"),
             "Pill visibility should flow through the Core hybrid surface policy."
@@ -22,7 +22,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
     }
 
     func testPillLabelsStayOnSessionIdentityInsteadOfRunningActivity() throws {
-        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripContentURL(from: URL(fileURLWithPath: #filePath)))
         let start = try XCTUnwrap(source.range(of: "static func sessionLabel(_ session: SessionState) -> String"))
         let end = try XCTUnwrap(
             source.range(
@@ -45,7 +45,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
     }
 
     func testPillBarUsesHybridSurfacePolicyInsteadOfProjectRoundRobin() throws {
-        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripContentURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
             source.contains("PillSurfacePolicy.select"),
             "Menu-bar pill selection should use the hybrid active-plus-recent-shortcut surface policy."
@@ -57,7 +57,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
     }
 
     func testRecentShortcutPillsAreStyledDistinctly() throws {
-        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripContentURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
             source.contains("let role: PillSurfaceRole"),
             "Visible pills should carry their active/recent role through to rendering."
@@ -69,7 +69,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
     }
 
     func testAllMenuBarPillsShareTwentyFourPointHeight() throws {
-        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripContentURL(from: URL(fileURLWithPath: #filePath)))
 
         XCTAssertTrue(source.contains("enum MenuBarPillMetrics"))
         XCTAssertTrue(source.contains("static let height: CGFloat = 24"))
@@ -81,7 +81,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
     }
 
     func testMenuBarPillTypographyAndPaddingUseSharedMetrics() throws {
-        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripContentURL(from: URL(fileURLWithPath: #filePath)))
 
         XCTAssertTrue(source.contains("static let sessionFontSize: CGFloat = 11"))
         XCTAssertTrue(source.contains("static let usageFontSize: CGFloat = 10.5"))
@@ -105,8 +105,8 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
 
     func testPackingPlanOwnsPressureGeometryForRenderingAndHitTesting() throws {
         let testFile = URL(fileURLWithPath: #filePath)
-        let sideContent = try String(contentsOf: notchSideContentURL(from: testFile))
-        let notchView = try String(contentsOf: notchViewURL(from: testFile))
+        let sideContent = try String(contentsOf: pillStripContentURL(from: testFile))
+        let pillStrip = try String(contentsOf: pillStripURL(from: testFile))
 
         XCTAssertTrue(sideContent.contains("let density: PillBarPacker.Density"))
         XCTAssertTrue(sideContent.contains("let pillSpacing: CGFloat"))
@@ -116,21 +116,21 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
         XCTAssertTrue(sideContent.contains("HStack(spacing: pillSpacing)"))
         XCTAssertTrue(sideContent.contains("OverflowPillButton(count: overflowCount, width: overflowPillWidth)"))
 
-        XCTAssertTrue(notchView.contains("width: pill.renderedWidth"))
-        XCTAssertTrue(notchView.contains("leftOverflowWidth: pack.leftOverflowWidth"))
-        XCTAssertTrue(notchView.contains("rightOverflowWidth: pack.rightOverflowWidth"))
-        XCTAssertTrue(notchView.contains("pillSpacing: pack.pillSpacing"))
-        XCTAssertTrue(notchView.contains("horizontalPadding: pack.horizontalPadding"))
+        XCTAssertTrue(pillStrip.contains("width: pill.renderedWidth"))
+        XCTAssertTrue(pillStrip.contains("leftOverflowWidth: pack.leftOverflowWidth"))
+        XCTAssertTrue(pillStrip.contains("rightOverflowWidth: pack.rightOverflowWidth"))
+        XCTAssertTrue(pillStrip.contains("pillSpacing: pack.pillSpacing"))
+        XCTAssertTrue(pillStrip.contains("horizontalPadding: pack.horizontalPadding"))
     }
 
-    func testPillBarsUseExactlyOneNotchEdgePaddingLayer() throws {
+    func testPillBarsUseExactlyOneCenterEdgePaddingLayer() throws {
         let testFile = URL(fileURLWithPath: #filePath)
-        let sideContent = try String(contentsOf: notchSideContentURL(from: testFile))
-        let notchView = try String(contentsOf: notchViewURL(from: testFile))
+        let sideContent = try String(contentsOf: pillStripContentURL(from: testFile))
+        let pillStrip = try String(contentsOf: pillStripURL(from: testFile))
 
         XCTAssertFalse(
             sideContent.contains(".padding(\n                side == .left ? .trailing : .leading"),
-            "NotchPillBar must not add a second notch-edge padding layer."
+            "PillBar must not add a second notch-edge padding layer."
         )
         XCTAssertTrue(sideContent.contains("let leftUsable = max(0, leftMax)"))
         XCTAssertTrue(sideContent.contains("usableWidth: Double(max(0, rightMax))"))
@@ -139,23 +139,23 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
         // collapses the center gap to the normal pill spacing, but both the
         // overlay padding and the snapshot anchors read it from one helper.
         XCTAssertTrue(
-            notchView.contains("let leftAnchor = pillLeftEdge - seamEdgePadding(pillSpacing: pack.pillSpacing)")
+            pillStrip.contains("let leftAnchor = pillLeftEdge - seamEdgePadding(pillSpacing: pack.pillSpacing)")
         )
         XCTAssertTrue(
-            notchView.contains("let rightAnchor = pillRightEdge + seamEdgePadding(pillSpacing: pack.pillSpacing)")
+            pillStrip.contains("let rightAnchor = pillRightEdge + seamEdgePadding(pillSpacing: pack.pillSpacing)")
         )
         XCTAssertEqual(
-            notchView.components(separatedBy: "seamEdgePadding(pillSpacing: pack.pillSpacing)").count - 1,
+            pillStrip.components(separatedBy: "seamEdgePadding(pillSpacing: pack.pillSpacing)").count - 1,
             4,
             "Both pill overlays and both hit-test anchors must share the one seam-padding helper."
         )
-        XCTAssertFalse(notchView.contains("2 * PillBarCoordinator.edgePadding"))
-        XCTAssertTrue(notchView.contains("leftBarWidth: leftSafeWidth,"))
-        XCTAssertTrue(notchView.contains("rightBarWidth: rightSafeWidth,"))
+        XCTAssertFalse(pillStrip.contains("2 * PillBarCoordinator.edgePadding"))
+        XCTAssertTrue(pillStrip.contains("leftBarWidth: leftSafeWidth,"))
+        XCTAssertTrue(pillStrip.contains("rightBarWidth: rightSafeWidth,"))
     }
 
     func testPackingPlanCarriesFullCompactAndTightLabelTiers() throws {
-        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripContentURL(from: URL(fileURLWithPath: #filePath)))
 
         XCTAssertTrue(source.contains("let labelTier: PillBarPacker.LabelTier"))
         XCTAssertTrue(source.contains("let compactLabel: String"))
@@ -172,7 +172,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
     }
 
     func testPillOverflowCountsAllNonVisibleWorkspaceSessions() throws {
-        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripContentURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
             source.contains("hiddenVisibleCount"),
             "The +N overflow pill should count every workspace session not rendered as a pill."
@@ -185,8 +185,8 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
 
     func testOverflowPopoverUsesOnlySessionsOmittedByTheRenderedPillPack() throws {
         let testFile = URL(fileURLWithPath: #filePath)
-        let sideContentSource = try String(contentsOf: notchSideContentURL(from: testFile))
-        let notchViewSource = try String(contentsOf: notchViewURL(from: testFile))
+        let sideContentSource = try String(contentsOf: pillStripContentURL(from: testFile))
+        let pillStripSource = try String(contentsOf: pillStripURL(from: testFile))
 
         XCTAssertTrue(
             sideContentSource.contains("let overflowSessions: [SessionState]"),
@@ -197,17 +197,17 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
             "Overflow sessions should come from the packer's hidden IDs, preserving priority order."
         )
         XCTAssertTrue(
-            notchViewSource.contains("from: pack.overflowSessions"),
+            pillStripSource.contains("from: pack.overflowSessions"),
             "The +N popover snapshot should be built from hidden sessions only."
         )
         XCTAssertFalse(
-            notchViewSource.contains("snapshot: navigatorSnapshot"),
+            pillStripSource.contains("snapshot: navigatorSnapshot"),
             "The +N popover must not receive the full workspace snapshot and duplicate visible pills."
         )
     }
 
     func testOverflowPopoverFreezesOverflowAndSearchCatalogWhileOpen() throws {
-        let source = try String(contentsOf: notchViewURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripURL(from: URL(fileURLWithPath: #filePath)))
 
         XCTAssertTrue(
             source.contains("@State private var frozenOverflowSnapshot: SidebarSessionListSnapshot?"),
@@ -241,8 +241,8 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
 
     func testOverflowPopoverSupportsInlineSearchWithoutBecomingTheFullBrowser() throws {
         let testFile = URL(fileURLWithPath: #filePath)
-        let sideContentSource = try String(contentsOf: notchSideContentURL(from: testFile))
-        let notchViewSource = try String(contentsOf: notchViewURL(from: testFile))
+        let sideContentSource = try String(contentsOf: pillStripContentURL(from: testFile))
+        let pillStripSource = try String(contentsOf: pillStripURL(from: testFile))
 
         XCTAssertTrue(sideContentSource.contains("let totalSessionCount: Int"))
         XCTAssertTrue(sideContentSource.contains("let allSessionsSnapshot: SidebarSessionListSnapshot"))
@@ -258,13 +258,13 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
             sideContentSource.contains("SessionNavigatorSummaryPolicy.openBrowserLabel")
         )
         XCTAssertTrue(
-            notchViewSource.contains("totalSessionCount: navigatorSnapshot.flatRows.count"),
+            pillStripSource.contains("totalSessionCount: navigatorSnapshot.flatRows.count"),
             "Search should advertise the complete recent catalog count, not the hidden-row count."
         )
     }
 
     func testSessionNavigatorPopoverShowsStatusFreshnessText() throws {
-        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripContentURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
             source.contains("statusFreshnessText"),
             "Navigator rows should expose the status freshness/inference gap instead of only showing an age chip."
@@ -280,7 +280,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
     }
 
     func testNavigationRecencyIsRecordedFromPillsAndNavigator() throws {
-        let source = try String(contentsOf: notchViewURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
             source.contains("SessionNavigationRecencyStore.shared.record"),
             "Pill clicks and navigator selections should record navigation recency so idle sessions can become recent shortcuts."
@@ -293,8 +293,8 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
 
     func testNavigationRecencyImmediatelyInvalidatesPillLayout() throws {
         let testFile = URL(fileURLWithPath: #filePath)
-        let sideContentSource = try String(contentsOf: notchSideContentURL(from: testFile))
-        let notchViewSource = try String(contentsOf: notchViewURL(from: testFile))
+        let sideContentSource = try String(contentsOf: pillStripContentURL(from: testFile))
+        let pillStripSource = try String(contentsOf: pillStripURL(from: testFile))
 
         XCTAssertTrue(
             sideContentSource.contains("final class SessionNavigationRecencyStore: ObservableObject"),
@@ -305,11 +305,11 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
             "The recency store should expose a lightweight layout invalidation signal."
         )
         XCTAssertTrue(
-            notchViewSource.contains("@ObservedObject private var navigationRecencyStore"),
+            pillStripSource.contains("@ObservedObject private var navigationRecencyStore"),
             "The menu-bar surface must observe navigation recency changes."
         )
         XCTAssertTrue(
-            notchViewSource.contains("navigationRecencyStore.revision"),
+            pillStripSource.contains("navigationRecencyStore.revision"),
             "Pill layout should establish an explicit dependency on the recency revision."
         )
     }
@@ -344,13 +344,13 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
 
     func testDedicatedSessionsNavigatorButtonIsRemovedFromMenuBar() throws {
         let testFile = URL(fileURLWithPath: #filePath)
-        let source = try String(contentsOf: notchViewURL(from: testFile))
-        let sideContent = try String(contentsOf: notchSideContentURL(from: testFile))
+        let source = try String(contentsOf: pillStripURL(from: testFile))
+        let sideContent = try String(contentsOf: pillStripContentURL(from: testFile))
         let coreSources = repoRootURL(from: testFile)
             .appendingPathComponent("AgentVisorCore/Sources/AgentVisorCore")
         XCTAssertFalse(
             source.contains("SessionNavigatorButtonLayout.layout"),
-            "NotchView should not reserve width for a dedicated Sessions N button."
+            "PillStripView should not reserve width for a dedicated Sessions N button."
         )
         XCTAssertFalse(
             source.contains("SessionNavigatorButtonMetrics.label"),
@@ -376,7 +376,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
     }
 
     func testPillPackingUsesNavigatorWorkspaceListWithoutDedicatedReservation() throws {
-        let source = try String(contentsOf: notchViewURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
             source.contains("let navigatorPillSessions = navigatorSnapshot.flatRows.compactMap"),
             "The pill strip should pack the same recent workspace list as the navigator."
@@ -392,7 +392,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
     }
 
     func testSessionsNavigatorPopoverRendersStateSummaryHeader() throws {
-        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripContentURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
             source.contains("SessionNavigatorSummaryPolicy.headerText"),
             "The Sessions popover header should explain the current workspace state counts."
@@ -404,7 +404,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
     }
 
     func testSessionsNavigatorPopoverUsesWideScreenSafeWidthPolicy() throws {
-        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripContentURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
             source.contains("SessionNavigatorPopoverLayoutPolicy.width"),
             "The Sessions popover should use a wider screen-safe width policy instead of a cramped fixed width."
@@ -416,7 +416,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
     }
 
     func testSessionsNavigatorRowPrioritizesTitleBeforeMetadataChips() throws {
-        let source = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripContentURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
             source.contains("private var titleLine"),
             "The navigator row should keep the title on a dedicated first line."
@@ -428,7 +428,7 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
     }
 
     func testOverflowPillUsesPillSnapshotCoordinates() throws {
-        let source = try String(contentsOf: notchViewURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: pillStripURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertFalse(
             source.contains("SessionNavigatorButtonHitTargetBuilder.target"),
             "The removed Sessions button should not have a separate hit target."
@@ -444,15 +444,15 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
     }
 
     func testOverflowPillTogglesSessionsPopover() throws {
-        let notchViewSource = try String(contentsOf: notchViewURL(from: URL(fileURLWithPath: #filePath)))
-        let sideContentSource = try String(contentsOf: notchSideContentURL(from: URL(fileURLWithPath: #filePath)))
+        let pillStripSource = try String(contentsOf: pillStripURL(from: URL(fileURLWithPath: #filePath)))
+        let sideContentSource = try String(contentsOf: pillStripContentURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
-            notchViewSource.contains("GlobalSessionShortcutPolicy.overflowAction(")
-                && notchViewSource.contains("isPresented: showSessionNavigatorPopover"),
+            pillStripSource.contains("GlobalSessionShortcutPolicy.overflowAction(")
+                && pillStripSource.contains("isPresented: showSessionNavigatorPopover"),
             "Clicking +N again while the popover is opening/open should dismiss it."
         )
         XCTAssertTrue(
-            notchViewSource.contains("showSessionNavigatorPopover = willShowNavigatorPopover"),
+            pillStripSource.contains("showSessionNavigatorPopover = willShowNavigatorPopover"),
             "+N clicks should assign the toggled state instead of forcing the popover open."
         )
         XCTAssertTrue(
@@ -465,13 +465,13 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
         )
     }
 
-    private func notchSideContentURL(from testFile: URL) -> URL {
+    private func pillStripContentURL(from testFile: URL) -> URL {
         let repoRoot = repoRootURL(from: testFile)
         return repoRoot
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Components")
-            .appendingPathComponent("NotchSideContent.swift")
+            .appendingPathComponent("PillStripContent.swift")
     }
 
     private func mainWindowViewModelURL(from testFile: URL) -> URL {
@@ -483,13 +483,13 @@ final class NotchSideContentVisibilityAuditTests: XCTestCase {
             .appendingPathComponent("MainWindowViewModel.swift")
     }
 
-    private func notchViewURL(from testFile: URL) -> URL {
+    private func pillStripURL(from testFile: URL) -> URL {
         let repoRoot = repoRootURL(from: testFile)
         return repoRoot
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Views")
-            .appendingPathComponent("NotchView.swift")
+            .appendingPathComponent("PillStripView.swift")
     }
 
     private func repoRootURL(from testFile: URL) -> URL {

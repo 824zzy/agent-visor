@@ -1,26 +1,26 @@
 import CoreGraphics
 import Foundation
 
-public enum NotchMenuEdgeSource: Equatable, Sendable {
+public enum MenuBarEdgeSource: Equatable, Sendable {
     case ownerCache
     case ownerLocalMenu
     case ownerAccessibility(onTargetScreen: Bool)
     case screenWindowList
 }
 
-public struct NotchMenuEdgeEvidence: Equatable, Sendable {
+public struct MenuBarEdgeEvidence: Equatable, Sendable {
     public let generation: UInt64
     public let requestID: UInt64
     public let ownerBundleID: String?
     public let edge: CGFloat
-    public let source: NotchMenuEdgeSource
+    public let source: MenuBarEdgeSource
 
     public init(
         generation: UInt64,
         requestID: UInt64 = 0,
         ownerBundleID: String?,
         edge: CGFloat,
-        source: NotchMenuEdgeSource
+        source: MenuBarEdgeSource
     ) {
         self.generation = generation
         self.requestID = requestID
@@ -30,12 +30,12 @@ public struct NotchMenuEdgeEvidence: Equatable, Sendable {
     }
 }
 
-public struct NotchMenuLayoutSnapshot: Equatable, Sendable {
+public struct MenuBarLayoutSnapshot: Equatable, Sendable {
     public let generation: UInt64
     public let targetScreenID: String
     public let ownerBundleID: String?
     public let ownerIsResolved: Bool
-    public let evidence: NotchMenuEdgeEvidence?
+    public let evidence: MenuBarEdgeEvidence?
     public let latestRequestID: UInt64
 
     public init(
@@ -43,7 +43,7 @@ public struct NotchMenuLayoutSnapshot: Equatable, Sendable {
         targetScreenID: String,
         ownerBundleID: String?,
         ownerIsResolved: Bool,
-        evidence: NotchMenuEdgeEvidence?,
+        evidence: MenuBarEdgeEvidence?,
         latestRequestID: UInt64 = 0
     ) {
         self.generation = generation
@@ -55,7 +55,7 @@ public struct NotchMenuLayoutSnapshot: Equatable, Sendable {
     }
 }
 
-public enum NotchMenuLayoutPolicy {
+public enum MenuBarLayoutPolicy {
     public static func begin(
         generation: UInt64,
         targetScreenID: String,
@@ -63,13 +63,13 @@ public enum NotchMenuLayoutPolicy {
         ownerIsResolved: Bool,
         cachedOwnerEdge: CGFloat?,
         localOwnerEdge: CGFloat? = nil
-    ) -> NotchMenuLayoutSnapshot {
-        let initialEvidence: NotchMenuEdgeEvidence?
+    ) -> MenuBarLayoutSnapshot {
+        let initialEvidence: MenuBarEdgeEvidence?
         if ownerIsResolved,
            let ownerBundleID,
            let localOwnerEdge,
            localOwnerEdge > 0 {
-            initialEvidence = NotchMenuEdgeEvidence(
+            initialEvidence = MenuBarEdgeEvidence(
                 generation: generation,
                 ownerBundleID: ownerBundleID,
                 edge: localOwnerEdge,
@@ -79,7 +79,7 @@ public enum NotchMenuLayoutPolicy {
                   let ownerBundleID,
                   let cachedOwnerEdge,
                   cachedOwnerEdge > 0 {
-            initialEvidence = NotchMenuEdgeEvidence(
+            initialEvidence = MenuBarEdgeEvidence(
                 generation: generation,
                 ownerBundleID: ownerBundleID,
                 edge: cachedOwnerEdge,
@@ -89,7 +89,7 @@ public enum NotchMenuLayoutPolicy {
             initialEvidence = nil
         }
 
-        return NotchMenuLayoutSnapshot(
+        return MenuBarLayoutSnapshot(
             generation: generation,
             targetScreenID: targetScreenID,
             ownerBundleID: ownerBundleID,
@@ -100,9 +100,9 @@ public enum NotchMenuLayoutPolicy {
     }
 
     public static func applying(
-        _ evidence: NotchMenuEdgeEvidence,
-        to snapshot: NotchMenuLayoutSnapshot
-    ) -> NotchMenuLayoutSnapshot {
+        _ evidence: MenuBarEdgeEvidence,
+        to snapshot: MenuBarLayoutSnapshot
+    ) -> MenuBarLayoutSnapshot {
         guard evidence.generation == snapshot.generation,
               evidence.requestID >= snapshot.latestRequestID,
               evidence.edge > 0 else {
@@ -120,7 +120,7 @@ public enum NotchMenuLayoutPolicy {
             break
         }
 
-        return NotchMenuLayoutSnapshot(
+        return MenuBarLayoutSnapshot(
             generation: snapshot.generation,
             targetScreenID: snapshot.targetScreenID,
             ownerBundleID: snapshot.ownerBundleID,
@@ -132,7 +132,7 @@ public enum NotchMenuLayoutPolicy {
 
     public static func safeWidth(
         available: CGFloat,
-        snapshot: NotchMenuLayoutSnapshot,
+        snapshot: MenuBarLayoutSnapshot,
         margin: CGFloat
     ) -> CGFloat {
         guard let edge = renderedEdge(for: snapshot),
@@ -144,7 +144,7 @@ public enum NotchMenuLayoutPolicy {
     }
 
     public static func renderedEdge(
-        for snapshot: NotchMenuLayoutSnapshot
+        for snapshot: MenuBarLayoutSnapshot
     ) -> CGFloat? {
         guard let evidence = snapshot.evidence,
               evidence.generation == snapshot.generation,

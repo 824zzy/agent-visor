@@ -256,7 +256,7 @@ class ChatHistoryManager: ObservableObject {
 
     /// The newer task-management tool family (TaskCreate / TaskUpdate / TaskList /
     /// TaskGet / TaskOutput / TaskStop) replaced the legacy single TodoWrite tool.
-    /// Claude Code's TUI condenses them into one live panel; in the notch chat a
+    /// Claude Code's TUI condenses them into one live panel; in Agent Visor Chat a
     /// per-call row is just noise and a single condensed row carries no real
     /// signal, so we hide them entirely and let the TUI surface todo state.
     private static let taskListToolNames: Set<String> = [

@@ -11,7 +11,7 @@
 //  Differences from the notch ChatView:
 //      - Top-down layout (no scaleEffect(y: -1) flip).
 //      - Window-owned composer, approval bar, and source-capability fallbacks.
-//      - No NotchViewModel dependency. Boot-clean: ChatHistoryManager
+//      - No PillStripViewModel dependency. Boot-clean: ChatHistoryManager
 //        is the data source; SessionStore is the metadata source.
 //      - Per-session @State so session switches in MainSplitView
 //        recreate this view (via .id(sessionId)) and don't share

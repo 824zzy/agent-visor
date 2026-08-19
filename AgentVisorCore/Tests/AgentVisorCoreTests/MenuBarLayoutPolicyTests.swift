@@ -2,13 +2,13 @@ import CoreGraphics
 import XCTest
 @testable import AgentVisorCore
 
-final class NotchMenuLayoutPolicyTests: XCTestCase {
+final class MenuBarLayoutPolicyTests: XCTestCase {
     private let margin: CGFloat = 28
 
     func testLocalOwnerEdgeKeepsLeftPillsAvailableWhenSelfAXCannotProbe() {
-        let snapshot = NotchMenuLayoutPolicy.begin(
+        let snapshot = MenuBarLayoutPolicy.begin(
             generation: 1,
-            targetScreenID: "notch",
+            targetScreenID: "target",
             ownerBundleID: "com.824zzy.AgentVisor",
             ownerIsResolved: true,
             cachedOwnerEdge: nil,
@@ -17,7 +17,7 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
 
         XCTAssertEqual(snapshot.evidence?.source, .ownerLocalMenu)
         XCTAssertEqual(
-            NotchMenuLayoutPolicy.safeWidth(
+            MenuBarLayoutPolicy.safeWidth(
                 available: 912,
                 snapshot: snapshot,
                 margin: margin
@@ -27,16 +27,16 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
     }
 
     func testFreshLocalOwnerMeasurementRefinesTheInitialEstimate() {
-        let initial = NotchMenuLayoutPolicy.begin(
+        let initial = MenuBarLayoutPolicy.begin(
             generation: 2,
-            targetScreenID: "notch",
+            targetScreenID: "target",
             ownerBundleID: "com.824zzy.AgentVisor",
             ownerIsResolved: true,
             cachedOwnerEdge: nil,
             localOwnerEdge: 344
         )
-        let refined = NotchMenuLayoutPolicy.applying(
-            NotchMenuEdgeEvidence(
+        let refined = MenuBarLayoutPolicy.applying(
+            MenuBarEdgeEvidence(
                 generation: 2,
                 requestID: 1,
                 ownerBundleID: "com.824zzy.AgentVisor",
@@ -46,19 +46,19 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
             to: initial
         )
 
-        XCTAssertEqual(NotchMenuLayoutPolicy.renderedEdge(for: refined), 351)
+        XCTAssertEqual(MenuBarLayoutPolicy.renderedEdge(for: refined), 351)
     }
 
     func testResolvedOwnerCrossScreenMeasurementIgnoresUnrelatedFrontmostCache() {
-        let snapshot = NotchMenuLayoutPolicy.begin(
+        let snapshot = MenuBarLayoutPolicy.begin(
             generation: 1,
-            targetScreenID: "notch",
+            targetScreenID: "target",
             ownerBundleID: "com.openai.codex",
             ownerIsResolved: true,
             cachedOwnerEdge: nil
         )
-        let measured = NotchMenuLayoutPolicy.applying(
-            NotchMenuEdgeEvidence(
+        let measured = MenuBarLayoutPolicy.applying(
+            MenuBarEdgeEvidence(
                 generation: 1,
                 ownerBundleID: "com.openai.codex",
                 edge: 375,
@@ -68,7 +68,7 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            NotchMenuLayoutPolicy.safeWidth(
+            MenuBarLayoutPolicy.safeWidth(
                 available: 912,
                 snapshot: measured,
                 margin: 28
@@ -78,12 +78,12 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
     }
 
     func testOwnerEvidenceForAnotherAppIsNeverRendered() {
-        let snapshot = NotchMenuLayoutSnapshot(
+        let snapshot = MenuBarLayoutSnapshot(
             generation: 2,
-            targetScreenID: "notch",
+            targetScreenID: "target",
             ownerBundleID: "com.openai.codex",
             ownerIsResolved: true,
-            evidence: NotchMenuEdgeEvidence(
+            evidence: MenuBarEdgeEvidence(
                 generation: 2,
                 ownerBundleID: "com.google.Chrome",
                 edge: 628,
@@ -92,7 +92,7 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            NotchMenuLayoutPolicy.safeWidth(
+            MenuBarLayoutPolicy.safeWidth(
                 available: 912,
                 snapshot: snapshot,
                 margin: 28
@@ -102,15 +102,15 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
     }
 
     func testOlderProbeCannotOverwriteNewerEvidenceInSameGeneration() {
-        let initial = NotchMenuLayoutPolicy.begin(
+        let initial = MenuBarLayoutPolicy.begin(
             generation: 3,
-            targetScreenID: "notch",
+            targetScreenID: "target",
             ownerBundleID: "com.openai.codex",
             ownerIsResolved: true,
             cachedOwnerEdge: nil
         )
-        let newest = NotchMenuLayoutPolicy.applying(
-            NotchMenuEdgeEvidence(
+        let newest = MenuBarLayoutPolicy.applying(
+            MenuBarEdgeEvidence(
                 generation: 3,
                 requestID: 2,
                 ownerBundleID: "com.openai.codex",
@@ -119,8 +119,8 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
             ),
             to: initial
         )
-        let afterLateOlderProbe = NotchMenuLayoutPolicy.applying(
-            NotchMenuEdgeEvidence(
+        let afterLateOlderProbe = MenuBarLayoutPolicy.applying(
+            MenuBarEdgeEvidence(
                 generation: 3,
                 requestID: 1,
                 ownerBundleID: "com.openai.codex",
@@ -134,16 +134,16 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
     }
 
     func testResolvedOwnerCacheIsUsedWhileFreshProbeIsPending() {
-        let snapshot = NotchMenuLayoutPolicy.begin(
+        let snapshot = MenuBarLayoutPolicy.begin(
             generation: 4,
-            targetScreenID: "notch",
+            targetScreenID: "target",
             ownerBundleID: "com.google.Chrome",
             ownerIsResolved: true,
             cachedOwnerEdge: 628
         )
 
         XCTAssertEqual(
-            NotchMenuLayoutPolicy.safeWidth(
+            MenuBarLayoutPolicy.safeWidth(
                 available: 912,
                 snapshot: snapshot,
                 margin: margin
@@ -153,16 +153,16 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
     }
 
     func testUnresolvedOwnerNeverUsesItsCache() {
-        let snapshot = NotchMenuLayoutPolicy.begin(
+        let snapshot = MenuBarLayoutPolicy.begin(
             generation: 5,
-            targetScreenID: "notch",
+            targetScreenID: "target",
             ownerBundleID: "com.google.Chrome",
             ownerIsResolved: false,
             cachedOwnerEdge: 628
         )
 
         XCTAssertEqual(
-            NotchMenuLayoutPolicy.safeWidth(
+            MenuBarLayoutPolicy.safeWidth(
                 available: 912,
                 snapshot: snapshot,
                 margin: margin
@@ -172,15 +172,15 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
     }
 
     func testScreenLocalFallbackCanRenderWhenOwnerIsUnresolved() {
-        let initial = NotchMenuLayoutPolicy.begin(
+        let initial = MenuBarLayoutPolicy.begin(
             generation: 6,
-            targetScreenID: "notch",
+            targetScreenID: "target",
             ownerBundleID: nil,
             ownerIsResolved: false,
             cachedOwnerEdge: nil
         )
-        let measured = NotchMenuLayoutPolicy.applying(
-            NotchMenuEdgeEvidence(
+        let measured = MenuBarLayoutPolicy.applying(
+            MenuBarEdgeEvidence(
                 generation: 6,
                 requestID: 1,
                 ownerBundleID: nil,
@@ -191,7 +191,7 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            NotchMenuLayoutPolicy.safeWidth(
+            MenuBarLayoutPolicy.safeWidth(
                 available: 912,
                 snapshot: measured,
                 margin: margin
@@ -201,15 +201,15 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
     }
 
     func testPreviousGenerationCannotOverwriteNewOwner() {
-        let current = NotchMenuLayoutPolicy.begin(
+        let current = MenuBarLayoutPolicy.begin(
             generation: 8,
-            targetScreenID: "notch",
+            targetScreenID: "target",
             ownerBundleID: "com.openai.codex",
             ownerIsResolved: true,
             cachedOwnerEdge: 375
         )
-        let afterStaleChromeProbe = NotchMenuLayoutPolicy.applying(
-            NotchMenuEdgeEvidence(
+        let afterStaleChromeProbe = MenuBarLayoutPolicy.applying(
+            MenuBarEdgeEvidence(
                 generation: 7,
                 requestID: 99,
                 ownerBundleID: "com.google.Chrome",
@@ -223,15 +223,15 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
     }
 
     func testUnknownOrOverfullEdgesHideInsteadOfOverlapping() {
-        let unknown = NotchMenuLayoutPolicy.begin(
+        let unknown = MenuBarLayoutPolicy.begin(
             generation: 9,
-            targetScreenID: "notch",
+            targetScreenID: "target",
             ownerBundleID: nil,
             ownerIsResolved: false,
             cachedOwnerEdge: nil
         )
-        let overfull = NotchMenuLayoutPolicy.applying(
-            NotchMenuEdgeEvidence(
+        let overfull = MenuBarLayoutPolicy.applying(
+            MenuBarEdgeEvidence(
                 generation: 9,
                 requestID: 1,
                 ownerBundleID: nil,
@@ -242,7 +242,7 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            NotchMenuLayoutPolicy.safeWidth(
+            MenuBarLayoutPolicy.safeWidth(
                 available: 912,
                 snapshot: unknown,
                 margin: margin
@@ -250,7 +250,7 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
             0
         )
         XCTAssertEqual(
-            NotchMenuLayoutPolicy.safeWidth(
+            MenuBarLayoutPolicy.safeWidth(
                 available: 912,
                 snapshot: overfull,
                 margin: margin
@@ -260,15 +260,15 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
     }
 
     func testRepeatedProbeRequestDoesNotChangeRenderedEdge() {
-        let initial = NotchMenuLayoutPolicy.begin(
+        let initial = MenuBarLayoutPolicy.begin(
             generation: 10,
-            targetScreenID: "notch",
+            targetScreenID: "target",
             ownerBundleID: "com.openai.codex",
             ownerIsResolved: true,
             cachedOwnerEdge: nil
         )
-        let first = NotchMenuLayoutPolicy.applying(
-            NotchMenuEdgeEvidence(
+        let first = MenuBarLayoutPolicy.applying(
+            MenuBarEdgeEvidence(
                 generation: 10,
                 requestID: 1,
                 ownerBundleID: "com.openai.codex",
@@ -277,8 +277,8 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
             ),
             to: initial
         )
-        let second = NotchMenuLayoutPolicy.applying(
-            NotchMenuEdgeEvidence(
+        let second = MenuBarLayoutPolicy.applying(
+            MenuBarEdgeEvidence(
                 generation: 10,
                 requestID: 2,
                 ownerBundleID: "com.openai.codex",
@@ -289,8 +289,8 @@ final class NotchMenuLayoutPolicyTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            NotchMenuLayoutPolicy.renderedEdge(for: first),
-            NotchMenuLayoutPolicy.renderedEdge(for: second)
+            MenuBarLayoutPolicy.renderedEdge(for: first),
+            MenuBarLayoutPolicy.renderedEdge(for: second)
         )
     }
 }

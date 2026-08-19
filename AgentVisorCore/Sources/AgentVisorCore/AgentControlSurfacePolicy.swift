@@ -8,7 +8,7 @@ public enum AgentControlSessionOwnership: Equatable, Sendable {
 
     /// Who owns the running session, read from the session itself.
     ///
-    /// This rule used to sit in `NotchView.swift`, above a private helper class, while the type it
+    /// This rule used to sit in `PillStripView.swift`, above a private helper class, while the type it
     /// returns and the policy that consumes it both lived here. So the vocabulary and the
     /// consequences were in the package and the derivation was in a view file, untested.
     public static func of(_ session: SessionState) -> AgentControlSessionOwnership {

@@ -598,7 +598,7 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("Services")
             .appendingPathComponent("Session")
-            .appendingPathComponent("ClaudeSessionMonitor.swift"))
+            .appendingPathComponent("SessionMonitor.swift"))
 
         XCTAssertTrue(
             sessionEventSource.contains("var isTerminalLifecycleStatus"),
@@ -614,7 +614,7 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
         )
         XCTAssertTrue(
             monitorSource.contains("event.isTerminalLifecycleStatus"),
-            "ClaudeSessionMonitor should stop watchers for every terminal hook status, not only literal ended."
+            "SessionMonitor should stop watchers for every terminal hook status, not only literal ended."
         )
     }
 
@@ -928,21 +928,21 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
         )
     }
 
-    func testClaudeSessionMonitorBackgroundHelpersAreNonisolated() throws {
+    func testSessionMonitorBackgroundHelpersAreNonisolated() throws {
         let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
         let monitorSource = try String(contentsOf: root
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("Services")
             .appendingPathComponent("Session")
-            .appendingPathComponent("ClaudeSessionMonitor.swift"))
+            .appendingPathComponent("SessionMonitor.swift"))
 
         XCTAssertTrue(
             monitorSource.contains("nonisolated static func discoverExistingSessions()"),
-            "Session discovery runs from a background queue and must not inherit ClaudeSessionMonitor's MainActor isolation."
+            "Session discovery runs from a background queue and must not inherit SessionMonitor's MainActor isolation."
         )
         XCTAssertTrue(
             monitorSource.contains("nonisolated private static func writeLog"),
-            "Discovery/fallback logging runs from background queues and must not inherit ClaudeSessionMonitor's MainActor isolation."
+            "Discovery/fallback logging runs from background queues and must not inherit SessionMonitor's MainActor isolation."
         )
     }
 

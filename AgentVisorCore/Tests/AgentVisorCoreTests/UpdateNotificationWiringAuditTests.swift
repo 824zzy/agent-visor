@@ -13,7 +13,7 @@ final class UpdateNotificationWiringAuditTests: XCTestCase {
     func testAutomaticChecksNotifyOnceAndStaySilent() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let delegate = try source(root, "AgentVisor/App/AppDelegate.swift")
-        let driver = try source(root, "AgentVisor/Services/Update/NotchUserDriver.swift")
+        let driver = try source(root, "AgentVisor/Services/Update/UpdateUserDriver.swift")
         let notifications = try source(root, "AgentVisor/Services/Notifications/ApprovalNotifier.swift")
 
         XCTAssertTrue(delegate.contains("updater.checkForUpdatesInBackground()"))

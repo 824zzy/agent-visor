@@ -2,11 +2,8 @@
 //  WindowComposer.swift
 //  AgentVisor
 //
-//  Multi-line composer for the window-mode chat. Wraps the same
-//  `MultiLineInput` the notch uses, plus the slash-command popover
-//  and the attachment strip. Sends text/images via `SessionSender`
-//  (without notch focus-theft handling, since the window has no
-//  NotchPanel to re-key).
+//  Multi-line composer for Agent Visor Chat. It combines MultiLineInput,
+//  slash commands, attachments, and SessionSender.
 //
 //  Owns its own composer state — text, attachments, slash controller,
 //  focus controller, font scale. Per-session because parent uses

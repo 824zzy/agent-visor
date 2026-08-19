@@ -12,34 +12,34 @@ final class FullScreenPillVisibilityWiringAuditTests: XCTestCase {
         XCTAssertFalse(settings.contains("case never = \"never\""))
     }
 
-    func testNotchViewRendersCurrentLayoutWhileVisibilityPolicyControlsOpacityAndClicks() throws {
+    func testPillStripViewRendersCurrentLayoutWhileVisibilityPolicyControlsOpacityAndClicks() throws {
         let root = repoRoot()
-        let notchView = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor/UI/Views/NotchView.swift"))
+        let pillStrip = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Views/PillStripView.swift"))
 
-        XCTAssertTrue(notchView.contains("FullScreenPillVisibilityPolicy.isVisible"))
-        XCTAssertTrue(notchView.contains("if hasPillContent"))
-        XCTAssertTrue(notchView.contains(".opacity(pillsAreVisible ? 1 : 0)"))
-        XCTAssertTrue(notchView.contains("guard pillsAreVisible else"))
-        XCTAssertTrue(notchView.contains("GlobalSessionShortcutManager.shared"))
+        XCTAssertTrue(pillStrip.contains("FullScreenPillVisibilityPolicy.isVisible"))
+        XCTAssertTrue(pillStrip.contains("if hasPillContent"))
+        XCTAssertTrue(pillStrip.contains(".opacity(pillsAreVisible ? 1 : 0)"))
+        XCTAssertTrue(pillStrip.contains("guard pillsAreVisible else"))
+        XCTAssertTrue(pillStrip.contains("GlobalSessionShortcutManager.shared"))
     }
 
-    func testNotchViewUsesTargetScreenPointerZonesAndDelayedPeekState() throws {
+    func testPillStripViewUsesTargetScreenPointerZonesAndDelayedPeekState() throws {
         let root = repoRoot()
-        let notchView = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor/UI/Views/NotchView.swift"))
+        let pillStrip = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Views/PillStripView.swift"))
 
-        XCTAssertTrue(notchView.contains("EventMonitor(mask: .mouseMoved"))
-        XCTAssertTrue(notchView.contains("FullScreenPillPointerZonePolicy.contains"))
-        XCTAssertTrue(notchView.contains("startFullScreenPointerMonitor"))
-        XCTAssertTrue(notchView.contains("scheduleFullScreenPointerHide"))
-        XCTAssertTrue(notchView.contains("scheduleFullScreenShortcutHide"))
+        XCTAssertTrue(pillStrip.contains("EventMonitor(mask: .mouseMoved"))
+        XCTAssertTrue(pillStrip.contains("FullScreenPillPointerZonePolicy.contains"))
+        XCTAssertTrue(pillStrip.contains("startFullScreenPointerMonitor"))
+        XCTAssertTrue(pillStrip.contains("scheduleFullScreenPointerHide"))
+        XCTAssertTrue(pillStrip.contains("scheduleFullScreenShortcutHide"))
     }
 
     func testMediaSleepInferenceIsNoLongerPartOfFullScreenVisibility() throws {
         let root = repoRoot()
         let viewModel = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor/Core/NotchViewModel.swift"))
+            .appendingPathComponent("AgentVisor/Core/PillStripViewModel.swift"))
 
         XCTAssertFalse(viewModel.contains("DisplaySleepAssertions"))
         XCTAssertFalse(viewModel.contains("pillsShouldHide"))

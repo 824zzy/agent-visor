@@ -2,13 +2,13 @@
 //  SessionState.swift
 //  AgentVisor
 //
-//  Unified state model for a Claude session.
+//  Unified state model for a coding-agent session.
 //  Consolidates all state that was previously spread across multiple components.
 //
 
 import Foundation
 
-/// Complete state for a single Claude session
+/// Complete state for one coding-agent session.
 /// This is the single source of truth - all state reads and writes go through SessionStore
 public struct SessionState: Equatable, Identifiable, Sendable {
     // MARK: - Identity
@@ -496,7 +496,7 @@ public struct SessionState: Equatable, Identifiable, Sendable {
     }
 }
 
-/// Provenance of a Claude session — see `SessionState.origin`.
+/// Provenance of a coding-agent session — see `SessionState.origin`.
 public enum SessionOrigin: String, Codable, Equatable, Sendable {
     /// User launched `claude` in a real terminal (Ghostty, iTerm2,
     /// Terminal.app). agent-visor drives input via the host's

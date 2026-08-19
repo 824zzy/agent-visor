@@ -6,7 +6,7 @@ final class TransientPopoverActivationWiringAuditTests: XCTestCase {
     func testSessionNavigatorControlsAcceptTheFirstClickWithoutActivatingAgentVisor() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let sideContent = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Components/NotchSideContent.swift"
+            "AgentVisor/UI/Components/PillStripContent.swift"
         ))
 
         XCTAssertTrue(
@@ -34,7 +34,7 @@ final class TransientPopoverActivationWiringAuditTests: XCTestCase {
     func testFirstMouseRowsAndFooterActionsKeepHoverFeedback() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let sideContent = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Components/NotchSideContent.swift"
+            "AgentVisor/UI/Components/PillStripContent.swift"
         ))
         let rowSource = try XCTUnwrap(
             sideContent.split(separator: "struct SessionNavigatorRow: View", maxSplits: 1).last
@@ -170,36 +170,36 @@ final class TransientPopoverActivationWiringAuditTests: XCTestCase {
 
     func testMenuBarPopoversOpenWithoutActivatingTheApplicationOrBrowser() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
-        let notchView = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Views/NotchView.swift"
+        let pillStrip = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/UI/Views/PillStripView.swift"
         ))
         let appDelegate = try String(contentsOf: root.appendingPathComponent(
             "AgentVisor/App/AppDelegate.swift"
         ))
 
         XCTAssertFalse(
-            notchView.contains("NSApp.activate(ignoringOtherApps: true)"),
+            pillStrip.contains("NSApp.activate(ignoringOtherApps: true)"),
             "Opening a menu-bar popover must not raise the Agent Sessions browser."
         )
         XCTAssertFalse(
-            notchView.contains("activateForTransientSurface()"),
+            pillStrip.contains("activateForTransientSurface()"),
             "The +N and Usage popovers should remain nonactivating surfaces."
         )
         XCTAssertFalse(
             appDelegate.contains("transientSurfaceActivationGate"),
             "Popover opening should not alter the application's normal Dock reopen behavior."
         )
-        XCTAssertTrue(notchView.contains("onOpenMainWindow:"))
-        XCTAssertTrue(notchView.contains("requestMainWindowActivation(.overflowPill)"))
+        XCTAssertTrue(pillStrip.contains("onOpenMainWindow:"))
+        XCTAssertTrue(pillStrip.contains("requestMainWindowActivation(.overflowPill)"))
     }
 
     func testOverflowFooterOpensOverallSettingsAfterDismissingThePopover() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let sideContent = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Components/NotchSideContent.swift"
+            "AgentVisor/UI/Components/PillStripContent.swift"
         ))
-        let notchView = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Views/NotchView.swift"
+        let pillStrip = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/UI/Views/PillStripView.swift"
         ))
         let mainWindowController = try String(contentsOf: root.appendingPathComponent(
             "AgentVisor/UI/Window/MainWindowController.swift"
@@ -209,7 +209,7 @@ final class TransientPopoverActivationWiringAuditTests: XCTestCase {
         XCTAssertTrue(sideContent.contains("Button(action: onOpenSettings)"))
         XCTAssertTrue(sideContent.contains("SessionNavigatorSummaryPolicy.settingsLabel"))
         XCTAssertTrue(
-            notchView.contains(
+            pillStrip.contains(
                 "onOpenSettings: {\n                        dismissTransientPopovers()\n                        AppDelegate.shared?.openSettings()"
             ),
             "Settings should close the transient popover before opening overall Settings."

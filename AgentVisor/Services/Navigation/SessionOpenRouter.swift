@@ -8,8 +8,8 @@ import AppKit
 /// in `PillClickNavigationPolicy`, and the rule that decides who owns the session lives in
 /// `AgentControlSessionOwnership.of(_:)`. Both are in AgentVisorCore, with tests.
 ///
-/// This type used to live at the top of `NotchView.swift`, inside a 1450-line view file, even
-/// though `AppDelegate` and `NotchSideContent` also call it. It carries the two AppKit steps that
+/// This type used to live at the top of `PillStripView.swift`, inside a 1450-line view file, even
+/// though `AppDelegate` and `PillStripContent` also call it. It carries the two AppKit steps that
 /// cannot move into the package: raise our own window, or focus the owning app.
 enum SessionOpenRouter {
     static func smartOpen(

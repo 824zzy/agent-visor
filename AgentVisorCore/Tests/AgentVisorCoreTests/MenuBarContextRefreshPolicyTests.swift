@@ -1,9 +1,9 @@
 import XCTest
 @testable import AgentVisorCore
 
-final class NotchMenuContextRefreshPolicyTests: XCTestCase {
+final class MenuBarContextRefreshPolicyTests: XCTestCase {
     func testMissingContextAlwaysResolvesOwner() {
-        XCTAssertTrue(NotchMenuContextRefreshPolicy.shouldResolveOwner(
+        XCTAssertTrue(MenuBarContextRefreshPolicy.shouldResolveOwner(
             hasContext: false,
             contextFrontmostPid: nil,
             observedFrontmostPid: 100,
@@ -13,7 +13,7 @@ final class NotchMenuContextRefreshPolicyTests: XCTestCase {
     }
 
     func testWindowMoveResolvesOwnerWhenSameFrontmostAppNowOwnsTargetScreen() {
-        XCTAssertTrue(NotchMenuContextRefreshPolicy.shouldResolveOwner(
+        XCTAssertTrue(MenuBarContextRefreshPolicy.shouldResolveOwner(
             hasContext: true,
             contextFrontmostPid: 100,
             observedFrontmostPid: 100,
@@ -26,7 +26,7 @@ final class NotchMenuContextRefreshPolicyTests: XCTestCase {
     }
 
     func testWindowMoveResolvesTopmostOwnerWhenSameFrontmostAppLeavesTargetScreen() {
-        XCTAssertTrue(NotchMenuContextRefreshPolicy.shouldResolveOwner(
+        XCTAssertTrue(MenuBarContextRefreshPolicy.shouldResolveOwner(
             hasContext: true,
             contextFrontmostPid: 100,
             observedFrontmostPid: 100,
@@ -39,7 +39,7 @@ final class NotchMenuContextRefreshPolicyTests: XCTestCase {
     }
 
     func testTransientUnresolvedTopologyDoesNotReplaceReliableOwner() {
-        XCTAssertFalse(NotchMenuContextRefreshPolicy.shouldResolveOwner(
+        XCTAssertFalse(MenuBarContextRefreshPolicy.shouldResolveOwner(
             hasContext: true,
             contextFrontmostPid: 100,
             observedFrontmostPid: 100,
@@ -53,7 +53,7 @@ final class NotchMenuContextRefreshPolicyTests: XCTestCase {
     }
 
     func testStableResolvedTopologyDoesNotStartAnotherGeneration() {
-        XCTAssertFalse(NotchMenuContextRefreshPolicy.shouldResolveOwner(
+        XCTAssertFalse(MenuBarContextRefreshPolicy.shouldResolveOwner(
             hasContext: true,
             contextFrontmostPid: 100,
             observedFrontmostPid: 100,
@@ -67,7 +67,7 @@ final class NotchMenuContextRefreshPolicyTests: XCTestCase {
     }
 
     func testMissedActivationResolvesOwnerForDifferentFrontmostApp() {
-        XCTAssertTrue(NotchMenuContextRefreshPolicy.shouldResolveOwner(
+        XCTAssertTrue(MenuBarContextRefreshPolicy.shouldResolveOwner(
             hasContext: true,
             contextFrontmostPid: 100,
             observedFrontmostPid: 200,
@@ -77,7 +77,7 @@ final class NotchMenuContextRefreshPolicyTests: XCTestCase {
     }
 
     func testTransientMissingFrontmostDoesNotDiscardCurrentOwner() {
-        XCTAssertFalse(NotchMenuContextRefreshPolicy.shouldResolveOwner(
+        XCTAssertFalse(MenuBarContextRefreshPolicy.shouldResolveOwner(
             hasContext: true,
             contextFrontmostPid: 100,
             observedFrontmostPid: nil,
@@ -87,7 +87,7 @@ final class NotchMenuContextRefreshPolicyTests: XCTestCase {
     }
 
     func testTargetScreenChangeResolvesOwnerEvenWhenFrontmostAppIsUnchanged() {
-        XCTAssertTrue(NotchMenuContextRefreshPolicy.shouldResolveOwner(
+        XCTAssertTrue(MenuBarContextRefreshPolicy.shouldResolveOwner(
             hasContext: true,
             contextFrontmostPid: 100,
             observedFrontmostPid: 100,
@@ -98,7 +98,7 @@ final class NotchMenuContextRefreshPolicyTests: XCTestCase {
     }
 
     func testUnresolvedOwnerRetriesWhenFrontmostAppAndScreenAreUnchanged() {
-        XCTAssertTrue(NotchMenuContextRefreshPolicy.shouldResolveOwner(
+        XCTAssertTrue(MenuBarContextRefreshPolicy.shouldResolveOwner(
             hasContext: true,
             contextFrontmostPid: 100,
             observedFrontmostPid: 100,

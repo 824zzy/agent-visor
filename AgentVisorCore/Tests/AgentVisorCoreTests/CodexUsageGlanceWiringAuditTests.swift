@@ -24,29 +24,29 @@ final class CodexUsageGlanceWiringAuditTests: XCTestCase {
     func testUsagePillReservesItsSnapshotShapeAndUsesRenderSnapshotHitRouting() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let sideContent = try source(
-            root.appendingPathComponent("AgentVisor/UI/Components/NotchSideContent.swift")
+            root.appendingPathComponent("AgentVisor/UI/Components/PillStripContent.swift")
         )
-        let notchView = try source(
-            root.appendingPathComponent("AgentVisor/UI/Views/NotchView.swift")
+        let pillStrip = try source(
+            root.appendingPathComponent("AgentVisor/UI/Views/PillStripView.swift")
         )
 
         XCTAssertTrue(sideContent.contains("struct CodexUsagePillButton"))
         XCTAssertTrue(sideContent.contains("codexWidth: codexUsagePresentation?.width"))
         XCTAssertTrue(sideContent.contains("codexUsagePresentation?.width"))
         XCTAssertTrue(sideContent.contains("struct CodexUsagePopover"))
-        XCTAssertTrue(notchView.contains("codexUsagePresentation: codexUsagePresentation"))
-        XCTAssertFalse(notchView.contains("includeUsage: codexUsageMonitor.showsPill"))
-        XCTAssertFalse(notchView.contains("includeUsage: AppSettings.codexUsageGlanceEnabled"))
-        XCTAssertFalse(notchView.contains("codexUsageMonitor.enabled"))
-        XCTAssertTrue(notchView.contains("rightUsageWidth:"))
-        XCTAssertTrue(notchView.contains("case .usage:"))
-        XCTAssertTrue(notchView.contains("showCodexUsagePopover = willShowUsagePopover"))
+        XCTAssertTrue(pillStrip.contains("codexUsagePresentation: codexUsagePresentation"))
+        XCTAssertFalse(pillStrip.contains("includeUsage: codexUsageMonitor.showsPill"))
+        XCTAssertFalse(pillStrip.contains("includeUsage: AppSettings.codexUsageGlanceEnabled"))
+        XCTAssertFalse(pillStrip.contains("codexUsageMonitor.enabled"))
+        XCTAssertTrue(pillStrip.contains("rightUsageWidth:"))
+        XCTAssertTrue(pillStrip.contains("case .usage:"))
+        XCTAssertTrue(pillStrip.contains("showCodexUsagePopover = willShowUsagePopover"))
     }
 
     func testUsagePillRendersOnlyRecognizedMenuBarWindowsWithoutAStatusDot() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let sideContent = try source(
-            root.appendingPathComponent("AgentVisor/UI/Components/NotchSideContent.swift")
+            root.appendingPathComponent("AgentVisor/UI/Components/PillStripContent.swift")
         )
         let start = try XCTUnwrap(sideContent.range(of: "struct CodexUsagePillButton"))
         let end = try XCTUnwrap(sideContent.range(
@@ -75,7 +75,7 @@ final class CodexUsageGlanceWiringAuditTests: XCTestCase {
             root.appendingPathComponent("AgentVisor/UI/Window/SettingsWindowView.swift")
         )
         let sideContent = try source(
-            root.appendingPathComponent("AgentVisor/UI/Components/NotchSideContent.swift")
+            root.appendingPathComponent("AgentVisor/UI/Components/PillStripContent.swift")
         )
         let monitor = try source(
             root.appendingPathComponent("AgentVisor/Services/Agents/CodexUsageMonitor.swift")

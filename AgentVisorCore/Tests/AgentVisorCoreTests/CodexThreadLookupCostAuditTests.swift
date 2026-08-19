@@ -67,7 +67,7 @@ final class CodexThreadLookupCostAuditTests: XCTestCase {
     }
 
     func testDiscoveryPreWarmsTheWholeGroupBeforeTheStoreMergesIt() throws {
-        let monitor = try source("AgentVisor/Services/Session/ClaudeSessionMonitor.swift")
+        let monitor = try source("AgentVisor/Services/Session/SessionMonitor.swift")
         XCTAssertTrue(
             monitor.contains("prewarmMetadata(for: results)"),
             "Discovery must read grouped metadata before the synchronous store merge asks per row."

@@ -12,7 +12,7 @@ final class PillClickNavigationWiringAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Views")
-            .appendingPathComponent("NotchView.swift"))
+            .appendingPathComponent("PillStripView.swift"))
 
         XCTAssertTrue(
             router.contains("PillClickNavigationPolicy.action"),
@@ -33,7 +33,7 @@ final class PillClickNavigationWiringAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Views")
-            .appendingPathComponent("NotchView.swift"))
+            .appendingPathComponent("PillStripView.swift"))
 
         XCTAssertTrue(
             source.contains("EventMonitor(mask: [.leftMouseDown, .rightMouseDown])"),
@@ -86,7 +86,7 @@ final class PillClickNavigationWiringAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Views")
-            .appendingPathComponent("NotchView.swift"))
+            .appendingPathComponent("PillStripView.swift"))
 
         XCTAssertFalse(settings.contains("SettingsSubheading(\"Click behavior\")"))
         XCTAssertFalse(settings.contains("title: \"Pill click action\""))

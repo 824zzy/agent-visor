@@ -318,4 +318,4 @@ Manual validation must cover:
 - `PillBarCoordinator` adapts sessions and usage snapshots into the Core plan and owns the fixed-font text-measurement cache.
 - `NotchPillBar` renders the plan without inventing geometry.
 - `PillBarHitTest` consumes the same plan.
-- `NotchMenuLayoutPolicy` and `StatusTrayLayoutPolicy` remain unchanged by this work.
+- `MenuBarLayoutPolicy` and `StatusTrayLayoutPolicy` remain unchanged by this work.

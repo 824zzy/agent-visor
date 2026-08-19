@@ -40,7 +40,7 @@ public struct ApprovalNotificationContent: Equatable, Sendable {
 
     /// Stable identifier: `cv.approval.<sessionId>|<toolUseId>`.
     /// Encoded so the notification action handler can recover both
-    /// pieces and dispatch to ClaudeSessionMonitor.approve/deny.
+    /// pieces and dispatch to SessionMonitor.approve/deny.
     public static func identifier(sessionId: String, toolUseId: String) -> String {
         identifierPrefix + sessionId + separator + toolUseId
     }

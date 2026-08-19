@@ -1,4 +1,4 @@
-public enum NotchMenuOwnerCandidatePolicy {
+public enum MenuBarOwnerCandidatePolicy {
     public static func canOwnTargetMenu(
         windowLayer: Int,
         isOwnProcess: Bool,

@@ -1,6 +1,6 @@
 import Foundation
 
-public enum NotchMenuContextRefreshPolicy {
+public enum MenuBarContextRefreshPolicy {
     public static func shouldResolveOwner(
         hasContext: Bool,
         contextFrontmostPid: pid_t?,

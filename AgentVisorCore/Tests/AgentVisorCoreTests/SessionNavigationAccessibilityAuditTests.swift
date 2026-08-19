@@ -4,7 +4,7 @@ final class SessionNavigationAccessibilityAuditTests: XCTestCase {
     func testSessionRowsExposeKeyboardAndAccessibilityActions() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let sidebar = try source(root, "AgentVisor/UI/Window/WindowSidebarRow.swift")
-        let popover = try source(root, "AgentVisor/UI/Components/NotchSideContent.swift")
+        let popover = try source(root, "AgentVisor/UI/Components/PillStripContent.swift")
         let logo = try source(root, "AgentVisor/UI/Components/AgentBrandLogo.swift")
 
         XCTAssertTrue(sidebar.contains(".accessibilityAction { onChat() }"))
@@ -18,7 +18,7 @@ final class SessionNavigationAccessibilityAuditTests: XCTestCase {
 
     func testSessionPopoverFreshnessUsesPeriodicClock() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
-        let popover = try source(root, "AgentVisor/UI/Components/NotchSideContent.swift")
+        let popover = try source(root, "AgentVisor/UI/Components/PillStripContent.swift")
 
         XCTAssertTrue(popover.contains("TimelineView(.periodic"))
         XCTAssertTrue(popover.contains("now: context.date"))
@@ -35,7 +35,7 @@ final class SessionNavigationAccessibilityAuditTests: XCTestCase {
 
         XCTAssertTrue(controller.contains("NSStatusBar.system.statusItem"))
         XCTAssertTrue(controller.contains("setAccessibilityLabel"))
-        XCTAssertTrue(controller.contains("NotchPanelRedirect.openMainWindow?()"))
+        XCTAssertTrue(controller.contains("SessionBrowserRedirect.openMainWindow?()"))
         XCTAssertTrue(appDelegate.contains("PillAccessibilityStatusItemController.shared.start()"))
         XCTAssertFalse(
             controller.contains("isVoiceOverEnabled"),

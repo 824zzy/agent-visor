@@ -30,8 +30,8 @@ extension Color {
 /// constant across themes.
 enum BrandColors {
     /// The Claude brand orange. Three different RGB literals were
-    /// previously scattered across NotchSideContent, SessionStatusDot,
-    /// ProcessingSpinner, NotchHeaderView, ClaudeInstancesView, and
+    /// previously scattered across PillStripContent, SessionStatusDot,
+    /// Processing spinners, session rows, and
     /// `TerminalColors.prompt`. Consolidated to the most common variant.
     static let claudeOrange = Color(.sRGB, red: 0.8510, green: 0.4706, blue: 0.3412, opacity: 1)  // #d97857
 
@@ -236,7 +236,7 @@ enum TerminalColors {
 // MARK: - ChatTheme
 
 /// Semantic color roles for the chat surface. Centralizing here so the
-/// notch chat view, tool rows, tool results, and approval UI all share
+/// Chat view, tool rows, tool results, and approval UI all share
 /// the same Catppuccin tokens. Tokens go through `Catppuccin.*` which
 /// switches flavors on `AppSettings.appearance`, so views re-render
 /// with new colors when `AppearanceSelector` publishes a mode change.

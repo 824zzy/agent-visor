@@ -2,19 +2,19 @@
 //  TmuxTargetFinder.swift
 //  AgentVisor
 //
-//  Finds tmux targets for Claude processes
+//  Finds tmux targets for coding-agent processes
 //
 
 import Foundation
 
-/// Finds tmux session/window/pane targets for Claude processes
+/// Finds tmux session, window, and pane targets for coding-agent processes
 actor TmuxTargetFinder {
     static let shared = TmuxTargetFinder()
 
     private init() {}
 
-    /// Find the tmux target for a given Claude PID
-    func findTarget(forClaudePid claudePid: Int) async -> TmuxTarget? {
+    /// Find the tmux target for an agent process
+    func findTarget(forAgentPid agentPid: Int) async -> TmuxTarget? {
         guard let tmuxPath = await TmuxPathFinder.shared.getTmuxPath() else {
             return nil
         }
@@ -34,7 +34,7 @@ actor TmuxTargetFinder {
 
             let targetString = String(parts[0])
 
-            if ProcessTreeBuilder.shared.isDescendant(targetPid: claudePid, ofAncestor: panePid, tree: tree) {
+            if ProcessTreeBuilder.shared.isDescendant(targetPid: agentPid, ofAncestor: panePid, tree: tree) {
                 return TmuxTarget(from: targetString)
             }
         }
@@ -70,13 +70,13 @@ actor TmuxTargetFinder {
     }
 
     /// Check if a session's tmux pane is currently the active pane
-    func isSessionPaneActive(claudePid: Int) async -> Bool {
+    func isSessionPaneActive(agentPid: Int) async -> Bool {
         guard let tmuxPath = await TmuxPathFinder.shared.getTmuxPath() else {
             return false
         }
 
-        // Find which pane the Claude session is in
-        guard let sessionTarget = await findTarget(forClaudePid: claudePid) else {
+        // Find which pane owns the agent process
+        guard let sessionTarget = await findTarget(forAgentPid: agentPid) else {
             return false
         }
 

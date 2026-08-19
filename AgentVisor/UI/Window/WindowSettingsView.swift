@@ -41,10 +41,7 @@ struct SettingsSectionHeader: View {
     }
 }
 
-// MARK: - Row primitives (renamed copies of MenuRow / MenuToggleRow /
-// AccessibilityRow / UpdateRow from the deleted NotchMenuView. The
-// notch-tinted naming is dropped; the visual treatment is identical
-// because both surfaces share the same Catppuccin palette.)
+// MARK: - Settings row primitives
 
 struct SettingsLinkRow: View {
     let icon: String

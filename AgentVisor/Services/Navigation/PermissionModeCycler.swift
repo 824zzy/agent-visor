@@ -77,7 +77,7 @@ enum PermissionModeCycler {
         }
 
         if session.isInTmux, let pid = session.pid,
-           let target = await TmuxTargetFinder.shared.findTarget(forClaudePid: pid) {
+           let target = await TmuxTargetFinder.shared.findTarget(forAgentPid: pid) {
             return await sendTmuxBackTab(target: target)
         }
 

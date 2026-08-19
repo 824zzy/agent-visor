@@ -1,20 +1,20 @@
 import XCTest
 
-final class NotchMenuLayoutWiringAuditTests: XCTestCase {
-    func testNotchWidthUsesOneOwnerBoundCoordinatorSnapshot() throws {
+final class MenuBarLayoutWiringAuditTests: XCTestCase {
+    func testPillStripWidthUsesOneOwnerBoundCoordinatorSnapshot() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
-        let notchView = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor/UI/Views/NotchView.swift"))
+        let pillStrip = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Views/PillStripView.swift"))
         let coordinator = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor/Services/MenuBar/NotchMenuLayoutCoordinator.swift"))
+            .appendingPathComponent("AgentVisor/Services/MenuBar/MenuBarLayoutCoordinator.swift"))
 
-        XCTAssertTrue(notchView.contains("@StateObject private var menuLayoutCoordinator"))
-        XCTAssertTrue(notchView.contains("menuLayoutCoordinator.safeWidth"))
-        XCTAssertFalse(notchView.contains("frontmostCached"))
-        XCTAssertFalse(notchView.contains("probeIsOnTarget"))
+        XCTAssertTrue(pillStrip.contains("@StateObject private var menuLayoutCoordinator"))
+        XCTAssertTrue(pillStrip.contains("menuLayoutCoordinator.safeWidth"))
+        XCTAssertFalse(pillStrip.contains("frontmostCached"))
+        XCTAssertFalse(pillStrip.contains("probeIsOnTarget"))
 
-        XCTAssertTrue(coordinator.contains("NotchMenuLayoutPolicy.begin"))
-        XCTAssertTrue(coordinator.contains("NotchMenuLayoutPolicy.applying"))
+        XCTAssertTrue(coordinator.contains("MenuBarLayoutPolicy.begin"))
+        XCTAssertTrue(coordinator.contains("MenuBarLayoutPolicy.applying"))
         XCTAssertTrue(coordinator.contains("ownerBundleID"))
         XCTAssertTrue(coordinator.contains("requestID"))
         XCTAssertTrue(coordinator.contains("localOwnerEdge: localOwnerEdge"))
@@ -28,11 +28,11 @@ final class NotchMenuLayoutWiringAuditTests: XCTestCase {
     func testPeriodicProbeReevaluatesOwnerWhenWindowTopologyChanges() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let coordinator = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor/Services/MenuBar/NotchMenuLayoutCoordinator.swift"))
+            .appendingPathComponent("AgentVisor/Services/MenuBar/MenuBarLayoutCoordinator.swift"))
 
         XCTAssertTrue(coordinator.contains("let frontmostPid: pid_t?"))
         XCTAssertTrue(coordinator.contains("let observedContext = resolveContext"))
-        XCTAssertTrue(coordinator.contains("NotchMenuContextRefreshPolicy.shouldResolveOwner"))
+        XCTAssertTrue(coordinator.contains("MenuBarContextRefreshPolicy.shouldResolveOwner"))
         XCTAssertTrue(coordinator.contains("contextFrontmostPid: context?.frontmostPid"))
         XCTAssertTrue(coordinator.contains("observedFrontmostPid: observedFrontmostPid"))
         XCTAssertTrue(coordinator.contains("contextTargetScreenID: context?.targetScreenID"))
@@ -46,9 +46,9 @@ final class NotchMenuLayoutWiringAuditTests: XCTestCase {
     func testTopmostMenuOwnerSkipsHelpersThatCannotOwnAnAppMenu() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let coordinator = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor/Services/MenuBar/NotchMenuLayoutCoordinator.swift"))
+            .appendingPathComponent("AgentVisor/Services/MenuBar/MenuBarLayoutCoordinator.swift"))
 
-        XCTAssertTrue(coordinator.contains("NotchMenuOwnerCandidatePolicy.canOwnTargetMenu"))
+        XCTAssertTrue(coordinator.contains("MenuBarOwnerCandidatePolicy.canOwnTargetMenu"))
         XCTAssertTrue(coordinator.contains("isRegularApplication: app?.activationPolicy == .regular"))
         XCTAssertTrue(coordinator.contains("hasBundleIdentifier: !(app?.bundleIdentifier?.isEmpty ?? true)"))
     }

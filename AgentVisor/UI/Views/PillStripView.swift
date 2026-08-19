@@ -1,8 +1,8 @@
 //
-//  NotchView.swift
+//  PillStripView.swift
 //  AgentVisor
 //
-//  The main dynamic island SwiftUI view with accurate notch shape
+//  The menu-bar pill strip, with an optional physical-notch decoration.
 //
 
 import AppKit
@@ -29,41 +29,8 @@ private final class PillMenuActionTarget: NSObject {
 }
 
 
-// Corner radius constants
-private let cornerRadiusInsets = (
-    opened: (top: CGFloat(19), bottom: CGFloat(24)),
-    closed: (top: CGFloat(6), bottom: CGFloat(14))
-)
+private let pillCornerRadii = (top: CGFloat(6), bottom: CGFloat(14))
 
-/// Which slice of the notch UI a `NotchView` instance renders.
-///
-/// - `.full`: the standard composition — closed-state pills + center
-///   notch shape that animates open into the full panel content. Used
-///   by the primary `NotchWindow`.
-/// - `.pillsOnlyOpenState`: pills only, and ONLY while the panel is
-///   opened. Used by the parallel `PillsStripWindow` so the user keeps
-///   seeing session pills in the menu-bar strip while the (now-inset)
-///   panel hangs below the menu bar. The mainWindow already shows
-///   pills when closed, so this gate keeps them mutually exclusive
-///   and avoids double-rendering.
-
-
-/// Holds the most recently rendered pill-bar snapshot for the click
-/// handler to read. Reference type so writes from inside `body` don't
-/// trigger SwiftUI re-renders (we'd loop forever); both NotchView
-/// instances (`.full` for closed-state pills, `.pillsOnlyOpenState`
-/// for opened-state strip pills) write into the SAME shared instance.
-/// The click monitor only runs in `.full`, but it needs to resolve
-/// against whichever instance most recently rendered — sharing one
-/// store closes that gap.
-///
-/// The contract: `handleSideClick` MUST read from here and never
-/// rebuild the snapshot from `sessionMonitor.instances`. See
-/// `PillBarHitTestTests.test_resolveAgainstSnapshot_renderedAndLiveDiverge`
-/// for the regression this guards: live-state re-sorts on
-/// `lastActivity` bumps in the milliseconds between render and click,
-/// so a snapshot recomputed at click time disagrees with what the
-/// user saw and the click resolves to the wrong pill.
 /// Shared "which pill should flash right now" channel. Set by
 /// `dispatchHit` when a pill click resolves; observed by the
 /// pill views to drive their press-flash animation. Lives outside
@@ -71,15 +38,9 @@ private let cornerRadiusInsets = (
 /// session re-sorts (a SwiftUI `@State` inside the view would be
 /// blown away when ForEach decides to re-key the row).
 ///
-/// Reference type + singleton: there's exactly one click stream
-/// across the closed `.full` window and the opened
-/// `.pillsOnlyOpenState` strip, and both windows' pill views need
-/// to observe the same flash signal. Using one shared store
-/// guarantees that the flash, the snapshot read, and the
-/// navigation dispatch are all keyed off the same click —
-/// no path can fire without the others. That's the structural
-/// invariant that prevents the regression where one of the
-/// three was silently disconnected.
+/// There is one click stream and one strip. Keeping the flash outside the pill
+/// view makes the rendered target, the click result, and the animation use the
+/// same stable session identity.
 final class PillFlashStore: ObservableObject {
     static let shared = PillFlashStore()
     /// `nil` when nothing is flashing; otherwise the stableId of the
@@ -105,6 +66,9 @@ final class PillFlashStore: ObservableObject {
     }
 }
 
+/// Holds the pill layout that was actually rendered. Click handling reads this
+/// snapshot instead of rebuilding from live sessions, because an activity update
+/// can reorder sessions between rendering and the click.
 final class PillBarSnapshotStore {
     static let shared = PillBarSnapshotStore()
     var snapshot: PillBarHitTest.PillBarSnapshot?
@@ -156,8 +120,8 @@ final class TransientPopoverWindowTracker: ObservableObject {
     }
 }
 
-struct NotchView: View {
-    @ObservedObject var viewModel: NotchViewModel
+struct PillStripView: View {
+    @ObservedObject var viewModel: PillStripViewModel
     /// Shared session monitor. The pills strip is the only instance in
     /// the app, and it needs the SAME `instances` array
     /// at click time — otherwise a one-tick lag between the two
@@ -165,23 +129,20 @@ struct NotchView: View {
     /// `handleSideClick`'s pack diverge from the visually rendered
     /// pills, reintroducing a "click pill A, navigate to B" race.
     /// Sharing one monitor closes that gap.
-    @ObservedObject var sessionMonitor: ClaudeSessionMonitor
-    @StateObject private var activityCoordinator = NotchActivityCoordinator.shared
+    @ObservedObject var sessionMonitor: SessionMonitor
     @ObservedObject private var updateManager = UpdateManager.shared
     @ObservedObject private var navigationRecencyStore = SessionNavigationRecencyStore.shared
     @ObservedObject private var codexUsageMonitor = CodexUsageMonitor.shared
     @ObservedObject private var claudeUsageMonitor = ClaudeUsageMonitor.shared
     @ObservedObject private var fullScreenPolicy = FullScreenPolicySelector.shared
     @ObservedObject private var sessionShortcutManager = GlobalSessionShortcutManager.shared
-    @StateObject private var menuLayoutCoordinator = NotchMenuLayoutCoordinator()
+    @StateObject private var menuLayoutCoordinator = MenuBarLayoutCoordinator()
     @StateObject private var transientPopoverWindowTracker = TransientPopoverWindowTracker()
     /// Observed so a flavor flip re-evaluates this view's body and cascades
     /// new ChatTheme tokens into every descendant.
     @ObservedObject private var appearance = AppearanceSelector.shared
     @State private var previousPendingIds: Set<String> = []
     @State private var readyEpisodeTracker = ReadySessionEpisodeTracker()
-    @State private var waitingForInputTimestamps: [String: Date] = [:]  // sessionId -> when it entered waitingForInput
-    @State private var isVisible: Bool = true
     @State private var isHovering: Bool = false
     @State private var isBouncing: Bool = false
     @State private var sideClickMonitor: EventMonitor?
@@ -195,11 +156,7 @@ struct NotchView: View {
     @State private var frozenOverflowSnapshot: SidebarSessionListSnapshot?
     @State private var frozenNavigatorSnapshot: SidebarSessionListSnapshot?
     @State private var showCodexUsagePopover = false
-    /// Backing store for the rendered pill snapshot. Shared singleton
-    /// so both NotchView instances (closed `.full` + opened
-    /// `.pillsOnlyOpenState`) write into the same place; only `.full`
-    /// has the click monitor, and it always reads the most-recent
-    /// render. See `PillBarSnapshotStore` doc.
+    /// The one rendered layout read by click handling and shortcuts.
     private let pillSnapshotStore = PillBarSnapshotStore.shared
     private let hoverContextMenuCoordinator = PillHoverContextMenuCoordinator.shared
     /// Bumped when menu-bar apps launch or quit so the right-side tray
@@ -223,36 +180,9 @@ struct NotchView: View {
     // the guarded onReceive), so the added cost is negligible.
     private let menuProbeTimer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
-    @Namespace private var activityNamespace
-
-    /// Whether any Claude session is currently processing or compacting
-    private var isAnyProcessing: Bool {
-        sessionMonitor.instances.contains { $0.phase == .processing || $0.phase == .compacting }
-    }
-
-    /// Whether any Claude session has a pending permission request
-    private var hasPendingPermission: Bool {
-        sessionMonitor.instances.contains { $0.phase.isWaitingForApproval }
-    }
-
-    /// Whether any Claude session is waiting for user input (done/ready state) within the display window
-    private var hasWaitingForInput: Bool {
-        let now = Date()
-        let displayDuration: TimeInterval = 30  // Show checkmark for 30 seconds
-
-        return sessionMonitor.instances.contains { session in
-            guard session.phase == .waitingForInput else { return false }
-            // Only show if within the 30-second display window
-            if let enteredAt = waitingForInputTimestamps[session.sessionId] {
-                return now.timeIntervalSince(enteredAt) < displayDuration
-            }
-            return false
-        }
-    }
-
     // MARK: - Sizing
 
-    private var closedNotchSize: CGSize {
+    private var notchReservationSize: CGSize {
         CGSize(
             // On a display without a physical notch there is no synthetic
             // notch, so the center reserves zero width and the left/right
@@ -264,21 +194,9 @@ struct NotchView: View {
         )
     }
 
-    /// Extra width for expanding activities
-    /// When closed: no expansion (side content uses all available space)
-    private var expansionWidth: CGFloat {
-        0
-    }
-
-    /// Outer size for the visual notch shape. The panel is gone, so this
-    /// is always the closed size.
-    private var notchSize: CGSize {
-        closedNotchSize
-    }
-
     private var menuBarInteractionHeight: CGFloat {
         let visibleMenuHeight = max(0, viewModel.screenRect.maxY - viewModel.geometry.visibleFrame.maxY)
-        let stripHeight = max(visibleMenuHeight, closedNotchSize.height)
+        let stripHeight = max(visibleMenuHeight, notchReservationSize.height)
         return min(max(stripHeight, 1), 80)
     }
 
@@ -287,52 +205,7 @@ struct NotchView: View {
         return (maxY - menuBarInteractionHeight)...maxY
     }
 
-    /// Width of the closed content (notch + any expansion)
-    private var closedContentWidth: CGFloat {
-        closedNotchSize.width + expansionWidth
-    }
-
-    // MARK: - Corner Radii
-
-    private var topCornerRadius: CGFloat {
-        cornerRadiusInsets.closed.top
-    }
-
-    private var bottomCornerRadius: CGFloat {
-        cornerRadiusInsets.closed.bottom
-    }
-
-    /// Corner radius for the panel's rounded-rect clip. Single value
-    /// for all four corners — replaces the old `NotchShape` which
-    /// carved concave (notch-hugging) curves into the top corners.
-    /// On external displays those concave curves were vestigial and
-    /// read as "wrong" against the chrome row; on a real notched
-    /// MacBook they only look right when the closed pill is flush
-    /// against the hardware notch, which is a niche read. Standard
-    /// rounded corners look right everywhere.
-    private var panelCornerRadius: CGFloat {
-        cornerRadiusInsets.closed.bottom
-    }
-
-    private var currentNotchShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
-    }
-
-    // Animation springs
-    private let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.8, blendDuration: 0)
-    private let closeAnimation = Animation.spring(response: 0.45, dampingFraction: 1.0, blendDuration: 0)
-
     // MARK: - Body
-
-    /// Left edge of the hardware notch (x coordinate)
-    private var notchLeftEdge: CGFloat {
-        viewModel.deviceNotchRect.origin.x
-    }
-
-    /// Right edge of the hardware notch (x coordinate)
-    private var notchRightEdge: CGFloat {
-        viewModel.deviceNotchRect.origin.x + viewModel.deviceNotchRect.width
-    }
 
     /// Half of the fixed gap that separates each pill group from the notch
     /// center. On a physical notch this holds the pills 4px off the
@@ -345,13 +218,13 @@ struct NotchView: View {
 
     /// Left edge of the actual pill (accounts for expansion beyond hardware notch)
     private var pillLeftEdge: CGFloat {
-        let totalPillWidth = closedNotchSize.width + expansionWidth
+        let totalPillWidth = notchReservationSize.width
         return (viewModel.screenRect.width - totalPillWidth) / 2 - notchCenterGap
     }
 
     /// Right edge of the actual pill (accounts for expansion beyond hardware notch)
     private var pillRightEdge: CGFloat {
-        let totalPillWidth = closedNotchSize.width + expansionWidth
+        let totalPillWidth = notchReservationSize.width
         return (viewModel.screenRect.width + totalPillWidth) / 2 + notchCenterGap
     }
 
@@ -383,14 +256,9 @@ struct NotchView: View {
         menuLayoutCoordinator.statusTraySafeWidth(availableFrom: pillRightEdge)
     }
 
-    /// Whether this view instance owns a current pill layout. Full-screen
-    /// hiding deliberately does not participate here: hidden layouts keep
-    /// refreshing so direct 1-9 and 0 shortcuts retain a current snapshot.
-    /// With the notch chat panel retired, the panel never opens
-    /// (`status` stays `.closed` for the full process lifetime), so
-    /// `.pillsOnlyOpenState` — which historically gated on
-    /// `status != .closed` — now needs to render unconditionally.
-    /// `.full` keeps its original "show pills while closed" semantics.
+    /// Whether the strip has anything to lay out. Full-screen hiding does not
+    /// participate here, because hidden layouts must stay current for direct
+    /// 1–9 and 0 shortcuts.
     private var hasPillContent: Bool {
         !sessionMonitor.instances.isEmpty || codexUsageMonitor.showsPill || claudeUsageMonitor.showsPill
     }
@@ -509,13 +377,13 @@ struct NotchView: View {
                 // Invisible full-width canvas for positioning side content
                 // allowsHitTesting(false) so clicks on empty space pass through
                 Color.clear
-                    .frame(width: viewModel.screenRect.width, height: closedNotchSize.height)
+                    .frame(width: viewModel.screenRect.width, height: notchReservationSize.height)
                     .allowsHitTesting(false)
                     .id(menuBarVersion)  // Force re-render when frontmost app changes or tray shifts
                     .overlay(alignment: .trailing) {
                         // Left bar: right-aligned to pill left edge.
                         HStack(spacing: pack.pillSpacing) {
-                            NotchPillBar(
+                            PillBar(
                                 side: .left,
                                 visiblePills: pack.leftPills,
                                 overflowCount: pack.leftOverflowCount,
@@ -539,7 +407,7 @@ struct NotchView: View {
                         // Right bar: left-aligned from pill right edge.
                         // Same session-pill semantics as the left bar.
                         HStack(spacing: pack.pillSpacing) {
-                            NotchPillBar(
+                            PillBar(
                                 side: .right,
                                 visiblePills: pack.rightPills,
                                 overflowCount: pack.rightOverflowCount,
@@ -572,20 +440,17 @@ struct NotchView: View {
                     .animation(.easeOut(duration: 0.16), value: pillsAreVisible)
             }
 
-            // Decorative closed-style notch indicator for the pills
-            // strip. Anchors the panel visually to the menu-bar edge
-            // when open, so users on external displays (no hardware
-            // notch) can see "the notch is here" instead of staring
-            // at a panel hanging in mid-air below the menu bar.
+            // Decorative shape behind a physical notch. External displays do
+            // not render it, and the shape never accepts a click.
             if shouldRenderNotchIndicator {
                 NotchShape(
-                    topCornerRadius: cornerRadiusInsets.closed.top,
-                    bottomCornerRadius: cornerRadiusInsets.closed.bottom
+                    topCornerRadius: pillCornerRadii.top,
+                    bottomCornerRadius: pillCornerRadii.bottom
                 )
                 .fill(Color.black)
                 .frame(
-                    width: closedNotchSize.width,
-                    height: closedNotchSize.height
+                    width: notchReservationSize.width,
+                    height: notchReservationSize.height
                 )
                 .frame(maxWidth: .infinity, alignment: .center)
                 .allowsHitTesting(false)
@@ -594,7 +459,6 @@ struct NotchView: View {
             }
 
         }
-        .opacity(isVisible ? 1 : 0)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // Drives system-managed chrome (e.g. text selection caret, native
         // controls) to follow the user-chosen flavor. The hardware-notch
@@ -609,10 +473,7 @@ struct NotchView: View {
             }
         }())
         .onAppear {
-            isVisible = true
-            // Several pieces of bootstrap belong to the primary `.full`
-            // Bootstrap for the pills strip — the only NotchView
-            // instance in the app.
+            // Bootstrap the only pill-strip view in the app.
             sessionMonitor.startMonitoring()
             startSideClickMonitor()
             startFullScreenPointerMonitor()
@@ -638,7 +499,6 @@ struct NotchView: View {
             handlePendingSessionsChange(sessions)
         }
         .onChange(of: sessionMonitor.instances) { _, instances in
-            handleProcessingChange()
             handleWaitingForInputChange(instances)
         }
         .onChange(of: codexUsageMonitor.showsPill) { _, _ in
@@ -1309,28 +1169,7 @@ struct NotchView: View {
         SessionNavigationRecencyStore.shared.record(session)
     }
 
-    // MARK: - Notch Layout
-
-    private var isProcessing: Bool {
-        activityCoordinator.expandingActivity.show && activityCoordinator.expandingActivity.type == .claude
-    }
-
     // MARK: - Event Handlers
-
-    private func handleProcessingChange() {
-        if isAnyProcessing || hasPendingPermission {
-            // Show claude activity when processing or waiting for permission
-            activityCoordinator.showActivity(type: .claude)
-            isVisible = true
-        } else if hasWaitingForInput {
-            // Keep visible for waiting-for-input but hide the processing spinner
-            activityCoordinator.hideActivity()
-            isVisible = true
-        } else {
-            // Hide activity indicator when done (notch itself stays visible)
-            activityCoordinator.hideActivity()
-        }
-    }
 
     private func handlePendingSessionsChange(_ sessions: [SessionState]) {
         let currentIds = Set(sessions.map { $0.stableId })
@@ -1349,18 +1188,6 @@ struct NotchView: View {
         let waitingForInputSessions = instances.filter { $0.phase == .waitingForInput }
         let currentIds = Set(waitingForInputSessions.map { $0.sessionId })
         let newWaitingIds = readyEpisodeTracker.update(readySessionIDs: currentIds)
-
-        // Track timestamps for newly waiting sessions
-        let now = Date()
-        for session in waitingForInputSessions where newWaitingIds.contains(session.sessionId) {
-            waitingForInputTimestamps[session.sessionId] = now
-        }
-
-        // Clean up timestamps for sessions no longer waiting
-        let staleIds = Set(waitingForInputTimestamps.keys).subtracting(currentIds)
-        for staleId in staleIds {
-            waitingForInputTimestamps.removeValue(forKey: staleId)
-        }
 
         // Bounce the notch when a session newly enters waitingForInput state
         if !newWaitingIds.isEmpty {
@@ -1387,12 +1214,6 @@ struct NotchView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                     isBouncing = false
                 }
-            }
-
-            // Schedule hiding the checkmark after 30 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [self] in
-                // Trigger a UI update to re-evaluate hasWaitingForInput
-                handleProcessingChange()
             }
         }
     }

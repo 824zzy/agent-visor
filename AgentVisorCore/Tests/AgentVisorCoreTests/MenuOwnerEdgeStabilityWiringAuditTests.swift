@@ -7,7 +7,7 @@ import XCTest
 final class MenuOwnerEdgeStabilityWiringAuditTests: XCTestCase {
     func testCoordinatorSafeWidthUsesTheHeldEdgeAndFeedsTheHoldPolicy() throws {
         let source = try String(contentsOf: repoRoot()
-            .appendingPathComponent("AgentVisor/Services/MenuBar/NotchMenuLayoutCoordinator.swift"))
+            .appendingPathComponent("AgentVisor/Services/MenuBar/MenuBarLayoutCoordinator.swift"))
 
         // The hold policy seeds and updates the stabilized edge.
         XCTAssertTrue(source.contains("MenuOwnerEdgeHoldPolicy.begin("))
@@ -28,7 +28,7 @@ final class MenuOwnerEdgeStabilityWiringAuditTests: XCTestCase {
             "safeWidth must consume the held edge."
         )
         XCTAssertFalse(
-            safeWidth.contains("NotchMenuLayoutPolicy.safeWidth("),
+            safeWidth.contains("MenuBarLayoutPolicy.safeWidth("),
             "safeWidth must not read the raw per-probe snapshot edge."
         )
 

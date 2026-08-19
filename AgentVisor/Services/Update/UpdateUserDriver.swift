@@ -1,8 +1,8 @@
 //
-//  NotchUserDriver.swift
+//  UpdateUserDriver.swift
 //  AgentVisor
 //
-//  Custom Sparkle user driver for in-notch update UI
+//  Custom Sparkle user driver for Agent Visor's Updates surface.
 //
 
 import Combine
@@ -87,7 +87,7 @@ class UpdateManager: NSObject, ObservableObject {
         state = .idle
     }
 
-    // MARK: - Internal state updates (called by NotchUserDriver)
+    // MARK: - Internal state updates (called by UpdateUserDriver)
 
     func updateFound(version: String, releaseNotes: String?, installHandler: @escaping (SPUUserUpdateChoice) -> Void) {
         self.currentVersion = version
@@ -168,8 +168,8 @@ class UpdateManager: NSObject, ObservableObject {
     }
 }
 
-/// Custom Sparkle user driver that routes all UI to NotchUpdateManager
-class NotchUserDriver: NSObject, SPUUserDriver {
+/// Routes Sparkle state into UpdateManager and the Updates surface.
+class UpdateUserDriver: NSObject, SPUUserDriver {
 
     var canCheckForUpdates: Bool { true }
 
@@ -281,7 +281,7 @@ class NotchUserDriver: NSObject, SPUUserDriver {
     // MARK: - Resume/Focus
 
     func showUpdateInFocus() {
-        // Could expand notch here if desired
+        // The Updates surface already shows the resumed state.
     }
 
     func showResumableUpdateFound(with appcastItem: SUAppcastItem, state: SPUUserUpdateState, reply: @escaping (SPUUserUpdateChoice) -> Void) {

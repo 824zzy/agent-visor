@@ -6,7 +6,7 @@ final class PiRebootRestorationWiringAuditTests: XCTestCase {
         let root = repoRoot()
         let appDelegate = try String(contentsOf: root.appendingPathComponent("AgentVisor/App/AppDelegate.swift"))
         let monitor = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/Services/Session/ClaudeSessionMonitor.swift"
+            "AgentVisor/Services/Session/SessionMonitor.swift"
         ))
 
         XCTAssertTrue(appDelegate.contains("NSWorkspace.willPowerOffNotification"))

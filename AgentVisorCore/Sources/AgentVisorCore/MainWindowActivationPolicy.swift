@@ -5,7 +5,7 @@ public enum MainWindowActivationReason: Equatable, Sendable {
     case appReopen
     case hotkey
     case settings
-    case notchClick
+    case menuBarStatusItem
     case overflowPill
     case approvalNotificationTap
     case pendingApprovalDetected
@@ -24,7 +24,7 @@ public enum MainWindowActivationPolicy {
             return .ignore
         case .hotkey:
             return .toggle
-        case .appReopen, .settings, .notchClick, .overflowPill, .approvalNotificationTap:
+        case .appReopen, .settings, .menuBarStatusItem, .overflowPill, .approvalNotificationTap:
             return .show
         }
     }
