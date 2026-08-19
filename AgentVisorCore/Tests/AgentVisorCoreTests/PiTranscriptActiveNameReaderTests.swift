@@ -43,6 +43,17 @@ final class PiTranscriptActiveNameReaderTests: XCTestCase {
         XCTAssertEqual(PiTranscriptActiveNameReader.read(path: file.path), "Latest")
     }
 
+    func testCustomRecordUsesItsTopLevelID() throws {
+        let file = try makeFile(lines: [
+            #"{"type":"session_info","id":"name","parentId":null,"name":"pi-improve"}"#,
+            #"{"type":"custom","customType":"goal-state","data":{"goal":{"id":"nested"}},"id":"custom","parentId":"name"}"#,
+            #"{"type":"message","id":"leaf","parentId":"custom","message":{"role":"user","content":"hi"}}"#
+        ])
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+
+        XCTAssertEqual(PiTranscriptActiveNameReader.read(path: file.path), "pi-improve")
+    }
+
     func testAnIncompleteTrailingScalarDoesNotHideTheActiveLeaf() throws {
         let leafPrefix = #"{"type":"diagnostic","id":"active-leaf","parentId":"active-parent","payload":""#
         let activeLeaf = leafPrefix

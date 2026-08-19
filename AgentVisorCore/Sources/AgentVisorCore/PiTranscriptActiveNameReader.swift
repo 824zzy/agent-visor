@@ -35,10 +35,14 @@ public enum PiTranscriptActiveNameReader {
             // id and parent fields at the start of the line.
             let text = String(decoding: linePrefix, as: UTF8.self)
             guard let type = stringField("type", in: text),
-                  type != "session",
-                  let id = stringField("id", in: text) else { return }
+                  type != "session" else { return }
+            // Pi writes custom data before the record identity. Search backward
+            // so a nested goal ID cannot replace the top-level record ID.
+            // ponytail: retain a line tail if custom data grows beyond 64 KiB.
+            let identityOptions: String.CompareOptions = type == "custom" ? .backwards : []
+            guard let id = stringField("id", in: text, options: identityOptions) else { return }
 
-            if let parentID = stringField("parentId", in: text) {
+            if let parentID = stringField("parentId", in: text, options: identityOptions) {
                 parents[id] = parentID
             }
             if type == "session_info",
@@ -77,10 +81,14 @@ public enum PiTranscriptActiveNameReader {
         return nil
     }
 
-    /// Pi writes these top-level fields before message content. Values are UUIDs
-    /// or fixed record names, so escaped strings are not valid at this boundary.
-    private static func stringField(_ key: String, in text: String) -> String? {
-        guard let keyRange = text.range(of: "\"\(key)\"") else { return nil }
+    /// Pi writes message identity before content and custom identity after data.
+    /// Values here cannot contain escaped quotes.
+    private static func stringField(
+        _ key: String,
+        in text: String,
+        options: String.CompareOptions = []
+    ) -> String? {
+        guard let keyRange = text.range(of: "\"\(key)\"", options: options) else { return nil }
         var index = keyRange.upperBound
         while index < text.endIndex, text[index].isWhitespace { index = text.index(after: index) }
         guard index < text.endIndex, text[index] == ":" else { return nil }
