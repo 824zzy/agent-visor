@@ -169,7 +169,11 @@ struct ClaudeCodeAgentProvider: AgentProvider {
     /// the JSONL — much cheaper than a full parse and the only thing
     /// bootstrap needs.
     func loadConversationInfo(sessionId: String, cwd: String) async -> ConversationInfo {
-        await ConversationSummary.shared.parse(sessionId: sessionId, cwd: cwd)
+        // Bounded: a scan asks for one of these per row, and this one reads a
+        // transcript from disk.
+        await BlockingWork.limited("claudeSummary") {
+            await ConversationSummary.shared.parse(sessionId: sessionId, cwd: cwd)
+        }
     }
 
     // MARK: - Lifecycle

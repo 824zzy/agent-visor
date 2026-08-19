@@ -162,10 +162,15 @@ struct CodexAgentProvider: AgentProvider {
     /// session list no longer parses 100+ MB rollout files just to
     /// populate titles, model, context, and last-message previews.
     nonisolated func loadConversationInfo(sessionId: String, cwd: String) async -> ConversationInfo {
-        await CodexConversationSummary.shared.parse(
-            sessionId: sessionId,
-            rolloutPath: transcriptURL(sessionId: sessionId, cwd: cwd).path
-        )
+        // The path itself comes from the thread database, and the summary then
+        // reads the file. A scan asks for one per row, so both are bounded.
+        let rolloutPath = transcriptURL(sessionId: sessionId, cwd: cwd).path
+        return await BlockingWork.limited("codexSummary") {
+            await CodexConversationSummary.shared.parse(
+                sessionId: sessionId,
+                rolloutPath: rolloutPath
+            )
+        }
     }
 
     /// Codex doesn't have an incremental parser; full reparse on

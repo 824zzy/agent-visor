@@ -32,6 +32,18 @@ enum BlockingWork {
 
     private static let gate = BlockingWorkGate()
 
+    /// A second counter, for reads we cannot move.
+    ///
+    /// Some blocking reads sit behind an actor we do not own, such as a transcript
+    /// parser. We cannot put those on our own threads, because the actor decides
+    /// where its work runs. We can still say how many run at once, which is what
+    /// stops a fan-out over hundreds of rows.
+    ///
+    /// It is a separate counter for two reasons. A sweep of transcripts must not
+    /// starve a question about who is alive. And one kind may end up nested inside
+    /// the other, which with a single counter could stop both for good.
+    private static let readGate = BlockingWorkGate()
+
     /// Run `body` on a thread of our own and return its answer.
     ///
     /// The caller waits as a suspended task, so it holds no thread while the
@@ -53,6 +65,24 @@ enum BlockingWork {
                 }
             }
         }
+    }
+
+    /// Bound how many of these reads run at once, without moving them.
+    ///
+    /// Use this when the work is already behind `async` code you do not own, so
+    /// `run` cannot take it. A transcript summary is the example: the scan asks
+    /// for one per row, and two hundred at once is what froze the app.
+    static func limited<T: Sendable>(
+        _ label: StaticString = "read",
+        _ body: @Sendable () async -> T
+    ) async -> T {
+        let started = DispatchTime.now()
+        let value = await readGate.withPermit(body)
+        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+        if elapsedMs > 1_000 {
+            logger.info("\(label, privacy: .public) took \(Int(elapsedMs))ms, waiting included")
+        }
+        return value
     }
 
     /// How many blocking calls are running, and how many wait for a turn.

@@ -235,11 +235,15 @@ struct CursorAgentProvider: AgentProvider {
     /// out the conversation info.
     nonisolated func loadConversationInfo(sessionId: String, cwd: String) async -> ConversationInfo {
         let path = transcriptURL(sessionId: sessionId, cwd: cwd).path
-        _ = await CursorConversationParser.shared.parseFullConversation(
-            sessionId: sessionId,
-            transcriptPath: path
-        )
-        return await CursorConversationParser.shared.conversationInfo(for: sessionId)
+        // Cursor parses the whole conversation to warm its cache, so this is the
+        // heaviest of the summary reads. A scan asks for one per row.
+        return await BlockingWork.limited("cursorSummary") {
+            _ = await CursorConversationParser.shared.parseFullConversation(
+                sessionId: sessionId,
+                transcriptPath: path
+            )
+            return await CursorConversationParser.shared.conversationInfo(for: sessionId)
+        }
     }
 
     // MARK: - Lifecycle

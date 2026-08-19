@@ -334,10 +334,14 @@ struct PiAgentProvider: AgentProvider {
 
     nonisolated func loadConversationInfo(sessionId: String, cwd: String) async -> ConversationInfo {
         let path = transcriptURL(sessionId: sessionId, cwd: cwd).path
-        return await PiConversationSummary.shared.loadConversationInfo(
-            sessionId: sessionId,
-            transcriptPath: path
-        )
+        // Bounded: a scan asks for one of these per row, and this one reads a
+        // transcript from disk.
+        return await BlockingWork.limited("piSummary") {
+            await PiConversationSummary.shared.loadConversationInfo(
+                sessionId: sessionId,
+                transcriptPath: path
+            )
+        }
     }
 
     nonisolated func fileSync(sessionId: String, cwd: String) async -> FileSyncOutcome {
