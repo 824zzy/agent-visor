@@ -12,6 +12,19 @@ struct PiAgentProvider: AgentProvider {
     /// proves, so the synchronous store merge does not repeat that whole tree
     /// walk once per Pi row.
     nonisolated(unsafe) private static var transcriptURLBySessionID: [String: URL] = [:]
+
+    nonisolated private struct TranscriptNameSignature: Equatable {
+        let path: String
+        let byteCount: UInt64
+        let modifiedAt: Date
+    }
+
+    nonisolated private struct CachedTranscriptName {
+        let signature: TranscriptNameSignature
+        let name: String?
+    }
+
+    nonisolated(unsafe) private static var transcriptNameBySessionID: [String: CachedTranscriptName] = [:]
     nonisolated private static let transcriptURLCacheLock = NSLock()
     nonisolated let id: AgentID = .pi
     nonisolated let displayName: String = "Pi"
@@ -62,6 +75,55 @@ struct PiAgentProvider: AgentProvider {
             ?? sessionMetadataDirectory
                 .appendingPathComponent(projectDirName(forCwd: cwd))
                 .appendingPathComponent("\(sessionId).jsonl")
+    }
+
+    /// Discovery already has one exact path per visible Pi session. Scan only
+    /// record links and session names, then cache by file signature. The next
+    /// 30-second discovery skips unchanged files.
+    nonisolated func prewarmMetadata(sessionIds: [String]) {
+        Self.transcriptURLCacheLock.lock()
+        let paths = sessionIds.compactMap { id in
+            Self.transcriptURLBySessionID[id].map { (id, $0) }
+        }
+        Self.transcriptURLCacheLock.unlock()
+
+        for (sessionId, url) in paths {
+            guard let signature = Self.transcriptNameSignature(url: url) else { continue }
+            Self.transcriptURLCacheLock.lock()
+            let isCurrent = Self.transcriptNameBySessionID[sessionId]?.signature == signature
+            Self.transcriptURLCacheLock.unlock()
+            guard !isCurrent else { continue }
+
+            let name = PiTranscriptActiveNameReader.read(path: url.path)
+            Self.transcriptURLCacheLock.lock()
+            Self.transcriptNameBySessionID[sessionId] = CachedTranscriptName(
+                signature: signature,
+                name: name
+            )
+            Self.transcriptURLCacheLock.unlock()
+        }
+    }
+
+    nonisolated func resolveSessionName(sessionId: String, pid: Int?) -> String? {
+        Self.cachedTranscriptName(sessionId: sessionId)
+    }
+
+    nonisolated private static func transcriptNameSignature(url: URL) -> TranscriptNameSignature? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber,
+              let modifiedAt = attributes[.modificationDate] as? Date else { return nil }
+        return TranscriptNameSignature(
+            path: url.path,
+            byteCount: size.uint64Value,
+            modifiedAt: modifiedAt
+        )
+    }
+
+    nonisolated private static func cachedTranscriptName(sessionId: String) -> String? {
+        transcriptURLCacheLock.lock()
+        let name = transcriptNameBySessionID[sessionId]?.name
+        transcriptURLCacheLock.unlock()
+        return name
     }
 
     nonisolated private static func cachedTranscriptURL(sessionId: String) -> URL? {
