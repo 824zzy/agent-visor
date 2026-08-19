@@ -220,12 +220,6 @@ protocol AgentProvider: Sendable {
 
     // MARK: - Lifecycle rules
 
-    /// What `pruneDeadSessions` does when this session's CLI process
-    /// is no longer alive. Default `.markEnded` keeps the row in the
-    /// dictionary so chat history stays browsable. Providers whose
-    /// dead sessions can't be revived from the sidebar (e.g. Zed —
-    /// no deeplink or reveal path) override to `.remove`.
-    ///
     /// An event from this agent arrived, whatever the store later does with it.
     ///
     /// Called before any rule can drop the event, because an agent may keep a
@@ -288,6 +282,9 @@ protocol AgentProvider: Sendable {
     /// hooks of their own, and the transcript is the only live signal.
     nonisolated func watchesTranscriptOnDiscovery(for session: SessionState) -> Bool
 
+    /// What `pruneDeadSessions` does when this session's CLI process is gone.
+    /// Default `.markEnded` keeps browsable history. Providers whose dead rows
+    /// have no recovery path override to `.remove`.
     nonisolated func deadProcessAction(for session: SessionState) -> DeadProcessAction
 
     /// Which of these sessions have no live agent behind them any more.

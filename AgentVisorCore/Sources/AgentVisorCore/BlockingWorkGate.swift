@@ -26,8 +26,7 @@ public actor BlockingWorkGate {
 
     private let permits: Int
     private var inUse = 0
-    private var waiting: [(id: UInt64, resume: @Sendable () -> Void)] = []
-    private var nextWaiterID: UInt64 = 0
+    private var waiting: [@Sendable () -> Void] = []
 
     public init(permits: Int = BlockingWorkGate.defaultPermits) {
         self.permits = max(1, permits)
@@ -45,10 +44,8 @@ public actor BlockingWorkGate {
             inUse += 1
             return
         }
-        let id = nextWaiterID
-        nextWaiterID += 1
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            waiting.append((id: id, resume: { continuation.resume() }))
+            waiting.append { continuation.resume() }
         }
     }
 
@@ -59,8 +56,8 @@ public actor BlockingWorkGate {
             inUse = max(0, inUse - 1)
             return
         }
-        let next = waiting.removeFirst()
-        next.resume()
+        let resume = waiting.removeFirst()
+        resume()
     }
 
     /// Run `body` while holding a permit.
