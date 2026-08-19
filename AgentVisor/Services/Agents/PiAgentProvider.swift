@@ -8,6 +8,11 @@ import AgentVisorCore
 /// The extension is never a discovery prerequisite. Existing sessions remain
 /// browsable and terminal-owned sessions remain navigable if it is absent.
 struct PiAgentProvider: AgentProvider {
+    /// Discovery already reads every Pi transcript header. Keep the paths it
+    /// proves, so the synchronous store merge does not repeat that whole tree
+    /// walk once per Pi row.
+    nonisolated(unsafe) private static var transcriptURLBySessionID: [String: URL] = [:]
+    nonisolated private static let transcriptURLCacheLock = NSLock()
     nonisolated let id: AgentID = .pi
     nonisolated let displayName: String = "Pi"
     nonisolated let processNameFilter: String = "pi"
@@ -40,11 +45,39 @@ struct PiAgentProvider: AgentProvider {
         "--" + cwd.split(separator: "/").joined(separator: "-") + "--"
     }
 
+    nonisolated func transcriptURLForReading(sessionId: String, cwd: String) async -> URL {
+        await BlockingWork.run("piTranscriptURL") {
+            transcriptURL(sessionId: sessionId, cwd: cwd)
+        }
+    }
+
     nonisolated func transcriptURL(sessionId: String, cwd: String) -> URL {
-        Self.sessionFiles().first { $0.metadata.sessionId == sessionId }?.url
+        if let cached = Self.cachedTranscriptURL(sessionId: sessionId) {
+            return cached
+        }
+        // A hook can introduce a session before the next discovery. Keep the old
+        // fallback for that case: one scan finds the path and also refreshes the
+        // cache for every other Pi session.
+        return Self.sessionFiles().first { $0.metadata.sessionId == sessionId }?.url
             ?? sessionMetadataDirectory
                 .appendingPathComponent(projectDirName(forCwd: cwd))
                 .appendingPathComponent("\(sessionId).jsonl")
+    }
+
+    nonisolated private static func cachedTranscriptURL(sessionId: String) -> URL? {
+        transcriptURLCacheLock.lock()
+        let cached = transcriptURLBySessionID[sessionId]
+        transcriptURLCacheLock.unlock()
+        guard let cached else { return nil }
+        guard FileManager.default.fileExists(atPath: cached.path) else {
+            transcriptURLCacheLock.lock()
+            if transcriptURLBySessionID[sessionId] == cached {
+                transcriptURLBySessionID.removeValue(forKey: sessionId)
+            }
+            transcriptURLCacheLock.unlock()
+            return nil
+        }
+        return cached
     }
 
     // MARK: - Availability and installation
@@ -261,6 +294,16 @@ struct PiAgentProvider: AgentProvider {
                 headerByteCount: header.byteCount
             ))
         }
+        // Preserve the enumerator's first match for duplicate ids, which is the
+        // same answer `transcriptURL` gave before the cache existed.
+        let urls = result.reduce(into: [String: URL]()) { paths, file in
+            if paths[file.metadata.sessionId] == nil {
+                paths[file.metadata.sessionId] = file.url
+            }
+        }
+        transcriptURLCacheLock.lock()
+        transcriptURLBySessionID = urls
+        transcriptURLCacheLock.unlock()
         return result
     }
 
@@ -333,7 +376,7 @@ struct PiAgentProvider: AgentProvider {
     }
 
     nonisolated func loadConversationInfo(sessionId: String, cwd: String) async -> ConversationInfo {
-        let path = transcriptURL(sessionId: sessionId, cwd: cwd).path
+        let path = (await transcriptURLForReading(sessionId: sessionId, cwd: cwd)).path
         // Bounded: a scan asks for one of these per row, and this one reads a
         // transcript from disk.
         return await BlockingWork.limited("piSummary") {

@@ -83,10 +83,105 @@ final class BlockingWorkWiringAuditTests: XCTestCase {
         XCTAssertTrue(store.contains("await BlockingWork.run(\"findLiveAttachment\")"))
         // Waiting away from the actor lets other work run, so the answer must be
         // checked against the row before the sweep acts on it.
+        guard let start = store.range(of: "private func pruneDeadSessions()"),
+              let end = store.range(of: "private func publishStateWithoutPrune", range: start.upperBound..<store.endIndex)
+        else { return XCTFail("The sweep boundaries moved.") }
+        let sweep = String(store[start.lowerBound..<end.lowerBound])
         XCTAssertEqual(
-            store.components(separatedBy: "LivenessAnswerFreshnessPolicy.stillApplies").count - 1,
+            sweep.components(separatedBy: "SessionReadFreshnessPolicy.stillApplies").count - 1,
             2,
             "Each awaited answer in the sweep needs its own freshness check."
+        )
+    }
+
+    func testTranscriptPathReadsMoveOnlyForProvidersThatCanSearch() throws {
+        let seam = try source("AgentVisor/Services/Agents/AgentProvider.swift")
+        XCTAssertTrue(seam.contains("func transcriptURLForReading"))
+        XCTAssertTrue(
+            seam.contains("transcriptURL(sessionId: sessionId, cwd: cwd)"),
+            "The default must stay direct for agents whose path is pure string building."
+        )
+        for provider in ["CodexAgentProvider", "CursorAgentProvider", "PiAgentProvider"] {
+            let src = try source("AgentVisor/Services/Agents/\(provider).swift")
+            XCTAssertTrue(
+                src.contains("func transcriptURLForReading"),
+                "\(provider) can read a database or search directories, so it must move that question."
+            )
+            XCTAssertTrue(src.contains("BlockingWork.run"))
+        }
+        for provider in ["ClaudeCodeAgentProvider", "AuggieAgentProvider"] {
+            let src = try source("AgentVisor/Services/Agents/\(provider).swift")
+            XCTAssertFalse(
+                src.contains("func transcriptURLForReading"),
+                "\(provider) builds the path from strings, so a thread hop would cost more than the answer."
+            )
+        }
+    }
+
+    func testTranscriptPhaseReadRechecksTheRowAfterWaiting() throws {
+        let store = try source("AgentVisor/Services/State/SessionStore.swift")
+        guard let start = store.range(of: "private func applyInferredObservedPhase"),
+              let end = store.range(of: "func reconcileObservedPhases", range: start.upperBound..<store.endIndex)
+        else { return XCTFail("The transcript phase function moved.") }
+        let body = String(store[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(body.contains("transcriptURLForReading"))
+        XCTAssertTrue(body.contains("BlockingWork.run(\"transcriptModificationDate\")"))
+        XCTAssertTrue(body.contains("SessionReadFreshnessPolicy.stillApplies"))
+        XCTAssertTrue(
+            body.contains("session = current"),
+            "After the check, continue from the current row so a newer name or host is not overwritten."
+        )
+    }
+
+    func testBootstrapGathersMachineSnapshotsBeforeItsAtomicMerge() throws {
+        let store = try source("AgentVisor/Services/State/SessionStore.swift")
+        guard let start = store.range(of: "func bootstrapSessions"),
+              let end = store.range(of: "private func applyBootstrapConversationInfo", range: start.upperBound..<store.endIndex)
+        else { return XCTFail("The bootstrap boundaries moved.") }
+        let body = String(store[start.lowerBound..<end.lowerBound])
+        guard let loop = body.range(of: "for info in discovered") else {
+            return XCTFail("The atomic merge loop moved.")
+        }
+        let beforeMerge = String(body[..<loop.lowerBound])
+        XCTAssertTrue(beforeMerge.contains("BlockingWork.run(\"bootstrapProcessTree\")"))
+        XCTAssertTrue(beforeMerge.contains("BlockingWork.run(\"bootstrapZedSnapshot\")"))
+        XCTAssertTrue(beforeMerge.contains("await (treeRead, zedRead)"))
+        XCTAssertFalse(
+            String(body[loop.lowerBound...]).contains("ProcessTreeBuilder.shared.buildTree()"),
+            "The child process must finish before the merge changes its first row."
+        )
+    }
+
+    func testBootstrapUsesOneZedHostAnswerForEveryRow() throws {
+        let store = try source("AgentVisor/Services/State/SessionStore.swift")
+        guard let start = store.range(of: "func bootstrapSessions"),
+              let end = store.range(of: "private func applyBootstrapConversationInfo", range: start.upperBound..<store.endIndex)
+        else { return XCTFail("The bootstrap boundaries moved.") }
+        let body = String(store[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(body.contains("let zedRecord = zedSnapshot.bySessionID[info.sessionId]"))
+        XCTAssertTrue(body.contains("if !zedHostsSession,"))
+        XCTAssertFalse(
+            body.contains("ZedThreadStore.hostsSession"),
+            "A per-row host lookup repeats a synchronous LaunchServices question."
+        )
+        let codex = try source("AgentVisor/Services/Agents/CodexAgentProvider.swift")
+        XCTAssertFalse(
+            codex.contains("ZedThreadStore.hostsSession"),
+            "The store's host rule must answer before Codex's attachment and watcher rules."
+        )
+    }
+
+    func testPiReusesTheTranscriptPathsDiscoveryAlreadyRead() throws {
+        let pi = try source("AgentVisor/Services/Agents/PiAgentProvider.swift")
+        XCTAssertTrue(pi.contains("transcriptURLBySessionID"))
+        XCTAssertTrue(
+            pi.contains("if let cached = Self.cachedTranscriptURL(sessionId: sessionId)"),
+            "The direct answer must consult discovery's path before it scans the tree again."
+        )
+        XCTAssertTrue(pi.contains("transcriptURLBySessionID = urls"))
+        XCTAssertTrue(
+            pi.contains("FileManager.default.fileExists(atPath: cached.path)"),
+            "A deleted transcript must invalidate its cached path and use the old fallback."
         )
     }
 

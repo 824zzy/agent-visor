@@ -134,7 +134,19 @@ protocol AgentProvider: Sendable {
     nonisolated func projectDirName(forCwd cwd: String) -> String
 
     /// Full path to a session's JSONL transcript.
+    ///
+    /// This is the direct answer. Use it only when the caller is synchronous or
+    /// the provider has already pre-read its metadata. An agent whose answer can
+    /// search a directory or read a database also implements
+    /// `transcriptURLForReading`, which keeps that work off shared threads.
     nonisolated func transcriptURL(sessionId: String, cwd: String) -> URL
+
+    /// Full transcript path for an asynchronous read.
+    ///
+    /// The default stays direct for agents whose path is pure string building.
+    /// Providers whose answer can ask the disk or a database move that question
+    /// through `BlockingWork` instead.
+    nonisolated func transcriptURLForReading(sessionId: String, cwd: String) async -> URL
 
     // MARK: - Installation
 
@@ -213,13 +225,7 @@ protocol AgentProvider: Sendable {
     /// dictionary so chat history stays browsable. Providers whose
     /// dead sessions can't be revived from the sidebar (e.g. Zed —
     /// no deeplink or reveal path) override to `.remove`.
-    /// Give a provider one chance to read what a whole group needs before the
-    /// per-row questions below ask for it one at a time.
     ///
-    /// Codex keeps its transcript paths and titles in a database, and a lookup
-    /// by id costs a subprocess whenever the cached list misses. Without this
-    /// call a scan of a few hundred rows paid that cost per row. Providers
-    /// with nothing to pre-read do nothing here.
     /// An event from this agent arrived, whatever the store later does with it.
     ///
     /// Called before any rule can drop the event, because an agent may keep a
@@ -266,6 +272,13 @@ protocol AgentProvider: Sendable {
         discovered: DiscoveredSession
     ) -> RediscoveredAttachment?
 
+    /// Give a provider one chance to read what its whole discovered group needs
+    /// before the scan asks per-row questions.
+    ///
+    /// Codex keeps transcript paths and titles in a database. A lookup by id can
+    /// fork a child process on a cache miss, so one grouped read prevents a scan
+    /// from paying that cost per row. Providers with nothing to pre-read do
+    /// nothing here.
     nonisolated func prewarmMetadata(sessionIds: [String])
 
     /// Whether discovering this session should start a transcript watcher.
@@ -454,6 +467,10 @@ extension AgentProvider {
         discovered: DiscoveredSession
     ) -> RediscoveredAttachment? {
         nil
+    }
+
+    nonisolated func transcriptURLForReading(sessionId: String, cwd: String) async -> URL {
+        transcriptURL(sessionId: sessionId, cwd: cwd)
     }
 
     nonisolated func prewarmMetadata(sessionIds: [String]) {}

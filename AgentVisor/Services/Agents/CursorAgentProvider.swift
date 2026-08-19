@@ -143,6 +143,12 @@ struct CursorAgentProvider: AgentProvider {
         CursorProjectKeyEncoder.projectKey(forCwd: cwd)
     }
 
+    nonisolated func transcriptURLForReading(sessionId: String, cwd: String) async -> URL {
+        await BlockingWork.run("cursorTranscriptURL") {
+            transcriptURL(sessionId: sessionId, cwd: cwd)
+        }
+    }
+
     nonisolated func transcriptURL(sessionId: String, cwd: String) -> URL {
         let key = projectDirName(forCwd: cwd)
         let candidate = projectsDirectory
@@ -234,7 +240,7 @@ struct CursorAgentProvider: AgentProvider {
     /// Cursor's parser caches by session; warm the cache then read
     /// out the conversation info.
     nonisolated func loadConversationInfo(sessionId: String, cwd: String) async -> ConversationInfo {
-        let path = transcriptURL(sessionId: sessionId, cwd: cwd).path
+        let path = (await transcriptURLForReading(sessionId: sessionId, cwd: cwd)).path
         // Cursor parses the whole conversation to warm its cache, so this is the
         // heaviest of the summary reads. A scan asks for one per row.
         return await BlockingWork.limited("cursorSummary") {

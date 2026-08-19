@@ -66,11 +66,24 @@ final class CodexThreadLookupCostAuditTests: XCTestCase {
         )
     }
 
-    func testBootstrapPreWarmsTheWholeGroup() throws {
-        let store = try source("AgentVisor/Services/State/SessionStore.swift")
+    func testDiscoveryPreWarmsTheWholeGroupBeforeTheStoreMergesIt() throws {
+        let monitor = try source("AgentVisor/Services/Session/ClaudeSessionMonitor.swift")
         XCTAssertTrue(
-            store.contains(".prewarmMetadata(sessionIds: group.map(\\.sessionId))"),
-            "The bootstrap must give each provider one group pre-read before hydration asks per row."
+            monitor.contains("prewarmMetadata(for: results)"),
+            "Discovery must read grouped metadata before the synchronous store merge asks per row."
+        )
+        XCTAssertTrue(
+            monitor.contains(".prewarmMetadata(sessionIds: group.map(\\.sessionId))"),
+            "Each provider must receive one grouped pre-read, not one read per row."
+        )
+        let store = try source("AgentVisor/Services/State/SessionStore.swift")
+        XCTAssertFalse(
+            store.contains("for (agentID, group) in Dictionary(grouping: discovered"),
+            "A grouped database read inside the synchronous merge can hold SessionStore."
+        )
+        XCTAssertTrue(
+            store.contains("provider.prewarmMetadata(sessionIds: discovered.map(\\.sessionId))"),
+            "The Codex-only rediscovery path must pre-read its own group too."
         )
         let provider = try source("AgentVisor/Services/Agents/CodexAgentProvider.swift")
         XCTAssertTrue(

@@ -122,6 +122,12 @@ struct CodexAgentProvider: AgentProvider {
         URL(fileURLWithPath: cwd).standardizedFileURL.path
     }
 
+    nonisolated func transcriptURLForReading(sessionId: String, cwd: String) async -> URL {
+        await BlockingWork.run("codexTranscriptURL") {
+            transcriptURL(sessionId: sessionId, cwd: cwd)
+        }
+    }
+
     nonisolated func transcriptURL(sessionId: String, cwd: String) -> URL {
         if let path = CodexThreadStore.thread(id: sessionId)?.rolloutPath {
             return URL(fileURLWithPath: path)
@@ -164,7 +170,7 @@ struct CodexAgentProvider: AgentProvider {
     nonisolated func loadConversationInfo(sessionId: String, cwd: String) async -> ConversationInfo {
         // The path itself comes from the thread database, and the summary then
         // reads the file. A scan asks for one per row, so both are bounded.
-        let rolloutPath = transcriptURL(sessionId: sessionId, cwd: cwd).path
+        let rolloutPath = (await transcriptURLForReading(sessionId: sessionId, cwd: cwd)).path
         return await BlockingWork.limited("codexSummary") {
             await CodexConversationSummary.shared.parse(
                 sessionId: sessionId,
@@ -378,8 +384,10 @@ struct CodexAgentProvider: AgentProvider {
         for session: SessionState,
         discovered: DiscoveredSession
     ) -> RediscoveredAttachment? {
-        guard discovered.tty == nil,
-              !ZedThreadStore.hostsSession(discovered.sessionId) else { return nil }
+        // SessionStore asks its Zed host rule before this agent rule. Rows Zed
+        // owns never reach this method, so the provider only answers the Codex
+        // attachment shape here.
+        guard discovered.tty == nil else { return nil }
         return RediscoveredAttachment(
             revivesEndedRow: true,
             pid: discovered.pid == 0 ? .clear : .set(discovered.pid),
@@ -404,7 +412,9 @@ struct CodexAgentProvider: AgentProvider {
     /// turn hooks, so the rollout file is the only live signal for them. CLI
     /// codex sessions have their own process and their own hooks.
     nonisolated func watchesTranscriptOnDiscovery(for session: SessionState) -> Bool {
-        session.tty == nil && !ZedThreadStore.hostsSession(session.sessionId)
+        // SessionStore has already excluded Zed-owned rows through its host
+        // snapshot. A remaining thread with no tty has no hooks of its own.
+        session.tty == nil
     }
 
     /// Codex threads have no recovery path once they drop out of the

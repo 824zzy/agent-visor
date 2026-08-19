@@ -2721,21 +2721,23 @@ actor SessionStore {
                 || isEndedPiCandidate else { return false }
 
         guard let provider = AgentRegistry.provider(for: session.agentID) else { return false }
-        let transcriptPath = provider.transcriptURL(
+        let transcriptPath = (await provider.transcriptURLForReading(
             sessionId: sessionId,
             cwd: session.cwd
-        ).path
-        guard let transcriptModifiedAt =
+        )).path
+        let transcriptModifiedAt: Date? = await BlockingWork.run("transcriptModificationDate") {
             (try? FileManager.default.attributesOfItem(atPath: transcriptPath))?[.modificationDate]
                 as? Date
-        else {
-            return false
         }
+        guard let transcriptModifiedAt else { return false }
 
         if session.agentID == .claudeCode {
-            let metadataActivity = ClaudeCodeSessionMetadataPolicy.activity(
-                for: session.pid.flatMap { SessionState.readSessionStatus(pid: $0) }
-            )
+            let pid = session.pid
+            let metadataActivity = await BlockingWork.run("claudeSessionStatus") {
+                ClaudeCodeSessionMetadataPolicy.activity(
+                    for: pid.flatMap { SessionState.readSessionStatus(pid: $0) }
+                )
+            }
             let hookObservedAt = session.phaseEvidenceSource == .hook
                 ? (session.phaseObservedAt ?? session.phaseChangedAt).timeIntervalSince1970
                 : nil
@@ -2759,10 +2761,12 @@ actor SessionStore {
         if session.agentID == .codex {
             let fullMarker = await CodexConversationParser.shared.lastTurnMarker(for: sessionId)
             let fullPendingAction = await CodexConversationParser.shared.pendingAction(for: sessionId)
-            _ = await CodexConversationSummary.shared.parse(
-                sessionId: sessionId,
-                rolloutPath: transcriptPath
-            )
+            _ = await BlockingWork.limited("codexPhaseSummary") {
+                await CodexConversationSummary.shared.parse(
+                    sessionId: sessionId,
+                    rolloutPath: transcriptPath
+                )
+            }
             let summaryMarker = await CodexConversationSummary.shared.lastTurnMarker(for: sessionId)
             marker = fullMarker != .none ? fullMarker : summaryMarker
             pendingCodexAction = await CodexConversationSummary.shared.pendingAction(for: sessionId)
@@ -2770,13 +2774,24 @@ actor SessionStore {
         } else if session.agentID == .pi {
             marker = await PiConversationParser.shared.lastTurnMarker(for: sessionId)
             if marker == .none {
-                _ = await PiConversationParser.shared.parseFullConversation(
-                    sessionId: sessionId,
-                    transcriptPath: transcriptPath
-                )
+                _ = await BlockingWork.limited("piPhaseTranscript") {
+                    await PiConversationParser.shared.parseFullConversation(
+                        sessionId: sessionId,
+                        transcriptPath: transcriptPath
+                    )
+                }
                 marker = await PiConversationParser.shared.lastTurnMarker(for: sessionId)
             }
         }
+
+        // The path, file date and parsers all waited away from the store. Keep
+        // stronger evidence that arrived during those waits, and continue from
+        // the current row so a name or host change is not overwritten by this
+        // older copy.
+        guard let current = sessions[sessionId],
+              SessionReadFreshnessPolicy.stillApplies(asked: session, current: current)
+        else { return false }
+        session = current
 
         // Quiescence (seconds since the transcript was last written) gates
         // staleness on BOTH paths now: the heuristic (no-marker) one AND
@@ -3276,6 +3291,17 @@ actor SessionStore {
     }
 
     func refreshCodexMetadata() async {
+        // Codex can change many thread titles in one database write. Read that
+        // group once away from the store before the synchronous name pass asks
+        // the cache one row at a time.
+        let ids = sessions.values
+            .filter { $0.agentID == .codex }
+            .map(\.sessionId)
+        if !ids.isEmpty, let provider = AgentRegistry.provider(for: .codex) {
+            await BlockingWork.run("prewarmCodexMetadata") {
+                provider.prewarmMetadata(sessionIds: ids)
+            }
+        }
         refreshSessionNames(agentID: .codex)
         await pruneDeadSessions()
     }
@@ -3332,7 +3358,7 @@ actor SessionStore {
 
     private func completeCodexMetadataRediscovery() async {
         let rediscovered = await Self.discoverCodexInBackground()
-        bootstrapSessions(rediscovered)
+        await bootstrapSessions(rediscovered)
         lastCodexDiscoverySnapshot = currentCodexDiscoverySnapshot()
     }
 
@@ -3524,24 +3550,25 @@ actor SessionStore {
 
     /// Start periodic pruning of dead sessions (every 10 seconds)
     /// Bootstrap discovered sessions (called with results from ClaudeSessionMonitor.discoverExistingSessions)
-    func bootstrapSessions(_ discovered: [DiscoveredSession]) {
+    func bootstrapSessions(_ discovered: [DiscoveredSession]) async {
         guard !discovered.isEmpty else { return }
         debugLog("[Scan] Bootstrapping \(discovered.count) discovered sessions")
 
-        let tree = ProcessTreeBuilder.shared.buildTree()
-
-        // Let every provider read what its whole group needs before the
-        // per-row questions below ask for it one at a time. Codex keeps its
-        // transcript paths in a database, where a lookup by id costs a
-        // subprocess whenever the cached list misses; a scan of a few hundred
-        // rows used to pay that per row and stalled the app. Providers with
-        // nothing to pre-read do nothing here.
-        for (agentID, group) in Dictionary(grouping: discovered, by: \.agentID) {
-            AgentRegistry.provider(for: agentID)?
-                .prewarmMetadata(sessionIds: group.map(\.sessionId))
+        // Gather the two machine snapshots before the merge changes its first
+        // row. Other actor work may run while these answer, but once the merge
+        // begins it is still atomic, exactly as it was before this method became
+        // async.
+        async let treeRead = BlockingWork.run("bootstrapProcessTree") {
+            ProcessTreeBuilder.shared.buildTree()
         }
+        async let zedRead = BlockingWork.run("bootstrapZedSnapshot") {
+            ZedThreadStore.snapshot()
+        }
+        let (tree, zedSnapshot) = await (treeRead, zedRead)
 
         for info in discovered {
+            let zedRecord = zedSnapshot.bySessionID[info.sessionId]
+            let zedHostsSession = zedRecord.map { !$0.archived } ?? false
             // Skip sessions the user hid. Without this, the ~30s rediscovery
             // would re-add a hidden row (its backing files still exist on
             // disk), undoing the hide. Deleted sessions don't need this —
@@ -3645,10 +3672,14 @@ actor SessionStore {
                 // is already answered by the pid. A Zed-hosted thread is
                 // excluded by its provider, because reconcileZedHostedSessions
                 // owns that row's host, title and liveness.
-                if let attachment = rediscoveryProvider?.rediscoveredAttachment(
+                // A host rule comes before an agent rule. Zed pools one process
+                // across threads, so a Codex attachment must not claim a row the
+                // one Zed snapshot says Zed owns.
+                if !zedHostsSession,
+                   let attachment = rediscoveryProvider?.rediscoveredAttachment(
                     for: existing,
                     discovered: info
-                ) {
+                   ) {
                     if attachment.revivesEndedRow, existing.phase == .ended {
                         setSessionPhase(info.sessionId, .idle, evidenceSource: .rediscovery)
                     }
@@ -3714,7 +3745,8 @@ actor SessionStore {
             // The provider owns where a transcript lives. Codex reads a rollout
             // path out of its thread database and falls back to a dated scan of
             // the rollout layout; everyone else derives the path from session id
-            // and cwd. The group pre-read above makes the database answer cheap.
+            // and cwd. Discovery's group pre-read makes the database answer cheap
+            // before this synchronous merge starts.
             let provider = AgentRegistry.provider(for: info.agentID)
             let jsonlPath = provider?.transcriptURL(sessionId: info.sessionId, cwd: cwd).path ?? ""
             let fileDate: Date?
@@ -3741,7 +3773,7 @@ actor SessionStore {
                             reader: LiveProcessInfoReader.shared
                         )
                         : nil,
-                    zedHostsSession: ZedThreadStore.hostsSession(info.sessionId)
+                    zedHostsSession: zedHostsSession
                 )
                 ?? .unknown
             var session = SessionState(
@@ -3781,8 +3813,7 @@ actor SessionStore {
                !name.isEmpty {
                 session.sessionName = name
             }
-            if host == .zed,
-               let zedTitle = ZedThreadStore.displayTitle(sessionID: info.sessionId) {
+            if host == .zed, let zedTitle = zedRecord?.displayTitle {
                 session.sessionName = zedTitle
             }
             sessions[info.sessionId] = session
@@ -3790,7 +3821,8 @@ actor SessionStore {
             // own, so their transcript is the only live signal and the
             // provider asks for a watcher. Rows with their own process report
             // through hooks already.
-            if provider?.watchesTranscriptOnDiscovery(for: session) == true {
+            if !zedHostsSession,
+               provider?.watchesTranscriptOnDiscovery(for: session) == true {
                 let sessionId = info.sessionId
                 let sessionCwd = cwd
                 let watchedAgentID = info.agentID
@@ -3994,7 +4026,9 @@ actor SessionStore {
             let live = provider.discoverLiveSessions()
             let liveIds = Set(live.map(\.sessionId))
             let historical = provider.discoverHistoricalSessions(excluding: liveIds, limit: 30)
-            return live + historical
+            let discovered = live + historical
+            provider.prewarmMetadata(sessionIds: discovered.map(\.sessionId))
+            return discovered
         }
     }
 
@@ -4080,7 +4114,7 @@ actor SessionStore {
 
             // The answer describes the row as it was when we asked. Other work
             // ran while we waited, so a row may have reported in since then.
-            guard LivenessAnswerFreshnessPolicy.stillApplies(asked: asked, current: session) else {
+            guard SessionReadFreshnessPolicy.stillApplies(asked: asked, current: session) else {
                 Self.logger.debug(
                     "Prune skipped \(sessionId.prefix(8), privacy: .public): the row changed while we asked"
                 )
@@ -4113,7 +4147,7 @@ actor SessionStore {
                 }
                 // The row may have moved on while we asked, exactly as above.
                 guard let current = sessions[sessionId],
-                      LivenessAnswerFreshnessPolicy.stillApplies(asked: asked, current: current)
+                      SessionReadFreshnessPolicy.stillApplies(asked: asked, current: current)
                 else { continue }
                 if let attachment {
                     Self.logger.info(

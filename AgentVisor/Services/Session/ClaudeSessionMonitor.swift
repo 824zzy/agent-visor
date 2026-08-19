@@ -158,8 +158,19 @@ class ClaudeSessionMonitor: ObservableObject {
                 limit: historicalSessionLimit
             ))
         }
+        // Discovery already runs away from SessionStore. Read each provider's
+        // grouped metadata here, before the synchronous merge asks per-row
+        // questions. Codex can otherwise fork sqlite while holding the store.
+        prewarmMetadata(for: results)
         AgentDiscoveryUtilities.writeLog("[Discovery] Total: \(results.count) sessions")
         return results
+    }
+
+    nonisolated static func prewarmMetadata(for sessions: [DiscoveredSession]) {
+        for (agentID, group) in Dictionary(grouping: sessions, by: \.agentID) {
+            AgentRegistry.provider(for: agentID)?
+                .prewarmMetadata(sessionIds: group.map(\.sessionId))
+        }
     }
 
     /// Per-provider cap on historical rows surfaced into the sidebar.
