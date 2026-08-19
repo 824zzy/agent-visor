@@ -443,19 +443,6 @@ actor SessionStore {
             agentID: event.agentID,
             terminalHost: session.terminalHost
         )
-        // Resolve a provider-owned name for lifecycle activity and restored
-        // attachments. Active Pi renames continue through the file watcher,
-        // so an unchanged heartbeat does not rescan every transcript.
-        // Zed-hosted sessions skip this: their name belongs to Zed's thread
-        // title, and an agent-derived name (claude's `codes-92`) would
-        // shadow what the user sees in Zed's sidebar.
-        if shouldRefreshDerivedAttachmentMetadata,
-           !ZedHostedIdentityPolicy.suppressesAgentResolvedName(host: session.terminalHost),
-           let eventProvider,
-           let name = eventProvider.resolveSessionName(sessionId: event.sessionId, pid: processMetadata.pid),
-           !name.isEmpty {
-            session.sessionName = name
-        }
         if shouldRefreshDerivedAttachmentMetadata,
            !sharesProcessAcrossSessions,
            let pid = processMetadata.pid {
@@ -472,8 +459,22 @@ actor SessionStore {
         }
 
         // The row now carries the process identity and host from this event, so
-        // an agent that keeps its own notes can write them.
+        // an agent that keeps its own notes can write them. Pi also refreshes its
+        // signature-cached transcript name here for heartbeat-only restoration.
         await eventProvider?.noteHookEvent(event, session: session)
+
+        // Resolve after provider notes, so a restored Pi row can use the name its
+        // hook just recovered. Zed-hosted rows keep Zed's own title.
+        if shouldRefreshDerivedAttachmentMetadata,
+           !ZedHostedIdentityPolicy.suppressesAgentResolvedName(host: session.terminalHost),
+           let eventProvider,
+           let name = eventProvider.resolveSessionName(
+            sessionId: event.sessionId,
+            pid: processMetadata.pid
+           ),
+           !name.isEmpty {
+            session.sessionName = name
+        }
 
         if event.isTerminalLifecycleStatus {
             // Keep the ended state in the store for recovery/history

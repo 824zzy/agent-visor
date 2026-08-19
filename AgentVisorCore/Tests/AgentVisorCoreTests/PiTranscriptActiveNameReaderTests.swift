@@ -43,6 +43,26 @@ final class PiTranscriptActiveNameReaderTests: XCTestCase {
         XCTAssertEqual(PiTranscriptActiveNameReader.read(path: file.path), "Latest")
     }
 
+    func testAnIncompleteTrailingScalarDoesNotHideTheActiveLeaf() throws {
+        let leafPrefix = #"{"type":"diagnostic","id":"active-leaf","parentId":"active-parent","payload":""#
+        let activeLeaf = leafPrefix
+            + String(repeating: "x", count: 65_535 - leafPrefix.utf8.count)
+            + "😀"
+            + #""}"#
+        let file = try makeFile(lines: [
+            #"{"type":"message","id":"root","parentId":null,"message":{"role":"user","content":"Start"}}"#,
+            #"{"type":"message","id":"active-parent","parentId":"root","message":{"role":"assistant","content":"Active"}}"#,
+            #"{"type":"session_info","id":"abandoned-name","parentId":"root","name":"Abandoned"}"#,
+            activeLeaf
+        ])
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+
+        XCTAssertNil(
+            PiTranscriptActiveNameReader.read(path: file.path),
+            "The active branch has no name; a truncated scalar must not make the abandoned branch look active."
+        )
+    }
+
     private func makeFile(lines: [String]) throws -> URL {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

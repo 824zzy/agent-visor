@@ -29,9 +29,12 @@ public enum PiTranscriptActiveNameReader {
 
         func acceptLine() {
             defer { linePrefix.removeAll(keepingCapacity: true) }
-            guard !linePrefix.isEmpty,
-                  let text = String(data: linePrefix, encoding: .utf8),
-                  let type = stringField("type", in: text),
+            guard !linePrefix.isEmpty else { return }
+            // A retained prefix can end inside a multibyte value in discarded
+            // message content. Replacement decoding keeps the valid top-level
+            // id and parent fields at the start of the line.
+            let text = String(decoding: linePrefix, as: UTF8.self)
+            guard let type = stringField("type", in: text),
                   type != "session",
                   let id = stringField("id", in: text) else { return }
 

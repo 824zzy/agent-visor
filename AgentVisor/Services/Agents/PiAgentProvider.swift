@@ -88,24 +88,47 @@ struct PiAgentProvider: AgentProvider {
         Self.transcriptURLCacheLock.unlock()
 
         for (sessionId, url) in paths {
-            guard let signature = Self.transcriptNameSignature(url: url) else { continue }
-            Self.transcriptURLCacheLock.lock()
-            let isCurrent = Self.transcriptNameBySessionID[sessionId]?.signature == signature
-            Self.transcriptURLCacheLock.unlock()
-            guard !isCurrent else { continue }
-
-            let name = PiTranscriptActiveNameReader.read(path: url.path)
-            Self.transcriptURLCacheLock.lock()
-            Self.transcriptNameBySessionID[sessionId] = CachedTranscriptName(
-                signature: signature,
-                name: name
-            )
-            Self.transcriptURLCacheLock.unlock()
+            Self.refreshTranscriptName(sessionId: sessionId, url: url)
         }
     }
 
     nonisolated func resolveSessionName(sessionId: String, pid: Int?) -> String? {
         Self.cachedTranscriptName(sessionId: sessionId)
+    }
+
+    nonisolated private static func refreshTranscriptName(sessionId: String, url: URL) {
+        guard let signature = transcriptNameSignature(url: url) else { return }
+        transcriptURLCacheLock.lock()
+        transcriptURLBySessionID[sessionId] = url
+        let isCurrent = transcriptNameBySessionID[sessionId]?.signature == signature
+        transcriptURLCacheLock.unlock()
+        guard !isCurrent else { return }
+
+        let name = PiTranscriptActiveNameReader.read(path: url.path)
+        // Do not bind an answer to a newer file version than the one it read.
+        // A hook during the scan changes the signature and the next event retries.
+        guard transcriptNameSignature(url: url) == signature else { return }
+        cacheTranscriptName(
+            sessionId: sessionId,
+            url: url,
+            signature: signature,
+            name: name
+        )
+    }
+
+    nonisolated private static func cacheTranscriptName(
+        sessionId: String,
+        url: URL,
+        signature: TranscriptNameSignature,
+        name: String?
+    ) {
+        transcriptURLCacheLock.lock()
+        transcriptURLBySessionID[sessionId] = url
+        transcriptNameBySessionID[sessionId] = CachedTranscriptName(
+            signature: signature,
+            name: name
+        )
+        transcriptURLCacheLock.unlock()
     }
 
     nonisolated private static func transcriptNameSignature(url: URL) -> TranscriptNameSignature? {
@@ -450,11 +473,16 @@ struct PiAgentProvider: AgentProvider {
     }
 
     nonisolated func fileSync(sessionId: String, cwd: String) async -> FileSyncOutcome {
-        let path = transcriptURL(sessionId: sessionId, cwd: cwd).path
+        let url = transcriptURL(sessionId: sessionId, cwd: cwd)
         let result = await PiConversationParser.shared.loadHistory(
             sessionId: sessionId,
-            transcriptPath: path
+            transcriptPath: url.path
         )
+        if result.fileChange != nil {
+            await BlockingWork.run("piSessionName") {
+                Self.refreshTranscriptName(sessionId: sessionId, url: url)
+            }
+        }
         return result.didChange ? .fullReplay(result.history) : .noChange
     }
 
@@ -489,6 +517,13 @@ struct PiAgentProvider: AgentProvider {
     /// seconds and would keep re-reading window layout for no new information.
     nonisolated func noteHookEvent(_ event: HookEvent, session: SessionState) async {
         let sessionId = session.sessionId
+        let eventPath = event.sessionFile
+        let cwd = session.cwd
+        await BlockingWork.run("piSessionName") {
+            let url = eventPath.map(URL.init(fileURLWithPath:))
+                ?? transcriptURL(sessionId: sessionId, cwd: cwd)
+            Self.refreshTranscriptName(sessionId: sessionId, url: url)
+        }
         if event.isTerminalLifecycleStatus {
             await MainActor.run {
                 PiRebootRestorationManager.shared.noteExactSessionEnded(sessionID: sessionId)
@@ -515,8 +550,8 @@ struct PiAgentProvider: AgentProvider {
             agentID: event.agentID,
             lifecycleEvent: event.event
         )
-        let cwd = session.cwd
-        let sessionName = session.sessionName
+        let sessionName = Self.cachedTranscriptName(sessionId: sessionId)
+            ?? session.sessionName
         await MainActor.run {
             PiRebootRestorationManager.shared.recordAcceptedSession(
                 sessionID: sessionId,

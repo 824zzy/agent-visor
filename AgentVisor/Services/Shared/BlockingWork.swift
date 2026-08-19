@@ -84,10 +84,4 @@ enum BlockingWork {
         }
         return value
     }
-
-    /// How many blocking calls are running, and how many wait for a turn.
-    /// For diagnostics: a rising queue is the shape the app showed when it froze.
-    static func load() async -> (running: Int, waiting: Int) {
-        (await gate.busy, await gate.queued)
-    }
 }

@@ -240,7 +240,7 @@ Implementation proceeded as vertical slices. Each slice wrote one behavioral tes
 
 ### Slice 5 — One immutable render/hit-test plan
 
-**RED:** Add a wiring audit requiring the chosen profile's spacing, padding, per-pill widths, overflow width, and usage width to reach both `NotchPillBar` and `PillBarHitTest`. Reject direct use of global standard metrics in those paths.
+**RED:** Add a wiring audit requiring the chosen profile's spacing, padding, per-pill widths, overflow width, and usage width to reach both `PillBar` and `PillBarHitTest`. Reject direct use of global standard metrics in those paths.
 
 **GREEN:** Make `PillBarCoordinator.Pack` carry immutable layout metrics and rendered widths. Update `PillButton`, `OverflowPillButton`, snapshot construction, and hit testing one route at a time. Keep height, font, status-dot, hover, popover, and click semantics unchanged.
 
@@ -316,6 +316,6 @@ Manual validation must cover:
 - Usage shape and width policy belong in `AgentVisorCore`.
 - Density selection and ordered packing remain pure `AgentVisorCore` logic.
 - `PillBarCoordinator` adapts sessions and usage snapshots into the Core plan and owns the fixed-font text-measurement cache.
-- `NotchPillBar` renders the plan without inventing geometry.
+- `PillBar` renders the plan without inventing geometry.
 - `PillBarHitTest` consumes the same plan.
 - `MenuBarLayoutPolicy` and `StatusTrayLayoutPolicy` remain unchanged by this work.
