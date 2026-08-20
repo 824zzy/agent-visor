@@ -19,5 +19,5 @@ protocol TerminalAdapter {
 
     /// Bring the session's exact pane to the front. Returns true only when
     /// the owning app is frontmost and keyboard input targets that pane.
-    func focusSession(_ session: SessionState) -> Bool
+    nonisolated func focusSession(_ session: SessionState) -> Bool
 }

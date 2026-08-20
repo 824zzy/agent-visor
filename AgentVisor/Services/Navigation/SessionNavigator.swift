@@ -2,17 +2,16 @@ import AppKit
 import AgentVisorCore
 import os.log
 
-struct SessionNavigator {
+nonisolated struct SessionNavigator {
     private static let pillNavLog = Logger(
         subsystem: AppBranding.loggerSubsystem,
         category: "PillNav"
     )
     private static let claudeDesktopBundleID = "com.anthropic.claudefordesktop"
+    private static let navigationQueue = SessionNavigationQueue(navigate: navigateOnBackground)
 
     static func navigateToSession(_ session: SessionState) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            navigateOnBackground(session)
-        }
+        navigationQueue.submit(session)
     }
 
     private static func navigateOnBackground(_ session: SessionState) {

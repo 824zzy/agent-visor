@@ -30,7 +30,8 @@ struct GhosttyAdapter: TerminalAdapter {
         let observedCwd = session.conversationInfo.lastCwd ?? session.cwd
         var selectedTargetMatches = focusByTTYMarker(
             ttyPath: ttyPath,
-            originalCwd: observedCwd
+            originalCwd: observedCwd,
+            sid4: sid4
         )
         if !selectedTargetMatches {
             selectedTargetMatches = focusUniqueCwd(observedCwd)
@@ -47,15 +48,28 @@ struct GhosttyAdapter: TerminalAdapter {
         return success
     }
 
-    private func focusByTTYMarker(ttyPath: String, originalCwd: String) -> Bool {
+    private func focusByTTYMarker(
+        ttyPath: String,
+        originalCwd: String,
+        sid4: String
+    ) -> Bool {
         let marker = GhosttyMarkerLocator.makeMarker()
-        guard write(GhosttyMarkerLocator.osc7Sequence(cwd: marker), to: ttyPath) else {
+        let writeStarted = Date()
+        let wroteMarker = write(GhosttyMarkerLocator.osc7Sequence(cwd: marker), to: ttyPath)
+        let writeMs = Int(Date().timeIntervalSince(writeStarted) * 1_000)
+        guard wroteMarker else {
+            Self.logger.notice("ghostty marker sid=\(sid4, privacy: .public) writeMs=\(writeMs) result=writeFailed")
             return false
         }
         usleep(100_000)
 
+        let scriptStarted = Date()
         let result = runAppleScript(GhosttyMarkerLocator.focusScript(marker: marker))
-        _ = write(GhosttyMarkerLocator.osc7Sequence(cwd: originalCwd), to: ttyPath)
+        let scriptMs = Int(Date().timeIntervalSince(scriptStarted) * 1_000)
+        let restoreStarted = Date()
+        let restored = write(GhosttyMarkerLocator.osc7Sequence(cwd: originalCwd), to: ttyPath)
+        let restoreMs = Int(Date().timeIntervalSince(restoreStarted) * 1_000)
+        Self.logger.notice("ghostty marker sid=\(sid4, privacy: .public) writeMs=\(writeMs) scriptMs=\(scriptMs) restoreMs=\(restoreMs) located=\(result == "ok") restored=\(restored)")
         return result == "ok"
     }
 
@@ -101,20 +115,9 @@ struct GhosttyAdapter: TerminalAdapter {
     }
 
     private func runAppleScript(_ source: String) -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", source]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            return String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        } catch {
-            return ""
-        }
+        ProcessExecutor.shared.runSyncOrNil(
+            "/usr/bin/osascript",
+            arguments: ["-e", source]
+        )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 }

@@ -2,7 +2,7 @@ import AppKit
 import AgentVisorCore
 import os.log
 
-enum TerminalHostActivator {
+nonisolated enum TerminalHostActivator {
     private static let logger = Logger(subsystem: AppBranding.loggerSubsystem, category: "PillNav")
 
     static func activateAndWait(
