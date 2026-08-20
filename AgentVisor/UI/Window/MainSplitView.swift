@@ -616,8 +616,8 @@ private struct SessionBrowserRow: View {
                             .frame(minWidth: 28, alignment: .trailing)
                     }
                     hotkeyBadge
-                    if item.canEnterChat {
-                        chatDisclosureChevron
+                    if primaryAction != .none {
+                        primaryDestinationLabel
                     }
                 }
                 .padding(.leading, 12)
@@ -629,15 +629,16 @@ private struct SessionBrowserRow: View {
             .disabled(!item.canEnterChat && !item.canOpenOriginal)
             .accessibilityLabel(primaryAccessibilityLabel)
 
-            if item.canOpenOriginal {
-                SessionBrowserOwnerAction(
-                    fullTitle: "Open in \(item.ownerName)",
-                    compactTitle: item.ownerName,
-                    action: onOpenOriginal
+            if item.canOpenOriginal && item.canEnterChat {
+                SessionBrowserAccessoryAction(
+                    fullTitle: "Open Chat",
+                    compactTitle: "Chat",
+                    systemImage: "bubble.left",
+                    action: onEnterChat
                 )
                 .frame(width: 138, alignment: .trailing)
                 .padding(.trailing, 8)
-                .accessibilityLabel("Open \(item.title) in \(item.ownerName)")
+                .accessibilityLabel("Open Chat for \(item.title)")
             }
         }
         .background(rowBackground)
@@ -650,11 +651,11 @@ private struct SessionBrowserRow: View {
             isHovered = hovering
         }
         .contextMenu {
-            if item.canEnterChat {
-                Button("Enter Chat", action: onEnterChat)
-            }
             if item.canOpenOriginal {
                 Button("Open in \(item.ownerName)", action: onOpenOriginal)
+            }
+            if item.canEnterChat {
+                Button("Open Chat", action: onEnterChat)
             }
             Divider()
             Button("Hide session", action: onHide)
@@ -733,19 +734,30 @@ private struct SessionBrowserRow: View {
             .accessibilityHidden(!isVisible)
     }
 
-    private var chatDisclosureChevron: some View {
-        Image(systemName: "chevron.right")
-            .contentScaledFont(size: 11, weight: .semibold)
-            .foregroundColor(isHovered ? ChatTheme.link : ChatTheme.tertiary)
-            .frame(minWidth: 28, minHeight: 32)
-            .accessibilityHidden(true)
+    private var primaryDestinationLabel: some View {
+        Group {
+            switch primaryAction {
+            case .enterChat:
+                Label("Chat", systemImage: "bubble.left")
+            case .openOriginal:
+                Label(item.ownerName, systemImage: "arrow.up.forward.app")
+            case .none:
+                EmptyView()
+            }
+        }
+        .contentScaledFont(size: 11, weight: .semibold)
+        .foregroundColor(isHovered ? ChatTheme.link : ChatTheme.tertiary)
+        .lineLimit(1)
+        .fixedSize()
+        .frame(minWidth: 72, minHeight: 32, alignment: .trailing)
+        .accessibilityHidden(true)
     }
 
     private var primaryAccessibilityLabel: String {
         let action: String
         switch primaryAction {
         case .enterChat:
-            action = "Enter Chat"
+            action = "Open Chat"
         case .openOriginal:
             action = "Open in \(item.ownerName)"
         case .none:
@@ -755,9 +767,10 @@ private struct SessionBrowserRow: View {
     }
 }
 
-private struct SessionBrowserOwnerAction: View {
+private struct SessionBrowserAccessoryAction: View {
     let fullTitle: String
     let compactTitle: String
+    let systemImage: String
     let action: () -> Void
     @State private var isHovered = false
 
@@ -766,7 +779,7 @@ private struct SessionBrowserOwnerAction: View {
             ViewThatFits(in: .horizontal) {
                 actionLabel(fullTitle)
                 actionLabel(compactTitle)
-                Image(systemName: "arrow.up.forward.app")
+                Image(systemName: systemImage)
                     .frame(minWidth: 28, minHeight: 32)
             }
             .contentScaledFont(size: 11, weight: .semibold)
@@ -788,7 +801,7 @@ private struct SessionBrowserOwnerAction: View {
     }
 
     private func actionLabel(_ title: String) -> some View {
-        Label(title, systemImage: "arrow.up.forward.app")
+        Label(title, systemImage: systemImage)
             .fixedSize(horizontal: true, vertical: false)
     }
 }

@@ -56,9 +56,9 @@ The keyboard cursor starts at the first visible row when the browser opens or th
 | Input | Result |
 | --- | --- |
 | Hover row | Show hover styling only |
-| Click row | Enter Agent Visor Chat; if Chat is unavailable, open the only supported owner destination |
-| Return | Apply the same Chat-first action to the keyboard-cursor row |
-| Shift+Return | Open the canonical owner; if owner routing is unavailable, use the only supported Chat destination |
+| Click row | Open the canonical owner; if owner routing is unavailable, use the only supported Chat destination |
+| Return | Apply the same source-first action to the keyboard-cursor row |
+| Shift+Return | Open Agent Visor Chat; if Chat is unavailable, use the only supported owner destination |
 | Up/Down | Move the keyboard cursor by one row and minimally reveal it if needed |
 | Cmd+1 through Cmd+9 | Open the corresponding row in its canonical owner in current visible order |
 | Cmd+F | Focus search |
@@ -66,10 +66,10 @@ The keyboard cursor starts at the first visible row when the browser opens or th
 | Cmd+- | Decrease the shared Sessions-and-Chat content font scale by 10% |
 | Cmd+0 | Reset the shared Sessions-and-Chat content font scale to 100% |
 | Escape with a query | Clear the query and keep search focused |
-| Chat disclosure chevron | Visually communicates the row's Chat destination; it is part of the row target, not a separate button |
-| Open in `<owner>` action | Open the canonical owning app or terminal without entering Chat |
+| Owner destination label | Names the row's canonical owning app or terminal; it is part of the row target, not a separate button |
+| Open Chat action | Enter Agent Visor Chat without opening the canonical owner |
 | Details menu | Reveal optional source, owner, project, path, model, and last-tool metadata from the Chat header |
-| Context menu | Duplicate `Enter Chat` and `Open in <owner>` when available, plus hide |
+| Context menu | Duplicate `Open in <owner>` and `Open Chat` when available, plus hide |
 
 Hotkey numbering follows the exact visible row order, including state groups and search ranking.
 
@@ -124,12 +124,12 @@ Interaction tests must prove:
 - Up and Down issue a minimal reveal request for the new cursor;
 - background refresh does not issue a scroll request;
 - query changes select and reveal the first result;
-- row click and Return enter Chat whenever the row can render Chat;
-- owner-only rows fall back to their canonical owner;
-- Shift-Return opens the owner with capability-safe fallback;
-- the disclosure chevron belongs to the row's Chat target rather than creating another competing button;
-- the always-visible owner action opens only the original owner;
-- no repeated high-emphasis `Enter Chat` button competes with session identity;
+- row click and Return open the canonical owner when routing is supported;
+- Chat-only rows fall back to Agent Visor Chat;
+- Shift-Return opens Chat with capability-safe fallback;
+- the owner label names the row's primary destination without creating another button;
+- the always-visible Chat action opens only Agent Visor Chat;
+- no generic disclosure chevron hides the row's destination;
 - opening the browser does not parse conversation content;
 - Back preserves query, keyboard cursor, and viewport;
 - browser font-scale commands work while search is focused without mutating the query;

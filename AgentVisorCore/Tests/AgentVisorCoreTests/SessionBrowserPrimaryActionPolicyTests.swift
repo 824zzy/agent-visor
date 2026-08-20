@@ -5,33 +5,33 @@ final class SessionBrowserPrimaryActionPolicyTests: XCTestCase {
     func testFooterLabelsDescribeStableIntentWithoutNamingAProvider() {
         XCTAssertEqual(
             SessionBrowserPrimaryActionPolicy.footerLabel(for: .enterChat),
-            "Enter Chat"
+            "Open Chat"
         )
         XCTAssertEqual(
             SessionBrowserPrimaryActionPolicy.footerLabel(for: .openOriginal),
-            "Continue in source app"
+            "Open source app"
         )
         XCTAssertNil(SessionBrowserPrimaryActionPolicy.footerLabel(for: .none))
     }
 
-    func testChatIsTheStableRowActionWhenBothDestinationsAreAvailable() {
+    func testSourceAppIsTheRowActionWhenBothDestinationsAreAvailable() {
         XCTAssertEqual(
             SessionBrowserPrimaryActionPolicy.action(
                 canEnterChat: true,
                 canOpenOriginal: true
             ),
-            .enterChat
+            .openOriginal
         )
     }
 
-    func testShiftReturnOpensOriginalWhenBothDestinationsAreAvailable() {
+    func testShiftReturnOpensChatWhenBothDestinationsAreAvailable() {
         XCTAssertEqual(
             SessionBrowserPrimaryActionPolicy.action(
                 canEnterChat: true,
                 canOpenOriginal: true,
                 alternate: true
             ),
-            .openOriginal
+            .enterChat
         )
     }
 

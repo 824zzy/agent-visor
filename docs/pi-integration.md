@@ -284,8 +284,8 @@ A live Pi TUI session is terminal-owned:
 - TTY identifies the exact pane where the host adapter supports exact routing;
 - a normal pill or `+N` popover action opens that original terminal;
 - a competing live Pi runtime reporting the same session ID cannot replace the pinned PID or TTY and therefore cannot redirect navigation or terminal submission;
-- a Chat-capable Sessions-browser row or Return enters the same in-window Chat used by other supported sources;
-- Shift-Return and the always-visible **Open in <terminal>** action open the terminal, while the quiet disclosure chevron belongs to the row's Chat target rather than acting as a separate neighboring button.
+- a Sessions-browser row or Return opens the original terminal and names that terminal inside the row;
+- Shift-Return and the always-visible **Open Chat** action enter the same in-window Chat used by other supported sources.
 
 Text submission reuses the terminal adapter and behaves as input typed into Pi. Agent Visor does not promise source-specific semantics for input submitted while Pi is busy; Pi's native queueing behavior remains authoritative.
 
