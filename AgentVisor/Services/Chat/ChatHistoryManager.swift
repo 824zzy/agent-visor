@@ -270,23 +270,3 @@ class ChatHistoryManager: ObservableObject {
         return false
     }
 }
-
-// MARK: - Models
-
-
-// Explicit nonisolated Equatable conformance to avoid actor isolation issues
-extension ToolStatus: Equatable {
-    nonisolated static func == (lhs: ToolStatus, rhs: ToolStatus) -> Bool {
-        switch (lhs, rhs) {
-        case (.running, .running): return true
-        case (.waitingForApproval, .waitingForApproval): return true
-        case (.success, .success): return true
-        case (.error, .error): return true
-        case (.interrupted, .interrupted): return true
-        default: return false
-        }
-    }
-}
-
-// MARK: - Subagent Tool Call
-
