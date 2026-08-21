@@ -6,6 +6,35 @@
     <description>Agent Visor updates</description>
     <language>en</language>
     <item>
+      <title>v2.6.1</title>
+      <pubDate>Fri, 21 Aug 2026 03:46:40 +0000</pubDate>
+      <sparkle:version>53</sparkle:version>
+      <sparkle:shortVersionString>2.6.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumUpdateVersion>48</sparkle:minimumUpdateVersion>
+      <description><![CDATA[<h2>v2.6.1</h2>
+<h3>What’s new</h3>
+<ul>
+  <li><strong>Sessions now return to their owning app.</strong> Row clicks and Return open Ghostty, Codex, Zed, or another owner. Open Chat stays separate.</li>
+  <li><strong>Rapid session switches are reliable.</strong> Agent Visor runs focus requests in order, skips stale requests, and keeps the latest destination.</li>
+</ul>
+<h3>Improvements and fixes</h3>
+<ul>
+  <li>Removed the invisible external-display menu-bar click target and the synthetic notch on displays without a physical notch.</li>
+  <li>Fixed Pi names before the first message and across custom transcript records with nested identifiers.</li>
+  <li>Moved blocking process, liveness, transcript, and machine reads away from shared session threads, with bounded subprocess deadlines.</li>
+  <li>Clarified Sessions and Chat controls with separate hover surfaces, larger Back targets, and direct <code>Open in &lt;owner&gt;</code> labels.</li>
+  <li>Hardened provider ownership, watcher scope, phase evidence, and delayed-result freshness without changing source authority.</li>
+</ul>
+]]></description>
+      <enclosure
+        url="https://github.com/824zzy/agent-visor/releases/download/v2.6.1/AgentVisor-v2.6.1.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="PDJYsU7ggIid4Js/ReFrKhfClB5y765fM30SyLyOX03c83ULjrPMtt7wEOrmMctEnNmZlAElOeRTsz8a9Qw4Bg=="
+        length="12943176"
+      />
+    </item>
+    <item>
       <title>v2.6.0</title>
       <pubDate>Sat, 08 Aug 2026 09:20:41 +0000</pubDate>
       <sparkle:version>52</sparkle:version>
