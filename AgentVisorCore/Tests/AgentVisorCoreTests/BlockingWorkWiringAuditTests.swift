@@ -34,6 +34,20 @@ final class BlockingWorkWiringAuditTests: XCTestCase {
         XCTAssertTrue(executor.contains("stderrPipe.fileHandleForReading.closeFile()"))
     }
 
+    func testProcessOutputReadersRemainSafeWhenDeadlinesCloseTheirPipes() throws {
+        let executor = try source("AgentVisor/Services/Shared/ProcessExecutor.swift")
+
+        XCTAssertEqual(
+            executor.components(separatedBy: "ProcessPipeReader.read(").count - 1,
+            2,
+            "Stdout and stderr must share the close-safe reader."
+        )
+        XCTAssertFalse(
+            executor.contains("readDataToEndOfFile"),
+            "FileHandle raises an Objective-C exception when a deadline closes an active read."
+        )
+    }
+
     func testTheRunnerKeepsItsOwnThreadsAndBoundsThem() throws {
         let runner = try source("AgentVisor/Services/Shared/BlockingWork.swift")
         XCTAssertTrue(

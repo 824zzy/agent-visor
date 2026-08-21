@@ -209,12 +209,16 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
         let readers = DispatchGroup()
         readers.enter()
         DispatchQueue.global(qos: .utility).async {
-            capture.setStdout(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+            capture.setStdout(ProcessPipeReader.read(
+                fileDescriptor: stdoutPipe.fileHandleForReading.fileDescriptor
+            ))
             readers.leave()
         }
         readers.enter()
         DispatchQueue.global(qos: .utility).async {
-            capture.setStderr(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+            capture.setStderr(ProcessPipeReader.read(
+                fileDescriptor: stderrPipe.fileHandleForReading.fileDescriptor
+            ))
             readers.leave()
         }
 
