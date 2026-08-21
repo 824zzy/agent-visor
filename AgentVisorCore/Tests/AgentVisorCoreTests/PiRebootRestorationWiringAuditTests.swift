@@ -6,7 +6,7 @@ final class PiRebootRestorationWiringAuditTests: XCTestCase {
         let root = repoRoot()
         let appDelegate = try String(contentsOf: root.appendingPathComponent("AgentVisor/App/AppDelegate.swift"))
         let monitor = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/Services/Session/ClaudeSessionMonitor.swift"
+            "AgentVisor/Services/Session/SessionMonitor.swift"
         ))
 
         XCTAssertTrue(appDelegate.contains("NSWorkspace.willPowerOffNotification"))
@@ -55,8 +55,33 @@ final class PiRebootRestorationWiringAuditTests: XCTestCase {
         XCTAssertTrue(
             manager.contains("plan.removeAll { exactLiveSessionIDs.contains($0.sessionId) }")
         )
-        XCTAssertTrue(store.contains("noteExactLiveSession(sessionID: sessionId)"))
-        XCTAssertTrue(store.contains("noteExactSessionEnded(sessionID: sessionId)"))
+        let piProvider = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/Services/Agents/PiAgentProvider.swift"))
+        XCTAssertTrue(piProvider.contains("noteExactLiveSession(sessionID: sessionId)"))
+        XCTAssertTrue(piProvider.contains("noteExactSessionEnded(sessionID: sessionId)"))
+        XCTAssertTrue(store.contains("noteHookEvent(event, session: session)"))
+    }
+
+    /// An exact SessionStart is the one hook event allowed to set the phase of a
+    /// row whose phase is otherwise read from the transcript. The store must read
+    /// that from the named evidence, not from its own agent-and-event test, and it
+    /// must read it once: the same evidence decides resurrection.
+    func testTranscriptAuthorityIsOverriddenByNamedEvidence() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let store = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/Services/State/SessionStore.swift"))
+        XCTAssertTrue(
+            store.contains("let overridesTranscriptAuthority = rebindEvidence == .exactSessionStart"),
+            "The override must come from SessionRebindCandidatePolicy evidence, which is already tested."
+        )
+        XCTAssertFalse(
+            store.contains("event.agentID == .pi && event.event == \"SessionStart\""),
+            "That test is what the evidence already names, and repeating it lets the two drift apart."
+        )
     }
 
     func testAcceptedPiLifecycleFeedsTheRestorationCoordinator() throws {
@@ -66,9 +91,13 @@ final class PiRebootRestorationWiringAuditTests: XCTestCase {
 
         XCTAssertTrue(hook.contains("let sessionFile: String?"))
         XCTAssertTrue(hook.contains("case sessionFile = \"session_file\""))
-        XCTAssertTrue(store.contains("PiRebootRestorationManager.shared.recordAcceptedSession"))
-        XCTAssertTrue(store.contains("PiRebootRestorationManager.shared.end"))
-        XCTAssertTrue(store.contains("PiRebootRestorationManager.shared.removeRestorationCandidate"))
+        let piProvider = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/Services/Agents/PiAgentProvider.swift"))
+        XCTAssertTrue(piProvider.contains("PiRebootRestorationManager.shared.recordAcceptedSession"))
+        XCTAssertTrue(piProvider.contains("PiRebootRestorationManager.shared.end"))
+        XCTAssertTrue(piProvider.contains("PiRebootRestorationManager.shared.removeRestorationCandidate"))
+        XCTAssertTrue(store.contains("noteHookEvent(event, session: session)"))
+        XCTAssertTrue(store.contains("noteSessionGone(sessionId:"))
         XCTAssertTrue(store.contains("runtimeOwnershipDisposition == .ignoreCompetingRuntime"))
 
         let manager = try String(contentsOf: root.appendingPathComponent(

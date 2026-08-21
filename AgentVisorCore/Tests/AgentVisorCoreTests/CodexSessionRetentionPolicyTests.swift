@@ -1,18 +1,34 @@
 import XCTest
 @testable import AgentVisorCore
 
+/// Covers the Codex pruning rule through whole sessions.
+///
+/// Each case builds the session it prunes or keeps. The world outside the session — the Codex
+/// app pid, the active thread set, the clock — stays in the arguments, because a session cannot
+/// know any of it.
 final class CodexSessionRetentionPolicyTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 10_000)
 
+    private func guiThread(id: String, lastActivity: Date) -> SessionState {
+        SessionStateFixture.make(sessionId: id, agentID: .codex, lastActivity: lastActivity)
+    }
+
+    private func terminalThread(id: String, pid: Int, lastActivity: Date) -> SessionState {
+        SessionStateFixture.make(
+            sessionId: id,
+            agentID: .codex,
+            pid: pid,
+            tty: "ttys001",
+            lastActivity: lastActivity
+        )
+    }
+
     func testKeepsGuiThreadWhenActiveSetContainsSession() {
         XCTAssertTrue(CodexSessionRetentionPolicy.shouldKeep(
-            sessionId: "active",
-            tty: nil,
-            pid: nil,
+            session: guiThread(id: "active", lastActivity: now.addingTimeInterval(-10_000)),
             codexAppPid: nil,
             isNonAppPidAlive: false,
             activeGUIThreadIds: ["active"],
-            lastActivity: now.addingTimeInterval(-10_000),
             now: now,
             observedWindowSeconds: 900
         ))
@@ -20,13 +36,10 @@ final class CodexSessionRetentionPolicyTests: XCTestCase {
 
     func testKeepsRecentGuiThreadWhenActiveSetTemporarilyMisses() {
         XCTAssertTrue(CodexSessionRetentionPolicy.shouldKeep(
-            sessionId: "recent",
-            tty: nil,
-            pid: nil,
+            session: guiThread(id: "recent", lastActivity: now.addingTimeInterval(-899)),
             codexAppPid: nil,
             isNonAppPidAlive: false,
             activeGUIThreadIds: [],
-            lastActivity: now.addingTimeInterval(-899),
             now: now,
             observedWindowSeconds: 900
         ))
@@ -34,13 +47,10 @@ final class CodexSessionRetentionPolicyTests: XCTestCase {
 
     func testPrunesConfirmedArchivedGuiThreadEvenWhenRecent() {
         XCTAssertFalse(CodexSessionRetentionPolicy.shouldKeep(
-            sessionId: "archived",
-            tty: nil,
-            pid: nil,
+            session: guiThread(id: "archived", lastActivity: now.addingTimeInterval(-10)),
             codexAppPid: nil,
             isNonAppPidAlive: false,
             activeGUIThreadIds: [],
-            lastActivity: now.addingTimeInterval(-10),
             now: now,
             observedWindowSeconds: 900,
             isKnownArchived: true
@@ -52,13 +62,10 @@ final class CodexSessionRetentionPolicyTests: XCTestCase {
     // alone no longer prunes a thread the selector just surfaced.
     func testKeepsArchivedGuiThreadWhenActiveSetContainsSession() {
         XCTAssertTrue(CodexSessionRetentionPolicy.shouldKeep(
-            sessionId: "archived-active",
-            tty: nil,
-            pid: nil,
+            session: guiThread(id: "archived-active", lastActivity: now),
             codexAppPid: nil,
             isNonAppPidAlive: false,
             activeGUIThreadIds: ["archived-active"],
-            lastActivity: now,
             now: now,
             observedWindowSeconds: 900,
             isKnownArchived: true
@@ -67,13 +74,10 @@ final class CodexSessionRetentionPolicyTests: XCTestCase {
 
     func testExplicitArchiveWinsEvenWhenStaleActiveSetContainsSession() {
         XCTAssertFalse(CodexSessionRetentionPolicy.shouldKeep(
-            sessionId: "explicitly-archived",
-            tty: nil,
-            pid: nil,
+            session: guiThread(id: "explicitly-archived", lastActivity: now),
             codexAppPid: nil,
             isNonAppPidAlive: false,
             activeGUIThreadIds: ["explicitly-archived"],
-            lastActivity: now,
             now: now,
             observedWindowSeconds: 900,
             isKnownArchived: true,
@@ -83,13 +87,10 @@ final class CodexSessionRetentionPolicyTests: XCTestCase {
 
     func testPrunesGuiThreadAfterObservedWindowWhenActiveSetMisses() {
         XCTAssertFalse(CodexSessionRetentionPolicy.shouldKeep(
-            sessionId: "stale",
-            tty: nil,
-            pid: nil,
+            session: guiThread(id: "stale", lastActivity: now.addingTimeInterval(-901)),
             codexAppPid: nil,
             isNonAppPidAlive: false,
             activeGUIThreadIds: [],
-            lastActivity: now.addingTimeInterval(-901),
             now: now,
             observedWindowSeconds: 900
         ))
@@ -97,13 +98,10 @@ final class CodexSessionRetentionPolicyTests: XCTestCase {
 
     func testPrunesConfirmedArchivedTerminalThreadEvenWhenPidIsAlive() {
         XCTAssertFalse(CodexSessionRetentionPolicy.shouldKeep(
-            sessionId: "archived-cli",
-            tty: "ttys001",
-            pid: 123,
+            session: terminalThread(id: "archived-cli", pid: 123, lastActivity: now),
             codexAppPid: 456,
             isNonAppPidAlive: true,
             activeGUIThreadIds: [],
-            lastActivity: now,
             now: now,
             observedWindowSeconds: 900,
             isKnownArchived: true
@@ -112,13 +110,10 @@ final class CodexSessionRetentionPolicyTests: XCTestCase {
 
     func testObservedWindowBoundaryIsInclusive() {
         XCTAssertTrue(CodexSessionRetentionPolicy.shouldKeep(
-            sessionId: "edge",
-            tty: nil,
-            pid: nil,
+            session: guiThread(id: "edge", lastActivity: now.addingTimeInterval(-900)),
             codexAppPid: nil,
             isNonAppPidAlive: false,
             activeGUIThreadIds: [],
-            lastActivity: now.addingTimeInterval(-900),
             now: now,
             observedWindowSeconds: 900
         ))
@@ -126,13 +121,10 @@ final class CodexSessionRetentionPolicyTests: XCTestCase {
 
     func testKeepsLiveTerminalCliCodexPid() {
         XCTAssertTrue(CodexSessionRetentionPolicy.shouldKeep(
-            sessionId: "cli",
-            tty: "ttys001",
-            pid: 123,
+            session: terminalThread(id: "cli", pid: 123, lastActivity: now.addingTimeInterval(-10_000)),
             codexAppPid: 456,
             isNonAppPidAlive: true,
             activeGUIThreadIds: [],
-            lastActivity: now.addingTimeInterval(-10_000),
             now: now,
             observedWindowSeconds: 900
         ))
@@ -140,13 +132,40 @@ final class CodexSessionRetentionPolicyTests: XCTestCase {
 
     func testDoesNotKeepTerminalCliWhenPidIsTheSharedCodexAppPid() {
         XCTAssertFalse(CodexSessionRetentionPolicy.shouldKeep(
-            sessionId: "cli",
-            tty: "ttys001",
-            pid: 456,
+            session: terminalThread(id: "cli", pid: 456, lastActivity: now),
             codexAppPid: 456,
             isNonAppPidAlive: true,
             activeGUIThreadIds: [],
-            lastActivity: now,
+            now: now,
+            observedWindowSeconds: 900
+        ))
+    }
+
+    // MARK: - Cases the field-based tests could not reach
+
+    func testDoesNotKeepTerminalThreadWithoutPid() {
+        let session = SessionStateFixture.make(
+            sessionId: "no-pid",
+            agentID: .codex,
+            tty: "ttys002",
+            lastActivity: now
+        )
+        XCTAssertFalse(CodexSessionRetentionPolicy.shouldKeep(
+            session: session,
+            codexAppPid: 456,
+            isNonAppPidAlive: true,
+            activeGUIThreadIds: ["no-pid"],
+            now: now,
+            observedWindowSeconds: 900
+        ), "A tty session is judged by its process, so the active GUI set cannot save it.")
+    }
+
+    func testDoesNotKeepTerminalThreadWhenProcessIsGone() {
+        XCTAssertFalse(CodexSessionRetentionPolicy.shouldKeep(
+            session: terminalThread(id: "dead", pid: 123, lastActivity: now),
+            codexAppPid: 456,
+            isNonAppPidAlive: false,
+            activeGUIThreadIds: [],
             now: now,
             observedWindowSeconds: 900
         ))

@@ -592,14 +592,10 @@ private struct AppearanceSection: View {
             SettingsGroup(dividerInset: 38) {
                 ScreenPickerRow(screenSelector: screenSelector)
                 FullScreenPolicyPickerRow(selector: fullScreenPolicy)
-            }
-
-            SettingsSubheading("Content font size", subtitle: "Use ⌘+ / ⌘− / ⌘0 in Sessions or Chat to change live")
-            SettingsGroup(dividerInset: 38) {
                 SettingsRow(
                     icon: "textformat.size",
-                    title: "Scale",
-                    description: "Multiplier applied to Sessions browser and Chat content. Menu-bar pills and Settings stay fixed."
+                    title: "Content size",
+                    description: "Sessions and Chat"
                 ) {
                     HStack(spacing: 8) {
                         Text(String(format: "%.0f%%", contentFontScale * 100))
@@ -611,9 +607,8 @@ private struct AppearanceSection: View {
                             in: AppSettings.contentFontScaleMin...AppSettings.contentFontScaleMax,
                             step: AppSettings.contentFontScaleStep
                         )
-                        .frame(width: 160)
-                        Button("Reset") { contentFontScale = 1.0 }
-                            .controlSize(.small)
+                        .frame(width: 120)
+                        .accessibilityLabel("Content size")
                     }
                 }
             }

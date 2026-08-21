@@ -4,7 +4,7 @@ import XCTest
 /// Pins the rule for which Cursor IDE Agents Window transcripts are
 /// allowed into the agent-visor sidebar.
 ///
-/// Bug context: ClaudeSessionMonitor was sorting all `~/.cursor/projects/
+/// Bug context: SessionMonitor was sorting all `~/.cursor/projects/
 /// */agent-transcripts/*` by mtime and keeping the top 30 — no age cap.
 /// A user with only a handful of historical Cursor transcripts saw a
 /// 5-week-old "How do you know about chrome-devtools..." row stuck in

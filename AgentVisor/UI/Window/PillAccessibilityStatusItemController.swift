@@ -2,27 +2,34 @@ import AppKit
 import AgentVisorCore
 import Combine
 
+/// Owns Agent Visor's menu-bar status item.
+///
+/// Two roles, one slot:
+/// - When permissions need attention it shows the "Setup" affordance.
+/// - Otherwise it is the app's menu-bar entry point to the session browser.
+///
+/// The entry point is unconditional. It used to appear only when VoiceOver was
+/// running or when the pill display had no physical notch, because on a notched
+/// display a global mouse-down monitor turned clicks over the hardware cutout
+/// into window summons. That monitor is gone: it decided "this click is mine"
+/// from screen geometry captured when the strip was built, so geometry left
+/// over from an earlier display arrangement claimed clicks in empty space on
+/// whichever display now occupies those coordinates. With the monitor removed,
+/// this item — plus the Dock icon and the global hotkey — is how the session
+/// browser is reached on every display.
 @MainActor
 final class PillAccessibilityStatusItemController {
     static let shared = PillAccessibilityStatusItemController()
 
     private var statusItem: NSStatusItem?
-    private var accessibilityObserver: NSObjectProtocol?
     private var permissionCancellable: AnyCancellable?
+    private var started = false
 
     private init() {}
 
     func start() {
-        guard accessibilityObserver == nil else { return }
-        accessibilityObserver = NotificationCenter.default.addObserver(
-            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            Task { @MainActor in
-                PillAccessibilityStatusItemController.shared.updateStatusItem()
-            }
-        }
+        guard !started else { return }
+        started = true
         permissionCancellable = PermissionHealthMonitor.shared.$health
             .removeDuplicates()
             .sink { _ in
@@ -53,25 +60,19 @@ final class PillAccessibilityStatusItemController {
             return
         }
 
-        if NSWorkspace.shared.isVoiceOverEnabled {
-            let item = ensureStatusItem(length: NSStatusItem.squareLength)
-            if let button = item.button {
-                button.image = NSImage(
-                    systemSymbolName: "rectangle.stack",
-                    accessibilityDescription: nil
-                )
-                button.imagePosition = .imageOnly
-                button.title = ""
-                button.target = self
-                button.action = #selector(openMainWindow)
-                button.toolTip = "Open Agent Visor sessions"
-                button.setAccessibilityLabel("Agent Visor sessions")
-                button.setAccessibilityHelp("Opens the accessible session navigator")
-            }
-            statusItem = item
-        } else if let statusItem {
-            NSStatusBar.system.removeStatusItem(statusItem)
-            self.statusItem = nil
+        let item = ensureStatusItem(length: NSStatusItem.squareLength)
+        if let button = item.button {
+            button.image = NSImage(
+                systemSymbolName: "rectangle.stack",
+                accessibilityDescription: nil
+            )
+            button.imagePosition = .imageOnly
+            button.title = ""
+            button.target = self
+            button.action = #selector(openMainWindow)
+            button.toolTip = "Open Agent Visor sessions"
+            button.setAccessibilityLabel("Agent Visor sessions")
+            button.setAccessibilityHelp("Opens the session navigator")
         }
     }
 
@@ -88,7 +89,7 @@ final class PillAccessibilityStatusItemController {
     @objc private func performSetup() {
         let monitor = PermissionHealthMonitor.shared
         if PermissionSetupPolicy.primaryAction(for: monitor.health) == .requestAccessibility {
-            NotchPanelRedirect.openMainWindow?()
+            SessionBrowserRedirect.openMainWindow?()
             DispatchQueue.main.async {
                 monitor.performPrimarySetupAction()
             }
@@ -98,6 +99,6 @@ final class PillAccessibilityStatusItemController {
     }
 
     @objc private func openMainWindow() {
-        NotchPanelRedirect.openMainWindow?()
+        SessionBrowserRedirect.openMainWindow?()
     }
 }

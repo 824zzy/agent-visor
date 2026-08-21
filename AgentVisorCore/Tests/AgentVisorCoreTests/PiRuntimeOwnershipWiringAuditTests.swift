@@ -101,7 +101,7 @@ final class PiRuntimeOwnershipWiringAuditTests: XCTestCase {
 
     func testMenuBarReadyEpisodesUseSessionIdentityInsteadOfAttachmentIdentity() throws {
         let source = try String(contentsOf: repoRoot()
-            .appendingPathComponent("AgentVisor/UI/Views/NotchView.swift"))
+            .appendingPathComponent("AgentVisor/UI/Views/PillStripView.swift"))
         guard let start = source.range(
             of: "private func handleWaitingForInputChange"
         )?.lowerBound,
@@ -128,25 +128,15 @@ final class PiRuntimeOwnershipWiringAuditTests: XCTestCase {
                 "readyEpisodeTracker.update(readySessionIDs: currentIds)"
             )
         )
-        XCTAssertTrue(readyHandler.contains("newWaitingIds.contains(session.sessionId)"))
-        XCTAssertTrue(readyHandler.contains("waitingForInputTimestamps[session.sessionId]"))
+        XCTAssertTrue(readyHandler.contains("newWaitingIds.contains($0.sessionId)"))
+        XCTAssertTrue(readyHandler.contains("isBouncing = true"))
+        XCTAssertTrue(readyHandler.contains("shouldPlayNotificationSound"))
         XCTAssertFalse(readyHandler.contains("session.stableId"))
         XCTAssertFalse(source.contains("previousWaitingForInputIds"))
-
-        guard let displayStart = source.range(
-            of: "private var hasWaitingForInput"
-        )?.lowerBound,
-        let displayEnd = source.range(
-            of: "// MARK: - Sizing",
-            range: displayStart..<source.endIndex
-        )?.lowerBound else {
-            return XCTFail("Could not isolate the Ready checkmark lookup.")
-        }
-        let readyDisplay = String(source[displayStart..<displayEnd])
-        XCTAssertTrue(
-            readyDisplay.contains("waitingForInputTimestamps[session.sessionId]")
+        XCTAssertFalse(
+            source.contains("waitingForInputTimestamps"),
+            "The retired panel's 30-second visibility timer must not return."
         )
-        XCTAssertFalse(readyDisplay.contains("session.stableId"))
     }
 
     private func repoRoot() -> URL {

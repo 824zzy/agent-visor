@@ -4,7 +4,7 @@ final class SessionNavigationAccessibilityAuditTests: XCTestCase {
     func testSessionRowsExposeKeyboardAndAccessibilityActions() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let sidebar = try source(root, "AgentVisor/UI/Window/WindowSidebarRow.swift")
-        let popover = try source(root, "AgentVisor/UI/Components/NotchSideContent.swift")
+        let popover = try source(root, "AgentVisor/UI/Components/PillStripContent.swift")
         let logo = try source(root, "AgentVisor/UI/Components/AgentBrandLogo.swift")
 
         XCTAssertTrue(sidebar.contains(".accessibilityAction { onChat() }"))
@@ -18,14 +18,14 @@ final class SessionNavigationAccessibilityAuditTests: XCTestCase {
 
     func testSessionPopoverFreshnessUsesPeriodicClock() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
-        let popover = try source(root, "AgentVisor/UI/Components/NotchSideContent.swift")
+        let popover = try source(root, "AgentVisor/UI/Components/PillStripContent.swift")
 
         XCTAssertTrue(popover.contains("TimelineView(.periodic"))
         XCTAssertTrue(popover.contains("now: context.date"))
         XCTAssertFalse(popover.contains("Date().timeIntervalSince(observedAt)"))
     }
 
-    func testVoiceOverGetsAStandardMenuBarEntryPoint() throws {
+    func testMenuBarEntryPointIsAlwaysAvailableForKeyboardAndVoiceOverUsers() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let controller = try source(
             root,
@@ -33,11 +33,18 @@ final class SessionNavigationAccessibilityAuditTests: XCTestCase {
         )
         let appDelegate = try source(root, "AgentVisor/App/AppDelegate.swift")
 
-        XCTAssertTrue(controller.contains("NSWorkspace.shared.isVoiceOverEnabled"))
         XCTAssertTrue(controller.contains("NSStatusBar.system.statusItem"))
         XCTAssertTrue(controller.contains("setAccessibilityLabel"))
-        XCTAssertTrue(controller.contains("NotchPanelRedirect.openMainWindow?()"))
+        XCTAssertTrue(controller.contains("SessionBrowserRedirect.openMainWindow?()"))
         XCTAssertTrue(appDelegate.contains("PillAccessibilityStatusItemController.shared.start()"))
+        XCTAssertFalse(
+            controller.contains("isVoiceOverEnabled"),
+            "The menu-bar entry point must not depend on VoiceOver being on."
+        )
+        XCTAssertFalse(
+            controller.contains("hasPhysicalNotch"),
+            "The menu-bar entry point must not depend on notch hardware; it is the only menu-bar path to the session browser on every display."
+        )
     }
 
     private func source(_ root: URL, _ path: String) throws -> String {

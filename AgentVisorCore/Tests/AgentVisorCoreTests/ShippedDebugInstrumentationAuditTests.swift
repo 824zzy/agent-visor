@@ -47,7 +47,7 @@ final class ShippedDebugInstrumentationAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Views")
-            .appendingPathComponent("NotchView.swift"))
+            .appendingPathComponent("PillStripView.swift"))
 
         XCTAssertTrue(source.contains("if previousSnapshot != renderedSnapshot"))
         XCTAssertFalse(source.contains("pillRaceLog.notice(\"render mode=") &&

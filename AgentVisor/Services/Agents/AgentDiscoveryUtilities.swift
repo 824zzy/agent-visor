@@ -4,7 +4,7 @@
 //
 //  Shared helpers used by `AgentProvider.discoverLiveSessions` /
 //  `discoverHistoricalSessions` implementations across providers.
-//  Earlier this logic was inlined in `ClaudeSessionMonitor` as a
+//  Earlier this logic was inlined in `SessionMonitor` as a
 //  3-way switch on agent identity; pulling discovery into providers
 //  needed a common home for these process / fs primitives.
 //
@@ -15,7 +15,7 @@ import Foundation
 enum AgentDiscoveryUtilities {
     /// Synchronous `Process` runner returning stdout. Returns "" on
     /// any error (mirrors the legacy `try? runProcess(...)` pattern in
-    /// ClaudeSessionMonitor). `stderr` is discarded.
+    /// SessionMonitor). `stderr` is discarded.
     nonisolated static func runProcess(_ path: String, arguments: [String]) -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
@@ -53,7 +53,7 @@ enum AgentDiscoveryUtilities {
     }
 
     /// Append a discovery log line to the same file
-    /// `ClaudeSessionMonitor.writeLog` uses, keeping one tail target
+    /// `SessionMonitor.writeLog` uses, keeping one tail target
     /// across the app. Provider-side discovery emits identical-shape
     /// lines via this helper so existing log-tailing workflows keep
     /// working.

@@ -4,35 +4,35 @@ final class TransientPopoverDismissalWiringAuditTests: XCTestCase {
     func testPopoverContentRegistersItsWindowForInsideClickDetection() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let sideContent = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Components/NotchSideContent.swift"
+            "AgentVisor/UI/Components/PillStripContent.swift"
         ))
-        let notchView = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Views/NotchView.swift"
+        let pillStrip = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/UI/Views/PillStripView.swift"
         ))
 
         XCTAssertTrue(sideContent.contains("struct PopoverWindowReader: NSViewRepresentable"))
         XCTAssertTrue(sideContent.contains("onWindowChange"))
-        XCTAssertTrue(notchView.contains("transientPopoverWindowTracker"))
+        XCTAssertTrue(pillStrip.contains("transientPopoverWindowTracker"))
     }
 
     func testGlobalInputMonitorAppliesTransientDismissalPolicy() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
-        let notchView = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Views/NotchView.swift"
+        let pillStrip = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/UI/Views/PillStripView.swift"
         ))
 
         XCTAssertTrue(
-            notchView.contains("EventMonitor(mask: .keyDown)")
+            pillStrip.contains("EventMonitor(mask: .keyDown)")
         )
-        XCTAssertTrue(notchView.contains("startTransientPopoverKeyMonitor()"))
+        XCTAssertTrue(pillStrip.contains("startTransientPopoverKeyMonitor()"))
         XCTAssertTrue(
-            notchView.contains(
+            pillStrip.contains(
                 "transientPopoverWindowTracker.contains(\n            eventWindow: event.window,\n            screenPoint: NSEvent.mouseLocation"
             ),
             "Global events have no app window, so inside-popover detection must also use the popover's screen frame."
         )
-        XCTAssertTrue(notchView.contains("applyTransientPopoverPolicy(.outsideClick)"))
-        XCTAssertTrue(notchView.contains(".escapeKey : .otherKey"))
+        XCTAssertTrue(pillStrip.contains("applyTransientPopoverPolicy(.outsideClick)"))
+        XCTAssertTrue(pillStrip.contains(".escapeKey : .otherKey"))
     }
 
     private func repositoryRoot(from testFile: URL) -> URL {

@@ -15,7 +15,7 @@ Permission setup and recovery are specified in [Permission Health](permission-he
 
 ## Principles
 
-1. **Stable actions by surface.** Menu-bar pills and the `+N` popover return to the canonical owner. A Chat-capable Sessions-browser row enters Agent Visor Chat, while its explicit `Open in <owner>` action always returns to the canonical owner. Labels and hit targets never exchange meanings.
+1. **Stable actions by surface.** Menu-bar pills, the `+N` popover, and Sessions-browser rows return to the canonical owner. A Chat-capable browser row keeps `Open Chat` as an explicit secondary action. Labels and hit targets never exchange meanings.
 2. **Actionability before recency.** Needs-attention, ready, and working sessions appear before recent sessions when a surface has to prioritize.
 3. **Honest capability.** UI copy and controls reflect the evidence and transport Agent Visor actually has. Inferred status and mirrored history are labeled as such.
 4. **One session truth, different surface scopes.** Surfaces share session identity and phase semantics, but each surface may show a different subset for its job.
@@ -29,7 +29,7 @@ Permission setup and recovery are specified in [Permission Health](permission-he
 | --- | --- | --- | --- | --- |
 | Menu-bar pills | Ambient status and fastest return path | Discoverable sessions, ordered by actionability then recency, packed to available width | Open original owner | A full history browser |
 | `+N` popover | Quick access to sessions that do not fit as pills | The `+N` overflow by default; all recent navigable sessions while searching | Open original owner | A full history or Chat browser |
-| Sessions browser | Complete searchable navigation | Current cross-source sessions plus supported saved history | Enter Chat when renderable; otherwise open the only supported owner destination | A replacement for the owning source |
+| Sessions browser | Complete searchable navigation | Current cross-source sessions plus supported saved history | Open the original owner; offer Chat explicitly when renderable | A replacement for the owning source |
 | Agent Visor Chat | In-window conversation and continuation | Mirrored conversation, composer when controllable, and compact status | Continue in Chat or open original | An implicitly authoritative replacement for the owner |
 | Owning app | Canonical conversation and control | Native task, conversation, composer, tools, approvals, and source-specific UI | Continue work | Something Agent Visor attempts to duplicate wholesale |
 | Usage glance | Peripheral account-capacity awareness when supported | Available Codex 5-hour and 7-day limits | Open compact usage detail | A placeholder for unavailable provider data |
@@ -64,12 +64,24 @@ The Agent Sessions browser is the durable teaching surface for global session sh
 - The browser footer keeps shortcut education visible without placing a second explanatory row above the primary search control.
 - When shortcuts are enabled, the footer shows the configured modifier family with `1-9 Switch sessions` and `0 Session menu`. Numbered shortcuts activate sessions in menu-bar pill reading order; zero toggles the menu-bar session overflow. The labels describe user intent rather than exposing “pill” or “more sessions” implementation language.
 - Browser row semantics must not overwrite a modifier family that the user explicitly selected in Settings.
-- The guidance must not imply that `1-9` indexes rows in the full browser. Return remains `Enter Chat` when supported, while Shift-Return uses the stable provider-neutral label `Continue in source app`; exact owner names belong to row-level actions.
+- The guidance must not imply that `1-9` indexes rows in the full browser. Return uses the provider-neutral label `Open source app`, while Shift-Return uses `Open Chat` when supported; exact owner names belong to rows.
 - When shortcuts are off, the same location says that global session shortcuts are off and directs the user to Settings.
 - Shortcut glyphs come from the effective persisted setting. Copy must not hard-code Control-Command, Option-Command, or any other family.
-- The footer separates browser-local actions on the left from global shortcuts on the right. Up/Down navigates, Return enters Chat when supported, and Shift-Return opens the selected row's owner when possible. Capability fallback is reflected in the labels.
+- The footer separates browser-local actions on the left from global shortcuts on the right. Up/Down navigates, Return opens the selected row's owner, and Shift-Return opens Chat when supported. Capability fallback is reflected in the labels.
 - Generic copy such as `Find a session, then return to the app that owns it.` and `Codex history included` is omitted. The browser structure, source chips, and history rows already communicate those facts.
 - Pill hover hints remain as contextual reinforcement for users who rarely open the browser.
+
+## Display Notch Adaptation
+
+The menu-bar strip adapts to whether its display has a physical notch. The synthetic notch was originally drawn on every display as the pills' visual home and as the click target that opens the session browser. On a display without a physical notch that produced an *invisible* click target in empty top-center menu-bar space: clicking near the center of an external display opened the session browser with no visible affordance explaining why.
+
+- The notch shape is **decoration only**. It is drawn on a display with a physical notch, behind the hardware cutout, and it does not hit-test. Clicking it does nothing. There is no panel behind it: the strip renders pills and nothing else.
+- On a display **without** a physical notch, Agent Visor renders no synthetic notch. The pills consolidate at center with no center gap.
+- **No global pointer monitor turns a menu-bar click into a window summon.** Clicks in empty menu-bar space never open a window, on any display.
+- The session browser is reached through the always-visible menu-bar status item, the Dock icon, and the global window hotkey. The status item is present on every display and whatever the VoiceOver state, so keyboard and VoiceOver users have the same standard entry point.
+- Pill clicks are the one global click route that remains. They resolve against geometry captured for the pill display, so they are ignored whenever that display has moved, been resized, or been detached since capture. A rebuilt strip with fresh geometry takes over.
+
+The reason for the last two rules: a click target derived from captured screen geometry keeps claiming the *coordinates* it was built for, even after the display moves. Geometry captured while the built-in display was the main display kept a 244x38 band alive at global coordinates that later belonged to empty space in the middle of an external monitor, and clicks there summoned the session window with nothing on screen to explain it.
 
 ## Transient Menu-Bar Popovers
 
@@ -136,10 +148,10 @@ A model identifier is provider data, not a human-facing label. Agent Visor prese
 
 User-facing UI calls the desktop conversation surface **Chat**, not **Transcript** or **Inspect**. Transcript remains an implementation term for parsers, files, and diagnostic internals; it is not the name of the user task.
 
-- A normal Sessions-browser row click and Return enter Agent Visor Chat whenever the row can render it. This meaning is stable rather than preference-dependent.
-- Shift-Return opens the canonical owner. If that destination is unavailable, activation safely falls back to the only destination the row actually supports.
-- Do not repeat Chat as a high-emphasis `Enter Chat` button on every row. A quiet disclosure chevron lives inside the row's Chat target and is not a second independent control.
-- `Open in <owner>` remains an always-visible, visually secondary trailing action whenever routing is supported. It has a disjoint hit target, always opens the canonical owner, and never depends on hover or a context menu.
+- A normal Sessions-browser row click and Return open the canonical owner. If that destination is unavailable, activation safely falls back to Chat when renderable.
+- Shift-Return opens Agent Visor Chat when renderable. If Chat is unavailable, it falls back to the owner.
+- The row names its primary owner destination as `Open in <owner>` with an external-open symbol. It does not repeat the owner as a metadata chip.
+- `Open Chat` remains an always-visible, visually secondary trailing action when both destinations are supported. Its hit target, hover, and selection surface stay separate from the primary row target.
 - Chat replaces the browser content inside the same main window; it is not a modal sheet, popover, or permanent split pane.
 - `Back to Sessions` restores the already-mounted browser with its query, keyboard cursor, and viewport intact.
 - The Chat surface reuses Agent Visor's established Claude Code conversation, composer, approval, pagination, and status presentation. Pi reaches that same source-agnostic surface through its provider parser and text sender.
@@ -234,8 +246,8 @@ Within an attention tier, newer phase-entry evidence sorts first and session ID 
 
 ## Navigation Contract
 
-- In the Sessions browser, a normal row click or Return enters Chat when renderable. Owner-only rows open their canonical owner instead of exposing fabricated Chat.
-- Shift-Return opens the canonical owner when routing is supported. The visible `Open in <owner>` action always opens that same canonical owner; the disclosure chevron is part of the row's Chat target rather than a separate neighboring button.
+- In the Sessions browser, a normal row click or Return opens the canonical owner when routing is supported. Chat-only rows open Chat instead of exposing a dead owner action.
+- Shift-Return opens Chat when renderable. `Open in <owner>` names the row's primary destination, while `Open Chat` remains a separate, quieter action.
 - Pointer and keyboard activation agree. Menu-bar pills and the `+N` popover retain their original-owner-first behavior; Option-click or their explicit Agent Visor action enters Chat.
 - Saved legacy browser-action and click-routing preferences are inert and must not override these surface-specific actions.
 - A session pill's context menu contains only `Pill Settings...`. It does not repeat the normal open action or expose alternate click defaults.

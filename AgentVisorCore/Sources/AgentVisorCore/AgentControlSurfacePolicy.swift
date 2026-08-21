@@ -5,6 +5,37 @@ public enum AgentControlSessionOwnership: Equatable, Sendable {
     case ownerApp(host: TerminalHost?)
     case terminal(host: TerminalHost?)
     case opaqueHost(host: TerminalHost?)
+
+    /// Who owns the running session, read from the session itself.
+    ///
+    /// This rule used to sit in `PillStripView.swift`, above a private helper class, while the type it
+    /// returns and the policy that consumes it both lived here. So the vocabulary and the
+    /// consequences were in the package and the derivation was in a view file, untested.
+    public static func of(_ session: SessionState) -> AgentControlSessionOwnership {
+        switch session.origin {
+        case .codexAppServer, .visorSpawned:
+            return .agentVisorAppServer
+        case .terminal:
+            return .terminal(host: session.terminalHost)
+        case .cursorObserved:
+            return .ownerApp(host: session.terminalHost ?? .cursor)
+        case .observed:
+            if session.agentID == .codex {
+                return .ownerApp(host: codexOwnerHost(for: session))
+            }
+            return .opaqueHost(host: session.terminalHost)
+        }
+    }
+
+    /// Codex threads we only observe belong to Codex.app unless a real terminal is known.
+    private static func codexOwnerHost(for session: SessionState) -> TerminalHost? {
+        switch session.terminalHost {
+        case .codexApp, .unknown, .none:
+            return .codexApp
+        default:
+            return session.terminalHost
+        }
+    }
 }
 
 public enum AgentControlLifecycle: Equatable, Sendable {

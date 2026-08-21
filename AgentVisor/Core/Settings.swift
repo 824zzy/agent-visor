@@ -309,7 +309,7 @@ enum AppSettings {
 
     // MARK: - Appearance
 
-    /// Light vs dark flavor for the notch panel. Defaults to `.dark`
+    /// Light, dark, or system appearance for Agent Visor surfaces.
     /// (Catppuccin Mocha) so existing users see no surprise on upgrade.
     /// Read off the main thread is safe — UserDefaults is thread-safe and
     /// `SelectionColorOverride`'s NSColor swizzle relies on this property

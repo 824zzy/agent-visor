@@ -3,18 +3,18 @@ import XCTest
 final class ModelDisplayNameWiringAuditTests: XCTestCase {
     func testPiCatalogDisplayNameFlowsIntoSessionPresentationMetadata() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
-        let conversationInfo = try source(root, "AgentVisor/Services/Session/ConversationParser.swift")
+        let conversationInfo = try source(root, "AgentVisorCore/Sources/AgentVisorCore/ConversationInfo.swift")
         let piParser = try source(root, "AgentVisor/Services/Session/PiConversationParser.swift")
-        let sessionState = try source(root, "AgentVisor/Models/SessionState.swift")
         let sessionStore = try source(root, "AgentVisor/Services/State/SessionStore.swift")
 
         XCTAssertTrue(conversationInfo.contains("let lastModelDisplayName: String?"))
         XCTAssertTrue(piParser.contains("lastModelDisplayName: catalogMetadata?.displayName"))
-        XCTAssertTrue(sessionState.contains("var modelDisplayName: String?"))
-        XCTAssertTrue(sessionState.contains("var displayModelName: String?"))
-        XCTAssertTrue(sessionState.contains("if modelName != modelID"))
-        XCTAssertTrue(sessionState.contains("modelDisplayName = nil"))
         XCTAssertTrue(sessionStore.contains("catalogDisplayName: info.lastModelDisplayName"))
+
+        // The SessionState half of this rule is covered by behaviour now, in
+        // SessionStateBehaviourTests: displayModelName resolution and fallback, a placeholder id
+        // being ignored, and a new model clearing the previous catalog name. Those tests run the
+        // code, so the text checks that used to stand in for them are gone.
     }
 
     func testCodexCatalogDisplayNameFlowsIntoConversationMetadataReadOnly() throws {
@@ -36,7 +36,6 @@ final class ModelDisplayNameWiringAuditTests: XCTestCase {
     func testEveryUserFacingSurfaceConsumesTheResolvedSessionLabel() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let status = try source(root, "AgentVisor/UI/Components/ChatStatusBar.swift")
-        let chat = try source(root, "AgentVisor/UI/Views/ChatView.swift")
         let windowChat = try source(root, "AgentVisor/UI/Window/WindowChatView.swift")
         let hover = try source(root, "AgentVisor/UI/Components/SessionDetailPopover.swift")
         let details = try source(root, "AgentVisor/UI/Window/SessionWorkspaceDetail.swift")
@@ -44,7 +43,6 @@ final class ModelDisplayNameWiringAuditTests: XCTestCase {
         XCTAssertTrue(status.contains("let modelDisplayName: String?"))
         XCTAssertTrue(status.contains("if let display = modelDisplayName"))
         XCTAssertFalse(status.contains("private var displayModel"))
-        XCTAssertTrue(chat.contains("modelDisplayName: session.displayModelName"))
         XCTAssertTrue(windowChat.contains("modelDisplayName: session.displayModelName"))
         XCTAssertTrue(hover.contains("modelDisplayName: session.displayModelName"))
         XCTAssertTrue(details.contains("Text(\"Model: \\(displayModelName)\")"))

@@ -21,6 +21,22 @@ public struct StatusTrayLayoutSnapshot: Equatable, Sendable {
 }
 
 public enum StatusTrayLayoutPolicy {
+    public static func observedLeftEdge(
+        targetScreenRect: CGRect,
+        statusItemFrames: [CGRect]
+    ) -> CGFloat? {
+        let candidates = statusItemFrames.compactMap { frame -> CGFloat? in
+            guard frame.height > 0,
+                  frame.height < 50,
+                  targetScreenRect.contains(CGPoint(x: frame.midX, y: frame.midY)) else {
+                return nil
+            }
+            let relativeX = frame.minX - targetScreenRect.minX
+            return relativeX > targetScreenRect.width / 2 ? relativeX : nil
+        }
+        return candidates.min()
+    }
+
     public static func begin(
         targetScreenID: String,
         observedLeftEdge: CGFloat?

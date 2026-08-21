@@ -297,10 +297,7 @@ final class MainWindowViewModel: ObservableObject {
         if session.origin == .visorSpawned { return "Agent Visor" }
         if session.origin == .cursorObserved { return "Cursor" }
         if session.agentID == .codex, session.tty == nil { return "Codex" }
-        if let host = SessionHostDisplayPolicy.displayHost(
-            agentID: session.agentID,
-            terminalHost: session.terminalHost
-        ), host != .unknown {
+        if let host = SessionHostDisplayPolicy.displayHost(session: session), host != .unknown {
             return HostMetadata.metadata(for: host).displayName
         }
         return agentDisplayName
@@ -665,15 +662,9 @@ enum SidebarSessionListBuilder {
         selectedSessionId: String?
     ) -> Bool {
         let isTitleless = SidebarTitlelessPolicy.shouldHide(
+            session: session,
             isSelected: session.sessionId == selectedSessionId,
-            needsAttention: MainWindowViewModel.isAttentionRequired(session.phase),
-            agentID: session.agentID,
-            terminalHost: session.terminalHost,
-            hasTTY: session.tty != nil,
-            hasSessionName: !(session.sessionName ?? "").isEmpty,
-            hasFirstUserMessage: !(session.conversationInfo.firstUserMessage ?? "").isEmpty,
-            hasChatItems: !session.chatItems.isEmpty,
-            hasLastActivityDate: session.conversationInfo.lastActivityDate != nil
+            needsAttention: MainWindowViewModel.isAttentionRequired(session.phase)
         )
         return SidebarSessionVisibilityPolicy.shouldHideInWindow(
             isEnded: session.phase == .ended,

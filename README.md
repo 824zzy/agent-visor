@@ -49,7 +49,7 @@ The menu bar is the ambient status strip. Each pill shows a session title and st
 
 ### Agent Sessions browser
 
-The browser is the complete searchable workspace. It groups sessions by state, preserves source and project context, and supports arrow-key navigation. For Chat-capable sessions, row click and Return enter Agent Visor Chat; Shift-Return and the always-visible **Open in <owner>** action return to the canonical owner. The quiet disclosure chevron belongs to the row's Chat target rather than acting as a competing button. Owner-only history rows safely open their owner. Back returns to the preserved browser state, while optional technical metadata stays under **Details**.
+The browser is the complete searchable workspace. Open it from the Agent Visor menu-bar item, the Dock icon, or the global window hotkey; those three work the same on every display. It groups sessions by state, preserves source and project context, and supports arrow-key navigation. Row click and Return open the canonical owner when available, and each row names that destination. Shift-Return and the explicit **Open Chat** action enter Agent Visor Chat when supported. Chat-only history rows safely open Chat. Back returns to the preserved browser state, while optional technical metadata stays under **Details**.
 
 ### Codex usage glance
 

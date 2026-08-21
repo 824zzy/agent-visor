@@ -52,7 +52,7 @@ final class PillBarHitTestTests: XCTestCase {
 
     // sessionPills[0] is closest to the notch on the left bar (rightmost
     // visually). sessionPills[1] sits to its left.
-    func testLeftBarOrderingNotchClosestFirst() {
+    func testLeftBarOrderingCenterClosestFirst() {
         // anchor=200, pill[0] width 40 → [160, 200]
         // spacing 4 → next anchor = 156
         // pill[1] width 40 → [116, 156]
@@ -125,7 +125,7 @@ final class PillBarHitTestTests: XCTestCase {
         XCTAssertEqual(result, .session(id: "a"))
     }
 
-    func testRightBarOrderingNotchClosestFirst() {
+    func testRightBarOrderingCenterClosestFirst() {
         // anchor=300, pill[0] [300,340], spacing 4, pill[1] [344,384]
         let result0 = PillBarHitTest.resolve(
             clickX: 310,

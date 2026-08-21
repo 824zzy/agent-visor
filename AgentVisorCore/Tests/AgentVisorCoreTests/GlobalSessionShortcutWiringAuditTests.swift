@@ -51,17 +51,17 @@ final class GlobalSessionShortcutWiringAuditTests: XCTestCase {
 
     func testOverflowShortcutUsesTheSameTogglePathAsTheRenderedPlusNPill() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
-        let notchView = try String(contentsOf: root
+        let pillStrip = try String(contentsOf: root
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Views")
-            .appendingPathComponent("NotchView.swift"))
+            .appendingPathComponent("PillStripView.swift"))
 
-        XCTAssertTrue(notchView.contains("GlobalSessionShortcutManager.shared.onToggleOverflow ="))
-        XCTAssertTrue(notchView.contains("GlobalSessionShortcutManager.shared.onToggleOverflow = nil"))
-        XCTAssertTrue(notchView.contains("GlobalSessionShortcutPolicy.overflowAction("))
-        XCTAssertTrue(notchView.contains("case .overflow:\n            return toggleSessionNavigatorPopover()"))
-        XCTAssertTrue(notchView.contains("private func toggleSessionNavigatorPopover() -> Bool"))
+        XCTAssertTrue(pillStrip.contains("GlobalSessionShortcutManager.shared.onToggleOverflow ="))
+        XCTAssertTrue(pillStrip.contains("GlobalSessionShortcutManager.shared.onToggleOverflow = nil"))
+        XCTAssertTrue(pillStrip.contains("GlobalSessionShortcutPolicy.overflowAction("))
+        XCTAssertTrue(pillStrip.contains("case .overflow:\n            return toggleSessionNavigatorPopover()"))
+        XCTAssertTrue(pillStrip.contains("private func toggleSessionNavigatorPopover() -> Bool"))
     }
 
     func testHoldingShortcutModifiersReplacesStatusDotsWithFrozenNumberBadges() throws {
@@ -70,7 +70,7 @@ final class GlobalSessionShortcutWiringAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Components")
-            .appendingPathComponent("NotchSideContent.swift"))
+            .appendingPathComponent("PillStripContent.swift"))
         let manager = try String(contentsOf: root
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("Events")
@@ -89,7 +89,7 @@ final class GlobalSessionShortcutWiringAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Components")
-            .appendingPathComponent("NotchSideContent.swift"))
+            .appendingPathComponent("PillStripContent.swift"))
         let manager = try String(contentsOf: root
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("Events")
@@ -110,7 +110,7 @@ final class GlobalSessionShortcutWiringAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Components")
-            .appendingPathComponent("NotchSideContent.swift"))
+            .appendingPathComponent("PillStripContent.swift"))
 
         XCTAssertTrue(sideContent.contains(".font(.system(size: 10, weight: .bold, design: .rounded))"))
         XCTAssertTrue(sideContent.contains(".monospacedDigit()"))

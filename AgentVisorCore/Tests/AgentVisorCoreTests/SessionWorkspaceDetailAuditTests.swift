@@ -20,6 +20,36 @@ final class SessionWorkspaceDetailAuditTests: XCTestCase {
         XCTAssertFalse(detailSource.contains("Inspect transcript"))
     }
 
+    func testBackToSessionsOwnsItsVisibleArrowArea() throws {
+        let source = try String(contentsOf: repositoryRoot(from: URL(fileURLWithPath: #filePath))
+            .appendingPathComponent("AgentVisor/UI/Window/SessionWorkspaceDetail.swift"))
+        let backButton = try sourceSlice(
+            source,
+            from: "private var backButton",
+            to: "private func detailsMenu"
+        )
+
+        XCTAssertTrue(backButton.contains(".padding(.horizontal, 8)"))
+        XCTAssertTrue(backButton.contains(".frame(minHeight: 44)"))
+        XCTAssertTrue(backButton.contains(".contentShape(Rectangle())"))
+    }
+
+    func testChatHeaderActionsHighlightIndependentlyOnHover() throws {
+        let source = try String(contentsOf: repositoryRoot(from: URL(fileURLWithPath: #filePath))
+            .appendingPathComponent("AgentVisor/UI/Window/SessionWorkspaceDetail.swift"))
+        let style = try sourceSlice(
+            source,
+            from: "private struct ChatHeaderActionHoverStyle",
+            to: "private extension View"
+        )
+
+        XCTAssertEqual(source.components(separatedBy: ".chatHeaderActionHover()").count - 1, 3)
+        XCTAssertTrue(style.contains("@State private var isHovered = false"))
+        XCTAssertTrue(style.contains("ChatTheme.link.opacity(0.08)"))
+        XCTAssertTrue(style.contains("ChatTheme.link : ChatTheme.secondary"))
+        XCTAssertTrue(style.contains(".onHover { isHovered = $0 }"))
+    }
+
     func testChatHeaderKeepsOwnerAndOptionalDetailsOneClickAway() throws {
         let source = try String(contentsOf: repositoryRoot(from: URL(fileURLWithPath: #filePath))
             .appendingPathComponent("AgentVisor/UI/Window/SessionWorkspaceDetail.swift"))
@@ -64,8 +94,8 @@ final class SessionWorkspaceDetailAuditTests: XCTestCase {
 
         XCTAssertLessThan(ownerAction.lowerBound, detailsOverflow.lowerBound)
         XCTAssertTrue(header.contains("Label(\"Open in \\(ownerName)\", systemImage: \"arrow.up.forward\")"))
-        XCTAssertTrue(header.contains(".buttonStyle(.bordered)"))
-        XCTAssertTrue(header.contains(".controlSize(.small)"))
+        XCTAssertTrue(header.contains(".buttonStyle(.plain)"))
+        XCTAssertFalse(header.contains(".buttonStyle(.bordered)"))
         XCTAssertFalse(header.contains(".buttonStyle(.borderedProminent)"))
         XCTAssertFalse(header.contains(".tint(ChatTheme.link)"))
         XCTAssertTrue(source.contains("Image(systemName: \"ellipsis\")"))

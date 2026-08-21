@@ -2,7 +2,7 @@
 //  SessionStore.swift
 //  AgentVisor
 //
-//  Central state manager for all Claude sessions.
+//  Central state manager for all coding-agent sessions.
 //  Single source of truth - all state mutations flow through process().
 //
 
@@ -13,7 +13,7 @@ import Foundation
 import Mixpanel
 import os.log
 
-/// Central state manager for all Claude sessions
+/// Central state manager for all coding-agent sessions.
 /// Uses Swift actor for thread-safe state mutations
 actor SessionStore {
     static let shared = SessionStore()
@@ -256,11 +256,9 @@ actor SessionStore {
 
     private func processHookEvent(_ event: HookEvent) async {
         guard let event = codexBackedHookEvent(event) else { return }
-        if event.agentID == .pi {
-            await MainActor.run {
-                PiIntegrationMonitor.shared.recordHeartbeat()
-            }
-        }
+        // Before any rule can drop this event. An agent may keep a flag that its
+        // own reporter is alive, and a dropped event still proves that.
+        await AgentRegistry.provider(for: event.agentID)?.noteRuntimeReportedIn()
 
         let sessionId = event.sessionId
         let existingSessionBeforeHook = sessions[sessionId]
@@ -338,10 +336,9 @@ actor SessionStore {
             }
             for staleId in staleIds {
                 Self.logger.debug("Dedup: removing stale session \(staleId.prefix(8), privacy: .public) (PID \(pid) now belongs to \(sessionId.prefix(8), privacy: .public))")
-                if sessions[staleId]?.agentID == .pi {
-                    await MainActor.run {
-                        PiRebootRestorationManager.shared.end(sessionID: staleId)
-                    }
+                if let staleAgentID = sessions[staleId]?.agentID {
+                    await AgentRegistry.provider(for: staleAgentID)?
+                        .noteSessionGone(sessionId: staleId)
                 }
                 sessions.removeValue(forKey: staleId)
                 hookDidRemoveStaleSession = true
@@ -446,19 +443,6 @@ actor SessionStore {
             agentID: event.agentID,
             terminalHost: session.terminalHost
         )
-        // Resolve a provider-owned name for lifecycle activity and restored
-        // attachments. Active Pi renames continue through the file watcher,
-        // so an unchanged heartbeat does not rescan every transcript.
-        // Zed-hosted sessions skip this: their name belongs to Zed's thread
-        // title, and an agent-derived name (claude's `codes-92`) would
-        // shadow what the user sees in Zed's sidebar.
-        if shouldRefreshDerivedAttachmentMetadata,
-           !ZedHostedIdentityPolicy.suppressesAgentResolvedName(host: session.terminalHost),
-           let eventProvider,
-           let name = eventProvider.resolveSessionName(sessionId: event.sessionId, pid: processMetadata.pid),
-           !name.isEmpty {
-            session.sessionName = name
-        }
         if shouldRefreshDerivedAttachmentMetadata,
            !sharesProcessAcrossSessions,
            let pid = processMetadata.pid {
@@ -474,44 +458,22 @@ actor SessionStore {
             session.lastActivity = Date()
         }
 
-        if event.agentID == .pi {
-            await MainActor.run {
-                if event.isTerminalLifecycleStatus {
-                    PiRebootRestorationManager.shared.noteExactSessionEnded(sessionID: sessionId)
-                } else {
-                    PiRebootRestorationManager.shared.noteExactLiveSession(sessionID: sessionId)
-                }
-            }
-            if event.isTerminalLifecycleStatus {
-                await MainActor.run {
-                    PiRebootRestorationManager.shared.end(sessionID: sessionId)
-                }
-            } else if session.terminalHost == .ghostty,
-                      session.origin == .terminal,
-                      let pid = session.pid, pid > 0,
-                      let tty = session.tty, !tty.isEmpty {
-                let sessionFile = event.sessionFile
-                    ?? eventProvider?.transcriptURL(sessionId: sessionId, cwd: session.cwd).path
-                    ?? ""
-                let sessionName = session.sessionName
-                let cwd = session.cwd
-                await MainActor.run {
-                    PiRebootRestorationManager.shared.recordAcceptedSession(
-                        sessionID: sessionId,
-                        sessionFile: sessionFile,
-                        cwd: cwd,
-                        sessionName: sessionName,
-                        tty: tty,
-                        allowTopologyRefresh: !isPiSessionHeartbeat
-                    )
-                }
-            } else {
-                await MainActor.run {
-                    PiRebootRestorationManager.shared.removeRestorationCandidate(
-                        sessionID: sessionId
-                    )
-                }
-            }
+        // The row now carries the process identity and host from this event, so
+        // an agent that keeps its own notes can write them. Pi also refreshes its
+        // signature-cached transcript name here for heartbeat-only restoration.
+        await eventProvider?.noteHookEvent(event, session: session)
+
+        // Resolve after provider notes, so a restored Pi row can use the name its
+        // hook just recovered. Zed-hosted rows keep Zed's own title.
+        if shouldRefreshDerivedAttachmentMetadata,
+           !ZedHostedIdentityPolicy.suppressesAgentResolvedName(host: session.terminalHost),
+           let eventProvider,
+           let name = eventProvider.resolveSessionName(
+            sessionId: event.sessionId,
+            pid: processMetadata.pid
+           ),
+           !name.isEmpty {
+            session.sessionName = name
         }
 
         if event.isTerminalLifecycleStatus {
@@ -590,8 +552,14 @@ actor SessionStore {
         // .waitingForApproval to .success *before* the phase decision,
         // otherwise we would incorrectly hold the session in
         // .waitingForApproval forever.
+        // The placeholder exists so a pending approval renders. Agents that
+        // report tools through hooks always get one. An agent whose tool state
+        // comes from its own transcript gets one only for the request that asks
+        // the user a question: that hook carries the questions, and nothing else
+        // would draw them before the parser catches up.
+        let reportsToolsThroughHooks = eventProvider?.reportsToolsThroughHooks ?? true
         let shouldCreateApprovalPlaceholder = event.event == "PermissionRequest"
-            && (event.agentID != .codex || event.tool == "AskUserQuestion")
+            && (reportsToolsThroughHooks || event.tool == "AskUserQuestion")
         if shouldCreateApprovalPlaceholder, let toolUseId = event.toolUseId {
             Self.logger.debug("Setting tool \(toolUseId.prefix(12), privacy: .public) status to waitingForApproval")
             updateToolStatus(in: &session, toolId: toolUseId, status: .waitingForApproval)
@@ -627,20 +595,27 @@ actor SessionStore {
             }
         }
 
-        if event.agentID != .codex {
+        // Tool and subagent tracking build chat items from hook events. An
+        // agent whose tool state lives in its own transcript is skipped here, or
+        // the two records would fight over the same rows.
+        if reportsToolsThroughHooks {
             processToolTracking(event: event, session: &session)
             processSubagentTracking(event: event, session: &session)
         }
 
         let newPhase = event.determinePhase()
-        let isAuthoritativePiHeartbeat = event.agentID == .pi && event.event == "SessionStart"
         let rebindEvidence = SessionRebindCandidatePolicy.evidence(
             agentID: event.agentID,
             lifecycleEvent: event.event
         )
+        // An exact SessionStart names a new live attachment, so it is stronger
+        // than transcript quiescence and may set the phase even for a row whose
+        // phase is normally read from the transcript. The same evidence decides
+        // resurrection below, so it is read once here.
+        let overridesTranscriptAuthority = rebindEvidence == .exactSessionStart
         if !ObservedHookPhasePolicy.shouldApplyHookPhase(
             usesTranscriptPhaseInference: usesTranscriptAsAuthoritativeSource(session)
-                && !isAuthoritativePiHeartbeat,
+                && !overridesTranscriptAuthority,
             reportedPhase: Self.reportedHookPhase(for: newPhase),
             isCurrentlyWaitingForApproval: session.phase.isWaitingForApproval
         ) {
@@ -2392,10 +2367,8 @@ actor SessionStore {
     // MARK: - Session End Processing
 
     private func processSessionEnd(sessionId: String) async {
-        if sessions[sessionId]?.agentID == .pi {
-            await MainActor.run {
-                PiRebootRestorationManager.shared.end(sessionID: sessionId)
-            }
+        if let agentID = sessions[sessionId]?.agentID {
+            await AgentRegistry.provider(for: agentID)?.noteSessionGone(sessionId: sessionId)
         }
         // Mark ended but DO NOT remove. The user can still browse the
         // chat history, send a message (which fails fast if the TTY is
@@ -2749,21 +2722,23 @@ actor SessionStore {
                 || isEndedPiCandidate else { return false }
 
         guard let provider = AgentRegistry.provider(for: session.agentID) else { return false }
-        let transcriptPath = provider.transcriptURL(
+        let transcriptPath = (await provider.transcriptURLForReading(
             sessionId: sessionId,
             cwd: session.cwd
-        ).path
-        guard let transcriptModifiedAt =
+        )).path
+        let transcriptModifiedAt: Date? = await BlockingWork.run("transcriptModificationDate") {
             (try? FileManager.default.attributesOfItem(atPath: transcriptPath))?[.modificationDate]
                 as? Date
-        else {
-            return false
         }
+        guard let transcriptModifiedAt else { return false }
 
         if session.agentID == .claudeCode {
-            let metadataActivity = ClaudeCodeSessionMetadataPolicy.activity(
-                for: session.pid.flatMap { SessionState.readSessionStatus(pid: $0) }
-            )
+            let pid = session.pid
+            let metadataActivity = await BlockingWork.run("claudeSessionStatus") {
+                ClaudeCodeSessionMetadataPolicy.activity(
+                    for: pid.flatMap { SessionState.readSessionStatus(pid: $0) }
+                )
+            }
             let hookObservedAt = session.phaseEvidenceSource == .hook
                 ? (session.phaseObservedAt ?? session.phaseChangedAt).timeIntervalSince1970
                 : nil
@@ -2787,10 +2762,12 @@ actor SessionStore {
         if session.agentID == .codex {
             let fullMarker = await CodexConversationParser.shared.lastTurnMarker(for: sessionId)
             let fullPendingAction = await CodexConversationParser.shared.pendingAction(for: sessionId)
-            _ = await CodexConversationSummary.shared.parse(
-                sessionId: sessionId,
-                rolloutPath: transcriptPath
-            )
+            _ = await BlockingWork.limited("codexPhaseSummary") {
+                await CodexConversationSummary.shared.parse(
+                    sessionId: sessionId,
+                    rolloutPath: transcriptPath
+                )
+            }
             let summaryMarker = await CodexConversationSummary.shared.lastTurnMarker(for: sessionId)
             marker = fullMarker != .none ? fullMarker : summaryMarker
             pendingCodexAction = await CodexConversationSummary.shared.pendingAction(for: sessionId)
@@ -2798,13 +2775,24 @@ actor SessionStore {
         } else if session.agentID == .pi {
             marker = await PiConversationParser.shared.lastTurnMarker(for: sessionId)
             if marker == .none {
-                _ = await PiConversationParser.shared.parseFullConversation(
-                    sessionId: sessionId,
-                    transcriptPath: transcriptPath
-                )
+                _ = await BlockingWork.limited("piPhaseTranscript") {
+                    await PiConversationParser.shared.parseFullConversation(
+                        sessionId: sessionId,
+                        transcriptPath: transcriptPath
+                    )
+                }
                 marker = await PiConversationParser.shared.lastTurnMarker(for: sessionId)
             }
         }
+
+        // The path, file date and parsers all waited away from the store. Keep
+        // stronger evidence that arrived during those waits, and continue from
+        // the current row so a name or host change is not overwritten by this
+        // older copy.
+        guard let current = sessions[sessionId],
+              SessionReadFreshnessPolicy.stillApplies(asked: session, current: current)
+        else { return false }
+        session = current
 
         // Quiescence (seconds since the transcript was last written) gates
         // staleness on BOTH paths now: the heuristic (no-marker) one AND
@@ -3304,6 +3292,17 @@ actor SessionStore {
     }
 
     func refreshCodexMetadata() async {
+        // Codex can change many thread titles in one database write. Read that
+        // group once away from the store before the synchronous name pass asks
+        // the cache one row at a time.
+        let ids = sessions.values
+            .filter { $0.agentID == .codex }
+            .map(\.sessionId)
+        if !ids.isEmpty, let provider = AgentRegistry.provider(for: .codex) {
+            await BlockingWork.run("prewarmCodexMetadata") {
+                provider.prewarmMetadata(sessionIds: ids)
+            }
+        }
         refreshSessionNames(agentID: .codex)
         await pruneDeadSessions()
     }
@@ -3360,7 +3359,7 @@ actor SessionStore {
 
     private func completeCodexMetadataRediscovery() async {
         let rediscovered = await Self.discoverCodexInBackground()
-        bootstrapSessions(rediscovered)
+        await bootstrapSessions(rediscovered)
         lastCodexDiscoverySnapshot = currentCodexDiscoverySnapshot()
     }
 
@@ -3380,7 +3379,7 @@ actor SessionStore {
 
     /// Single publish boundary. Drops hidden sessions before sending so BOTH
     /// subscribers — the window sidebar (`MainWindowViewModel`) and the
-    /// menu-bar pills (`ClaudeSessionMonitor`) — honor the hidden set without
+    /// menu-bar pills (`SessionMonitor`) — honor the hidden set without
     /// each re-implementing the filter. Sort matches the prior behavior.
     private func send(_ sessionsToPublish: [SessionState]) {
         let visible = hiddenSessionIds.isEmpty
@@ -3536,21 +3535,6 @@ actor SessionStore {
         return isHistorical ? .ended : .idle
     }
 
-    private func reconcileClaudeMetadataPhase(sessionId: String, pid: Int) {
-        guard let currentPhase = sessions[sessionId]?.phase else { return }
-        let activity = ClaudeCodeSessionMetadataPolicy.activity(
-            for: SessionState.readSessionStatus(pid: pid)
-        )
-        switch (activity, currentPhase) {
-        case (.working, .idle), (.working, .waitingForInput):
-            setSessionPhase(sessionId, .processing, evidenceSource: .rediscovery)
-        case (.idle, .processing):
-            setSessionPhase(sessionId, .waitingForInput, evidenceSource: .rediscovery)
-        default:
-            break
-        }
-    }
-
     private static func bootstrapLastActivity(fileDate: Date?, pid: Int, tty: String?) -> Date {
         if let fileDate {
             return fileDate
@@ -3566,29 +3550,26 @@ actor SessionStore {
     private var pruneTask: Task<Void, Never>?
 
     /// Start periodic pruning of dead sessions (every 10 seconds)
-    /// Bootstrap discovered sessions (called with results from ClaudeSessionMonitor.discoverExistingSessions)
-    func bootstrapSessions(_ discovered: [DiscoveredSession]) {
+    /// Bootstrap discovered sessions (called with results from SessionMonitor.discoverExistingSessions)
+    func bootstrapSessions(_ discovered: [DiscoveredSession]) async {
         guard !discovered.isEmpty else { return }
         debugLog("[Scan] Bootstrapping \(discovered.count) discovered sessions")
 
-        let tree = ProcessTreeBuilder.shared.buildTree()
-
-        // Pre-warm the codex thread list once instead of running a
-        // per-id sqlite3 fork in the loop below. `liveThreadCandidates`
-        // is a single bounded query (limit 200) cached by `(sql, mtime)`,
-        // so subsequent codex bootstraps within the same mtime window
-        // pay zero subprocesses.
-        let codexThreadsById: [String: CodexThreadCandidate]
-        if discovered.contains(where: { $0.agentID == .codex }) {
-            let liveCandidates = CodexThreadStore.liveThreadCandidates()
-            codexThreadsById = Dictionary(
-                uniqueKeysWithValues: liveCandidates.map { ($0.id, $0) }
-            )
-        } else {
-            codexThreadsById = [:]
+        // Gather the two machine snapshots before the merge changes its first
+        // row. Other actor work may run while these answer, but once the merge
+        // begins it is still atomic, exactly as it was before this method became
+        // async.
+        async let treeRead = BlockingWork.run("bootstrapProcessTree") {
+            ProcessTreeBuilder.shared.buildTree()
         }
+        async let zedRead = BlockingWork.run("bootstrapZedSnapshot") {
+            ZedThreadStore.snapshot()
+        }
+        let (tree, zedSnapshot) = await (treeRead, zedRead)
 
         for info in discovered {
+            let zedRecord = zedSnapshot.bySessionID[info.sessionId]
+            let zedHostsSession = zedRecord.map { !$0.archived } ?? false
             // Skip sessions the user hid. Without this, the ~30s rediscovery
             // would re-add a hidden row (its backing files still exist on
             // disk), undoing the hide. Deleted sessions don't need this —
@@ -3656,11 +3637,18 @@ actor SessionStore {
                         }
                     }
                 }
-                if info.agentID == .claudeCode {
-                    reconcileClaudeMetadataPhase(
+                let rediscoveryProvider = AgentRegistry.provider(for: info.agentID)
+                // An agent that keeps its own busy-or-idle record can correct a
+                // row whose phase drifted while no hook arrived. Agents without
+                // such a record report nothing and change nothing.
+                if let phase = RediscoveredActivityPhasePolicy.phase(
+                    for: rediscoveryProvider?.rediscoveredActivity(
                         sessionId: info.sessionId,
                         pid: info.pid
-                    )
+                    ) ?? .unknown,
+                    currentPhase: existing.phase
+                ) {
+                    setSessionPhase(info.sessionId, phase, evidenceSource: .rediscovery)
                 }
                 if let provider = AgentRegistry.provider(for: info.agentID),
                    !ZedHostedIdentityPolicy.suppressesAgentResolvedName(host: existing.terminalHost),
@@ -3678,35 +3666,52 @@ actor SessionStore {
                    ).first {
                     sessions[change.sessionId]?.sessionName = change.name
                 }
-                if info.agentID == .cursor, info.pid != 0,
-                   existing.phase == .ended, existing.pid == nil {
-                    setSessionPhase(info.sessionId, .idle, evidenceSource: .rediscovery)
-                    sessions[info.sessionId]?.pid = info.pid
-                }
-                // A codex thread Zed hosts is reconciled onto `.zed` (host +
-                // title) by reconcileZedHostedSessions; don't stamp it with
-                // Codex.app's pid here or the Zed liveness/nav is undone each
-                // rediscovery.
-                if info.agentID == .codex, info.tty == nil,
-                   !ZedThreadStore.hostsSession(info.sessionId) {
-                    if existing.phase == .ended {
+                // Discovery can find a session the store believes ended. Only
+                // the agent knows whether that proves the session is back: a
+                // thread inside a shared app process has no pid of its own, so
+                // being found again is the proof, while one process per session
+                // is already answered by the pid. A Zed-hosted thread is
+                // excluded by its provider, because reconcileZedHostedSessions
+                // owns that row's host, title and liveness.
+                // A host rule comes before an agent rule. Zed pools one process
+                // across threads, so a Codex attachment must not claim a row the
+                // one Zed snapshot says Zed owns.
+                if !zedHostsSession,
+                   let attachment = rediscoveryProvider?.rediscoveredAttachment(
+                    for: existing,
+                    discovered: info
+                   ) {
+                    if attachment.revivesEndedRow, existing.phase == .ended {
                         setSessionPhase(info.sessionId, .idle, evidenceSource: .rediscovery)
                     }
-                    sessions[info.sessionId]?.pid = info.pid == 0 ? nil : info.pid
-                    if let rolloutPath = codexThreadsById[info.sessionId]?.rolloutPath,
-                       let attrs = try? FileManager.default.attributesOfItem(atPath: rolloutPath),
+                    switch attachment.pid {
+                    case .leave:
+                        break
+                    case .clear:
+                        sessions[info.sessionId]?.pid = nil
+                    case .set(let pid):
+                        sessions[info.sessionId]?.pid = pid
+                    }
+                    if attachment.refreshesActivityFromTranscript,
+                       let path = rediscoveryProvider?
+                        .transcriptURL(sessionId: info.sessionId, cwd: info.cwd).path,
+                       let attrs = try? FileManager.default.attributesOfItem(atPath: path),
                        let modDate = attrs[.modificationDate] as? Date,
                        modDate > existing.lastActivity {
                         sessions[info.sessionId]?.lastActivity = modDate
                     }
-                    let sessionId = info.sessionId
-                    let sessionCwd = info.cwd
-                    Task { @MainActor in
-                        SessionFileWatcherManager.shared.startWatching(
-                            sessionId: sessionId,
-                            cwd: sessionCwd,
-                            agentID: .codex
-                        )
+                    if let session = sessions[info.sessionId],
+                       rediscoveryProvider?.watchesTranscriptOnDiscovery(for: session) == true {
+                        let sessionId = info.sessionId
+                        let sessionCwd = info.cwd
+                        let watchedAgentID = info.agentID
+                        Task { @MainActor in
+                            SessionFileWatcherManager.shared.startWatching(
+                                sessionId: sessionId,
+                                cwd: sessionCwd,
+                                agentID: watchedAgentID
+                            )
+                        }
                     }
                 }
                 // Hook-created sessions can already have a resolved process
@@ -3734,22 +3739,17 @@ actor SessionStore {
             }
 
             let cwd = info.cwd
-            let codexThread = info.agentID == .codex ? codexThreadsById[info.sessionId] : nil
             let projectName = ProjectDisplayNamePolicy.displayName(forCwd: cwd)
                 ?? URL(fileURLWithPath: cwd).lastPathComponent
             debugLog("[Scan] Session: \(info.sessionId.prefix(8)) pid=\(info.pid) tty=\(info.tty ?? "none") cwd=\(cwd)")
 
-            // Codex stores its rollout path in sqlite; everyone else
-            // derives the path from sessionId+cwd via the provider.
+            // The provider owns where a transcript lives. Codex reads a rollout
+            // path out of its thread database and falls back to a dated scan of
+            // the rollout layout; everyone else derives the path from session id
+            // and cwd. Discovery's group pre-read makes the database answer cheap
+            // before this synchronous merge starts.
             let provider = AgentRegistry.provider(for: info.agentID)
-            let jsonlPath: String
-            if info.agentID == .codex, let path = codexThread?.rolloutPath {
-                jsonlPath = path
-            } else if let provider {
-                jsonlPath = provider.transcriptURL(sessionId: info.sessionId, cwd: cwd).path
-            } else {
-                jsonlPath = ""
-            }
+            let jsonlPath = provider?.transcriptURL(sessionId: info.sessionId, cwd: cwd).path ?? ""
             let fileDate: Date?
             if !jsonlPath.isEmpty,
                let attrs = try? FileManager.default.attributesOfItem(atPath: jsonlPath),
@@ -3774,7 +3774,7 @@ actor SessionStore {
                             reader: LiveProcessInfoReader.shared
                         )
                         : nil,
-                    zedHostsSession: ZedThreadStore.hostsSession(info.sessionId)
+                    zedHostsSession: zedHostsSession
                 )
                 ?? .unknown
             var session = SessionState(
@@ -3814,19 +3814,24 @@ actor SessionStore {
                !name.isEmpty {
                 session.sessionName = name
             }
-            if host == .zed,
-               let zedTitle = ZedThreadStore.displayTitle(sessionID: info.sessionId) {
+            if host == .zed, let zedTitle = zedRecord?.displayTitle {
                 session.sessionName = zedTitle
             }
             sessions[info.sessionId] = session
-            if info.agentID == .codex, info.tty == nil {
+            // Rows inside a shared app process fire no turn hooks of their
+            // own, so their transcript is the only live signal and the
+            // provider asks for a watcher. Rows with their own process report
+            // through hooks already.
+            if !zedHostsSession,
+               provider?.watchesTranscriptOnDiscovery(for: session) == true {
                 let sessionId = info.sessionId
                 let sessionCwd = cwd
+                let watchedAgentID = info.agentID
                 Task { @MainActor in
                     SessionFileWatcherManager.shared.startWatching(
                         sessionId: sessionId,
                         cwd: sessionCwd,
-                        agentID: .codex
+                        agentID: watchedAgentID
                     )
                 }
             }
@@ -4007,26 +4012,24 @@ actor SessionStore {
         }
     }
 
-    /// Run the (blocking, `ps`-based) discovery scan off the actor and
-    /// off the main thread, then hand the result back for a merge. Process
-    /// needs a run loop, so it can't run inline on the actor.
+    /// Run the (blocking, `ps`-based) discovery scan away from the threads that
+    /// serve `await`, then hand the result back for a merge. Process needs a run
+    /// loop, so it cannot run inline on the actor.
     private static func discoverInBackground() async -> [DiscoveredSession] {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                continuation.resume(returning: ClaudeSessionMonitor.discoverExistingSessions())
-            }
+        await BlockingWork.run("discoverExistingSessions") {
+            SessionMonitor.discoverExistingSessions()
         }
     }
 
     private static func discoverCodexInBackground() async -> [DiscoveredSession] {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                let provider = CodexAgentProvider()
-                let live = provider.discoverLiveSessions()
-                let liveIds = Set(live.map(\.sessionId))
-                let historical = provider.discoverHistoricalSessions(excluding: liveIds, limit: 30)
-                continuation.resume(returning: live + historical)
-            }
+        await BlockingWork.run("discoverCodexSessions") {
+            let provider = CodexAgentProvider()
+            let live = provider.discoverLiveSessions()
+            let liveIds = Set(live.map(\.sessionId))
+            let historical = provider.discoverHistoricalSessions(excluding: liveIds, limit: 30)
+            let discovered = live + historical
+            provider.prewarmMetadata(sessionIds: discovered.map(\.sessionId))
+            return discovered
         }
     }
 
@@ -4060,139 +4063,66 @@ actor SessionStore {
         //    its session ids are pid-bound; codex/cursor keep watching
         //    in case the same session id reattaches.
         //
-        // Zed-hosted sessions get special-cased: Zed pools its
-        // claude-acp child process across threads, so closing a thread
-        // does NOT reliably kill the PID. PID-alive ⇒ live-row was wrong
-        // for Zed (rows lingered indefinitely after thread close), so we
-        // key Zed liveness on transcript idleness instead. The window is
-        // the observed-agent window (default 42h): an idle-but-open Zed
-        // thread must stay visible. The old 30s window pruned a thread the
-        // moment you stopped typing for half a minute — exactly the bug
-        // where an open Zed session vanished. Genuine thread close is
-        // caught promptly by the claude SessionEnd hook; this is only the
-        // fallback cleanup for a thread that went away without one.
+        // Detection is per-provider too, through `deadSessionIDs`, because
+        // the evidence differs per agent and a pid answers only for agents
+        // that run one process per session. Each provider is asked once for
+        // its whole group, so it gathers its evidence a single time.
+        //
+        // The Zed host rule is asked first and its rows never reach a
+        // provider. Zed pools one ACP child across threads, so closing a
+        // thread does not reliably kill the pid, and the per-agent rules
+        // would keep a closed thread forever. Where the process lives is a
+        // host question, so the store answers it.
         let now = Date()
-        let zedIdleSeconds: TimeInterval = AppSettings.observedWindowSeconds
+        let liveSessions = sessions.filter { $0.value.phase != .ended }
+        var deadIds: Set<String> = []
 
-        // Codex.app runs all GUI threads in one process, so PID-alive
-        // can't decide per-thread liveness. Re-derive the active set the
-        // SAME way discovery does, but keep recent GUI rows as a fallback
-        // when the sqlite active-set query has a transient miss.
-        let hasCodex = sessions.values.contains { $0.agentID == .codex }
-        let codexActiveIDs: Set<String> = hasCodex
-            ? CodexAgentProvider.activeGUIThreadIDs()
-            : []
-        let codexAppPid = hasCodex ? CodexAgentProvider.runningCodexAppPid() : nil
+        let zedHosted = liveSessions.values.filter { $0.terminalHost == .zed }
+        if !zedHosted.isEmpty {
+            let zedRunning = ZedThreadStore.isZedRunning
+            let idleWindow = AppSettings.observedWindowSeconds
+            for session in zedHosted where ZedHostedSessionLivenessPolicy.isDead(
+                zedRunning: zedRunning,
+                idleSeconds: now.timeIntervalSince(session.lastActivity),
+                idleWindow: idleWindow
+            ) {
+                deadIds.insert(session.sessionId)
+            }
+        }
 
-        // Zed pools its claude-acp child across threads, so PID-alive
-        // can't decide per-thread liveness — but Zed NOT running is a
-        // definitive signal that every Zed thread is dead. Without this,
-        // closing Zed left rows lingering for the full 42h idle window
-        // (the JSONL just stops growing; nothing else fires). Computed
-        // once per sweep, only when we actually track a Zed session, and
-        // across every release channel (a Preview user's threads must not
-        // be pruned just because stable isn't installed).
-        let hasZed = sessions.values.contains { $0.terminalHost == .zed }
-        let zedRunning = hasZed ? ZedThreadStore.isZedRunning : false
+        let byAgent = Dictionary(
+            grouping: liveSessions.values.filter { $0.terminalHost != .zed },
+            by: \.agentID
+        )
+        for (agentID, group) in byAgent {
+            guard let provider = AgentRegistry.provider(for: agentID) else { continue }
+            // Away from the threads that serve `await`. Codex reads its thread
+            // database and Cursor asks about a running app, so this question
+            // blocks, and it is asked every few seconds.
+            let answer = await BlockingWork.run("deadSessionIDs") {
+                provider.deadSessionIDs(among: group, now: now)
+            }
+            deadIds.formUnion(answer)
+        }
 
-        // Cursor IDE Agents Window threads share Cursor.app's PID, so
-        // PID-alive can't decide liveness either (it's true for every
-        // thread whenever Cursor.app runs). Re-derive the active set by
-        // transcript recency — same window discovery uses — over only the
-        // tracked IDE sessions (a handful of stats, not a tree walk).
-        let cursorIDESessions = sessions.values.filter { $0.agentID == .cursor && $0.tty == nil }
-        let cursorActiveIDs: Set<String> = {
-            guard !cursorIDESessions.isEmpty,
-                  CursorAgentProvider.isAppRunning(),
-                  let provider = AgentRegistry.provider(for: .cursor) else { return [] }
-            let cutoff = now.addingTimeInterval(-CursorAgentProvider.activeWindowSeconds)
-            let fm = FileManager.default
-            return Set(cursorIDESessions.compactMap { s -> String? in
-                let path = provider.transcriptURL(sessionId: s.sessionId, cwd: s.cwd).path
-                guard let attrs = try? fm.attributesOfItem(atPath: path),
-                      let mtime = attrs[.modificationDate] as? Date,
-                      mtime >= cutoff else { return nil }
-                return s.sessionId
-            })
-        }()
-
-        let deadPidIds = sessions.filter { _, session in
-            if session.phase == .ended { return false }
-            // Zed host wins first — a codex-acp / claude-acp thread inside Zed
-            // must follow Zed liveness (Zed running + transcript not idle), not
-            // the per-agent codex/claude rules below, which key on Codex.app's
-            // active GUI set or a pooled pid and would wrongly prune it.
-            if session.terminalHost == .zed {
-                if !zedRunning { return true }
-                let idle = now.timeIntervalSince(session.lastActivity)
-                return idle > zedIdleSeconds
-            }
-            if session.agentID == .claudeCode,
-               let status = SessionState.readSessionStatus(pid: session.pid),
-               ClaudeCodeSessionMetadataPolicy.isTerminalStatus(status) {
-                return true
-            }
-            if session.agentID == .claudeCode,
-               session.origin == .cursorObserved {
-                return shouldPruneCursorObservedClaudeSession(session, now: now)
-            }
-            if session.agentID == .codex {
-                let isKnownArchived: Bool
-                let isExplicitlyArchived: Bool
-                if let thread = CodexThreadStore.thread(id: session.sessionId) {
-                    isKnownArchived = thread.archived
-                    isExplicitlyArchived = thread.isExplicitlyArchived
-                    if session.tty == nil,
-                       !CodexActiveThreadSelector.isInteractiveGUISource(thread.source) {
-                        return true
-                    }
-                    if session.tty != nil,
-                       thread.source != "cli" {
-                        return true
-                    }
-                } else {
-                    isKnownArchived = false
-                    isExplicitlyArchived = false
-                }
-                let nonAppPidAlive: Bool
-                if let pid = session.pid, pid != 0, pid != codexAppPid {
-                    nonAppPidAlive = kill(Int32(pid), 0) == 0
-                } else {
-                    nonAppPidAlive = false
-                }
-                return !CodexSessionRetentionPolicy.shouldKeep(
-                    sessionId: session.sessionId,
-                    tty: session.tty,
-                    pid: session.pid,
-                    codexAppPid: codexAppPid,
-                    isNonAppPidAlive: nonAppPidAlive,
-                    activeGUIThreadIds: codexActiveIDs,
-                    lastActivity: session.lastActivity,
-                    now: now,
-                    observedWindowSeconds: AppSettings.observedWindowSeconds,
-                    isKnownArchived: isKnownArchived,
-                    isExplicitlyArchived: isExplicitlyArchived
-                )
-            }
-            if session.agentID == .cursor && session.tty == nil {
-                // Cursor IDE thread: active-only by transcript recency.
-                // CLI cursor (tty != nil) uses the generic PID check below.
-                return !cursorActiveIDs.contains(session.sessionId)
-            }
-            guard let pid = session.pid else { return false }
-            return kill(Int32(pid), 0) != 0
-        }.map(\.key)
+        let deadPidIds = liveSessions.keys.filter { deadIds.contains($0) }
 
         for sessionId in deadPidIds {
             guard let session = sessions[sessionId],
-                  let provider = AgentRegistry.provider(for: session.agentID)
+                  let provider = AgentRegistry.provider(for: session.agentID),
+                  let asked = liveSessions[sessionId]
             else { continue }
 
-            if session.agentID == .pi {
-                await MainActor.run {
-                    PiRebootRestorationManager.shared.end(sessionID: sessionId)
-                }
+            // The answer describes the row as it was when we asked. Other work
+            // ran while we waited, so a row may have reported in since then.
+            guard SessionReadFreshnessPolicy.stillApplies(asked: asked, current: session) else {
+                Self.logger.debug(
+                    "Prune skipped \(sessionId.prefix(8), privacy: .public): the row changed while we asked"
+                )
+                continue
             }
+
+            await provider.noteSessionGone(sessionId: sessionId)
 
             // Before marking ended, try to rebind to a NEW live PID for
             // the same session. Users routinely close a terminal pane
@@ -4204,19 +4134,30 @@ actor SessionStore {
             // sessions reuse their own session ids on respawn but
             // their argvs don't carry the id, so they go through the
             // existing dead-process action.
-            if session.agentID == .claudeCode,
-               let attachment = ClaudeSessionPidRebinder.findLiveAttachment(
-                    sessionId: sessionId,
-                    sessionName: session.sessionName,
-                    excludePid: session.pid
-               )
-            {
-                Self.logger.info(
-                    "Rebound \(sessionId.prefix(8), privacy: .public) to live PID \(attachment.pid, privacy: .public) (was \(session.pid ?? -1, privacy: .public))"
-                )
-                applyClaudeReattachment(attachment, sessionId: sessionId)
-                didMark = true
-                continue
+            if session.agentID == .claudeCode {
+                // Another blocking question: this one walks Claude's session
+                // files and may run `ps`. It only asks for a row already found
+                // dead, so it is rare, but a burst of deaths would ask it once
+                // per row.
+                let attachment = await BlockingWork.run("findLiveAttachment") {
+                    ClaudeSessionPidRebinder.findLiveAttachment(
+                        sessionId: sessionId,
+                        sessionName: session.sessionName,
+                        excludePid: session.pid
+                    )
+                }
+                // The row may have moved on while we asked, exactly as above.
+                guard let current = sessions[sessionId],
+                      SessionReadFreshnessPolicy.stillApplies(asked: asked, current: current)
+                else { continue }
+                if let attachment {
+                    Self.logger.info(
+                        "Rebound \(sessionId.prefix(8), privacy: .public) to live PID \(attachment.pid, privacy: .public) (was \(session.pid ?? -1, privacy: .public))"
+                    )
+                    applyClaudeReattachment(attachment, sessionId: sessionId)
+                    didMark = true
+                    continue
+                }
             }
 
             switch provider.deadProcessAction(for: session) {
@@ -4278,14 +4219,20 @@ actor SessionStore {
             let excludePid = SessionRebindCandidatePolicy.excludePidForEndedResurrection(
                 currentPid: session.pid
             )
-            guard let attachment = ClaudeSessionPidRebinder.findLiveAttachment(
-                sessionId: sessionId,
-                sessionName: session.sessionName,
-                excludePid: excludePid
-            ) else { continue }
+            let attachment = await BlockingWork.run("findLiveAttachment") {
+                ClaudeSessionPidRebinder.findLiveAttachment(
+                    sessionId: sessionId,
+                    sessionName: session.sessionName,
+                    excludePid: excludePid
+                )
+            }
+            guard let attachment,
+                  let current = sessions[sessionId],
+                  SessionReadFreshnessPolicy.stillApplies(asked: session, current: current)
+            else { continue }
 
             Self.logger.info(
-                "Resurrected ended session \(sessionId.prefix(8), privacy: .public) → live PID \(attachment.pid, privacy: .public) (was \(session.pid ?? -1, privacy: .public))"
+                "Resurrected ended session \(sessionId.prefix(8), privacy: .public) → live PID \(attachment.pid, privacy: .public) (was \(current.pid ?? -1, privacy: .public))"
             )
             applyClaudeReattachment(attachment, sessionId: sessionId)
             didMark = true
@@ -4323,32 +4270,6 @@ actor SessionStore {
         if didMark {
             publishStateWithoutPrune()
         }
-    }
-
-    private func shouldPruneCursorObservedClaudeSession(_ session: SessionState, now: Date) -> Bool {
-        let processAlive = session.pid.map { kill(Int32($0), 0) == 0 } ?? false
-        let transcriptModifiedAt: Date? = {
-            guard let provider = AgentRegistry.provider(for: .claudeCode) else {
-                return nil
-            }
-            let path = provider.transcriptURL(sessionId: session.sessionId, cwd: session.cwd).path
-            return (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
-        }()
-        let liveness = CursorHostedSessionLivenessPolicy.classify(
-            hasTTY: session.tty != nil,
-            entrypoint: "claude-vscode",
-            processAlive: processAlive,
-            isTerminalStatus: ClaudeCodeSessionMetadataPolicy.isTerminalStatus(
-                SessionState.readSessionStatus(pid: session.pid)
-            ),
-            transcriptModifiedAt: transcriptModifiedAt?.timeIntervalSince1970,
-            now: now.timeIntervalSince1970,
-            observedWindowSeconds: AppSettings.observedWindowSeconds,
-            hasPendingUserAction: session.phase.isWaitingForApproval
-                || session.phase == .processing
-                || session.phase == .compacting
-        )
-        return liveness == .drop
     }
 
     /// Publish state without triggering another prune cycle

@@ -42,8 +42,9 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
     func testReadySessionCanJumpDirectlyToPendingTranscriptAction() throws {
         let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
         let source = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("SessionPhase.swift"))
 
         XCTAssertTrue(
@@ -112,36 +113,16 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
     }
 
     func testSessionStateTracksPhaseEvidenceSeparatelyFromPhaseChanges() throws {
-        let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
-        let sessionStateSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
-            .appendingPathComponent("SessionState.swift"))
-        let sessionPhaseSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
-            .appendingPathComponent("SessionPhase.swift"))
         let sessionStoreSource = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
 
-        XCTAssertTrue(
-            sessionPhaseSource.contains("enum SessionPhaseEvidenceSource"),
-            "Phase freshness should have an explicit evidence source rather than overloading phaseChangedAt."
-        )
-        XCTAssertTrue(
-            sessionStateSource.contains("var phaseObservedAt: Date?"),
-            "SessionState should track when the current phase was last observed, even if the phase did not change."
-        )
-        XCTAssertTrue(
-            sessionStateSource.contains("var phaseEvidenceSource: SessionPhaseEvidenceSource?"),
-            "SessionState should track whether phase evidence came from hooks, transcript markers, heuristics, or rediscovery."
-        )
+        // The model half of this rule is covered by behaviour now, in SessionStateBehaviourTests:
+        // markPhaseEvidence stores the source and the observation time, identical evidence for the
+        // same phase reports no change, and a later observation of the same phase does. Those
+        // tests also prove the evidence-source enum and both properties exist, by using them.
+
         XCTAssertTrue(
             sessionStoreSource.contains("markPhaseEvidence"),
             "Transcript inference should refresh phase evidence on same-phase syncs without forcing a phase transition."
-        )
-        XCTAssertTrue(
-            sessionStateSource.contains("PhaseEvidenceMutationPolicy.didChange"),
-            "Same evidence should not trigger a redundant publish on every reconciliation tick."
         )
         XCTAssertTrue(
             sessionStoreSource.contains("guard let transcriptModifiedAt"),
@@ -260,16 +241,10 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
         XCTAssertTrue(hookPath.contains("heartbeatDidChange"))
         XCTAssertTrue(hookPath.contains("if heartbeatDidChange {\n                publishState()"))
 
-        let sessionState = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
-            .appendingPathComponent("SessionState.swift"))
-        XCTAssertTrue(
-            sessionState.contains("mutating func reattachAsIdleWithoutPhaseEvidence"),
-            "A liveness-only reattachment must clear stale Ended evidence instead of stamping a fresh phase observation."
-        )
-        XCTAssertTrue(sessionState.contains("phaseObservedAt = nil"))
-        XCTAssertTrue(sessionState.contains("phaseEvidenceSource = nil"))
+        // What that call does is covered by behaviour now, in SessionStateBehaviourTests:
+        // a reattachment moves the phase to idle, clears phaseObservedAt and phaseEvidenceSource,
+        // and reports no change when the session is already idle and bare. The text checks here
+        // could only prove that those two assignments existed somewhere in the file.
     }
 
     func testHookPidDedupRespectsSharedProcessSessions() throws {
@@ -295,7 +270,9 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
     }
 
     func testPruneReconcilesClaudeTerminalMetadataStatus() throws {
-        let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        // The rule lives with the agent that owns the status file. The store
+        // asks the seam; the claude provider reads the file.
+        let source = try String(contentsOf: agentProviderURL(named: "ClaudeCodeAgentProvider"))
         XCTAssertTrue(
             source.contains("SessionState.readSessionStatus(pid: session.pid)"),
             "Already-tracked Claude rows must re-read session metadata during pruning; discovery-only filtering cannot hide existing rows."
@@ -304,26 +281,31 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
             source.contains("ClaudeCodeSessionMetadataPolicy.isTerminalStatus"),
             "Pruning should treat ended/deactivated Claude metadata status as a dead-session signal even while the process is winding down."
         )
+        let store = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        XCTAssertTrue(
+            store.contains("provider.deadSessionIDs(among: group, now: now)"),
+            "The prune sweep must reach the per-agent rule through the provider seam, once per agent group."
+        )
     }
 
     func testCodexPrunePassesExplicitArchiveRelocationToRetentionPolicy() throws {
-        let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: agentProviderURL(named: "CodexAgentProvider"))
 
         XCTAssertTrue(
-            source.contains("isExplicitlyArchived = thread.isExplicitlyArchived"),
-            "SessionStore must derive the definitive archive signal from the relocated rollout path."
+            source.contains("thread?.isExplicitlyArchived"),
+            "Codex liveness must derive the definitive archive signal from the relocated rollout path."
         )
         XCTAssertTrue(
-            source.contains("isExplicitlyArchived: isExplicitlyArchived"),
+            source.contains("isExplicitlyArchived: thread?.isExplicitlyArchived"),
             "Codex retention must receive the explicit archive signal instead of relying only on sqlite archived state."
         )
     }
 
     func testCursorObservedClaudeRowsPruneThroughTranscriptLivenessPolicy() throws {
-        let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        let source = try String(contentsOf: agentProviderURL(named: "ClaudeCodeAgentProvider"))
         XCTAssertTrue(
-            source.contains("private func shouldPruneCursorObservedClaudeSession"),
-            "Cursor-hosted Claude rows need their own prune gate; PID-alive alone is not a real session signal for claude-vscode."
+            source.contains("func deadSessionIDs(among sessions: [SessionState], now: Date)"),
+            "Cursor-hosted Claude rows need their own liveness answer; PID-alive alone is not a real session signal for claude-vscode."
         )
         XCTAssertTrue(
             source.contains("CursorHostedSessionLivenessPolicy.classify"),
@@ -333,6 +315,38 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
             source.contains("session.origin == .cursorObserved"),
             "The prune path should key on the observed host origin, not only agent id or terminal host."
         )
+    }
+
+    /// The sweep must keep two questions apart: who hosts the process, and
+    /// which agent runs in it. The host answer comes first, and the rows it
+    /// claims never reach a provider.
+    func testPruneAsksTheHostRuleBeforeAnyAgentRule() throws {
+        let store = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        guard let sweep = bracedBlock(in: store, startingAt: "private func pruneDeadSessions") else {
+            return XCTFail("pruneDeadSessions not found")
+        }
+        XCTAssertTrue(
+            sweep.contains("ZedHostedSessionLivenessPolicy.isDead"),
+            "A pooled ACP child means a live pid proves nothing per thread, so the Zed host rule must answer first."
+        )
+        guard let hostIndex = sweep.range(of: "ZedHostedSessionLivenessPolicy.isDead"),
+              let seamIndex = sweep.range(of: "provider.deadSessionIDs") else {
+            return XCTFail("the sweep must apply the host rule and then ask the providers")
+        }
+        XCTAssertTrue(
+            hostIndex.lowerBound < seamIndex.lowerBound,
+            "Agent rules key on an app pid or an active-thread set and would keep a closed Zed thread forever."
+        )
+        XCTAssertTrue(
+            sweep.contains("filter { $0.terminalHost != .zed }"),
+            "Rows the host rule owns must not be handed to a provider as well."
+        )
+        for check in ["agentID == .codex", "agentID == .cursor", "agentID == .claudeCode,\n               let status"] {
+            XCTAssertFalse(
+                sweep.contains("if session.\(check)"),
+                "Liveness detection belongs behind the provider seam, not in a branch inside the sweep."
+            )
+        }
     }
 
     func testCursorObservedDeadProcessActionRemovesInsteadOfEnding() throws {
@@ -397,19 +411,57 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
         )
     }
 
+    /// Codex keeps its tool state in its own rollout transcript, and its parser
+    /// builds the chat items from it. The hook path must not build them a second
+    /// time. That fact used to be written twice, as two Codex branches; it is
+    /// one provider answer now.
+    func testToolTrackingFollowsTheProviderNotAnAgentBranch() throws {
+        let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
+        guard let hookPath = bracedBlock(in: source, startingAt: "private func processHookEvent") else {
+            return XCTFail("processHookEvent not found")
+        }
+        XCTAssertTrue(
+            hookPath.contains("eventProvider?.reportsToolsThroughHooks ?? true"),
+            "The hook path must ask the provider whether its tool state arrives through hooks."
+        )
+        XCTAssertFalse(
+            hookPath.contains("if event.agentID != .codex {"),
+            "Skipping tool tracking is a fact about the agent's record, so the provider states it once."
+        )
+        XCTAssertFalse(
+            hookPath.contains("(event.agentID != .codex || event.tool =="),
+            "The approval placeholder must key on the same provider answer, not on a second Codex branch."
+        )
+        XCTAssertTrue(
+            hookPath.contains("reportsToolsThroughHooks || event.tool == \"AskUserQuestion\""),
+            "The request that asks the user a question still needs a placeholder, because that hook carries the questions."
+        )
+        let provider = try String(contentsOf: agentProviderURL(named: "CodexAgentProvider"))
+        XCTAssertTrue(
+            provider.contains("var reportsToolsThroughHooks: Bool { false }"),
+            "Codex is the agent whose tool state comes from its transcript."
+        )
+    }
+
     func testExistingClaudeRowsReconcileBusyAndIdleMetadata() throws {
         let source = try String(contentsOf: sessionStoreURL(from: URL(fileURLWithPath: #filePath)))
         XCTAssertTrue(
-            source.contains("reconcileClaudeMetadataPhase("),
-            "Periodic rediscovery must reconcile authoritative Claude metadata for sessions already in the store."
+            source.contains("rediscoveredActivity("),
+            "Periodic rediscovery must read the agent's own busy-or-idle record for rows already in the store."
         )
         XCTAssertTrue(
-            source.contains("case (.working, .idle), (.working, .waitingForInput):"),
-            "A passive existing Claude session must become Working when metadata reports busy."
+            source.contains("RediscoveredActivityPhasePolicy.phase("),
+            "The store must apply the shared rule rather than its own phase mapping."
         )
+        // The mapping itself is pinned by RediscoveredActivityPhasePolicyTests:
+        // busy lifts an idle or ready row to working, idle settles a working row
+        // to ready, an agreeing record changes nothing, and no record never
+        // moves a row. Those are behaviour checks, so the text checks that used
+        // to stand in for them are retired here.
+        let provider = try String(contentsOf: agentProviderURL(named: "ClaudeCodeAgentProvider"))
         XCTAssertTrue(
-            source.contains("case (.idle, .processing):"),
-            "Only a previously Working Claude session should become Ready when metadata returns to idle."
+            provider.contains("ClaudeCodeSessionMetadataPolicy.activity(for: SessionState.readSessionStatus(pid: pid))"),
+            "Claude Code keeps that record beside the session, so its provider reads it."
         )
     }
 
@@ -546,7 +598,7 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("Services")
             .appendingPathComponent("Session")
-            .appendingPathComponent("ClaudeSessionMonitor.swift"))
+            .appendingPathComponent("SessionMonitor.swift"))
 
         XCTAssertTrue(
             sessionEventSource.contains("var isTerminalLifecycleStatus"),
@@ -562,15 +614,16 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
         )
         XCTAssertTrue(
             monitorSource.contains("event.isTerminalLifecycleStatus"),
-            "ClaudeSessionMonitor should stop watchers for every terminal hook status, not only literal ended."
+            "SessionMonitor should stop watchers for every terminal hook status, not only literal ended."
         )
     }
 
     func testPermissionContextIsNonisolatedForHookPhaseInference() throws {
         let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
         let sessionPhaseSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("SessionPhase.swift"))
 
         XCTAssertTrue(
@@ -582,12 +635,14 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
     func testSessionValueHelpersUsedByStoreAreNonisolated() throws {
         let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
         let sessionStateSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("SessionState.swift"))
         let sessionPhaseSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("SessionPhase.swift"))
 
         for required in [
@@ -769,18 +824,18 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
 
     func testChatModeProbeDoesNotReadMonitorInstancesFromTimerClosure() throws {
         let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
-        let chatViewSource = try String(contentsOf: root
+        let windowChatSource = try String(contentsOf: root
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
-            .appendingPathComponent("Views")
-            .appendingPathComponent("ChatView.swift"))
+            .appendingPathComponent("Window")
+            .appendingPathComponent("WindowChatView.swift"))
 
         XCTAssertFalse(
-            chatViewSource.contains("capturedMonitor.instances"),
+            windowChatSource.contains("capturedMonitor.instances"),
             "Mode probing runs from a timer closure; it should fetch a Sendable session snapshot through SessionStore instead of reading MainActor monitor state."
         )
         XCTAssertTrue(
-            chatViewSource.contains("SessionStore.shared.getSession(id: capturedSessionId)"),
+            windowChatSource.contains("await SessionStore.shared.currentSessions()"),
             "Mode probing should snapshot the live session through the SessionStore actor before dispatching off-main AX reads."
         )
     }
@@ -873,21 +928,21 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
         )
     }
 
-    func testClaudeSessionMonitorBackgroundHelpersAreNonisolated() throws {
+    func testSessionMonitorBackgroundHelpersAreNonisolated() throws {
         let root = repoRootURL(from: URL(fileURLWithPath: #filePath))
         let monitorSource = try String(contentsOf: root
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("Services")
             .appendingPathComponent("Session")
-            .appendingPathComponent("ClaudeSessionMonitor.swift"))
+            .appendingPathComponent("SessionMonitor.swift"))
 
         XCTAssertTrue(
             monitorSource.contains("nonisolated static func discoverExistingSessions()"),
-            "Session discovery runs from a background queue and must not inherit ClaudeSessionMonitor's MainActor isolation."
+            "Session discovery runs from a background queue and must not inherit SessionMonitor's MainActor isolation."
         )
         XCTAssertTrue(
             monitorSource.contains("nonisolated private static func writeLog"),
-            "Discovery/fallback logging runs from background queues and must not inherit ClaudeSessionMonitor's MainActor isolation."
+            "Discovery/fallback logging runs from background queues and must not inherit SessionMonitor's MainActor isolation."
         )
     }
 
@@ -960,8 +1015,9 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
             .appendingPathComponent("Navigation")
             .appendingPathComponent("PermissionModeCycler.swift"))
         let toolResultDataSource = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("ToolResultData.swift"))
 
         for required in [
@@ -1093,6 +1149,14 @@ final class SessionStorePhaseMutationAuditTests: XCTestCase {
             source.contains("reportedHookPhase(for: newPhase)"),
             "SessionStore should map SessionPhase into the pure hook-phase policy instead of open-coding phase cases."
         )
+    }
+
+    private func agentProviderURL(named name: String) -> URL {
+        repoRootURL(from: URL(fileURLWithPath: #filePath))
+            .appendingPathComponent("AgentVisor")
+            .appendingPathComponent("Services")
+            .appendingPathComponent("Agents")
+            .appendingPathComponent("\(name).swift")
     }
 
     private func sessionStoreURL(from testFile: URL) -> URL {

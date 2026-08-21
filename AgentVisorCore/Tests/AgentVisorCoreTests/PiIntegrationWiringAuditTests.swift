@@ -32,7 +32,12 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
         XCTAssertTrue(settings.contains("Pi — Not detected"))
         XCTAssertTrue(settings.contains("Pi — Observing"))
         XCTAssertTrue(settings.contains("Pi — Connected"))
-        XCTAssertTrue(store.contains("PiIntegrationMonitor.shared.recordHeartbeat"))
+        // The store tells the provider that its runtime reported in; the Pi
+        // provider owns the flag, because the flag is Pi's own note.
+        XCTAssertTrue(store.contains("noteRuntimeReportedIn()"))
+        let piProvider = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/Services/Agents/PiAgentProvider.swift"))
+        XCTAssertTrue(piProvider.contains("PiIntegrationMonitor.shared.recordHeartbeat"))
     }
 
     func testEndedPiSessionCanRecoverFromLivePostEndTranscriptEvidence() throws {
@@ -66,7 +71,10 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
         XCTAssertTrue(store.contains("case .pi:"))
         XCTAssertTrue(store.contains("return s.phaseEvidenceSource != .hook"))
         XCTAssertTrue(store.contains("PiConversationParser.shared.lastTurnMarker"))
-        XCTAssertTrue(store.contains("event.agentID == .pi && event.event == \"SessionStart\""))
+        // The one hook event that may still set the phase is named by
+        // SessionRebindCandidatePolicy, which its own tests cover. The store must
+        // read that name rather than repeat the agent-and-event test.
+        XCTAssertTrue(store.contains("rebindEvidence == .exactSessionStart"))
     }
 
     func testSessionFileWatcherUsesProviderResolvedPiTranscript() throws {
@@ -264,25 +272,21 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
 
     func testPiComposerUsesProviderAwareImagePathSubmission() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
-        let state = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/Models/SessionState.swift"
-        ))
         let sender = try String(contentsOf: root.appendingPathComponent(
             "AgentVisor/Services/Chat/SessionSender.swift"
         ))
         let imageSender = try String(contentsOf: root.appendingPathComponent(
             "AgentVisor/Services/Chat/ImagePasteSender.swift"
         ))
-        let chat = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Views/ChatView.swift"
-        ))
         let composer = try String(contentsOf: root.appendingPathComponent(
             "AgentVisor/UI/Window/WindowComposer.swift"
         ))
 
-        XCTAssertTrue(state.contains("var imageSubmissionRoute: ImageSubmissionRoute"))
-        XCTAssertTrue(state.contains("ImageSubmissionRoutePolicy.route("))
-        for source in [chat, composer] {
+        // The route itself is covered by behaviour now, in SessionStateBehaviourTests: no terminal
+        // gives no route, Claude with a terminal attaches, Pi with a terminal prompts with a path,
+        // and Cursor has no route at all.
+
+        for source in [composer] {
             XCTAssertTrue(source.contains("guard session.imageSubmissionRoute != .unavailable else { return }"))
             XCTAssertTrue(source.contains("ImageAttachmentRetentionPolicy.cleanupDelay("))
             XCTAssertFalse(source.contains("guard session.agentID != .pi else { return }"))

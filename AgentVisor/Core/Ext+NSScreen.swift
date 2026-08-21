@@ -8,6 +8,13 @@
 import AppKit
 
 extension NSScreen {
+    /// Stable identity of the underlying display. Geometry captured for a
+    /// display is only valid while that same display still reports the same
+    /// frame, so click routing needs the identity, not just the frame.
+    var displayID: CGDirectDisplayID? {
+        deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+    }
+
     /// Returns the size of the notch on this screen (pixel-perfect using macOS APIs)
     var notchSize: CGSize {
         guard safeAreaInsets.top > 0 else {
@@ -35,7 +42,7 @@ extension NSScreen {
 
     /// Whether this is the built-in display
     var isBuiltinDisplay: Bool {
-        guard let screenNumber = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
+        guard let screenNumber = displayID else {
             return false
         }
         return CGDisplayIsBuiltin(screenNumber) != 0

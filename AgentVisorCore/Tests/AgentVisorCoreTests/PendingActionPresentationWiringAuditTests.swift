@@ -5,7 +5,7 @@ final class PendingActionPresentationWiringAuditTests: XCTestCase {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let event = try source(root, "AgentVisor/Models/SessionEvent.swift")
         let hook = try source(root, "AgentVisor/Services/Hooks/HookSocketServer.swift")
-        let pills = try source(root, "AgentVisor/UI/Components/NotchSideContent.swift")
+        let pills = try source(root, "AgentVisor/UI/Components/PillStripContent.swift")
         let sidebar = try source(root, "AgentVisor/UI/Window/WindowSidebarRow.swift")
 
         XCTAssertTrue(event.contains("PendingActionPresentation.storedToolName"))

@@ -218,20 +218,40 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
             readers.leave()
         }
 
-        let deadline = timeout.map { DispatchTime.now() + $0 } ?? .distantFuture
-        let timedOut = termination.wait(timeout: deadline) == .timedOut
+        // Every wait has a deadline. A child that never exits used to hold this
+        // thread for the life of the app; now it becomes a missing answer, which
+        // every caller already handles, because a command can also fail.
+        let seconds = SubprocessDeadlinePolicy.deadline(requested: timeout)
+        let timedOut = termination.wait(timeout: .now() + seconds) == .timedOut
         if timedOut {
+            Self.logger.warning(
+                "Gave up after \(Int(seconds))s: \(executable, privacy: .public)"
+            )
             process.terminate()
             if termination.wait(timeout: .now() + 1) == .timedOut {
                 Darwin.kill(process.processIdentifier, SIGKILL)
                 _ = termination.wait(timeout: .now() + 1)
             }
         }
-        readers.wait()
+
+        // A child can exit while one of its descendants keeps stdout or stderr
+        // open. Draining without a deadline would then defeat the process
+        // deadline above. On process timeout, close our read ends immediately;
+        // otherwise allow one short drain before closing a retained pipe.
+        if timedOut {
+            stdoutPipe.fileHandleForReading.closeFile()
+            stderrPipe.fileHandleForReading.closeFile()
+        }
+        let readerDrainTimedOut = readers.wait(timeout: .now() + 1) == .timedOut
+        if readerDrainTimedOut && !timedOut {
+            stdoutPipe.fileHandleForReading.closeFile()
+            stderrPipe.fileHandleForReading.closeFile()
+            _ = readers.wait(timeout: .now() + 1)
+        }
         process.terminationHandler = nil
 
-        if timedOut {
-            Self.logger.error("Command timed out: \(executable, privacy: .public)")
+        if timedOut || readerDrainTimedOut {
+            Self.logger.error("Command or output drain timed out: \(executable, privacy: .public)")
             return .failure(.timedOut(command: executable))
         }
 

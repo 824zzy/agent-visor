@@ -45,6 +45,14 @@ public struct SessionHoverDetailPresentation: Equatable, Sendable {
 }
 
 public enum SessionHoverDetailPolicy {
+    /// The source line for a session, for example "Claude Code · Ghostty".
+    ///
+    /// The popover holds a session, so it uses this form. The field form stays for the tests
+    /// that cover every agent and host pair without building a session for each one.
+    public static func sourceDisplayName(session: SessionState) -> String {
+        sourceDisplayName(agentID: session.agentID, terminalHost: session.terminalHost)
+    }
+
     public static func sourceDisplayName(
         agentID: AgentID,
         terminalHost: TerminalHost?

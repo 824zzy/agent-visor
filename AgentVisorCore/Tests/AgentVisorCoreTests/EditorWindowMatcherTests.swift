@@ -20,7 +20,7 @@ final class EditorWindowMatcherTests: XCTestCase {
     // appears as the second em-dash-separated segment.
     func testTitleWithFilenamePrefixMatchesByLastSegment() {
         let result = EditorWindowMatcher.bestMatch(
-            titles: ["NotchView.swift — agent-visor"],
+            titles: ["PillStripView.swift — agent-visor"],
             projectName: "agent-visor"
         )
         XCTAssertEqual(result, 0)
@@ -68,7 +68,7 @@ final class EditorWindowMatcherTests: XCTestCase {
     // middle segment is still the workspace name and should match.
     func testCodeWorkspaceSuffixMatches() {
         let result = EditorWindowMatcher.bestMatch(
-            titles: ["NotchView.swift — agent-visor — [Workspace]"],
+            titles: ["PillStripView.swift — agent-visor — [Workspace]"],
             projectName: "agent-visor"
         )
         XCTAssertEqual(result, 0)

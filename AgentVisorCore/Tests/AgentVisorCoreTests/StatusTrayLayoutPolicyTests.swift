@@ -3,6 +3,23 @@ import XCTest
 @testable import AgentVisorCore
 
 final class StatusTrayLayoutPolicyTests: XCTestCase {
+    func testObservedLeftEdgeIgnoresStatusItemsOnOtherDisplays() {
+        let externalDisplay = CGRect(x: -880, y: -1600, width: 3_840, height: 1_600)
+        let statusItemFrames = [
+            CGRect(x: 1_411, y: 0, width: 67, height: 39),
+            CGRect(x: 2_313, y: -1_600, width: 67, height: 30),
+            CGRect(x: 2_380, y: -1_600, width: 38, height: 30),
+        ]
+
+        XCTAssertEqual(
+            StatusTrayLayoutPolicy.observedLeftEdge(
+                targetScreenRect: externalDisplay,
+                statusItemFrames: statusItemFrames
+            ),
+            3_193
+        )
+    }
+
     func testUnavailableObservationKeepsLastReliableEdgeOnSameScreen() {
         let initial = StatusTrayLayoutPolicy.begin(
             targetScreenID: "display-4",

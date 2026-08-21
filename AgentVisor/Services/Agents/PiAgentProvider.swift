@@ -8,6 +8,24 @@ import AgentVisorCore
 /// The extension is never a discovery prerequisite. Existing sessions remain
 /// browsable and terminal-owned sessions remain navigable if it is absent.
 struct PiAgentProvider: AgentProvider {
+    /// Discovery already reads every Pi transcript header. Keep the paths it
+    /// proves, so the synchronous store merge does not repeat that whole tree
+    /// walk once per Pi row.
+    nonisolated(unsafe) private static var transcriptURLBySessionID: [String: URL] = [:]
+
+    nonisolated private struct TranscriptNameSignature: Equatable {
+        let path: String
+        let byteCount: UInt64
+        let modifiedAt: Date
+    }
+
+    nonisolated private struct CachedTranscriptName {
+        let signature: TranscriptNameSignature
+        let name: String?
+    }
+
+    nonisolated(unsafe) private static var transcriptNameBySessionID: [String: CachedTranscriptName] = [:]
+    nonisolated private static let transcriptURLCacheLock = NSLock()
     nonisolated let id: AgentID = .pi
     nonisolated let displayName: String = "Pi"
     nonisolated let processNameFilter: String = "pi"
@@ -40,11 +58,111 @@ struct PiAgentProvider: AgentProvider {
         "--" + cwd.split(separator: "/").joined(separator: "-") + "--"
     }
 
+    nonisolated func transcriptURLForReading(sessionId: String, cwd: String) async -> URL {
+        await BlockingWork.run("piTranscriptURL") {
+            transcriptURL(sessionId: sessionId, cwd: cwd)
+        }
+    }
+
     nonisolated func transcriptURL(sessionId: String, cwd: String) -> URL {
-        Self.sessionFiles().first { $0.metadata.sessionId == sessionId }?.url
+        if let cached = Self.cachedTranscriptURL(sessionId: sessionId) {
+            return cached
+        }
+        // A hook can introduce a session before the next discovery. Keep the old
+        // fallback for that case: one scan finds the path and also refreshes the
+        // cache for every other Pi session.
+        return Self.sessionFiles().first { $0.metadata.sessionId == sessionId }?.url
             ?? sessionMetadataDirectory
                 .appendingPathComponent(projectDirName(forCwd: cwd))
                 .appendingPathComponent("\(sessionId).jsonl")
+    }
+
+    /// Discovery already has one exact path per visible Pi session. Scan only
+    /// record links and session names, then cache by file signature. The next
+    /// 30-second discovery skips unchanged files.
+    nonisolated func prewarmMetadata(sessionIds: [String]) {
+        Self.transcriptURLCacheLock.lock()
+        let paths = sessionIds.compactMap { id in
+            Self.transcriptURLBySessionID[id].map { (id, $0) }
+        }
+        Self.transcriptURLCacheLock.unlock()
+
+        for (sessionId, url) in paths {
+            Self.refreshTranscriptName(sessionId: sessionId, url: url)
+        }
+    }
+
+    nonisolated func resolveSessionName(sessionId: String, pid: Int?) -> String? {
+        Self.cachedTranscriptName(sessionId: sessionId)
+    }
+
+    nonisolated private static func refreshTranscriptName(sessionId: String, url: URL) {
+        guard let signature = transcriptNameSignature(url: url) else { return }
+        transcriptURLCacheLock.lock()
+        transcriptURLBySessionID[sessionId] = url
+        let isCurrent = transcriptNameBySessionID[sessionId]?.signature == signature
+        transcriptURLCacheLock.unlock()
+        guard !isCurrent else { return }
+
+        let name = PiTranscriptActiveNameReader.read(path: url.path)
+        // Do not bind an answer to a newer file version than the one it read.
+        // A hook during the scan changes the signature and the next event retries.
+        guard transcriptNameSignature(url: url) == signature else { return }
+        cacheTranscriptName(
+            sessionId: sessionId,
+            url: url,
+            signature: signature,
+            name: name
+        )
+    }
+
+    nonisolated private static func cacheTranscriptName(
+        sessionId: String,
+        url: URL,
+        signature: TranscriptNameSignature,
+        name: String?
+    ) {
+        transcriptURLCacheLock.lock()
+        transcriptURLBySessionID[sessionId] = url
+        transcriptNameBySessionID[sessionId] = CachedTranscriptName(
+            signature: signature,
+            name: name
+        )
+        transcriptURLCacheLock.unlock()
+    }
+
+    nonisolated private static func transcriptNameSignature(url: URL) -> TranscriptNameSignature? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber,
+              let modifiedAt = attributes[.modificationDate] as? Date else { return nil }
+        return TranscriptNameSignature(
+            path: url.path,
+            byteCount: size.uint64Value,
+            modifiedAt: modifiedAt
+        )
+    }
+
+    nonisolated private static func cachedTranscriptName(sessionId: String) -> String? {
+        transcriptURLCacheLock.lock()
+        let name = transcriptNameBySessionID[sessionId]?.name
+        transcriptURLCacheLock.unlock()
+        return name
+    }
+
+    nonisolated private static func cachedTranscriptURL(sessionId: String) -> URL? {
+        transcriptURLCacheLock.lock()
+        let cached = transcriptURLBySessionID[sessionId]
+        transcriptURLCacheLock.unlock()
+        guard let cached else { return nil }
+        guard FileManager.default.fileExists(atPath: cached.path) else {
+            transcriptURLCacheLock.lock()
+            if transcriptURLBySessionID[sessionId] == cached {
+                transcriptURLBySessionID.removeValue(forKey: sessionId)
+            }
+            transcriptURLCacheLock.unlock()
+            return nil
+        }
+        return cached
     }
 
     // MARK: - Availability and installation
@@ -261,6 +379,16 @@ struct PiAgentProvider: AgentProvider {
                 headerByteCount: header.byteCount
             ))
         }
+        // Preserve the enumerator's first match for duplicate ids, which is the
+        // same answer `transcriptURL` gave before the cache existed.
+        let urls = result.reduce(into: [String: URL]()) { paths, file in
+            if paths[file.metadata.sessionId] == nil {
+                paths[file.metadata.sessionId] = file.url
+            }
+        }
+        transcriptURLCacheLock.lock()
+        transcriptURLBySessionID = urls
+        transcriptURLCacheLock.unlock()
         return result
     }
 
@@ -333,19 +461,28 @@ struct PiAgentProvider: AgentProvider {
     }
 
     nonisolated func loadConversationInfo(sessionId: String, cwd: String) async -> ConversationInfo {
-        let path = transcriptURL(sessionId: sessionId, cwd: cwd).path
-        return await PiConversationSummary.shared.loadConversationInfo(
-            sessionId: sessionId,
-            transcriptPath: path
-        )
+        let path = (await transcriptURLForReading(sessionId: sessionId, cwd: cwd)).path
+        // Bounded: a scan asks for one of these per row, and this one reads a
+        // transcript from disk.
+        return await BlockingWork.limited("piSummary") {
+            await PiConversationSummary.shared.loadConversationInfo(
+                sessionId: sessionId,
+                transcriptPath: path
+            )
+        }
     }
 
     nonisolated func fileSync(sessionId: String, cwd: String) async -> FileSyncOutcome {
-        let path = transcriptURL(sessionId: sessionId, cwd: cwd).path
+        let url = transcriptURL(sessionId: sessionId, cwd: cwd)
         let result = await PiConversationParser.shared.loadHistory(
             sessionId: sessionId,
-            transcriptPath: path
+            transcriptPath: url.path
         )
+        if result.fileChange != nil {
+            await BlockingWork.run("piSessionName") {
+                Self.refreshTranscriptName(sessionId: sessionId, url: url)
+            }
+        }
         return result.didChange ? .fullReplay(result.history) : .noChange
     }
 
@@ -354,4 +491,82 @@ struct PiAgentProvider: AgentProvider {
     }
 
     nonisolated func overwritesModelName() -> Bool { true }
+
+    // MARK: - Pi's own notes
+
+    /// Pi ships a bundled extension that reports over a unix socket. One event
+    /// of any kind proves the extension is loaded and reporting, which the
+    /// integration health check reads. A dropped event still proves it, so the
+    /// store calls this before any rule can drop one.
+    nonisolated func noteRuntimeReportedIn() async {
+        await MainActor.run {
+            PiIntegrationMonitor.shared.recordHeartbeat()
+        }
+    }
+
+    /// Keep the record used to restore Pi sessions after a reboot.
+    ///
+    /// A terminal status ends the record. A live event marks the session live,
+    /// and a session running in Ghostty with its own process and tty becomes a
+    /// restoration candidate, because those three facts are what a restore
+    /// needs to reopen it. Anything else drops the candidate: a session with no
+    /// tty or no process cannot be reopened, and keeping it would restore a row
+    /// that cannot run.
+    ///
+    /// A heartbeat must not refresh the terminal topology. It arrives every ten
+    /// seconds and would keep re-reading window layout for no new information.
+    nonisolated func noteHookEvent(_ event: HookEvent, session: SessionState) async {
+        let sessionId = session.sessionId
+        let eventPath = event.sessionFile
+        let cwd = session.cwd
+        await BlockingWork.run("piSessionName") {
+            let url = eventPath.map(URL.init(fileURLWithPath:))
+                ?? transcriptURL(sessionId: sessionId, cwd: cwd)
+            Self.refreshTranscriptName(sessionId: sessionId, url: url)
+        }
+        if event.isTerminalLifecycleStatus {
+            await MainActor.run {
+                PiRebootRestorationManager.shared.noteExactSessionEnded(sessionID: sessionId)
+                PiRebootRestorationManager.shared.end(sessionID: sessionId)
+            }
+            return
+        }
+        await MainActor.run {
+            PiRebootRestorationManager.shared.noteExactLiveSession(sessionID: sessionId)
+        }
+        guard session.terminalHost == .ghostty,
+              session.origin == .terminal,
+              let pid = session.pid, pid > 0,
+              let tty = session.tty, !tty.isEmpty
+        else {
+            await MainActor.run {
+                PiRebootRestorationManager.shared.removeRestorationCandidate(sessionID: sessionId)
+            }
+            return
+        }
+        let sessionFile = event.sessionFile
+            ?? transcriptURL(sessionId: sessionId, cwd: session.cwd).path
+        let allowTopologyRefresh = !PiSessionHeartbeatPolicy.isHeartbeat(
+            agentID: event.agentID,
+            lifecycleEvent: event.event
+        )
+        let sessionName = Self.cachedTranscriptName(sessionId: sessionId)
+            ?? session.sessionName
+        await MainActor.run {
+            PiRebootRestorationManager.shared.recordAcceptedSession(
+                sessionID: sessionId,
+                sessionFile: sessionFile,
+                cwd: cwd,
+                sessionName: sessionName,
+                tty: tty,
+                allowTopologyRefresh: allowTopologyRefresh
+            )
+        }
+    }
+
+    nonisolated func noteSessionGone(sessionId: String) async {
+        await MainActor.run {
+            PiRebootRestorationManager.shared.end(sessionID: sessionId)
+        }
+    }
 }

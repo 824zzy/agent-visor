@@ -2,21 +2,11 @@
 //  PillsStripWindow.swift
 //  AgentVisor
 //
-//  Thin always-visible window covering the menu-bar strip on the notch
-//  screen. Hosts a `NotchView` in `.pillsOnlyOpenState` so the user
-//  keeps seeing session pills while the panel is open and inset below
-//  the menu bar.
+//  A thin overlay that renders the menu-bar pill strip on the selected display.
 //
-//  Why a separate window: the primary `NotchWindow` shrinks to the
-//  panel rect when opened (`ignoresMouseEvents = false` for panel
-//  interaction), so it no longer covers the menu-bar strip. The first
-//  attempt at restoring strip pills tried to extend the primary
-//  window upward, but `level = .mainMenu+3 + ignoresMouseEvents=false`
-//  re-triggered the historical "top-half freeze" — the window swallowed
-//  every click in the menu-bar area. A dedicated `ignoresMouseEvents=true`
-//  window dodges that entirely; pill clicks are caught the same way the
-//  closed-state pills already are (global `EventMonitor` →
-//  `PillBarHitTest.resolve` → direct navigation).
+//  The window ignores mouse events. A global monitor resolves clicks against the
+//  layout that PillStripView rendered, then routes the selected session to its
+//  owning app or to Agent Visor Chat.
 //
 
 import AppKit
@@ -58,7 +48,7 @@ class PillsStripPanel: NSPanel {
 
         // CRITICAL: never accept mouse events directly — clicks pass
         // through to the menu bar (or whatever app owns the area) and
-        // a global `EventMonitor` in `NotchView.handleSideClick` catches
+        // a global `EventMonitor` in `PillStripView.handleSideClick` catches
         // hits on session pills. Mirrors the closed-state main window.
         ignoresMouseEvents = true
 
@@ -69,17 +59,16 @@ class PillsStripPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    // The notch view's accessibility surface lives in the main panel.
-    // The strip panel exists only as a render canvas — opt out so AX
-    // probes targeting the menu bar don't deadlock against our SwiftUI
-    // hierarchy (same reasoning as `NotchPanel`).
+    // A separate menu-bar status item provides the strip's accessibility
+    // surface. This panel exists only as a render canvas, so opt out and let AX
+    // probes targeting the menu bar do not enter the SwiftUI render hierarchy.
     override func isAccessibilityElement() -> Bool { false }
     override func accessibilityHitTest(_ point: NSPoint) -> Any? { nil }
 }
 
 class PillsStripWindowController: NSWindowController {
-    let viewModel: NotchViewModel
-    let sessionMonitor: ClaudeSessionMonitor
+    let viewModel: PillStripViewModel
+    let sessionMonitor: SessionMonitor
     private let screen: NSScreen
     private var backingPropertiesObserver: Any?
     private var didChangeScreenObserver: Any?
@@ -94,7 +83,7 @@ class PillsStripWindowController: NSWindowController {
     }
 
     init(screen: NSScreen) {
-        self.sessionMonitor = ClaudeSessionMonitor()
+        self.sessionMonitor = SessionMonitor()
         self.screen = screen
 
         let screenFrame = screen.frame
@@ -105,22 +94,19 @@ class PillsStripWindowController: NSWindowController {
             width: notchSize.width,
             height: notchSize.height
         )
-        // Window height is unused by the pills strip itself but the
-        // viewModel's geometry helpers expect a non-zero panel height.
-        // The legacy NotchWindowController used 750; we keep the same
-        // value so geometry math stays identical for the pills layout.
-        self.viewModel = NotchViewModel(
+        // Window height is unused by the pills strip itself.
+        self.viewModel = PillStripViewModel(
             deviceNotchRect: deviceNotchRect,
             screenRect: screenFrame,
             visibleFrame: screen.visibleFrame,
-            windowHeight: 750,
-            hasPhysicalNotch: screen.hasPhysicalNotch
+            hasPhysicalNotch: screen.hasPhysicalNotch,
+            displayID: screen.displayID
         )
 
         let notchHeight = notchSize.height
 
         // Strip covers the top notch-height of the screen, full width.
-        // NotchView's body positions content at the top with
+        // PillStripView's body positions content at the top with
         // `alignment: .top`, so it naturally fills this strip.
         let stripFrame = NSRect(
             x: screenFrame.origin.x,
@@ -138,21 +124,11 @@ class PillsStripWindowController: NSWindowController {
 
         super.init(window: panel)
 
-        // `.pillsOnlyOpenState` is the lighter mode: it renders pills
-        // and skips the panel layout (`notchLayout` / `contentView`)
-        // entirely. With the chat panel retired, the heavier `.full`
-        // mode pulled in expensive menu-owner and tray scans on every
-        // body re-render — pinning CPU at
-        // 20-100% during streaming. Switching to the lighter variant
-        // is correct because the panel never opens and the only role
-        // left is "render the pills row in the menu-bar strip."
-        // Bootstrap (sessionMonitor.startMonitoring + click monitor +
-        // prioritySessionProvider) was previously gated on `.full`;
-        // it now runs unconditionally inside `NotchView.onAppear`.
+        // This is the only PillStripView. Its onAppear starts session monitoring
+        // and the global click monitor.
         let hostingController = NSHostingController(
-            rootView: NotchView(
+            rootView: PillStripView(
                 viewModel: viewModel,
-                displayMode: .pillsOnlyOpenState,
                 sessionMonitor: sessionMonitor
             )
         )
@@ -164,19 +140,15 @@ class PillsStripWindowController: NSWindowController {
         // Opt out of the screen-top safe-area inset. The strip window
         // sits across the menu-bar / hardware-notch region, which on
         // notched MacBooks reports `safeAreaInsets.top ≈ 32pt`. Without
-        // this, SwiftUI insets the pillsOnlyOpenState NotchView's
-        // content downward by that 32pt, so each open/close cycle
-        // visibly shifts the rendered pill row vs. mainWindow's pills
-        // (which already opt out via NotchViewController's hosting
-        // setup). Matches the equivalent line on the main hosting view.
+        // this, SwiftUI insets the PillStripView's content downward by that
+        // 32pt, so the rendered pill row visibly shifts.
         if #available(macOS 13.3, *) {
             hostingController.safeAreaRegions = []
         }
         panel.contentViewController = hostingController
         panel.setFrame(stripFrame, display: false)
 
-        // Mirror the protection NotchViewController installs on the
-        // main panel: when the window's backingScaleFactor or screen
+        // Force a redraw when the window's backing scale or screen
         // changes (external-monitor reconfiguration, color profile
         // flip, sleep+wake of just the external display), AppKit
         // doesn't always re-rasterize the existing NSHostingController
@@ -204,5 +176,37 @@ class PillsStripWindowController: NSWindowController {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Retire this controller for good.
+    ///
+    /// `WindowManager` rebuilds the strip whenever the pill display's identity
+    /// or frame changes. Dropping the reference is not enough: the closed panel
+    /// kept its `NSHostingController`, and therefore the SwiftUI view and the
+    /// `PillStripViewModel`, alive for the rest of the process — so a superseded
+    /// controller went on observing workspace events and answering click
+    /// questions with geometry from the previous display arrangement.
+    ///
+    /// Clearing `contentViewController` unmounts the SwiftUI view, which runs
+    /// its `onDisappear` teardown (global click monitors, menu-layout
+    /// coordinator), then the view model drops its own subscriptions.
+    ///
+    /// The `SessionMonitor` this controller owns is intentionally left
+    /// running: `stopMonitoring()` also stops process-wide singletons
+    /// (`HookSocketServer`, `CodexMetadataWatcher`) that the replacement
+    /// controller depends on. Session-monitor ownership needs its own change.
+    func teardown() {
+        if let token = backingPropertiesObserver {
+            NotificationCenter.default.removeObserver(token)
+            backingPropertiesObserver = nil
+        }
+        if let token = didChangeScreenObserver {
+            NotificationCenter.default.removeObserver(token)
+            didChangeScreenObserver = nil
+        }
+        window?.contentViewController = nil
+        viewModel.teardown()
+        window?.orderOut(nil)
+        window?.close()
     }
 }

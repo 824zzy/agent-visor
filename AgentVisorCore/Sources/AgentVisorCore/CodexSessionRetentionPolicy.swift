@@ -11,14 +11,15 @@ import Foundation
 /// does not: Codex can set it on background-research GUI threads that are still
 /// writing, so those remain eligible while the active selector confirms them.
 public enum CodexSessionRetentionPolicy {
+    /// Whether a stored Codex session survives a pruning pass.
+    ///
+    /// The session supplies its own id, tty, pid and last activity. Everything else describes
+    /// the world outside the session, so it stays an argument.
     public static func shouldKeep(
-        sessionId: String,
-        tty: String?,
-        pid: Int?,
+        session: SessionState,
         codexAppPid: Int?,
         isNonAppPidAlive: Bool,
         activeGUIThreadIds: Set<String>,
-        lastActivity: Date,
         now: Date,
         observedWindowSeconds: TimeInterval,
         isKnownArchived: Bool = false,
@@ -31,18 +32,18 @@ public enum CodexSessionRetentionPolicy {
         // Archived ⇒ drop, UNLESS the thread is still in the active set: a
         // running-archived background thread (fresh rollout) the selector just
         // surfaced. Keeping it here avoids pruning what discovery added.
-        if isKnownArchived && !activeGUIThreadIds.contains(sessionId) {
+        if isKnownArchived && !activeGUIThreadIds.contains(session.sessionId) {
             return false
         }
 
-        if tty == nil {
-            if activeGUIThreadIds.contains(sessionId) {
+        if session.tty == nil {
+            if activeGUIThreadIds.contains(session.sessionId) {
                 return true
             }
-            return now.timeIntervalSince(lastActivity) <= observedWindowSeconds
+            return now.timeIntervalSince(session.lastActivity) <= observedWindowSeconds
         }
 
-        guard let pid, pid != 0, pid != codexAppPid else {
+        guard let pid = session.pid, pid != 0, pid != codexAppPid else {
             return false
         }
         return isNonAppPidAlive

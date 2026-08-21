@@ -17,15 +17,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowManager: WindowManager?
     private var screenObserver: ScreenObserver?
     private var updateCheckTimer: Timer?
-    /// Phase 0 of the window-mode rollout. While `WindowModeFlag.isEnabled()`
-    /// is false this stays nil and only the notch panel is created. While
-    /// true the main window is built alongside the notch so we can develop
-    /// it incrementally without disturbing existing users.
+    /// The Sessions browser, Chat, Settings, and Updates window.
     private var mainWindowController: MainWindowController?
 
     static var shared: AppDelegate?
     let updater: SPUUpdater
-    private let userDriver: NotchUserDriver
+    private let userDriver: UpdateUserDriver
     private let updaterDelegate: SparkleQuarantineFix
 
     func openSettings() {
@@ -62,15 +59,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ensureMainWindowController().showSession(sessionId)
     }
 
-    /// Live `ClaudeSessionMonitor` owned by the pills-strip controller.
+    /// Live `SessionMonitor` owned by the pills-strip controller.
     /// Phase 4 reuses it to dispatch approve/deny from notification
     /// actions, since there's no `.shared` instance.
-    var sessionMonitor: ClaudeSessionMonitor? {
+    var sessionMonitor: SessionMonitor? {
         windowManager?.pillsStripController?.sessionMonitor
     }
 
     override init() {
-        userDriver = NotchUserDriver()
+        userDriver = UpdateUserDriver()
         updaterDelegate = SparkleQuarantineFix()
         updater = SPUUpdater(
             hostBundle: Bundle.main,
@@ -140,11 +137,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSWorkspace.willPowerOffNotification,
             object: nil
         )
-        // Trigger the "Agent Visor wants to control X" TCC prompts now
-        // (before the notch is open) so the system alert lands on top of
-        // the desktop instead of behind the high-windowLevel notch panel.
-        // Without this, the first AppleScript call happens when the user
-        // types in chat — and the alert is unreachable, forcing a pkill.
+        // Ask for terminal automation permission during launch, before the
+        // user's first send is interrupted by a system prompt.
         TCCPrewarm.start()
         // Tail Cursor's claude-code extension logs to mirror the
         // auto-generated session titles (the names users see on chat
@@ -191,27 +185,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         PermissionHealthMonitor.shared.start()
 
         windowManager = WindowManager()
-        _ = windowManager?.setupNotchWindow()
+        _ = windowManager?.setupPillsStrip()
         // Monitoring is app lifecycle, not pill visibility. Start it even when
         // the strip is hidden so the hook socket can collect exact live Pi
         // owners before reboot restoration claims a prior generation.
         sessionMonitor?.startMonitoring()
 
-        // Window mode is now the default workspace. The notch panel is
-        // dead code in this build — only the menu-bar pills strip from
-        // WindowManager survives. Approval banners + dock badge are
-        // unconditional now.
+        // The Sessions browser is the main workspace. The menu-bar pill strip
+        // remains the ambient status and fastest return surface.
         _ = ensureMainWindowController()
         requestMainWindowActivation(.appLaunch)
         ApprovalNotifier.shared.start()
 
-        // Bridge legacy notch-panel "open" call sites (notch-shape tap,
-        // overflow pill, etc.) to the main window. Without this the
-        // pills-strip click-on-notch geometry handler would still
-        // invoke `notchOpen` via `NotchViewModel.handleMouseDown` and
-        // pop an empty panel container under the menu bar.
-        NotchPanelRedirect.openMainWindow = { [weak self] in
-            DispatchQueue.main.async { self?.requestMainWindowActivation(.notchClick) }
+        // The menu-bar status item summons the Sessions browser through the
+        // same activation policy as other stable entry points.
+        SessionBrowserRedirect.openMainWindow = { [weak self] in
+            DispatchQueue.main.async { self?.requestMainWindowActivation(.menuBarStatusItem) }
         }
         PillAccessibilityStatusItemController.shared.start()
 
@@ -219,16 +208,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.handleScreenChange()
         }
 
-        // AV_PROBE_SCALE_NOTIF / AV_PROBE_LOAD probes targeted the
-        // legacy notch panel window and have been retired with it.
-
-        // Phase 2: settings-driven trigger. The picker writes through to
-        // AppSettings + HotkeyManager.applyTrigger directly, so we just
-        // apply the persisted choice on launch. Phase 3 will add an
-        // arbitrary chord recorder.
+        // The picker writes through to AppSettings and HotkeyManager, so launch
+        // only needs to apply the saved trigger.
         HotkeyManager.shared.onTrigger = { [weak self] in
-            // Hotkey toggles the main window. The notch chat panel is
-            // gone — the menu-bar pills strip remains via WindowManager.
+            // The global hotkey toggles the Sessions browser.
             self?.requestMainWindowActivation(.hotkey)
         }
         HotkeyManager.shared.applyTrigger(AppSettings.hotkeyTrigger)
@@ -253,7 +236,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleScreenChange() {
-        _ = windowManager?.setupNotchWindow()
+        _ = windowManager?.setupPillsStrip()
     }
 
     /// Dock-icon click / Cmd-Tab return when no main window is

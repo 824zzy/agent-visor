@@ -4,7 +4,7 @@ final class PillMovementGraceWiringAuditTests: XCTestCase {
     func testRecentNavigationDefersRecencyCommitInsteadOfReorderingImmediately() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let source = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Components/NotchSideContent.swift"
+            "AgentVisor/UI/Components/PillStripContent.swift"
         ))
 
         XCTAssertTrue(source.contains("session.phase == .idle"))
@@ -17,7 +17,7 @@ final class PillMovementGraceWiringAuditTests: XCTestCase {
     func testDeferredRecentCommitPublishesTheMoveAtItsDeadline() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let source = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Components/NotchSideContent.swift"
+            "AgentVisor/UI/Components/PillStripContent.swift"
         ))
 
         XCTAssertTrue(source.contains("DispatchQueue.main.asyncAfter"))

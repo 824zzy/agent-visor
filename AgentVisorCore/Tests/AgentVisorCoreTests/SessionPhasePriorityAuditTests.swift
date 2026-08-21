@@ -21,7 +21,7 @@ final class SessionPhasePriorityAuditTests: XCTestCase {
     func testWindowUsesStateSectionsAndPillsUseDisplayPriority() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let mainWindow = try String(contentsOf: mainWindowViewModelURL(from: testFile))
-        let notchSideContent = try String(contentsOf: notchSideContentURL(from: testFile))
+        let pillStripContent = try String(contentsOf: pillStripContentURL(from: testFile))
 
         XCTAssertTrue(
             mainWindow.contains("SidebarStateSectionPolicy.group"),
@@ -32,7 +32,7 @@ final class SessionPhasePriorityAuditTests: XCTestCase {
             "Window sidebar should not use pill display priority as its primary ordering model."
         )
         XCTAssertTrue(
-            notchSideContent.contains("return phase.displayPriority"),
+            pillStripContent.contains("return phase.displayPriority"),
             "Pill ordering must delegate to SessionPhase.displayPriority."
         )
     }
@@ -47,8 +47,9 @@ final class SessionPhasePriorityAuditTests: XCTestCase {
 
     private func sessionPhaseURL(from testFile: URL) -> URL {
         repoRoot(from: testFile)
-            .appendingPathComponent("AgentVisor")
-            .appendingPathComponent("Models")
+            .appendingPathComponent("AgentVisorCore")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("AgentVisorCore")
             .appendingPathComponent("SessionPhase.swift")
     }
 
@@ -60,11 +61,11 @@ final class SessionPhasePriorityAuditTests: XCTestCase {
             .appendingPathComponent("MainWindowViewModel.swift")
     }
 
-    private func notchSideContentURL(from testFile: URL) -> URL {
+    private func pillStripContentURL(from testFile: URL) -> URL {
         repoRoot(from: testFile)
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Components")
-            .appendingPathComponent("NotchSideContent.swift")
+            .appendingPathComponent("PillStripContent.swift")
     }
 }

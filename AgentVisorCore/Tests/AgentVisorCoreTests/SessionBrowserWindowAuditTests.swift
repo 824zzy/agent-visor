@@ -59,7 +59,7 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         XCTAssertTrue(appDelegate.contains("ensureMainWindowController().toggleSessions()"))
     }
 
-    func testRowsAndKeyboardUseStableChatFirstActions() throws {
+    func testRowsAndKeyboardUseStableSourceFirstActions() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let split = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
@@ -100,22 +100,28 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         XCTAssertTrue(policy.contains("alternate: Bool = false"))
     }
 
-    func testRowOwnsChatDisclosureAndOwnerActionHasADisjointTarget() throws {
+    func testRowNamesTheSourcePrimaryActionAndKeepsChatDisjoint() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let split = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
 
         XCTAssertTrue(split.contains("Button(action: onActivate)"))
-        XCTAssertTrue(split.contains("if item.canEnterChat {\n                        chatDisclosureChevron"))
-        XCTAssertTrue(split.contains("private var chatDisclosureChevron: some View"))
-        XCTAssertTrue(split.contains(".accessibilityHidden(true)"))
-        XCTAssertTrue(split.contains("SessionBrowserOwnerAction("))
+        XCTAssertTrue(split.contains("private var primaryDestinationLabel: some View"))
+        XCTAssertTrue(split.contains("Label(\"Open in \\(item.ownerName)\", systemImage: \"arrow.up.forward.app\")"))
+        XCTAssertTrue(split.contains("@State private var isPrimaryHovered = false"))
+        XCTAssertTrue(split.contains(".background(primaryRowBackground)"))
+        XCTAssertTrue(split.contains("ChatTheme.link : ChatTheme.secondary"))
+        XCTAssertTrue(split.contains("if showsOwner, primaryAction != .openOriginal, item.ownerName != item.sourceName"))
+        XCTAssertFalse(split.contains(".background(rowBackground)"))
+        XCTAssertTrue(split.contains("SessionBrowserAccessoryAction("))
+        XCTAssertTrue(split.contains("fullTitle: \"Open Chat\""))
+        XCTAssertTrue(split.contains("action: onEnterChat"))
+        XCTAssertTrue(split.contains("ChatTheme.link : ChatTheme.tertiary"))
         XCTAssertTrue(split.contains("onOpenOriginal: { viewModel.openOriginal(sessionId) }"))
-        XCTAssertTrue(split.contains("action: onOpenOriginal"))
-        XCTAssertTrue(split.contains("fullTitle: \"Open in \\(item.ownerName)\""))
-        XCTAssertTrue(split.contains(".frame(width: 138, alignment: .trailing)"))
-        XCTAssertFalse(split.contains("SessionBrowserChatDisclosure"))
-        XCTAssertFalse(split.contains("title: \"Enter Chat\""))
+        XCTAssertTrue(split.contains(".frame(width: 138, alignment: .leading)"))
+        XCTAssertTrue(split.contains(".frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)"))
+        XCTAssertTrue(split.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
+        XCTAssertFalse(split.contains("chatDisclosureChevron"))
         XCTAssertFalse(split.contains("prominent: true"))
         XCTAssertTrue(split.contains("keyboardHint(keys: \"↩\", label: footerLabel"))
         XCTAssertTrue(split.contains("keyboardHint(keys: \"⇧↩\", label: footerLabel"))
@@ -135,7 +141,7 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         let footerLabel = String(split[start..<end])
         XCTAssertTrue(footerLabel.contains("SessionBrowserPrimaryActionPolicy.footerLabel"))
         XCTAssertFalse(footerLabel.contains("ownerName"))
-        XCTAssertTrue(split.contains("fullTitle: \"Open in \\(item.ownerName)\""))
+        XCTAssertTrue(split.contains("Label(\"Open in \\(item.ownerName)\", systemImage: \"arrow.up.forward.app\")"))
     }
 
     func testBackKeepsTheMountedBrowserStateInsteadOfReconstructingIt() throws {
@@ -277,7 +283,7 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         )
     }
 
-    func testSettingsPresentsOneSharedContentScaleAndPreservesTheLegacyPreferenceKey() throws {
+    func testAppearanceKeepsSharedContentSizeCompactInsideDisplayAndPreservesTheLegacyPreferenceKey() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let settings = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/Core/Settings.swift"))
@@ -285,28 +291,54 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor/UI/Window/SettingsWindowView.swift"))
         let split = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
+        let appearanceStart = try XCTUnwrap(settingsView.range(of: "private struct AppearanceSection: View"))
+        let appearanceEnd = try XCTUnwrap(settingsView.range(
+            of: "private struct PillsSection: View",
+            range: appearanceStart.upperBound..<settingsView.endIndex
+        ))
+        let appearance = String(settingsView[appearanceStart.lowerBound..<appearanceEnd.lowerBound])
+        let displayStart = try XCTUnwrap(appearance.range(of: "SettingsSubheading(\"Display\")"))
+        let displayGroup = String(appearance[displayStart.lowerBound...])
 
         XCTAssertTrue(settings.contains("static let chatFontScale = \"chatFontScale\""))
         XCTAssertTrue(settings.contains("static var contentFontScale: Double"))
         XCTAssertTrue(settings.contains("static let contentFontScaleMin: Double = 0.8"))
         XCTAssertTrue(settings.contains("static let contentFontScaleMax: Double = 2.5"))
-        XCTAssertTrue(settingsView.contains("SettingsSubheading(\"Content font size\""))
-        XCTAssertTrue(settingsView.contains("in Sessions or Chat"))
-        XCTAssertTrue(settingsView.contains("Sessions browser and Chat content"))
-        XCTAssertFalse(settingsView.contains("SettingsSubheading(\"Chat font size\""))
+        XCTAssertTrue(displayGroup.contains("title: \"Content size\""))
+        XCTAssertTrue(displayGroup.contains("description: \"Sessions and Chat\""))
+        XCTAssertTrue(displayGroup.contains("value: $contentFontScale"))
+        XCTAssertFalse(appearance.contains("SettingsSubheading(\"Content font size\""))
+        XCTAssertFalse(appearance.contains("SettingsSubheading(\"Chat font size\""))
+        XCTAssertFalse(appearance.contains("Button(\"Reset\")"))
         XCTAssertTrue(split.contains("AppSettings.contentFontScale = command.apply("))
     }
 
-    func testSessionsAndBothChatSurfacesUseTheSharedScaleDecoder() throws {
+    func testViewMenuExposesSharedContentSizeCommands() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let app = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/App/AgentVisorApp.swift"))
+
+        XCTAssertTrue(app.contains("CommandGroup(after: .toolbar)"))
+        XCTAssertTrue(app.contains("Button(\"Zoom In\")"))
+        XCTAssertTrue(app.contains("Button(\"Zoom Out\")"))
+        XCTAssertTrue(app.contains("Button(\"Actual Size\")"))
+        XCTAssertTrue(app.contains(".keyboardShortcut(\"=\", modifiers: .command)"))
+        XCTAssertTrue(app.contains(".keyboardShortcut(\"-\", modifiers: .command)"))
+        XCTAssertTrue(app.contains(".keyboardShortcut(\"0\", modifiers: .command)"))
+        XCTAssertTrue(app.contains("AppSettings.contentFontScale = command.apply("))
+        XCTAssertTrue(app.contains("step: AppSettings.contentFontScaleStep"))
+        XCTAssertTrue(app.contains("min: AppSettings.contentFontScaleMin"))
+        XCTAssertTrue(app.contains("max: AppSettings.contentFontScaleMax"))
+    }
+
+    func testSessionsAndTheChatSurfaceUseTheSharedScaleDecoder() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let split = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
         let windowChat = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/UI/Window/WindowChatView.swift"))
-        let notchChat = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor/UI/Views/ChatView.swift"))
 
-        for source in [split, windowChat, notchChat] {
+        for source in [split, windowChat] {
             XCTAssertTrue(source.contains("ContentFontScaleCommand.decode("))
             XCTAssertTrue(source.contains("optionHeld:"))
             XCTAssertTrue(source.contains("controlHeld:"))

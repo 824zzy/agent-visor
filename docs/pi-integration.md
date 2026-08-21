@@ -284,8 +284,8 @@ A live Pi TUI session is terminal-owned:
 - TTY identifies the exact pane where the host adapter supports exact routing;
 - a normal pill or `+N` popover action opens that original terminal;
 - a competing live Pi runtime reporting the same session ID cannot replace the pinned PID or TTY and therefore cannot redirect navigation or terminal submission;
-- a Chat-capable Sessions-browser row or Return enters the same in-window Chat used by other supported sources;
-- Shift-Return and the always-visible **Open in <terminal>** action open the terminal, while the quiet disclosure chevron belongs to the row's Chat target rather than acting as a separate neighboring button.
+- a Sessions-browser row or Return opens the original terminal and names that terminal inside the row;
+- Shift-Return and the always-visible **Open Chat** action enter the same in-window Chat used by other supported sources.
 
 Text submission reuses the terminal adapter and behaves as input typed into Pi. Agent Visor does not promise source-specific semantics for input submitted while Pi is busy; Pi's native queueing behavior remains authoritative.
 
@@ -503,7 +503,7 @@ Run each focused RED → GREEN loop separately, then nearby Pi, lifecycle, atten
 
 - **Slice 1 RED:** `swift test --package-path AgentVisorCore --filter PiRuntimeOwnershipPolicyTests` failed because `PiRuntimeOwnershipPolicy` did not exist. GREEN added the pure first-live-owner policy; all six ownership examples passed.
 - **Slice 2 RED:** the focused SessionStore wiring audit failed because no ownership guard existed. GREEN placed one early return before heartbeat disposition, PID deduplication, metadata merge, tool effects, and generic phase handling. Matching-owner and owner-dead evidence retain the existing paths.
-- **Slice 3 RED:** the tracker tests first failed because `ReadySessionEpisodeTracker` did not exist; the production-wiring regression then failed nine assertions because `NotchView` still used PID-bearing `stableId`. GREEN moved entry detection, timestamps, checkmarks, sound, and bounce to durable `sessionId`; terminal-focus checking still receives the exact PID.
+- **Slice 3 RED:** the tracker tests first failed because `ReadySessionEpisodeTracker` did not exist; the production-wiring regression then failed nine assertions because `PillStripView` still used PID-bearing `stableId`. GREEN moved ready-episode detection, sound, and bounce to durable `sessionId`; terminal-focus checking still receives the exact PID. The retired panel's unused timestamp and checkmark state was later removed.
 - **Refactor:** Ready set-transition arithmetic moved into the small Core tracker, and ownership outcomes remain isolated from transcript or branch semantics. The combined Pi ownership, heartbeat, notification, and Ready-attention suite passed 40 tests.
 - **Full validation:** the complete AgentVisorCore suite passed 1,782 tests with zero failures; `git diff --check` and an unsigned Debug app build passed.
 - **Signed deployment:** `scripts/dev-build.sh` succeeded and relaunched `/Applications/Agent Visor Dev.app` as one process at PID `77059`. The app owns `/tmp/agent-visor.sock`, Accessibility reached Ready, deep strict code-signature validation passed, and the embedded Codex runtime passed its bundle audit. Bundled and installed Pi extension SHA-256 values remain byte-identical at `4191e1e3c2ac3681da6582ed6b1656a2fb15678cfa7abb70f8a8a4a25b080375`.

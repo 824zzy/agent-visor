@@ -33,6 +33,9 @@ enum CodexThreadStore {
         titles: [String: String]
     )?
     nonisolated(unsafe) private static var liveSnapshot: LiveQuerySnapshot?
+    /// Ids proven absent under one database signature. Without this, every
+    /// lookup of an id the live list does not hold forked `sqlite3` again.
+    nonisolated(unsafe) private static var missingIds: (signature: CodexMetadataSignature, ids: Set<String>)?
     nonisolated private static let cacheLock = NSLock()
 
     nonisolated private static let liveThreadsSQL = """
@@ -119,17 +122,84 @@ enum CodexThreadStore {
         if let candidate = liveThreadCandidate(id: id) {
             return candidate
         }
+        if isKnownMissing(id: id) {
+            // Already proven absent under this database signature. A repeat
+            // read cannot find it, and forking again per id is exactly what
+            // stalled a bootstrap of a few hundred sessions.
+            return nil
+        }
+        return threads(ids: [id])[id]
+    }
 
-        // Codex thread ids are UUIDs in practice; the single-quote
-        // doubling here is defense-in-depth, not a real escape barrier.
-        let escaped = id.replacingOccurrences(of: "'", with: "''")
+    /// Look up a whole group of thread ids with at most one database read.
+    ///
+    /// Ids the cached snapshot holds are answered from memory. Ids already
+    /// proven absent are answered as absent. Whatever is left goes into one
+    /// query, and the ids it does not return are remembered as absent for as
+    /// long as the signature holds.
+    nonisolated static func threads(ids: [String]) -> [String: CodexThreadCandidate] {
+        var found: [String: CodexThreadCandidate] = [:]
+        var unresolved: [String] = []
+        for id in ids where !id.isEmpty {
+            if let candidate = liveThreadCandidate(id: id) {
+                found[id] = candidate
+            } else {
+                unresolved.append(id)
+            }
+        }
+
+        let resolvedDatabasePath = databasePath
+        let signature = metadataSignature(databasePath: resolvedDatabasePath)
+        cacheLock.lock()
+        let knownMissing = missingIds?.signature == signature
+            ? (missingIds?.ids ?? [])
+            : []
+        cacheLock.unlock()
+
+        let needed = CodexThreadLookupPlanPolicy.idsNeedingQuery(
+            requested: unresolved,
+            cached: Set(found.keys),
+            knownMissing: knownMissing
+        )
+        guard !needed.isEmpty else { return found }
+
+        // Codex thread ids are UUIDs in practice; the single-quote doubling
+        // here is defense-in-depth, not a real escape barrier.
+        let list = needed
+            .map { "'\($0.replacingOccurrences(of: "'", with: "''"))'" }
+            .joined(separator: ",")
         let query = """
         select id, rollout_path, cwd, substr(title, 1, 500) as title, updated_at, archived, source
         from threads
-        where id = '\(escaped)'
-        limit 1
+        where id in (\(list))
+        limit \(needed.count)
         """
-        return queryThreads(sql: query).first
+        for candidate in queryThreads(sql: query) {
+            found[candidate.id] = candidate
+        }
+
+        let absent = CodexThreadLookupPlanPolicy.missingIDs(
+            queried: needed,
+            returned: Set(found.keys)
+        )
+        if !absent.isEmpty {
+            cacheLock.lock()
+            if missingIds?.signature == signature {
+                missingIds?.ids.formUnion(absent)
+            } else {
+                missingIds = (signature: signature, ids: absent)
+            }
+            cacheLock.unlock()
+        }
+        return found
+    }
+
+    nonisolated private static func isKnownMissing(id: String) -> Bool {
+        let signature = metadataSignature(databasePath: databasePath)
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard let missingIds, missingIds.signature == signature else { return false }
+        return missingIds.ids.contains(id)
     }
 
     nonisolated static func liveThreadCandidates() -> [CodexThreadCandidate] {
@@ -160,6 +230,7 @@ enum CodexThreadStore {
         cache.removeAll(keepingCapacity: true)
         titleCache = nil
         liveSnapshot = nil
+        missingIds = nil
         cacheLock.unlock()
     }
 

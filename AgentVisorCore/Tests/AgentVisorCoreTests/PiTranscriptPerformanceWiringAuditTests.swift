@@ -77,7 +77,7 @@ final class PiTranscriptPerformanceWiringAuditTests: XCTestCase {
 
     func testPillCoordinatorCachesFixedFontTextMeasurements() throws {
         let source = try String(contentsOf: repoRoot()
-            .appendingPathComponent("AgentVisor/UI/Components/NotchSideContent.swift"))
+            .appendingPathComponent("AgentVisor/UI/Components/PillStripContent.swift"))
 
         XCTAssertTrue(source.contains("private static let textWidthCache = NSCache<NSString, NSNumber>()"))
         XCTAssertTrue(source.contains("textWidthCache.object(forKey: cacheKey)"))

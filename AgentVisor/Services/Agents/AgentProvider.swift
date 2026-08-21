@@ -134,7 +134,19 @@ protocol AgentProvider: Sendable {
     nonisolated func projectDirName(forCwd cwd: String) -> String
 
     /// Full path to a session's JSONL transcript.
+    ///
+    /// This is the direct answer. Use it only when the caller is synchronous or
+    /// the provider has already pre-read its metadata. An agent whose answer can
+    /// search a directory or read a database also implements
+    /// `transcriptURLForReading`, which keeps that work off shared threads.
     nonisolated func transcriptURL(sessionId: String, cwd: String) -> URL
+
+    /// Full transcript path for an asynchronous read.
+    ///
+    /// The default stays direct for agents whose path is pure string building.
+    /// Providers whose answer can ask the disk or a database move that question
+    /// through `BlockingWork` instead.
+    nonisolated func transcriptURLForReading(sessionId: String, cwd: String) async -> URL
 
     // MARK: - Installation
 
@@ -208,12 +220,91 @@ protocol AgentProvider: Sendable {
 
     // MARK: - Lifecycle rules
 
-    /// What `pruneDeadSessions` does when this session's CLI process
-    /// is no longer alive. Default `.markEnded` keeps the row in the
-    /// dictionary so chat history stays browsable. Providers whose
-    /// dead sessions can't be revived from the sidebar (e.g. Zed —
-    /// no deeplink or reveal path) override to `.remove`.
+    /// An event from this agent arrived, whatever the store later does with it.
+    ///
+    /// Called before any rule can drop the event, because an agent may keep a
+    /// flag that its own reporter is alive, and a dropped event still proves
+    /// that. Agents that keep no such flag do nothing.
+    nonisolated func noteRuntimeReportedIn() async
+
+    /// Let this agent keep its own notes about one of its sessions.
+    ///
+    /// Called after the store merges the event into the row, so the session
+    /// carries the process identity and host the notes may need. Pi keeps the
+    /// record used to restore its sessions after a reboot; other agents keep
+    /// nothing and do nothing.
+    nonisolated func noteHookEvent(_ event: HookEvent, session: SessionState) async
+
+    /// This session is finished, removed, or dead, so drop any notes about it.
+    nonisolated func noteSessionGone(sessionId: String) async
+
+    /// Whether this agent reports its tool calls and results through hooks.
+    ///
+    /// Most agents do, and the store builds their chat items and pending
+    /// actions from those events. Codex does not: its rollout transcript is the
+    /// record, and its own parser builds the items, the tool results and the
+    /// pending action from that file. Applying hook tool tracking on top would
+    /// duplicate rows and fight the parser for the same state.
+    nonisolated var reportsToolsThroughHooks: Bool { get }
+
+    /// What this agent's own record says about a rediscovered row's activity.
+    ///
+    /// Some agents keep a busy-or-idle record beside the session. Rediscovery
+    /// reads it to correct a row whose phase drifted while no hook arrived.
+    /// Agents that keep no such record report `.unknown`.
+    nonisolated func rediscoveredActivity(sessionId: String, pid: Int) -> ClaudeCodeSessionMetadataActivity
+
+    /// What rediscovery should change on a row this agent owns.
+    ///
+    /// Discovery can find a session the store believes ended. Whether that
+    /// proves the session is back depends on the agent's process model: a
+    /// thread inside a shared app process has no pid of its own to check, while
+    /// an agent with one process per session is answered by the pid alone.
+    /// `nil` leaves the row untouched.
+    nonisolated func rediscoveredAttachment(
+        for session: SessionState,
+        discovered: DiscoveredSession
+    ) -> RediscoveredAttachment?
+
+    /// Give a provider one chance to read what its whole discovered group needs
+    /// before the scan asks per-row questions.
+    ///
+    /// Codex keeps transcript paths and titles in a database. A lookup by id can
+    /// fork a child process on a cache miss, so one grouped read prevents a scan
+    /// from paying that cost per row. Providers with nothing to pre-read do
+    /// nothing here.
+    nonisolated func prewarmMetadata(sessionIds: [String])
+
+    /// Whether discovering this session should start a transcript watcher.
+    ///
+    /// A row with its own process reports through hooks, so the file watcher
+    /// would only duplicate that. Rows inside a shared app process have no
+    /// hooks of their own, and the transcript is the only live signal.
+    nonisolated func watchesTranscriptOnDiscovery(for session: SessionState) -> Bool
+
+    /// What `pruneDeadSessions` does when this session's CLI process is gone.
+    /// Default `.markEnded` keeps browsable history. Providers whose dead rows
+    /// have no recovery path override to `.remove`.
     nonisolated func deadProcessAction(for session: SessionState) -> DeadProcessAction
+
+    /// Which of these sessions have no live agent behind them any more.
+    ///
+    /// Detecting death is per-agent, because the evidence is per-agent: a
+    /// claude-code row reads its own status file, a Codex.app thread is judged
+    /// against Codex's active-thread set, and a Cursor IDE thread is judged by
+    /// transcript recency. A plain pid check answers only for agents that run
+    /// one process per session.
+    ///
+    /// The whole group arrives in one call so a provider can gather its
+    /// evidence once per sweep — an app pid, an active-thread set, one
+    /// database read — instead of once per row.
+    ///
+    /// Callers apply host rules first and pass only the rows this agent's own
+    /// process model can answer for. `deadProcessAction` then decides what
+    /// happens to the ids returned here.
+    ///
+    /// - Returns: the session ids judged dead. An unknown pid is not death.
+    nonisolated func deadSessionIDs(among sessions: [SessionState], now: Date) -> Set<String>
 
     /// Whether the file watcher should stop tailing this session's
     /// transcript when its CLI process exits. claude-code returns
@@ -354,6 +445,46 @@ extension AgentProvider {
         // after the cli exits if the user re-attaches the same
         // session id; the file watcher needs to keep firing.
         false
+    }
+
+    nonisolated func noteRuntimeReportedIn() async {}
+
+    nonisolated func noteHookEvent(_ event: HookEvent, session: SessionState) async {}
+
+    nonisolated func noteSessionGone(sessionId: String) async {}
+
+    nonisolated var reportsToolsThroughHooks: Bool { true }
+
+    nonisolated func rediscoveredActivity(sessionId: String, pid: Int) -> ClaudeCodeSessionMetadataActivity {
+        .unknown
+    }
+
+    nonisolated func rediscoveredAttachment(
+        for session: SessionState,
+        discovered: DiscoveredSession
+    ) -> RediscoveredAttachment? {
+        nil
+    }
+
+    nonisolated func transcriptURLForReading(sessionId: String, cwd: String) async -> URL {
+        transcriptURL(sessionId: sessionId, cwd: cwd)
+    }
+
+    nonisolated func prewarmMetadata(sessionIds: [String]) {}
+
+    nonisolated func watchesTranscriptOnDiscovery(for session: SessionState) -> Bool { false }
+
+    nonisolated func deadSessionIDs(among sessions: [SessionState], now: Date) -> Set<String> {
+        // One process per session: a pid we know to be gone is death, and a row
+        // with no pid is not yet evidence of anything.
+        Set(
+            sessions
+                .filter { session in
+                    guard let pid = session.pid else { return false }
+                    return kill(Int32(pid), 0) != 0
+                }
+                .map(\.sessionId)
+        )
     }
 
     nonisolated func skipsPidDedup(for session: SessionState) -> Bool {

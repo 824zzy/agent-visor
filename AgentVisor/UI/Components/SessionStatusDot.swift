@@ -18,7 +18,7 @@ import SwiftUI
 /// `darkChrome` always uses Mocha. The pills sit in the macOS menu bar
 /// against a dark capsule that doesn't theme, so a Latte-tinted dot
 /// would have poor contrast there. `adaptive` follows the user's
-/// chosen flavor — used inside the notch panel where the surface
+/// chosen flavor, including menu-bar pills where the surface
 /// colors flip with the theme.
 enum DotColorScheme {
     case darkChrome

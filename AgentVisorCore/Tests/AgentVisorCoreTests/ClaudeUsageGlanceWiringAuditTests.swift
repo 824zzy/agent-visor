@@ -28,10 +28,10 @@ final class ClaudeUsageGlanceWiringAuditTests: XCTestCase {
     func testClaudePillSharesTheRightUsageSlotBesideCodex() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let sideContent = try source(
-            root.appendingPathComponent("AgentVisor/UI/Components/NotchSideContent.swift")
+            root.appendingPathComponent("AgentVisor/UI/Components/PillStripContent.swift")
         )
-        let notchView = try source(
-            root.appendingPathComponent("AgentVisor/UI/Views/NotchView.swift")
+        let pillStrip = try source(
+            root.appendingPathComponent("AgentVisor/UI/Views/PillStripView.swift")
         )
 
         XCTAssertTrue(sideContent.contains("struct ClaudeUsagePillButton"))
@@ -46,10 +46,10 @@ final class ClaudeUsageGlanceWiringAuditTests: XCTestCase {
         XCTAssertTrue(sideContent.contains("let showsClaudeUsagePill: Bool"))
 
         // Both providers feed the one right-side usage hit region + popover.
-        XCTAssertTrue(notchView.contains("includeClaudeUsage: claudeUsageMonitor.showsPill"))
-        XCTAssertTrue(notchView.contains("showsClaudeUsage: pack.showsClaudeUsagePill"))
-        XCTAssertTrue(notchView.contains("rightUsageWidth"))
-        XCTAssertTrue(notchView.contains("pack.usageSlotWidth"))
+        XCTAssertTrue(pillStrip.contains("includeClaudeUsage: claudeUsageMonitor.showsPill"))
+        XCTAssertTrue(pillStrip.contains("showsClaudeUsage: pack.showsClaudeUsagePill"))
+        XCTAssertTrue(pillStrip.contains("rightUsageWidth"))
+        XCTAssertTrue(pillStrip.contains("pack.usageSlotWidth"))
     }
 
     func testClaudeUsageIsStartedAndTogglableAndDefaultsOn() throws {

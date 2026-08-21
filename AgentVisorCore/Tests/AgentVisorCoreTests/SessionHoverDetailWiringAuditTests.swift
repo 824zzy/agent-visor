@@ -32,7 +32,6 @@ final class SessionHoverDetailWiringAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor/Services/Shared/ClaudeSettings.swift"))
         let surfacePaths = [
             "AgentVisor/UI/Components/SessionDetailPopover.swift",
-            "AgentVisor/UI/Views/ChatView.swift",
             "AgentVisor/UI/Window/WindowChatView.swift",
         ]
 
@@ -48,7 +47,7 @@ final class SessionHoverDetailWiringAuditTests: XCTestCase {
         let popover = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/UI/Components/SessionDetailPopover.swift"))
         let sideContent = try String(contentsOf: root
-            .appendingPathComponent("AgentVisor/UI/Components/NotchSideContent.swift"))
+            .appendingPathComponent("AgentVisor/UI/Components/PillStripContent.swift"))
         let manager = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/Events/GlobalSessionShortcutManager.swift"))
 

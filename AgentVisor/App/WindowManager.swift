@@ -2,7 +2,7 @@
 //  WindowManager.swift
 //  AgentVisor
 //
-//  Manages the notch window lifecycle
+//  Manages the menu-bar pill-strip window lifecycle
 //
 
 import AppKit
@@ -16,19 +16,15 @@ private let logger = Logger(subsystem: AppBranding.loggerSubsystem, category: "W
 class WindowManager {
     private var pillsEnabledCancellable: AnyCancellable?
 
-    /// The menu-bar pills strip — always-visible thin overlay covering
-    /// the menu-bar strip on the notch screen, hosting `NotchView` so
-    /// the user keeps seeing session pills. Owns the live
-    /// `ClaudeSessionMonitor`. The legacy notch chat panel was retired
-    /// in favor of the main window.
+    /// The menu-bar pill strip for the selected display. It owns the live
+    /// `SessionMonitor` shared by status, navigation, and the Sessions browser.
     private(set) var pillsStripController: PillsStripWindowController?
 
     /// Track the screen identity + frame the current controller was built
     /// against so we can short-circuit rebuilds when nothing actually
     /// changed. `didChangeScreenParameters` and `didWake` fire for many
-    /// benign reasons (HDR toggles, brightness changes, color profile
-    /// shifts, wake-from-sleep where nothing structural moved). Each
-    /// rebuild was destroying the panel and re-instantiating NotchView,
+    /// benign reasons, such as brightness or color-profile changes. Each
+    /// rebuild was destroying the strip and re-instantiating PillStripView,
     /// which restarts `sessionMonitor` and re-runs probeMenuBarAsync —
     /// seconds of work and a visible wipe of the user's in-progress
     /// gesture.
@@ -37,7 +33,7 @@ class WindowManager {
 
     /// Set up or recreate the menu-bar pills strip.
     @discardableResult
-    func setupNotchWindow() -> PillsStripWindowController? {
+    func setupPillsStrip() -> PillsStripWindowController? {
         let screenSelector = ScreenSelector.shared
         screenSelector.refreshScreens()
 
@@ -55,8 +51,10 @@ class WindowManager {
         }
 
         if let existingStrip = pillsStripController {
-            existingStrip.window?.orderOut(nil)
-            existingStrip.window?.close()
+            // Full teardown, not just a window close: the superseded
+            // controller must stop observing global events. See
+            // `PillsStripWindowController.teardown()`.
+            existingStrip.teardown()
             pillsStripController = nil
         }
 
@@ -67,7 +65,7 @@ class WindowManager {
         }
         // Subscribe once: when the user toggles pills in Settings,
         // show or hide the strip window without tearing down the
-        // controller (which owns the live ClaudeSessionMonitor that
+        // controller (which owns the live SessionMonitor that
         // AppDelegate keeps a strong reference to).
         if pillsEnabledCancellable == nil {
             pillsEnabledCancellable = PillsEnabledSelector.shared.$enabled
@@ -86,11 +84,5 @@ class WindowManager {
         lastScreenFrame = newFrame
 
         return strip
-    }
-}
-
-private extension NSScreen {
-    var displayID: CGDirectDisplayID? {
-        deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
     }
 }

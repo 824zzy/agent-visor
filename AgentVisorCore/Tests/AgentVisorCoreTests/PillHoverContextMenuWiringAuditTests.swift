@@ -7,10 +7,10 @@ final class PillHoverContextMenuWiringAuditTests: XCTestCase {
             "AgentVisor/UI/Components/PillHoverContextMenuCoordinator.swift"
         ))
         let sideContent = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Components/NotchSideContent.swift"
+            "AgentVisor/UI/Components/PillStripContent.swift"
         ))
-        let notchView = try String(contentsOf: root.appendingPathComponent(
-            "AgentVisor/UI/Views/NotchView.swift"
+        let pillStrip = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/UI/Views/PillStripView.swift"
         ))
 
         XCTAssertTrue(coordinator.contains("PillHoverContextMenuPolicy.applying"))
@@ -18,9 +18,9 @@ final class PillHoverContextMenuWiringAuditTests: XCTestCase {
         XCTAssertTrue(sideContent.contains("hoverContextMenuCoordinator.pointerExited"))
         XCTAssertTrue(sideContent.contains("hoverContextMenuCoordinator.canPresentHover"))
         XCTAssertTrue(sideContent.contains("hoverContextMenuCoordinator.dismissalRevision"))
-        XCTAssertTrue(notchView.contains("hoverContextMenuCoordinator.contextMenuOpened"))
-        XCTAssertTrue(notchView.contains("hoverContextMenuCoordinator.contextMenuClosed"))
-        XCTAssertTrue(notchView.contains("hoverContextMenuCoordinator.primaryActionTriggered"))
+        XCTAssertTrue(pillStrip.contains("hoverContextMenuCoordinator.contextMenuOpened"))
+        XCTAssertTrue(pillStrip.contains("hoverContextMenuCoordinator.contextMenuClosed"))
+        XCTAssertTrue(pillStrip.contains("hoverContextMenuCoordinator.primaryActionTriggered"))
     }
 
     private func repositoryRoot(from testFile: URL) -> URL {

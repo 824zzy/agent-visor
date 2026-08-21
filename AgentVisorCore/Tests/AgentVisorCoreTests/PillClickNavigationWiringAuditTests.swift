@@ -2,19 +2,29 @@ import XCTest
 
 final class PillClickNavigationWiringAuditTests: XCTestCase {
     func testPillDispatchUsesNavigationPolicy() throws {
-        let source = try String(contentsOf: repoRoot(from: URL(fileURLWithPath: #filePath))
+        let root = repoRoot(from: URL(fileURLWithPath: #filePath))
+        let router = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor")
+            .appendingPathComponent("Services")
+            .appendingPathComponent("Navigation")
+            .appendingPathComponent("SessionOpenRouter.swift"))
+        let view = try String(contentsOf: root
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Views")
-            .appendingPathComponent("NotchView.swift"))
+            .appendingPathComponent("PillStripView.swift"))
 
         XCTAssertTrue(
-            source.contains("PillClickNavigationPolicy.action"),
+            router.contains("PillClickNavigationPolicy.action"),
             "Pill clicks must go through the tested navigation policy instead of directly focusing the original host."
         )
         XCTAssertTrue(
-            source.contains("event.modifierFlags.contains(.option) ? .forceAgentVisor : .standard"),
-            "Option-click should remain the low-risk escape hatch for opening the Agent Visor mirror."
+            view.contains("SessionOpenRouter.smartOpen(session, modifierIntent: modifierIntent)"),
+            "The pill dispatch must reach the router rather than calling a surface itself."
+        )
+        XCTAssertTrue(
+            view.contains("event.modifierFlags.contains(.option) ? .forceAgentVisor : .standard"),
+            "Option-click should remain the low-risk way to open the Agent Visor mirror."
         )
     }
 
@@ -23,7 +33,7 @@ final class PillClickNavigationWiringAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Views")
-            .appendingPathComponent("NotchView.swift"))
+            .appendingPathComponent("PillStripView.swift"))
 
         XCTAssertTrue(
             source.contains("EventMonitor(mask: [.leftMouseDown, .rightMouseDown])"),
@@ -76,7 +86,7 @@ final class PillClickNavigationWiringAuditTests: XCTestCase {
             .appendingPathComponent("AgentVisor")
             .appendingPathComponent("UI")
             .appendingPathComponent("Views")
-            .appendingPathComponent("NotchView.swift"))
+            .appendingPathComponent("PillStripView.swift"))
 
         XCTAssertFalse(settings.contains("SettingsSubheading(\"Click behavior\")"))
         XCTAssertFalse(settings.contains("title: \"Pill click action\""))

@@ -52,6 +52,64 @@ struct CursorAgentProvider: AgentProvider {
         !NSRunningApplication.runningApplications(withBundleIdentifier: appBundleID).isEmpty
     }
 
+    /// A Cursor IDE thread shares Cursor.app's process, so a row that lost its
+    /// pid and ended can only be proven live by discovery finding it again.
+    /// Adopt the reported pid and revive the row.
+    ///
+    /// A row that still holds a pid is left alone: it either never ended, or it
+    /// ended with its process, and re-stamping would fight the liveness rule.
+    nonisolated func rediscoveredAttachment(
+        for session: SessionState,
+        discovered: DiscoveredSession
+    ) -> RediscoveredAttachment? {
+        guard discovered.pid != 0,
+              session.phase == .ended,
+              session.pid == nil else { return nil }
+        return RediscoveredAttachment(revivesEndedRow: true, pid: .set(discovered.pid))
+    }
+
+    /// Cursor exposes no hook seam. Its transcript is the only live signal for
+    /// both CLI and IDE rows, so every discovered Cursor session needs a watcher.
+    /// SessionStore excludes Zed-hosted rows before it asks this provider.
+    nonisolated func watchesTranscriptOnDiscovery(for session: SessionState) -> Bool {
+        true
+    }
+
+    /// Cursor liveness splits by surface. IDE Agents Window threads (no tty)
+    /// all carry Cursor.app's one pid, so a live pid is true for every thread
+    /// whenever Cursor runs and decides nothing. Those rows are active-only,
+    /// judged by transcript recency inside `activeWindowSeconds`, the same
+    /// window discovery uses. With Cursor not running, every IDE thread is
+    /// dead. The cursor-agent CLI (real tty, own process) keeps the plain pid
+    /// rule.
+    nonisolated func deadSessionIDs(among sessions: [SessionState], now: Date) -> Set<String> {
+        var dead: Set<String> = []
+        let ideSessions = sessions.filter { $0.tty == nil }
+        if !ideSessions.isEmpty {
+            let cutoff = now.addingTimeInterval(-Self.activeWindowSeconds)
+            let appRunning = Self.isAppRunning()
+            let fileManager = FileManager.default
+            for session in ideSessions {
+                guard appRunning else {
+                    dead.insert(session.sessionId)
+                    continue
+                }
+                let path = transcriptURL(sessionId: session.sessionId, cwd: session.cwd).path
+                let modified = (try? fileManager.attributesOfItem(atPath: path))?[.modificationDate]
+                guard let modifiedAt = modified as? Date, modifiedAt >= cutoff else {
+                    dead.insert(session.sessionId)
+                    continue
+                }
+            }
+        }
+        for session in sessions where session.tty != nil {
+            if let pid = session.pid, kill(Int32(pid), 0) != 0 {
+                dead.insert(session.sessionId)
+            }
+        }
+        return dead
+    }
+
     /// Cursor IDE Agents Window threads (no TTY) are active-only: once
     /// their transcript goes quiet past `activeWindowSeconds`, they're
     /// removed rather than kept as ended rows — mirrors Codex.app GUI
@@ -90,6 +148,12 @@ struct CursorAgentProvider: AgentProvider {
 
     nonisolated func projectDirName(forCwd cwd: String) -> String {
         CursorProjectKeyEncoder.projectKey(forCwd: cwd)
+    }
+
+    nonisolated func transcriptURLForReading(sessionId: String, cwd: String) async -> URL {
+        await BlockingWork.run("cursorTranscriptURL") {
+            transcriptURL(sessionId: sessionId, cwd: cwd)
+        }
     }
 
     nonisolated func transcriptURL(sessionId: String, cwd: String) -> URL {
@@ -183,12 +247,16 @@ struct CursorAgentProvider: AgentProvider {
     /// Cursor's parser caches by session; warm the cache then read
     /// out the conversation info.
     nonisolated func loadConversationInfo(sessionId: String, cwd: String) async -> ConversationInfo {
-        let path = transcriptURL(sessionId: sessionId, cwd: cwd).path
-        _ = await CursorConversationParser.shared.parseFullConversation(
-            sessionId: sessionId,
-            transcriptPath: path
-        )
-        return await CursorConversationParser.shared.conversationInfo(for: sessionId)
+        let path = (await transcriptURLForReading(sessionId: sessionId, cwd: cwd)).path
+        // Cursor parses the whole conversation to warm its cache, so this is the
+        // heaviest of the summary reads. A scan asks for one per row.
+        return await BlockingWork.limited("cursorSummary") {
+            _ = await CursorConversationParser.shared.parseFullConversation(
+                sessionId: sessionId,
+                transcriptPath: path
+            )
+            return await CursorConversationParser.shared.conversationInfo(for: sessionId)
+        }
     }
 
     // MARK: - Lifecycle

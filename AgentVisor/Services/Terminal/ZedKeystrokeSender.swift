@@ -18,12 +18,14 @@
 //
 //  Bindings driven here (Zed's `default-macos.json`):
 //    cmd-shift-p command_palette::Toggle
-//    palette    multi_workspace::FocusWorkspaceSidebar
-//    cmd-f      agents_sidebar::FocusSidebarFilter
-//    cmd-a      editor::SelectAll
-//    delete     editor::Backspace
-//    down       menu::SelectNext
-//    enter      menu::Confirm
+//    cmd-alt-;   multi_workspace::FocusWorkspaceSidebar
+//    cmd-f       agents_sidebar::FocusSidebarFilter
+//    cmd-a       editor::SelectAll
+//    delete      editor::Backspace
+//    escape      menu::Cancel
+//    cmd-?       agent::ToggleFocus
+//    down        menu::SelectNext
+//    enter       menu::Confirm
 //
 
 import AgentVisorCore
@@ -41,9 +43,12 @@ enum ZedKeystrokeSender {
     /// Carbon virtual keycodes for the keys Zed's defaults use.
     private enum VirtualKey {
         static let p: CGKeyCode = 0x23
+        static let semicolon: CGKeyCode = 0x29
+        static let slash: CGKeyCode = 0x2C
         static let f: CGKeyCode = 0x03
         static let a: CGKeyCode = 0x00
         static let delete: CGKeyCode = 0x33
+        static let escape: CGKeyCode = 0x35
         static let downArrow: CGKeyCode = 0x7D
         static let returnKey: CGKeyCode = 0x24
     }
@@ -74,12 +79,18 @@ enum ZedKeystrokeSender {
         switch key {
         case .openCommandPalette:
             return post(keyCode: VirtualKey.p, flags: [.maskCommand, .maskShift])
+        case .focusWorkspaceSidebar:
+            return post(keyCode: VirtualKey.semicolon, flags: [.maskCommand, .maskAlternate])
         case .focusSidebarFilter:
             return post(keyCode: VirtualKey.f, flags: [.maskCommand])
         case .selectAll:
             return post(keyCode: VirtualKey.a, flags: [.maskCommand])
         case .deleteBackward:
             return post(keyCode: VirtualKey.delete, flags: [])
+        case .cancel:
+            return post(keyCode: VirtualKey.escape, flags: [])
+        case .focusAgentFromSidebar:
+            return post(keyCode: VirtualKey.slash, flags: [.maskCommand, .maskShift])
         case .selectNext:
             return post(keyCode: VirtualKey.downArrow, flags: [])
         case .confirm:

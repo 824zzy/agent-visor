@@ -33,6 +33,19 @@ final class TerminalFocusWiringAuditTests: XCTestCase {
         XCTAssertTrue(adapter.contains("TerminalHostActivator.activateAndWait"))
         XCTAssertTrue(adapter.contains("TerminalFocusVerificationPolicy.isSuccessful"))
         XCTAssertTrue(adapter.contains("focused terminal of selected tab of front window"))
+        XCTAssertTrue(adapter.contains("ProcessExecutor.shared.runSyncOrNil"))
+        XCTAssertFalse(adapter.contains("let process = Process()"))
+    }
+
+    func testNavigationFocusUsesTheLatestRequestQueue() throws {
+        let navigator = try String(contentsOf: repoRoot(from: URL(fileURLWithPath: #filePath))
+            .appendingPathComponent("AgentVisor")
+            .appendingPathComponent("Services")
+            .appendingPathComponent("Navigation")
+            .appendingPathComponent("SessionNavigator.swift"))
+
+        XCTAssertTrue(navigator.contains("SessionNavigationQueue"))
+        XCTAssertFalse(navigator.contains("DispatchQueue.global"))
     }
 
     func testTerminalAppUsesExactTTYAdapterAndForegroundVerification() throws {

@@ -122,6 +122,12 @@ struct CodexAgentProvider: AgentProvider {
         URL(fileURLWithPath: cwd).standardizedFileURL.path
     }
 
+    nonisolated func transcriptURLForReading(sessionId: String, cwd: String) async -> URL {
+        await BlockingWork.run("codexTranscriptURL") {
+            transcriptURL(sessionId: sessionId, cwd: cwd)
+        }
+    }
+
     nonisolated func transcriptURL(sessionId: String, cwd: String) -> URL {
         if let path = CodexThreadStore.thread(id: sessionId)?.rolloutPath {
             return URL(fileURLWithPath: path)
@@ -162,10 +168,15 @@ struct CodexAgentProvider: AgentProvider {
     /// session list no longer parses 100+ MB rollout files just to
     /// populate titles, model, context, and last-message previews.
     nonisolated func loadConversationInfo(sessionId: String, cwd: String) async -> ConversationInfo {
-        await CodexConversationSummary.shared.parse(
-            sessionId: sessionId,
-            rolloutPath: transcriptURL(sessionId: sessionId, cwd: cwd).path
-        )
+        // The path itself comes from the thread database, and the summary then
+        // reads the file. A scan asks for one per row, so both are bounded.
+        let rolloutPath = (await transcriptURLForReading(sessionId: sessionId, cwd: cwd)).path
+        return await BlockingWork.limited("codexSummary") {
+            await CodexConversationSummary.shared.parse(
+                sessionId: sessionId,
+                rolloutPath: rolloutPath
+            )
+        }
     }
 
     /// Codex doesn't have an incremental parser; full reparse on
@@ -293,6 +304,117 @@ struct CodexAgentProvider: AgentProvider {
         limit _: Int
     ) -> [DiscoveredSession] {
         []
+    }
+
+    /// Codex liveness cannot use a pid: every GUI thread carries Codex.app's
+    /// one process. The thread database is the evidence instead, read once for
+    /// the whole group.
+    ///
+    /// A GUI row (no tty) whose thread is not an interactive GUI source is
+    /// dead, and a CLI row (real tty) whose thread is no longer a `cli` source
+    /// is dead: in both cases the row and the thread no longer agree about
+    /// where the work runs. Anything past those two checks goes to the shared
+    /// retention rule, which weighs the active GUI set, a non-app pid, the
+    /// archive flags and the observed window.
+    nonisolated func deadSessionIDs(among sessions: [SessionState], now: Date) -> Set<String> {
+        guard !sessions.isEmpty else { return [] }
+        // Re-derive the active set the same way discovery does. Recent GUI rows
+        // stay as a fallback when the active-set query has a transient miss.
+        let activeGUIThreadIds = Self.activeGUIThreadIDs()
+        let codexAppPid = Self.runningCodexAppPid()
+        let observedWindowSeconds = AppSettings.observedWindowSeconds
+
+        var dead: Set<String> = []
+        for session in sessions {
+            let thread = CodexThreadStore.thread(id: session.sessionId)
+            if let thread {
+                if session.tty == nil,
+                   !CodexActiveThreadSelector.isInteractiveGUISource(thread.source) {
+                    dead.insert(session.sessionId)
+                    continue
+                }
+                if session.tty != nil, thread.source != "cli" {
+                    dead.insert(session.sessionId)
+                    continue
+                }
+            }
+            let isNonAppPidAlive: Bool
+            if let pid = session.pid, pid != 0, pid != codexAppPid {
+                isNonAppPidAlive = kill(Int32(pid), 0) == 0
+            } else {
+                isNonAppPidAlive = false
+            }
+            let keep = CodexSessionRetentionPolicy.shouldKeep(
+                session: session,
+                codexAppPid: codexAppPid,
+                isNonAppPidAlive: isNonAppPidAlive,
+                activeGUIThreadIds: activeGUIThreadIds,
+                now: now,
+                observedWindowSeconds: observedWindowSeconds,
+                isKnownArchived: thread?.archived ?? false,
+                isExplicitlyArchived: thread?.isExplicitlyArchived ?? false
+            )
+            if !keep {
+                dead.insert(session.sessionId)
+            }
+        }
+        return dead
+    }
+
+    /// Codex reports no tool state through hooks. The rollout transcript is the
+    /// record, and `CodexConversationParser` builds the chat items, the tool
+    /// results and the pending action from it. The only hook that still carries
+    /// tool identity is the request that asks the user a question, which the
+    /// store handles on its own.
+    nonisolated var reportsToolsThroughHooks: Bool { false }
+
+    /// A Codex.app GUI thread has no process of its own: every thread carries
+    /// Codex.app's pid, so discovery finding the thread again is the only proof
+    /// that it is live. That proof revives an ended row, replaces the row's
+    /// process identity, and lets the rollout file set the activity time, since
+    /// these threads fire no turn hooks.
+    ///
+    /// A thread Zed hosts is excluded. Zed reconciles host and title itself,
+    /// and stamping Codex.app's pid here would undo the Zed liveness rule and
+    /// its navigation on every scan.
+    ///
+    /// CLI codex sessions have their own process, so the plain pid rule already
+    /// answers for them and rediscovery changes nothing.
+    nonisolated func rediscoveredAttachment(
+        for session: SessionState,
+        discovered: DiscoveredSession
+    ) -> RediscoveredAttachment? {
+        // SessionStore asks its Zed host rule before this agent rule. Rows Zed
+        // owns never reach this method, so the provider only answers the Codex
+        // attachment shape here.
+        guard discovered.tty == nil else { return nil }
+        return RediscoveredAttachment(
+            revivesEndedRow: true,
+            pid: discovered.pid == 0 ? .clear : .set(discovered.pid),
+            refreshesActivityFromTranscript: true
+        )
+    }
+
+    /// Read the whole group from the thread database at once. The bounded live
+    /// list comes first, because it is one statement that serves most rows and
+    /// stays cached until Codex writes again. Ids it misses go into a single
+    /// group read, and ids that read cannot find are remembered as absent, so
+    /// the per-row questions that follow cost nothing.
+    nonisolated func prewarmMetadata(sessionIds: [String]) {
+        guard !sessionIds.isEmpty else { return }
+        let live = Set(CodexThreadStore.liveThreadCandidates().map(\.id))
+        let missing = sessionIds.filter { !live.contains($0) }
+        guard !missing.isEmpty else { return }
+        _ = CodexThreadStore.threads(ids: missing)
+    }
+
+    /// Codex.app GUI threads (no tty) share one process and fire no per-thread
+    /// turn hooks, so the rollout file is the only live signal for them. CLI
+    /// codex sessions have their own process and their own hooks.
+    nonisolated func watchesTranscriptOnDiscovery(for session: SessionState) -> Bool {
+        // SessionStore has already excluded Zed-owned rows through its host
+        // snapshot. A remaining thread with no tty has no hooks of its own.
+        session.tty == nil
     }
 
     /// Codex threads have no recovery path once they drop out of the

@@ -23,16 +23,11 @@ final class ZedThreadRevealPlannerTests: XCTestCase {
         XCTAssertNil(ZedThreadRevealPlanner.query(forTitle: "  \n "))
     }
 
-    func testPlanOrdersFocusTypeSelectConfirm() {
+    func testPlanUsesDirectSidebarShortcutInsteadOfTypingAnAction() {
         let plan = ZedThreadRevealPlanner.plan(title: "pi-test-2", settleDelay: 0.2)
         XCTAssertEqual(plan, [
             .key(.openCommandPalette),
-            .delay(0.2),
-            .key(.selectAll),
-            .key(.deleteBackward),
-            .text(ZedThreadRevealPlanner.focusSidebarAction),
-            .delay(0.2),
-            .key(.confirm),
+            .key(.focusWorkspaceSidebar),
             .delay(0.2),
             .key(.focusSidebarFilter),
             .delay(0.2),
@@ -41,14 +36,16 @@ final class ZedThreadRevealPlannerTests: XCTestCase {
             .text("pi-test-2"),
             .delay(0.2),
             .key(.selectNext),
+            .key(.selectNext),
             .delay(0.2),
             .key(.confirm)
         ])
     }
 
-    func testPlanIncludesSelectNextBecauseFilteringClearsSelection() {
-        // Zed's sidebar calls `selection.take()` on every filter edit, so
-        // Confirm alone is a no-op.
+    func testPlanSelectsPastProjectHeaderToMatchingThread() {
+        // Zed clears selection after every filter edit, then places the
+        // matching project's header before its matching thread. The first
+        // SelectNext lands on that header; the second lands on the thread.
         let plan = ZedThreadRevealPlanner.plan(title: "hi")
         let keys = plan.compactMap { step -> ZedRevealKey? in
             if case let .key(key) = step { return key }
@@ -56,12 +53,11 @@ final class ZedThreadRevealPlannerTests: XCTestCase {
         }
         XCTAssertEqual(keys, [
             .openCommandPalette,
-            .selectAll,
-            .deleteBackward,
-            .confirm,
+            .focusWorkspaceSidebar,
             .focusSidebarFilter,
             .selectAll,
             .deleteBackward,
+            .selectNext,
             .selectNext,
             .confirm
         ])
@@ -72,20 +68,22 @@ final class ZedThreadRevealPlannerTests: XCTestCase {
         XCTAssertTrue(ZedThreadRevealPlanner.plan(title: " ").isEmpty)
     }
 
-    func testCleanupPlanReestablishesFocusBeforeClearingFilter() {
+    func testCleanupDefaultCompletesWithoutVisiblePaletteLatency() {
+        let delays = ZedThreadRevealPlanner.cleanupPlan().compactMap { step -> Double? in
+            if case let .delay(seconds) = step { return seconds }
+            return nil
+        }
+        XCTAssertEqual(delays.reduce(0, +), 0.24, accuracy: 0.001)
+    }
+
+    func testCleanupPlanReanchorsSidebarBeforeClearingFilterAndFocusingAgent() {
         XCTAssertEqual(ZedThreadRevealPlanner.cleanupPlan(settleDelay: 0.1), [
             .key(.openCommandPalette),
+            .key(.focusWorkspaceSidebar),
             .delay(0.1),
-            .key(.selectAll),
-            .key(.deleteBackward),
-            .text(ZedThreadRevealPlanner.focusSidebarAction),
-            .delay(0.1),
-            .key(.confirm),
-            .delay(0.1),
-            .key(.focusSidebarFilter),
-            .delay(0.1),
-            .key(.selectAll),
-            .key(.deleteBackward)
+            .key(.cancel),
+            .key(.focusAgentFromSidebar),
+            .delay(0.1)
         ])
     }
 }

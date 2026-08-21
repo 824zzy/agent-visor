@@ -3,11 +3,8 @@
 //  AgentVisor
 //
 //  Fires a no-op AppleScript at each automation target (Ghostty, iTerm2)
-//  during app launch so macOS shows the "Agent Visor wants to control
-//  X" TCC prompt BEFORE the notch is open. Without this, the first
-//  AppleScript call happens when the user types in the chat composer,
-//  by which time the notch panel is up at a high `windowLevel` and the
-//  TCC alert renders behind it — unreachable without killing the app.
+//  during app launch so macOS requests permission before the user's first
+//  send. The system prompt therefore does not interrupt a message submission.
 //
 //  Probes run on a background queue so app launch isn't blocked by the
 //  user's grant/deny decision. One probe per target per agent-visor

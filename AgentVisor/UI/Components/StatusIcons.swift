@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AgentVisorCore
 
 // MARK: - Waiting for Input Icon (speech bubble)
 struct WaitingForInputIcon: View {
