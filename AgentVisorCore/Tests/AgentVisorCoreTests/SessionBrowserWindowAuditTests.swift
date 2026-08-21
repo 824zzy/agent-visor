@@ -59,7 +59,7 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         XCTAssertTrue(appDelegate.contains("ensureMainWindowController().toggleSessions()"))
     }
 
-    func testRowsAndKeyboardUseStableChatFirstActions() throws {
+    func testRowsAndKeyboardUseStableSourceFirstActions() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let split = try String(contentsOf: root
             .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
@@ -107,12 +107,20 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
 
         XCTAssertTrue(split.contains("Button(action: onActivate)"))
         XCTAssertTrue(split.contains("private var primaryDestinationLabel: some View"))
-        XCTAssertTrue(split.contains("Label(item.ownerName, systemImage: \"arrow.up.forward.app\")"))
+        XCTAssertTrue(split.contains("Label(\"Open in \\(item.ownerName)\", systemImage: \"arrow.up.forward.app\")"))
+        XCTAssertTrue(split.contains("@State private var isPrimaryHovered = false"))
+        XCTAssertTrue(split.contains(".background(primaryRowBackground)"))
+        XCTAssertTrue(split.contains("ChatTheme.link : ChatTheme.secondary"))
+        XCTAssertTrue(split.contains("if showsOwner, primaryAction != .openOriginal, item.ownerName != item.sourceName"))
+        XCTAssertFalse(split.contains(".background(rowBackground)"))
         XCTAssertTrue(split.contains("SessionBrowserAccessoryAction("))
         XCTAssertTrue(split.contains("fullTitle: \"Open Chat\""))
         XCTAssertTrue(split.contains("action: onEnterChat"))
+        XCTAssertTrue(split.contains("ChatTheme.link : ChatTheme.tertiary"))
         XCTAssertTrue(split.contains("onOpenOriginal: { viewModel.openOriginal(sessionId) }"))
-        XCTAssertTrue(split.contains(".frame(width: 138, alignment: .trailing)"))
+        XCTAssertTrue(split.contains(".frame(width: 138, alignment: .leading)"))
+        XCTAssertTrue(split.contains(".frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)"))
+        XCTAssertTrue(split.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
         XCTAssertFalse(split.contains("chatDisclosureChevron"))
         XCTAssertFalse(split.contains("prominent: true"))
         XCTAssertTrue(split.contains("keyboardHint(keys: \"↩\", label: footerLabel"))
@@ -133,7 +141,7 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         let footerLabel = String(split[start..<end])
         XCTAssertTrue(footerLabel.contains("SessionBrowserPrimaryActionPolicy.footerLabel"))
         XCTAssertFalse(footerLabel.contains("ownerName"))
-        XCTAssertTrue(split.contains("Label(item.ownerName, systemImage: \"arrow.up.forward.app\")"))
+        XCTAssertTrue(split.contains("Label(\"Open in \\(item.ownerName)\", systemImage: \"arrow.up.forward.app\")"))
     }
 
     func testBackKeepsTheMountedBrowserStateInsteadOfReconstructingIt() throws {

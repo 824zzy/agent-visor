@@ -49,7 +49,7 @@ struct SessionChatWorkspace: View {
     }
 
     private func chatHeader(_ session: SessionState) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 6) {
             backButton
             HStack(spacing: 7) {
                 SessionStatusDot(session: session, diameter: 7, colorScheme: .adaptive)
@@ -68,9 +68,11 @@ struct SessionChatWorkspace: View {
                     Button(action: onOpenOriginal) {
                         Label("Open in \(ownerName)", systemImage: "arrow.up.forward")
                             .font(.system(size: 12, weight: .medium))
+                            .padding(.horizontal, 8)
+                            .frame(minHeight: 32)
+                            .chatHeaderActionHover()
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.plain)
                     .fixedSize()
                 }
                 detailsMenu(session)
@@ -95,9 +97,12 @@ struct SessionChatWorkspace: View {
         Button(action: onBack) {
             Label("Sessions", systemImage: "chevron.left")
                 .font(.system(size: 12, weight: .semibold))
+                .padding(.horizontal, 8)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                .chatHeaderActionHover()
         }
         .buttonStyle(.plain)
-        .foregroundColor(ChatTheme.secondary)
         .fixedSize()
         .keyboardShortcut("[", modifiers: .command)
         .accessibilityLabel("Back to Sessions")
@@ -121,9 +126,9 @@ struct SessionChatWorkspace: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(ChatTheme.secondary)
-                .frame(width: 28, height: 24)
+                .frame(width: 28, height: 32)
                 .contentShape(Rectangle())
+                .chatHeaderActionHover()
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -156,5 +161,26 @@ struct SessionChatWorkspace: View {
             forCwd: path,
             homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path
         )
+    }
+}
+
+private struct ChatHeaderActionHoverStyle: ViewModifier {
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundColor(isHovered ? ChatTheme.link : ChatTheme.secondary)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isHovered ? ChatTheme.link.opacity(0.08) : Color.clear)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .onHover { isHovered = $0 }
+    }
+}
+
+private extension View {
+    func chatHeaderActionHover() -> some View {
+        modifier(ChatHeaderActionHoverStyle())
     }
 }

@@ -593,7 +593,7 @@ private struct SessionBrowserRow: View {
     let onEnterChat: () -> Void
     let onOpenOriginal: () -> Void
     let onHide: () -> Void
-    @State private var isHovered = false
+    @State private var isPrimaryHovered = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -628,6 +628,14 @@ private struct SessionBrowserRow: View {
             .buttonStyle(.plain)
             .disabled(!item.canEnterChat && !item.canOpenOriginal)
             .accessibilityLabel(primaryAccessibilityLabel)
+            .frame(maxWidth: .infinity)
+            .background(primaryRowBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isHighlighted ? ChatTheme.link.opacity(0.45) : Color.clear, lineWidth: 1)
+            )
+            .onHover { isPrimaryHovered = $0 }
 
             if item.canOpenOriginal && item.canEnterChat {
                 SessionBrowserAccessoryAction(
@@ -636,19 +644,10 @@ private struct SessionBrowserRow: View {
                     systemImage: "bubble.left",
                     action: onEnterChat
                 )
-                .frame(width: 138, alignment: .trailing)
+                .frame(width: 138, alignment: .leading)
                 .padding(.trailing, 8)
                 .accessibilityLabel("Open Chat for \(item.title)")
             }
-        }
-        .background(rowBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(isHighlighted ? ChatTheme.link.opacity(0.45) : Color.clear, lineWidth: 1)
-        )
-        .onHover { hovering in
-            isHovered = hovering
         }
         .contextMenu {
             if item.canOpenOriginal {
@@ -684,16 +683,16 @@ private struct SessionBrowserRow: View {
             if showsProject {
                 BrowserChip(text: item.projectName, tint: Catppuccin.lavender)
             }
-            if showsOwner, item.ownerName != item.sourceName {
+            if showsOwner, primaryAction != .openOriginal, item.ownerName != item.sourceName {
                 BrowserChip(text: item.ownerName, tint: Catppuccin.sky)
             }
             Spacer(minLength: 4)
         }
     }
 
-    private var rowBackground: Color {
+    private var primaryRowBackground: Color {
         if isHighlighted { return ChatTheme.cardBg }
-        if isHovered { return ChatTheme.cardBg.opacity(0.72) }
+        if isPrimaryHovered { return ChatTheme.cardBg.opacity(0.72) }
         return Color.clear
     }
 
@@ -738,17 +737,23 @@ private struct SessionBrowserRow: View {
         Group {
             switch primaryAction {
             case .enterChat:
-                Label("Chat", systemImage: "bubble.left")
+                ViewThatFits(in: .horizontal) {
+                    Label("Open Chat", systemImage: "bubble.left")
+                    Image(systemName: "bubble.left")
+                }
             case .openOriginal:
-                Label(item.ownerName, systemImage: "arrow.up.forward.app")
+                ViewThatFits(in: .horizontal) {
+                    Label("Open in \(item.ownerName)", systemImage: "arrow.up.forward.app")
+                    Label(item.ownerName, systemImage: "arrow.up.forward.app")
+                    Image(systemName: "arrow.up.forward.app")
+                }
             case .none:
                 EmptyView()
             }
         }
         .contentScaledFont(size: 11, weight: .semibold)
-        .foregroundColor(isHovered ? ChatTheme.link : ChatTheme.tertiary)
+        .foregroundColor(isPrimaryHovered ? ChatTheme.link : ChatTheme.secondary)
         .lineLimit(1)
-        .fixedSize()
         .frame(minWidth: 72, minHeight: 32, alignment: .trailing)
         .accessibilityHidden(true)
     }
@@ -783,11 +788,11 @@ private struct SessionBrowserAccessoryAction: View {
                     .frame(minWidth: 28, minHeight: 32)
             }
             .contentScaledFont(size: 11, weight: .semibold)
-            .foregroundColor(isHovered ? ChatTheme.link : ChatTheme.secondary)
+            .foregroundColor(isHovered ? ChatTheme.link : ChatTheme.tertiary)
             .lineLimit(1)
             .padding(.horizontal, 6)
             .padding(.vertical, 5)
-            .frame(maxWidth: .infinity, minHeight: 32, alignment: .trailing)
+            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(isHovered ? ChatTheme.link.opacity(0.08) : Color.clear)
@@ -795,7 +800,7 @@ private struct SessionBrowserAccessoryAction: View {
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onHover { isHovered = $0 }
         .help(fullTitle)
     }

@@ -66,8 +66,8 @@ The keyboard cursor starts at the first visible row when the browser opens or th
 | Cmd+- | Decrease the shared Sessions-and-Chat content font scale by 10% |
 | Cmd+0 | Reset the shared Sessions-and-Chat content font scale to 100% |
 | Escape with a query | Clear the query and keep search focused |
-| Owner destination label | Names the row's canonical owning app or terminal; it is part of the row target, not a separate button |
-| Open Chat action | Enter Agent Visor Chat without opening the canonical owner |
+| `Open in <owner>` label | Names the row's canonical owner inside the primary row target; its hover and selection stop before Chat |
+| `Open Chat` action | Enter Agent Visor Chat through a separate, visually quieter target |
 | Details menu | Reveal optional source, owner, project, path, model, and last-tool metadata from the Chat header |
 | Context menu | Duplicate `Open in <owner>` and `Open Chat` when available, plus hide |
 
@@ -127,8 +127,8 @@ Interaction tests must prove:
 - row click and Return open the canonical owner when routing is supported;
 - Chat-only rows fall back to Agent Visor Chat;
 - Shift-Return opens Chat with capability-safe fallback;
-- the owner label names the row's primary destination without creating another button;
-- the always-visible Chat action opens only Agent Visor Chat;
+- `Open in <owner>` names the row's primary destination without creating another button or owner chip;
+- the always-visible Chat action opens only Agent Visor Chat and has an independent hover surface;
 - no generic disclosure chevron hides the row's destination;
 - opening the browser does not parse conversation content;
 - Back preserves query, keyboard cursor, and viewport;
@@ -140,7 +140,9 @@ Interaction tests must prove:
 
 Source-wiring audits must reject an `onHover` path that calls `highlightSession` or any path that turns every highlight change into `scrollTo(..., anchor: .center)`.
 
-Manual regression checks must include a long list, trackpad scrolling, a top-to-bottom pointer sweep, rapid phase changes, search entry and clearing, keyboard navigation, row/Return Chat entry, Shift-Return owner routing, the explicit owner action, Chat/Back, optional Details, and session removal.
+Manual regression checks must include long-list scrolling, a pointer sweep, rapid phase changes, search, keyboard navigation, row or Return owner opening, and session removal.
+
+Also check Shift-Return, explicit Chat opening, Chat and Back, and Details.
 
 ## Regression Guard
 

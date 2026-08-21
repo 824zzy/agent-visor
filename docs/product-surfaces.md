@@ -150,8 +150,8 @@ User-facing UI calls the desktop conversation surface **Chat**, not **Transcript
 
 - A normal Sessions-browser row click and Return open the canonical owner. If that destination is unavailable, activation safely falls back to Chat when renderable.
 - Shift-Return opens Agent Visor Chat when renderable. If Chat is unavailable, it falls back to the owner.
-- The row names its primary owner destination with the owner label and external-open symbol.
-- `Open Chat` remains an always-visible, visually secondary trailing action when both destinations are supported. It has a disjoint hit target and never depends on hover or a context menu.
+- The row names its primary owner destination as `Open in <owner>` with an external-open symbol. It does not repeat the owner as a metadata chip.
+- `Open Chat` remains an always-visible, visually secondary trailing action when both destinations are supported. Its hit target, hover, and selection surface stay separate from the primary row target.
 - Chat replaces the browser content inside the same main window; it is not a modal sheet, popover, or permanent split pane.
 - `Back to Sessions` restores the already-mounted browser with its query, keyboard cursor, and viewport intact.
 - The Chat surface reuses Agent Visor's established Claude Code conversation, composer, approval, pagination, and status presentation. Pi reaches that same source-agnostic surface through its provider parser and text sender.
@@ -247,7 +247,7 @@ Within an attention tier, newer phase-entry evidence sorts first and session ID 
 ## Navigation Contract
 
 - In the Sessions browser, a normal row click or Return opens the canonical owner when routing is supported. Chat-only rows open Chat instead of exposing a dead owner action.
-- Shift-Return opens Chat when renderable. The visible owner label names the row's primary destination, while `Open Chat` remains a separate secondary action.
+- Shift-Return opens Chat when renderable. `Open in <owner>` names the row's primary destination, while `Open Chat` remains a separate, quieter action.
 - Pointer and keyboard activation agree. Menu-bar pills and the `+N` popover retain their original-owner-first behavior; Option-click or their explicit Agent Visor action enters Chat.
 - Saved legacy browser-action and click-routing preferences are inert and must not override these surface-specific actions.
 - A session pill's context menu contains only `Pill Settings...`. It does not repeat the normal open action or expose alternate click defaults.
