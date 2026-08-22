@@ -637,17 +637,19 @@ private struct SessionBrowserRow: View {
             )
             .onHover { isPrimaryHovered = $0 }
 
-            if item.canOpenOriginal && item.canEnterChat {
-                SessionBrowserAccessoryAction(
-                    fullTitle: "Open Chat",
-                    compactTitle: "Chat",
-                    systemImage: "bubble.left",
-                    action: onEnterChat
-                )
-                .frame(width: 138, alignment: .leading)
-                .padding(.trailing, 8)
-                .accessibilityLabel("Open Chat for \(item.title)")
+            ZStack(alignment: .leading) {
+                if item.canOpenOriginal && item.canEnterChat {
+                    SessionBrowserAccessoryAction(
+                        fullTitle: "Open Chat",
+                        compactTitle: "Chat",
+                        systemImage: "bubble.left",
+                        action: onEnterChat
+                    )
+                    .accessibilityLabel("Open Chat for \(item.title)")
+                }
             }
+            .frame(width: 138, alignment: .leading)
+            .padding(.trailing, 8)
         }
         .contextMenu {
             if item.canOpenOriginal {
@@ -754,7 +756,8 @@ private struct SessionBrowserRow: View {
         .contentScaledFont(size: 11, weight: .semibold)
         .foregroundColor(isPrimaryHovered ? ChatTheme.link : ChatTheme.secondary)
         .lineLimit(1)
-        .frame(minWidth: 72, minHeight: 32, alignment: .trailing)
+        .frame(width: 120, alignment: .leading)
+        .frame(minHeight: 32, alignment: .leading)
         .accessibilityHidden(true)
     }
 

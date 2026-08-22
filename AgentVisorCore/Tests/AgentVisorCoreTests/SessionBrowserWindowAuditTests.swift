@@ -129,6 +129,22 @@ final class SessionBrowserWindowAuditTests: XCTestCase {
         XCTAssertFalse(split.contains("Inspect session"))
     }
 
+    func testRowActionsUseFixedLeadingAlignedColumns() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let split = try String(contentsOf: root
+            .appendingPathComponent("AgentVisor/UI/Window/MainSplitView.swift"))
+
+        guard let start = split.range(of: "private var primaryDestinationLabel")?.lowerBound,
+              let end = split.range(of: "private var primaryAccessibilityLabel", range: start..<split.endIndex)?.lowerBound else {
+            return XCTFail("Could not isolate primaryDestinationLabel.")
+        }
+        let destination = String(split[start..<end])
+        XCTAssertTrue(destination.contains(".frame(width: 120, alignment: .leading)\n        .frame(minHeight: 32, alignment: .leading)"))
+        XCTAssertFalse(destination.contains(".frame(minWidth:"))
+        XCTAssertTrue(split.contains("            ZStack(alignment: .leading) {\n                if item.canOpenOriginal && item.canEnterChat {"))
+        XCTAssertTrue(split.contains("                }\n            }\n            .frame(width: 138, alignment: .leading)"))
+    }
+
     func testFooterActionCopyIsProviderNeutralWhileRowsKeepExactOwners() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let split = try String(contentsOf: root
