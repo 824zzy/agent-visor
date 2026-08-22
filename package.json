@@ -1,0 +1,22 @@
+{
+  "name": "agent-visor",
+  "version": "2.6.2",
+  "private": true,
+  "packageManager": "npm@11.6.2",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=@agent-visor/protocol && npm run build --workspace=@agent-visor/server && npm run build --workspace=@agent-visor/app && npm run test:export --workspace=@agent-visor/desktop && npm run build --workspace=@agent-visor/desktop",
+    "dev:desktop": "npm run dev --workspace=@agent-visor/desktop",
+    "test": "npm run build --workspace=@agent-visor/protocol && npm run test --workspace=@agent-visor/protocol && npm run test --workspace=@agent-visor/server && npm run test --workspace=@agent-visor/app && npm run test --workspace=@agent-visor/desktop",
+    "typecheck": "npm run build --workspace=@agent-visor/protocol && npm run typecheck --workspace=@agent-visor/server && npm run typecheck --workspace=@agent-visor/app && npm run typecheck --workspace=@agent-visor/desktop"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "4.1.6"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

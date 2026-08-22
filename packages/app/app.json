@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "Agent Visor",
+    "slug": "agent-visor",
+    "version": "0.1.0",
+    "orientation": "default",
+    "platforms": ["web"],
+    "experiments": {
+      "baseUrl": "."
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    }
+  }
+}

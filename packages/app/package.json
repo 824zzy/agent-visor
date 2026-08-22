@@ -1,0 +1,23 @@
+{
+  "name": "@agent-visor/app",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "build": "expo export --platform web --output-dir dist",
+    "dev": "expo start --web --port 8081",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@agent-visor/protocol": "*",
+    "@types/react": "19.2.18",
+    "expo": "57.0.15",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-web": "~0.21.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.6"
+  }
+}

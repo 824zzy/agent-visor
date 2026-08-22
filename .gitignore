@@ -10,7 +10,6 @@ xcuserdata/
 
 # Swift Package Manager
 .build/
-Packages/
 Package.resolved
 !AgentVisor.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
@@ -52,3 +51,11 @@ AGENTS.md
 
 # Local-only notes (reddit/twitter drafts, etc.)
 drafts/
+
+# TypeScript, Expo, and Electron
+node_modules/
+packages/*/dist/
+packages/app/.expo/
+packages/app/web-build/
+packages/app/.metro-health-check*
+npm-debug.log*

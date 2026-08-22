@@ -23,6 +23,8 @@ final class BrandIdentityAuditTests: XCTestCase {
             ".git",
             ".swiftpm",
             "build",
+            "dist",
+            "node_modules",
             "releases",
         ]
 

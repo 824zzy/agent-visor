@@ -1,0 +1,23 @@
+{
+  "name": "@agent-visor/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "node scripts/dev.mjs",
+    "test": "vitest run",
+    "test:export": "node scripts/test-exported-renderer.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@agent-visor/server": "*"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.7",
+    "electron": "41.10.6",
+    "typescript": "5.9.3",
+    "vitest": "4.1.6"
+  }
+}
