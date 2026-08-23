@@ -16,6 +16,21 @@ export function daemonUrlFromReadyMessage(value: unknown): string | undefined {
   return localDaemonUrl(message.url);
 }
 
+export function ownerApplication(owner: string): string | undefined {
+  return {
+    Auggie: "Auggie",
+    Claude: "Claude",
+    "Claude Code": "Claude",
+    Codex: "Codex",
+    Cursor: "Cursor",
+    Ghostty: "Ghostty",
+    iTerm2: "iTerm",
+    Pi: "Pi",
+    Terminal: "Terminal",
+    Zed: "Zed",
+  }[owner];
+}
+
 export function daemonUrlFromArguments(arguments_: string[]): string | undefined {
   const prefix = "--agent-visor-daemon=";
   const argument = arguments_.find((value) => value.startsWith(prefix));

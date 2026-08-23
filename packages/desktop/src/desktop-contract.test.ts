@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   daemonUrlFromArguments,
   daemonUrlFromReadyMessage,
+  ownerApplication,
   rendererLocation,
 } from "./desktop-contract.js";
 
@@ -31,6 +32,12 @@ describe("desktop launch contract", () => {
       daemonUrlFromReadyMessage({ type: "ready", url: "wss://remote.example" }),
     ).toBeUndefined();
     expect(daemonUrlFromReadyMessage({ type: "ready" })).toBeUndefined();
+  });
+
+  it("allows only known owner applications", () => {
+    expect(ownerApplication("Ghostty")).toBe("Ghostty");
+    expect(ownerApplication("Claude Code")).toBe("Claude");
+    expect(ownerApplication("arbitrary --argument")).toBeUndefined();
   });
 
   it("reads the daemon credential from Electron's isolated preload argument", () => {

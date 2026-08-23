@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { SessionSummary } from "@agent-visor/protocol";
-import { groupSessions } from "./session-groups.js";
+import {
+  groupSessions,
+  moveSessionCursor,
+  reconcileSessionCursor,
+  relativeSessionAge,
+  sessionAction,
+  selectSessions,
+} from "./session-groups.js";
 
 const session = (
   id: string,
@@ -48,5 +55,48 @@ describe("groupSessions", () => {
         session("working", "working", "2026-08-22T09:00:00.000Z"),
       ]).map(({ title }) => title),
     ).toEqual(["In progress"]);
+  });
+
+  it("uses source-first actions with capability-safe fallbacks", () => {
+    const both = session("both", "working", "2026-08-22T10:00:00.000Z");
+    const chatOnly = { ...both, canOpenOwner: false };
+    const ownerOnly = { ...both, canEnterChat: false };
+    const neither = { ...ownerOnly, canOpenOwner: false };
+
+    expect(sessionAction(both)).toBe("owner");
+    expect(sessionAction(both, true)).toBe("chat");
+    expect(sessionAction(chatOnly)).toBe("chat");
+    expect(sessionAction(ownerOnly, true)).toBe("owner");
+    expect(sessionAction(neither)).toBeUndefined();
+  });
+
+  it("reveals only explicit cursor and query moves", () => {
+    expect(reconcileSessionCursor("second", ["first", "second"], ["first", "second"], "background"))
+      .toEqual({ cursorId: "second" });
+    expect(reconcileSessionCursor("second", ["first", "second"], ["first"], "background"))
+      .toEqual({ cursorId: "first" });
+    expect(reconcileSessionCursor("second", ["first", "second"], ["third", "first"], "query"))
+      .toEqual({ cursorId: "third", revealId: "third" });
+    expect(moveSessionCursor("first", ["first", "second"], 1))
+      .toEqual({ cursorId: "second", revealId: "second" });
+    expect(moveSessionCursor(undefined, ["first", "second"], 1))
+      .toEqual({ cursorId: "first", revealId: "first" });
+  });
+
+  it("formats compact relative ages", () => {
+    const now = new Date("2026-08-22T10:00:00.000Z");
+    expect(relativeSessionAge("2026-08-22T09:58:00.000Z", now)).toBe("2m");
+    expect(relativeSessionAge("2026-08-22T07:00:00.000Z", now)).toBe("3h");
+    expect(relativeSessionAge("2026-08-20T10:00:00.000Z", now)).toBe("2d");
+  });
+
+  it("ranks title search matches before newer metadata matches", () => {
+    const titleMatch = { ...session("title", "history", "2026-08-20T10:00:00.000Z"), title: "Fix daemon" };
+    const metadataMatch = { ...session("metadata", "working", "2026-08-22T10:00:00.000Z"), project: "daemon" };
+
+    const selection = selectSessions([metadataMatch, titleMatch], "daemon");
+
+    expect(selection.groups.map(({ title }) => title)).toEqual(["Results"]);
+    expect(selection.orderedSessions.map(({ id }) => id)).toEqual(["title", "metadata"]);
   });
 });

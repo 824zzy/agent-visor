@@ -24,6 +24,22 @@ The daemon now reads live providers and streams stable session revisions. Its be
 
 Release scripts still point only at the Swift application.
 
+## Sessions browser
+
+The Expo renderer now matches the released browser’s state sections, ranked search, keyboard cursor, source-first rows, and separate Chat actions.
+
+Rows keep fixed owner and Chat columns at desktop and compact widths. Back retains the query, cursor, and viewport because Sessions stays mounted and hidden.
+
+Electron activates only known owner applications. Exact session and window focus remains part of the native-services parity work.
+
+Run the Electron accessibility and layout check with:
+
+```sh
+npm run test:sessions
+```
+
+Chat currently shows the retained-browser handoff surface. Conversation rendering and transport follow in the Chat parity work.
+
 ## Dependency status
 
 `npm audit --omit=dev` reports no production dependency vulnerabilities.

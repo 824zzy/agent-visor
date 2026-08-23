@@ -1,0 +1,4 @@
+{
+  "main": "../test-sessions-accessibility.mjs",
+  "type": "module"
+}

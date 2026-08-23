@@ -2,8 +2,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow } from "electron";
-import { daemonUrlFromReadyMessage, rendererLocation } from "./desktop-contract.js";
+import { app, BrowserWindow, ipcMain } from "electron";
+import { daemonUrlFromReadyMessage, ownerApplication, rendererLocation } from "./desktop-contract.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 let daemon: ChildProcess | undefined;
@@ -13,6 +13,12 @@ app.setName("Agent Visor Next");
 
 app.on("before-quit", () => daemon?.kill("SIGTERM"));
 app.on("window-all-closed", () => app.quit());
+ipcMain.on("session:open-owner", (event, owner: unknown) => {
+  if (event.sender !== mainWindow?.webContents || typeof owner !== "string") return;
+  const application = ownerApplication(owner);
+  if (!application) return;
+  spawn("/usr/bin/open", ["-a", application], { detached: true, stdio: "ignore" }).unref();
+});
 
 void app.whenReady()
   .then(async () => {
@@ -29,8 +35,8 @@ async function createMainWindow(daemonUrl: string): Promise<BrowserWindow> {
   const window = new BrowserWindow({
     width: 1040,
     height: 760,
-    minWidth: 760,
-    minHeight: 520,
+    minWidth: 960,
+    minHeight: 680,
     backgroundColor: "#f1f2f7",
     title: "Agent Visor Next",
     titleBarStyle: "hiddenInset",
