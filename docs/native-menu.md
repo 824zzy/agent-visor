@@ -34,7 +34,9 @@ A helper action travels back through the authenticated local helper connection. 
 
 Electron serializes owner activations and rejects owners outside its application allowlist.
 
-Exact session and window focus remains a cutover blocker. Owner activation stays source-first until a verified target route exists.
+Pill actions use the provider-owned exact target when one exists.
+
+Terminal sessions use exact TTY focus. Codex application sessions use their validated thread URL. Other rows use the strict source-application fallback.
 
 ## Accessibility
 

@@ -86,6 +86,16 @@ export async function startServer(options: {
           nativeSubscribers.add(socket);
           send(socket, options.nativeServices.current());
         }
+      } else if (parsed.data.type === "focus_session") {
+        const error = source.focusSession
+          ? await source.focusSession(parsed.data.sessionId)
+          : "Exact session focus is unavailable.";
+        send(socket, {
+          type: "native_action_result",
+          id: parsed.data.id,
+          ok: !error,
+          ...(error ? { error } : {}),
+        });
       } else if (parsed.data.type === "update_settings"
         || parsed.data.type === "native_service_action") {
         const error = options.nativeServices

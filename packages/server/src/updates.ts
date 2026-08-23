@@ -31,7 +31,7 @@ export async function checkForUpdates(currentVersion: string): Promise<UpdateSta
   try {
     const response = await fetch("https://824zzy.github.io/agent-visor/appcast.xml", {
       signal: AbortSignal.timeout(15_000),
-      headers: { accept: "application/xml", "user-agent": "AgentVisor/2.6.2" },
+      headers: { accept: "application/xml", "user-agent": `AgentVisor/${currentVersion}` },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return updateFromAppcast(await response.text(), currentVersion);

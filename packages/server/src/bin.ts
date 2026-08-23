@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type { NativeHelperUsageGlance } from "@agent-visor/protocol";
+import { stopCodexTurns } from "./codex-turn.js";
 import { startHookSocket, type RunningHookSocket } from "./hook-socket.js";
 import { menuPresentation, nativeActionFor } from "./menu.js";
 import { NativeHelperProcess, UnavailableNativeHelper } from "./native-helper.js";
@@ -9,6 +10,7 @@ import { NativeServicesRepository } from "./native-services.js";
 import { liveProviders } from "./providers/index.js";
 import { startServer } from "./server.js";
 import { SessionRepository } from "./sessions.js";
+import { NativeSessionControls } from "./session-controls.js";
 import { readLegacyDefaults, SettingsRepository } from "./settings.js";
 import { readCodexUsage } from "./usage.js";
 import { checkForUpdates } from "./updates.js";
@@ -47,6 +49,14 @@ const nativeHelperExecutable = process.env.AGENT_VISOR_NATIVE_HELPER;
 if (nativeHelperExecutable) {
   try {
     nativeHelper = await NativeHelperProcess.start(nativeHelperExecutable, (event) => {
+      if (event.event === "activate_pill") {
+        void repository.focusSession(event.sessionId).then((error) => {
+          if (!error) return;
+          const action = nativeActionFor(event, repository.current());
+          if (action) process.send?.(action);
+        });
+        return;
+      }
       const action = nativeActionFor(event, repository.current());
       if (action) process.send?.(action);
     });
@@ -84,9 +94,20 @@ if (nativeHelperExecutable) {
   }
 }
 
+const helperAdapter = nativeHelper ?? new UnavailableNativeHelper();
+const sessionControls = new NativeSessionControls(
+  helperAdapter,
+  path.join(dataRoot, "chat-images"),
+  undefined,
+  async (url) => { process.send?.({ type: "native_action", action: "open_session_url", url }); },
+  (sessionId, pending, respond) => repository.registerExternalAction(
+    sessionId, pending, respond,
+  ),
+);
+repository.setControls(sessionControls);
 nativeServices = new NativeServicesRepository({
   settings,
-  helper: nativeHelper ?? new UnavailableNativeHelper(),
+  helper: helperAdapter,
   currentVersion,
   checkUpdates: () => checkForUpdates(currentVersion),
   emitDesktop: (effect) => process.send?.({ type: "native_effect", ...effect }),
@@ -141,6 +162,8 @@ async function stop(): Promise<void> {
   unsubscribeMenu?.();
   unsubscribeNotifications?.();
   unsubscribeSettings?.();
+  stopCodexTurns();
+  await sessionControls.close();
   await nativeHelper?.close();
   await hookSocket?.close();
   await running.close();

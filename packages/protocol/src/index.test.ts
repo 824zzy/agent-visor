@@ -96,6 +96,9 @@ describe("session snapshot protocol", () => {
     expect(nativeServicesStateSchema.parse(state)).toEqual(state);
     expect(clientMessageSchema.safeParse({ type: "get_native_services" }).success).toBe(true);
     expect(clientMessageSchema.safeParse({
+      type: "focus_session", id: "focus-1", sessionId: "pi-123",
+    }).success).toBe(true);
+    expect(clientMessageSchema.safeParse({
       type: "update_settings", id: "settings-1", patch: { appearance: "system" },
     }).success).toBe(true);
     expect(clientMessageSchema.safeParse({

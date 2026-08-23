@@ -31,7 +31,15 @@ The authenticated WebSocket client can allow, always allow, deny, or answer a qu
 
 Question answers use the question text as the dictionary key, matching Claude Code’s hook contract.
 
-Text and image message schemas are ready for provider transports. Exact native message delivery remains disabled and blocks production cutover.
+Verified active Claude Code and Pi terminal sessions accept text through the signed helper’s exact TTY route.
+
+Claude image paths use private bracketed pastes. Pi receives one ordered prompt containing text and local image paths.
+
+Codex resumes the exact thread through `codex app-server`, then starts a text and local-image turn.
+
+The daemon keeps that app-server process until the turn completes. Command, file, permission, and question requests use the shared Chat response controls.
+
+Cursor, Zed-hosted, historical, and sessions without verified control metadata remain read only.
 
 The renderer reports that limit instead of exposing a composer that cannot deliver.
 

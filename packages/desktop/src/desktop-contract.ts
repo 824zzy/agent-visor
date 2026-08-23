@@ -18,13 +18,23 @@ export function daemonUrlFromReadyMessage(value: unknown): string | undefined {
 
 export type NativeAction =
   | { action: "open_sessions" }
-  | { action: "open_owner"; owner: string; sessionId: string };
+  | { action: "open_owner"; owner: string; sessionId: string }
+  | { action: "open_session_url"; url: string };
 
 export function nativeActionFromDaemonMessage(value: unknown): NativeAction | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const message = value as Record<string, unknown>;
   if (message.type !== "native_action") return undefined;
   if (message.action === "open_sessions") return { action: "open_sessions" };
+  if (message.action === "open_session_url" && typeof message.url === "string") {
+    try {
+      const url = new URL(message.url);
+      return url.protocol === "codex:" && url.hostname === "threads"
+        && /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(url.pathname)
+        ? { action: "open_session_url", url: message.url }
+        : undefined;
+    } catch { return undefined; }
+  }
   if (message.action !== "open_owner"
     || typeof message.owner !== "string"
     || typeof message.sessionId !== "string"

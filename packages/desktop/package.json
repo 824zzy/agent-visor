@@ -11,6 +11,7 @@
     "test:chat": "electron scripts/e2e --chat",
     "test:export": "node scripts/test-exported-renderer.mjs",
     "test:native-services": "electron scripts/test-native-services-accessibility.mjs",
+    "test:clean-profile": "node scripts/test-clean-profile.mjs && electron scripts/test-native-services-accessibility.mjs",
     "test:sessions": "electron scripts/e2e",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

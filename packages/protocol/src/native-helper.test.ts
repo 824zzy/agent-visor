@@ -66,6 +66,22 @@ const requests = [
       },
     },
   },
+  {
+    version: 1,
+    id: "focus-terminal",
+    method: "focus_terminal",
+    params: { target: { application: "Ghostty", tty: "ttys012", cwd: "/tmp/project" } },
+  },
+  {
+    version: 1,
+    id: "send-terminal",
+    method: "send_terminal",
+    params: {
+      target: { application: "Ghostty", tty: "/dev/ttys012", cwd: "/tmp/project" },
+      text: "Continue",
+      submit: true,
+    },
+  },
 ] as const;
 
 describe("native helper protocol", () => {
@@ -90,6 +106,14 @@ describe("native helper protocol", () => {
         id: "bad-focus",
         method: "focus",
         params: { target: { pid: 0, bundleIdentifier: "" } },
+      }).success,
+    ).toBe(false);
+    expect(
+      nativeHelperRequestSchema.safeParse({
+        version: 1,
+        id: "unsafe-terminal",
+        method: "focus_terminal",
+        params: { target: { application: "Ghostty", tty: "/dev/null", cwd: "/" } },
       }).success,
     ).toBe(false);
   });

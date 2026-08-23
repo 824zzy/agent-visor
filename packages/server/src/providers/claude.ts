@@ -1,7 +1,9 @@
 import path from "node:path";
 import type { ProviderAdapter, DiscoveredProviderSession } from "../sessions.js";
 import type { ProviderEnvironment } from "./environment.js";
-import { isRecord, iso, ownerForProcess } from "./shared.js";
+import {
+  applicationTargetForProcess, isRecord, iso, ownerForProcess, terminalTargetForProcess,
+} from "./shared.js";
 
 const terminalStatuses = new Set([
   "ended", "exited", "closed", "deactivated", "inactive", "stopped", "terminated",
@@ -52,6 +54,8 @@ export class ClaudeProvider implements ProviderAdapter {
       const owner = process.tty
         ? ownerForProcess(pid, processes)
         : entrypoint.includes("vscode") ? "Cursor" : "Claude";
+      const terminalTarget = terminalTargetForProcess(process, cwd, processes);
+      const applicationTarget = applicationTargetForProcess(process.pid, processes);
 
       results.push({
         id: sessionID,
@@ -65,6 +69,12 @@ export class ClaudeProvider implements ProviderAdapter {
         canOpenOwner: true,
         canEnterChat: true,
         chatPath: transcript,
+        ...(terminalTarget ? {
+          controlTarget: { kind: "terminal" as const, target: terminalTarget },
+          messageTransport: "terminal" as const,
+        } : applicationTarget ? {
+          controlTarget: { kind: "application" as const, target: applicationTarget },
+        } : {}),
       });
     }
 

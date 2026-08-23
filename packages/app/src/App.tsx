@@ -24,7 +24,7 @@ import {
 } from "./session-groups";
 import { palettes, type Palette } from "./theme";
 import { useNativeServices } from "./use-native-services";
-import { useSessionSnapshot } from "./use-session-snapshot";
+import { focusSession, useSessionSnapshot } from "./use-session-snapshot";
 
 const agentImages: Record<string, number> = {
   auggie: require("../assets/agents/auggie.png"),
@@ -443,12 +443,13 @@ function activateSession(
   onOpenChat: (session: SessionSummary) => void,
 ): void {
   const action = sessionAction(session, alternate);
-  if (action === "owner") openOwner(session);
+  if (action === "owner") void openOwner(session);
   if (action === "chat") onOpenChat(session);
 }
 
-function openOwner(session: SessionSummary): void {
-  if (session.canOpenOwner) window.agentVisor?.openOwner(session.owner);
+async function openOwner(session: SessionSummary): Promise<void> {
+  if (!session.canOpenOwner) return;
+  if (!await focusSession(session.id)) window.agentVisor?.openOwner(session.owner);
 }
 
 function footerLabel(action: "owner" | "chat"): string {

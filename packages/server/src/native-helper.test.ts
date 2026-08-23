@@ -46,12 +46,17 @@ describe("FakeNativeHelper", () => {
     await helper.openAccessibilitySettings();
     await helper.presentPills([pill], [usage]);
     await helper.focus(focus);
+    const terminal = { application: "Ghostty" as const, tty: "ttys012", cwd: "/tmp/project" };
+    await helper.focusTerminal(terminal);
+    await helper.sendTerminal(terminal, "Continue", true);
 
     expect(helper.requestedAccessibility).toBe(true);
     expect(helper.openedAccessibilitySettings).toBe(true);
     expect(helper.presentedPills).toEqual([pill]);
     expect(helper.presentedUsageGlances).toEqual([usage]);
     expect(helper.focusRequests).toEqual([focus]);
+    expect(helper.terminalFocusRequests).toEqual([terminal]);
+    expect(helper.terminalSendRequests).toEqual([{ target: terminal, text: "Continue", submit: true }]);
   });
 
   it("copies mutable inputs at the adapter boundary", async () => {

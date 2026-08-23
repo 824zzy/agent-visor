@@ -11,13 +11,15 @@ final class NativeHelperWireProtocolTests: XCTestCase {
             #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","subtitle":"Ready to continue","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready"}],"shortcutModifierFamily":"controlCommand","usageGlances":[{"id":"codex","label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage"}]}}"#,
             #"{"version":1,"id":"legacy-pills","method":"present_pills","params":{"pills":[{"id":"legacy","title":"Legacy","phase":"working","priority":2,"accessibilityLabel":"Legacy, in progress"}]}}"#,
             #"{"version":1,"id":"focus","method":"focus","params":{"target":{"pid":42,"bundleIdentifier":"com.mitchellh.ghostty","windowId":7}}}"#,
+            #"{"version":1,"id":"focus-terminal","method":"focus_terminal","params":{"target":{"application":"Ghostty","tty":"ttys012","cwd":"/tmp/project"}}}"#,
+            #"{"version":1,"id":"send-terminal","method":"send_terminal","params":{"target":{"application":"Ghostty","tty":"/dev/ttys012","cwd":"/tmp/project"},"text":"Continue","submit":true}}"#,
         ]
 
         XCTAssertEqual(
             try requests.map { try NativeHelperRequest.decode(Data($0.utf8)).id },
             [
                 "screens", "access", "request-access", "open-access",
-                "pills", "legacy-pills", "focus",
+                "pills", "legacy-pills", "focus", "focus-terminal", "send-terminal",
             ]
         )
     }
@@ -27,6 +29,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         assertInvalid(#"{"version":1,"id":"bad","method":"screen_topology","extra":true}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"focus","params":{"target":{"pid":0,"bundleIdentifier":""}}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"focus","params":{"target":{"pid":42,"bundleIdentifier":"app","provider":"Pi"}}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"focus_terminal","params":{"target":{"application":"Ghostty","tty":"/dev/null","cwd":"/"}}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[{"id":"1","title":"A","subtitle":"Ready","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"A","provider":"Pi"}],"usageGlances":[]}}"#)
     }
 

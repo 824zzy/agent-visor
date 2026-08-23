@@ -132,6 +132,7 @@ describe("Agent Visor daemon", () => {
         pendingAction: null,
       }),
       chatAction: async () => "Read only.",
+      focusSession: async () => undefined,
     };
     running = await startServer({ port: 0, source, token });
     const socket = new WebSocket(running.url);
@@ -143,13 +144,15 @@ describe("Agent Visor daemon", () => {
     });
 
     socket.send(JSON.stringify({ type: "open_chat", sessionId: "pi-ready" }));
+    socket.send(JSON.stringify({ type: "focus_session", id: "focus-1", sessionId: "pi-ready" }));
     socket.send(JSON.stringify({
       type: "send_chat", id: "send-1", sessionId: "pi-ready", text: "Continue", images: [],
     }));
 
-    await expect.poll(() => messages.length).toBe(3);
+    await expect.poll(() => messages.length).toBe(4);
     expect(messages[1]).toMatchObject({ type: "chat_page", sessionId: "pi-ready" });
-    expect(messages[2]).toEqual({
+    expect(messages).toContainEqual({ type: "native_action_result", id: "focus-1", ok: true });
+    expect(messages).toContainEqual({
       type: "chat_action_result", id: "send-1", ok: false, error: "Read only.",
     });
     socket.close();

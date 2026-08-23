@@ -181,6 +181,14 @@ private func response(
                 )
             }
             return .accepted(id: id)
+        case .focusTerminal(let id, let target):
+            return NativeTerminalController().focus(target)
+                ? .accepted(id: id)
+                : .error(id: id, code: .failed, message: "The requested terminal could not be focused.")
+        case .sendTerminal(let id, let target, let text, let submit):
+            return NativeTerminalController().send(text, to: target, submit: submit)
+                ? .accepted(id: id)
+                : .error(id: id, code: .failed, message: "The terminal input could not be delivered.")
         case .focus(let id, let target):
             guard target.windowId == nil else {
                 return .error(

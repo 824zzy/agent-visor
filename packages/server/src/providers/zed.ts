@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { DiscoveredProviderSession, ProviderAdapter, ProviderID } from "../sessions.js";
 import type { ProviderEnvironment } from "./environment.js";
-import { isRecord, iso } from "./shared.js";
+import { applicationTargetForProcess, isRecord, iso } from "./shared.js";
 
 const threadsSQL = `
 select hex(thread_id) as thread_id, session_id, agent_id,
@@ -20,11 +20,12 @@ export class ZedProvider implements ProviderAdapter {
 
   async discover(): Promise<DiscoveredProviderSession[]> {
     const processes = await this.environment.processes();
-    const zedRunning = processes.some((process) => {
+    const zedProcess = processes.find((process) => {
       const identity = `${process.command} ${process.arguments}`.toLowerCase();
       return identity.includes("/zed") && identity.includes(".app/");
     });
-    if (!zedRunning) return [];
+    if (!zedProcess) return [];
+    const applicationTarget = applicationTargetForProcess(zedProcess.pid, processes);
     const database = await zedDatabase(this.environment);
     if (!database) return [];
     const queried = await this.environment.sqlite(database, threadsSQL);
@@ -54,6 +55,9 @@ export class ZedProvider implements ProviderAdapter {
         canOpenOwner: true,
         canEnterChat: provider !== "auggie",
         authority: 2,
+        ...(applicationTarget ? {
+          controlTarget: { kind: "application" as const, target: applicationTarget },
+        } : {}),
       });
     }
     return results;

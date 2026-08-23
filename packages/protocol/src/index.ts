@@ -158,6 +158,11 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("get_native_services") }).strict(),
   z.object({
     ...requestEnvelope,
+    type: z.literal("focus_session"),
+    sessionId: z.string().min(1).max(512),
+  }).strict(),
+  z.object({
+    ...requestEnvelope,
     type: z.literal("update_settings"),
     patch: appSettingsPatchSchema,
   }).strict(),
@@ -273,6 +278,12 @@ export const nativeHelperFocusTargetSchema = z.object({
   windowId: z.number().int().nonnegative().max(4_294_967_295).optional(),
 }).strict();
 
+export const nativeHelperTerminalTargetSchema = z.object({
+  application: z.enum(["Ghostty", "iTerm2", "Terminal"]),
+  tty: z.string().regex(/^(?:\/dev\/)?ttys\d+$/).max(32),
+  cwd: z.string().startsWith("/").max(4_096),
+}).strict();
+
 export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
   z.object({
     ...helperEnvelope,
@@ -297,6 +308,20 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
     ...helperEnvelope,
     method: z.literal("focus"),
     params: z.object({ target: nativeHelperFocusTargetSchema }).strict(),
+  }).strict(),
+  z.object({
+    ...helperEnvelope,
+    method: z.literal("focus_terminal"),
+    params: z.object({ target: nativeHelperTerminalTargetSchema }).strict(),
+  }).strict(),
+  z.object({
+    ...helperEnvelope,
+    method: z.literal("send_terminal"),
+    params: z.object({
+      target: nativeHelperTerminalTargetSchema,
+      text: z.string().max(65_536),
+      submit: z.boolean(),
+    }).strict(),
   }).strict(),
 ]);
 
@@ -365,6 +390,7 @@ export type ChatPendingAction = z.infer<typeof chatPendingActionSchema>;
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 export type HookEvent = z.infer<typeof hookEventSchema>;
 export type NativeHelperFocusTarget = z.infer<typeof nativeHelperFocusTargetSchema>;
+export type NativeHelperTerminalTarget = z.infer<typeof nativeHelperTerminalTargetSchema>;
 export type NativeServicesState = z.infer<typeof nativeServicesStateSchema>;
 export type NativeHelperPill = z.infer<typeof nativeHelperPillSchema>;
 export type NativeHelperUsageGlance = z.infer<typeof nativeHelperUsageGlanceSchema>;

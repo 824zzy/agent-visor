@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { DiscoveredProviderSession, ProviderAdapter } from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
-import { isRecord, iso, ownerForProcess } from "./shared.js";
+import { isRecord, iso, ownerForProcess, terminalTargetForProcess } from "./shared.js";
 
 type PiNameState = {
   completeThrough: number;
@@ -68,6 +68,9 @@ export class PiProvider implements ProviderAdapter {
     return Promise.all(selected.map(async (file): Promise<DiscoveredProviderSession> => {
       const process = matched.get(file.id);
       const title = await piTranscriptTitle(this.environment, file, this.nameCache);
+      const terminalTarget = process
+        ? terminalTargetForProcess(process, file.cwd, processes)
+        : undefined;
       return {
         id: file.id,
         provider: "pi",
@@ -80,6 +83,10 @@ export class PiProvider implements ProviderAdapter {
         canOpenOwner: process !== undefined,
         canEnterChat: true,
         chatPath: file.path,
+        ...(terminalTarget ? {
+          controlTarget: { kind: "terminal" as const, target: terminalTarget },
+          messageTransport: "terminal" as const,
+        } : {}),
       };
     }));
   }

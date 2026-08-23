@@ -1,7 +1,8 @@
+import type { NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import path from "node:path";
 import type { DiscoveredProviderSession, ProviderAdapter } from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
-import { isRecord, iso, ownerForProcess } from "./shared.js";
+import { isRecord, iso, ownerForProcess, terminalTargetForProcess } from "./shared.js";
 
 type CodexRow = {
   id: string;
@@ -50,7 +51,12 @@ export class CodexProvider implements ProviderAdapter {
         .sort((left, right) => right.updatedAt - left.updatedAt)[0];
       if (!thread) continue;
       usedThreads.add(thread.id);
-      results.push(await this.session(thread, indexTitles, ownerForProcess(process.pid, processes)));
+      results.push(await this.session(
+        thread,
+        indexTitles,
+        ownerForProcess(process.pid, processes),
+        terminalTargetForProcess(process, thread.cwd, processes),
+      ));
     }
 
     const cutoff = this.environment.now().valueOf() - this.environment.observedWindowMs;
@@ -74,6 +80,7 @@ export class CodexProvider implements ProviderAdapter {
     thread: CodexRow,
     indexTitles: Map<string, string>,
     owner: string,
+    terminalTarget?: NativeHelperTerminalTarget,
   ): Promise<DiscoveredProviderSession> {
     const storedTitle = indexTitles.get(thread.id) || thread.title;
     const title = storedTitle || await codexRolloutTitle(this.environment, thread.rolloutPath);
@@ -90,6 +97,10 @@ export class CodexProvider implements ProviderAdapter {
       canEnterChat: owner !== "Codex"
         || this.environment.now().valueOf() - thread.updatedAt * 1_000 <= 120_000,
       chatPath: thread.rolloutPath,
+      messageTransport: "codex_app_server",
+      controlTarget: terminalTarget
+        ? { kind: "terminal", target: terminalTarget }
+        : { kind: "url", url: `codex://threads/${thread.id}` },
     };
   }
 }

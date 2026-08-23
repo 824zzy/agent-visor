@@ -132,6 +132,10 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
           mainWindow?.focus();
           return;
         }
+        if (action.action === "open_session_url") {
+          await shell.openExternal(action.url);
+          return;
+        }
         const application = ownerApplication(action.owner);
         if (application) await openApplication(application);
       })

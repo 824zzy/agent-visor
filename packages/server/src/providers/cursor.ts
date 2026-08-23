@@ -1,7 +1,8 @@
+import type { NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import path from "node:path";
 import type { DiscoveredProviderSession, ProviderAdapter } from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
-import { iso, isRecord, ownerForProcess } from "./shared.js";
+import { iso, isRecord, ownerForProcess, terminalTargetForProcess } from "./shared.js";
 
 type CursorTranscript = {
   id: string;
@@ -44,6 +45,7 @@ export class CursorProvider implements ProviderAdapter {
         ownerForProcess(process.pid, processes),
         "history",
         this.titleCache,
+        terminalTargetForProcess(process, transcript.cwd, processes),
       ));
     }
 
@@ -102,6 +104,7 @@ async function cursorSession(
   owner: string,
   section: "working" | "history",
   titleCache: Map<string, { signature: string; title: string }>,
+  terminalTarget?: NativeHelperTerminalTarget,
 ): Promise<DiscoveredProviderSession> {
   return {
     id: transcript.id,
@@ -115,6 +118,7 @@ async function cursorSession(
     canOpenOwner: true,
     canEnterChat: true,
     chatPath: transcript.path,
+    ...(terminalTarget ? { controlTarget: { kind: "terminal" as const, target: terminalTarget } } : {}),
   };
 }
 

@@ -8,6 +8,7 @@ import {
   nativeHelperResponseSchema,
   type NativeHelperFocusTarget,
   type NativeHelperPill,
+  type NativeHelperTerminalTarget,
   type NativeHelperResponse,
   type NativeHelperScreen,
   type NativeHelperUsageGlance,
@@ -24,12 +25,16 @@ export interface NativeHelperAdapter {
     shortcutModifierFamily?: "off" | "controlCommand" | "optionCommand" | "controlOptionCommand",
   ): Promise<void>;
   focus(target: NativeHelperFocusTarget): Promise<void>;
+  focusTerminal(target: NativeHelperTerminalTarget): Promise<void>;
+  sendTerminal(target: NativeHelperTerminalTarget, text: string, submit: boolean): Promise<void>;
 }
 
 export type NativeHelperEvent = Extract<NativeHelperResponse, { type: "event" }>;
 
 export class FakeNativeHelper implements NativeHelperAdapter {
   readonly focusRequests: NativeHelperFocusTarget[] = [];
+  readonly terminalFocusRequests: NativeHelperTerminalTarget[] = [];
+  readonly terminalSendRequests: Array<{ target: NativeHelperTerminalTarget; text: string; submit: boolean }> = [];
   presentedPills: NativeHelperPill[] = [];
   presentedUsageGlances: NativeHelperUsageGlance[] = [];
   shortcutModifierFamily = "optionCommand";
@@ -76,6 +81,14 @@ export class FakeNativeHelper implements NativeHelperAdapter {
   async focus(target: NativeHelperFocusTarget): Promise<void> {
     this.focusRequests.push(structuredClone(target));
   }
+
+  async focusTerminal(target: NativeHelperTerminalTarget): Promise<void> {
+    this.terminalFocusRequests.push(structuredClone(target));
+  }
+
+  async sendTerminal(target: NativeHelperTerminalTarget, text: string, submit: boolean): Promise<void> {
+    this.terminalSendRequests.push(structuredClone({ target, text, submit }));
+  }
 }
 
 export class UnavailableNativeHelper implements NativeHelperAdapter {
@@ -85,6 +98,8 @@ export class UnavailableNativeHelper implements NativeHelperAdapter {
   async openAccessibilitySettings(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async presentPills(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async focus(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
+  async focusTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
+  async sendTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
 }
 
 export class NativeHelperProcess implements NativeHelperAdapter {
@@ -174,6 +189,14 @@ export class NativeHelperProcess implements NativeHelperAdapter {
 
   async focus(target: NativeHelperFocusTarget): Promise<void> {
     await this.accepted("focus", { target });
+  }
+
+  async focusTerminal(target: NativeHelperTerminalTarget): Promise<void> {
+    await this.accepted("focus_terminal", { target });
+  }
+
+  async sendTerminal(target: NativeHelperTerminalTarget, text: string, submit: boolean): Promise<void> {
+    await this.accepted("send_terminal", { target, text, submit });
   }
 
   async close(): Promise<void> {

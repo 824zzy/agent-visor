@@ -79,6 +79,24 @@ public struct NativeHelperUsageGlance: Codable, Equatable {
     }
 }
 
+public enum NativeHelperTerminalApplication: String, Codable, Equatable {
+    case ghostty = "Ghostty"
+    case iTerm2 = "iTerm2"
+    case terminal = "Terminal"
+}
+
+public struct NativeHelperTerminalTarget: Codable, Equatable {
+    public let application: NativeHelperTerminalApplication
+    public let tty: String
+    public let cwd: String
+
+    public init(application: NativeHelperTerminalApplication, tty: String, cwd: String) {
+        self.application = application
+        self.tty = tty
+        self.cwd = cwd
+    }
+}
+
 public struct NativeHelperFocusTarget: Codable, Equatable {
     public let pid: Int32
     public let bundleIdentifier: String
@@ -103,12 +121,15 @@ public enum NativeHelperRequest: Equatable {
         shortcutModifierFamily: SessionShortcutModifierFamily?
     )
     case focus(id: String, target: NativeHelperFocusTarget)
+    case focusTerminal(id: String, target: NativeHelperTerminalTarget)
+    case sendTerminal(id: String, target: NativeHelperTerminalTarget, text: String, submit: Bool)
 
     public var id: String {
         switch self {
         case .screenTopology(let id), .accessibilityStatus(let id),
              .requestAccessibility(let id), .openAccessibilitySettings(let id),
-             .presentPills(let id, _, _, _), .focus(let id, _):
+             .presentPills(let id, _, _, _), .focus(let id, _),
+             .focusTerminal(let id, _), .sendTerminal(let id, _, _, _):
             id
         }
     }
@@ -120,7 +141,9 @@ public enum NativeHelperRequest: Equatable {
             throw NativeHelperWireError.invalidRequest
         }
 
-        let requiredKeys: Set<String> = ["present_pills", "focus"].contains(method)
+        let requiredKeys: Set<String> = [
+            "present_pills", "focus", "focus_terminal", "send_terminal",
+        ].contains(method)
             ? ["version", "id", "method", "params"]
             : ["version", "id", "method"]
         guard Set(object.keys) == requiredKeys,
@@ -177,6 +200,21 @@ public enum NativeHelperRequest: Equatable {
                 throw NativeHelperWireError.invalidRequest
             }
             return .focus(id: wire.id, target: target)
+        case "focus_terminal":
+            guard let params = wire.params,
+                  Set(params.keys) == ["target"],
+                  let target = params.terminalTarget,
+                  target.isValid else { throw NativeHelperWireError.invalidRequest }
+            return .focusTerminal(id: wire.id, target: target)
+        case "send_terminal":
+            guard let params = wire.params,
+                  Set(params.keys) == ["target", "text", "submit"],
+                  let target = params.terminalTarget,
+                  let text = params.text,
+                  text.count <= 65_536,
+                  let submit = params.submit,
+                  target.isValid else { throw NativeHelperWireError.invalidRequest }
+            return .sendTerminal(id: wire.id, target: target, text: text, submit: submit)
         default:
             throw NativeHelperWireError.invalidRequest
         }
@@ -371,6 +409,16 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         let keys = Set(target.keys)
         return keys == ["pid", "bundleIdentifier"]
             || keys == ["pid", "bundleIdentifier", "windowId"]
+    case "focus_terminal":
+        guard let params = object["params"] as? [String: Any],
+              Set(params.keys) == ["target"],
+              let target = params["target"] as? [String: Any] else { return false }
+        return Set(target.keys) == ["application", "tty", "cwd"]
+    case "send_terminal":
+        guard let params = object["params"] as? [String: Any],
+              Set(params.keys) == ["target", "text", "submit"],
+              let target = params["target"] as? [String: Any] else { return false }
+        return Set(target.keys) == ["application", "tty", "cwd"]
     default:
         return true
     }
@@ -387,6 +435,9 @@ private struct WireParameters: Decodable {
     let usageGlances: [NativeHelperUsageGlance]?
     let shortcutModifierFamily: String?
     let target: NativeHelperFocusTarget?
+    let terminalTarget: NativeHelperTerminalTarget?
+    let text: String?
+    let submit: Bool?
     let keys: [String]
 
     init(from decoder: Decoder) throws {
@@ -401,7 +452,13 @@ private struct WireParameters: Decodable {
             String.self,
             forKey: .init("shortcutModifierFamily")
         )
-        target = try container.decodeIfPresent(NativeHelperFocusTarget.self, forKey: .init("target"))
+        target = try? container.decodeIfPresent(NativeHelperFocusTarget.self, forKey: .init("target"))
+        terminalTarget = try? container.decodeIfPresent(
+            NativeHelperTerminalTarget.self,
+            forKey: .init("target")
+        )
+        text = try container.decodeIfPresent(String.self, forKey: .init("text"))
+        submit = try container.decodeIfPresent(Bool.self, forKey: .init("submit"))
     }
 }
 
@@ -412,6 +469,17 @@ private struct DynamicKey: CodingKey {
     init(_ value: String) { stringValue = value }
     init?(stringValue: String) { self.init(stringValue) }
     init?(intValue: Int) { return nil }
+}
+
+private extension NativeHelperTerminalTarget {
+    var isValid: Bool {
+        let name = tty.hasPrefix("/dev/") ? String(tty.dropFirst(5)) : tty
+        let suffix = name.hasPrefix("ttys") ? name.dropFirst(4) : ""
+        return !suffix.isEmpty && suffix.allSatisfy { $0.isASCII && $0.isNumber }
+            && tty.count <= 32
+            && cwd.hasPrefix("/") && cwd.count <= 4_096
+            && !cwd.contains("\0")
+    }
 }
 
 private extension NativeHelperPill {

@@ -31,6 +31,18 @@ export async function readChatPage(
 }
 
 export function chatCapabilities(session: DiscoveredProviderSession): ChatCapabilities {
+  if (session.messageTransport) {
+    return {
+      canSendText: true,
+      canSendImages: (session.provider === "claude_code"
+        && session.controlTarget?.kind === "terminal"
+        && session.controlTarget.target.application !== "Terminal")
+        || session.provider === "pi"
+        || session.messageTransport === "codex_app_server",
+      canApprove: false,
+      canAnswer: false,
+    };
+  }
   const readOnlyReason = session.owner === "Zed"
     ? "Continue in Zed. Zed-hosted Chat is read only."
     : session.provider === "cursor"

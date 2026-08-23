@@ -58,6 +58,8 @@ The replacement does not perform an automatic in-place install. It opens the ver
 
 Existing release scripts remain responsible for archive signing, notarization, public identity continuity, hashes, and rollback-safe publication.
 
+`scripts/package-electron.sh` prepares a separate release-signed 2.7.0 candidate. It does not change the public appcast or cask.
+
 ## Lifecycle
 
 Electron owns only the daemon it starts. The daemon owns only its helper, hook socket, timers, and temporary Codex usage process.

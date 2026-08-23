@@ -30,6 +30,32 @@ export function useSessionSnapshot(): ConnectionState {
   return state;
 }
 
+export async function focusSession(sessionId: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new WebSocket(daemonUrl());
+    const id = `focus-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const deadline = setTimeout(() => finish(false), 5_000);
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({ type: "focus_session", id, sessionId }));
+    });
+    socket.addEventListener("message", (event) => {
+      try {
+        const parsed = serverMessageSchema.safeParse(JSON.parse(String(event.data)));
+        if (parsed.success && parsed.data.type === "native_action_result" && parsed.data.id === id) {
+          finish(parsed.data.ok);
+        }
+      } catch { /* wait for a valid result */ }
+    });
+    socket.addEventListener("error", () => finish(false));
+
+    function finish(result: boolean): void {
+      clearTimeout(deadline);
+      socket.close();
+      resolve(result);
+    }
+  });
+}
+
 export function sessionSnapshotFromServerData(data: string): SessionSnapshot | undefined {
   try {
     const parsed = serverMessageSchema.safeParse(JSON.parse(data));

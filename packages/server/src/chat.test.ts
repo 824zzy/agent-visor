@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseChatLines, readChatPage } from "./chat.js";
+import { chatCapabilities, parseChatLines, readChatPage } from "./chat.js";
 
 describe("provider Chat parsing", () => {
   it("parses Claude prose, thinking, tools, results, and images", () => {
@@ -50,6 +50,29 @@ describe("provider Chat parsing", () => {
 
     expect(items.map(({ kind }) => kind)).toEqual(["user", "thinking", "tool", "assistant"]);
     expect(items[2]).toMatchObject({ status: "error", result: "failed" });
+  });
+
+  it("enables only verified provider message transports", () => {
+    const base = {
+      id: "session-1", provider: "pi" as const, cwd: "/tmp/project", owner: "Ghostty",
+      section: "working" as const, updatedAt: "2026-08-23T00:00:00.000Z",
+      canOpenOwner: true, canEnterChat: true,
+    };
+    expect(chatCapabilities({ ...base, messageTransport: "terminal" })).toMatchObject({
+      canSendText: true, canSendImages: true,
+    });
+    expect(chatCapabilities({
+      ...base,
+      provider: "claude_code",
+      messageTransport: "terminal",
+      controlTarget: {
+        kind: "terminal",
+        target: { application: "Terminal", tty: "ttys001", cwd: "/tmp/project" },
+      },
+    })).toMatchObject({ canSendText: true, canSendImages: false });
+    expect(chatCapabilities({ ...base, provider: "cursor" })).toMatchObject({
+      canSendText: false, canSendImages: false,
+    });
   });
 
   it("pages backward without repeating visible messages", async () => {

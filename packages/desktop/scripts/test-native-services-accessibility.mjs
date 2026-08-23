@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow } from "electron";
@@ -6,9 +8,15 @@ import { fixtureSnapshot } from "../../server/dist/fixture.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const token = "native-services-test-token-000000000000000000000";
+const profileRoot = mkdtempSync(path.join(os.tmpdir(), "agent-visor-clean-profile-"));
+app.setPath("userData", profileRoot);
 
-void app.whenReady().then(run).then(() => app.exit(0)).catch((error) => {
+void app.whenReady().then(run).then(() => {
+  rmSync(profileRoot, { recursive: true, force: true });
+  app.exit(0);
+}).catch((error) => {
   console.error(error);
+  rmSync(profileRoot, { recursive: true, force: true });
   app.exit(1);
 });
 

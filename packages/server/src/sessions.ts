@@ -3,6 +3,10 @@ import {
   type ChatPage,
   type ClientMessage,
   type SessionSection,
+  type ChatImage,
+  type ChatPendingAction,
+  type NativeHelperFocusTarget,
+  type NativeHelperTerminalTarget,
   type SessionSnapshot,
   type SessionSummary,
 } from "@agent-visor/protocol";
@@ -10,6 +14,11 @@ import path from "node:path";
 import { readChatPage } from "./chat.js";
 
 export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie";
+
+export type SessionControlTarget =
+  | { kind: "application"; target: NativeHelperFocusTarget }
+  | { kind: "terminal"; target: NativeHelperTerminalTarget }
+  | { kind: "url"; url: string };
 
 export type DiscoveredProviderSession = {
   id: string;
@@ -25,13 +34,21 @@ export type DiscoveredProviderSession = {
   canEnterChat: boolean;
   authority?: number;
   chatPath?: string;
+  controlTarget?: SessionControlTarget;
+  messageTransport?: "terminal" | "codex_app_server";
 };
+
+export interface SessionControls {
+  focus(session: DiscoveredProviderSession): Promise<void>;
+  send(session: DiscoveredProviderSession, text: string, images: ChatImage[]): Promise<void>;
+}
 
 export interface SessionSnapshotSource {
   current(): SessionSnapshot;
   subscribe(listener: (snapshot: SessionSnapshot) => void): () => void;
   chatPage?(sessionId: string, before?: number, limit?: number): Promise<ChatPage>;
   chatAction?(message: Extract<ClientMessage, { type: "send_chat" | "respond_chat" }>): Promise<string | undefined>;
+  focusSession?(sessionId: string): Promise<string | undefined>;
 }
 
 export interface ProviderAdapter {
@@ -85,12 +102,23 @@ export class SessionRepository {
   private readonly hookBySession = new Map<string, HookSessionEvent>();
   private readonly chatBySession = new Map<string, DiscoveredProviderSession>();
   private readonly listeners = new Set<(snapshot: SessionSnapshot) => void>();
+  private readonly controlBySession = new Map<string, DiscoveredProviderSession>();
+  private readonly externalActions = new Map<string, {
+    pending: ChatPendingAction;
+    receivedAt: string;
+    respond(message: Extract<ClientMessage, { type: "respond_chat" }>): Promise<void>;
+  }>();
+  private controls: SessionControls | undefined;
   private readonly hookResponders = new Map<string, {
     sessionId: string;
     respond(response: HookResponse): void;
   }>();
 
   constructor(private readonly providers: ProviderAdapter[]) {}
+
+  setControls(controls: SessionControls): void {
+    this.controls = controls;
+  }
 
   current(): SessionSnapshot {
     return structuredClone(this.snapshotValue);
@@ -111,6 +139,23 @@ export class SessionRepository {
     return record ? structuredClone(record) : undefined;
   }
 
+  registerExternalAction(
+    sessionId: string,
+    pending: ChatPendingAction,
+    respond: (message: Extract<ClientMessage, { type: "respond_chat" }>) => Promise<void>,
+  ): () => void {
+    this.externalActions.set(sessionId, {
+      pending: structuredClone(pending), receivedAt: new Date().toISOString(), respond,
+    });
+    this.publish([...this.lastByProvider.values()].flat());
+    return () => {
+      if (this.externalActions.get(sessionId)?.respond === respond) {
+        this.externalActions.delete(sessionId);
+        this.publish([...this.lastByProvider.values()].flat());
+      }
+    };
+  }
+
   registerHookResponder(
     sessionId: string,
     toolUseId: string,
@@ -129,7 +174,7 @@ export class SessionRepository {
     const record = discovered ?? (hook ? hookSession(hook) : undefined);
     if (!record) return unavailableChatPage(sessionId, "This session is no longer available.");
     const page = await readChatPage(record, before, limit);
-    const pendingAction = pendingChatAction(hook);
+    const pendingAction = this.externalActions.get(sessionId)?.pending ?? pendingChatAction(hook);
     if (pendingAction) {
       page.pendingAction = pendingAction;
       page.capabilities.canApprove = pendingAction.type === "approval";
@@ -138,11 +183,42 @@ export class SessionRepository {
     return page;
   }
 
+  async focusSession(sessionId: string): Promise<string | undefined> {
+    const session = this.controlBySession.get(sessionId);
+    if (!session?.controlTarget || !this.controls) return "Exact session focus is unavailable.";
+    try {
+      await this.controls.focus(structuredClone(session));
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Exact session focus failed.";
+    }
+  }
+
   async chatAction(
     message: Extract<ClientMessage, { type: "send_chat" | "respond_chat" }>,
   ): Promise<string | undefined> {
     if (message.type === "send_chat") {
-      return "Continue in the source app while native message transport is unavailable.";
+      const session = this.chatBySession.get(message.sessionId);
+      if (!session?.messageTransport || !this.controls) {
+        return "Continue in the source app while native message transport is unavailable.";
+      }
+      try {
+        await this.controls.send(structuredClone(session), message.text, message.images);
+        return undefined;
+      } catch (error) {
+        return error instanceof Error ? error.message : "The message could not be delivered.";
+      }
+    }
+    const external = this.externalActions.get(message.sessionId);
+    if (external && external.pending.toolUseId === message.toolUseId) {
+      try {
+        await external.respond(message);
+        this.externalActions.delete(message.sessionId);
+        this.publish([...this.lastByProvider.values()].flat());
+        return undefined;
+      } catch (error) {
+        return error instanceof Error ? error.message : "The response could not be delivered.";
+      }
     }
     const pending = this.hookResponders.get(message.toolUseId);
     const hook = this.hookBySession.get(message.sessionId);
@@ -191,11 +267,32 @@ export class SessionRepository {
       if (!record.chatPath) continue;
       const existing = this.chatBySession.get(record.id);
       if (!existing || (record.authority ?? 1) >= (existing.authority ?? 1)) {
-        const owner = authoritative.get(record.id)?.owner ?? record.owner;
-        this.chatBySession.set(record.id, structuredClone({ ...record, owner }));
+        const authority = authoritative.get(record.id);
+        const owner = authority?.owner ?? record.owner;
+        this.chatBySession.set(record.id, structuredClone({
+          ...record,
+          owner,
+          ...(authority?.controlTarget ? { controlTarget: authority.controlTarget } : {}),
+          ...(owner === "Zed" ? { messageTransport: undefined } : {}),
+        }));
       }
     }
-    const sessions = normalize(applyHooks(discovered, this.hookBySession));
+    const merged = applyHooks(discovered, this.hookBySession);
+    for (const record of merged) {
+      if (this.externalActions.has(record.id)) {
+        record.section = "needs_you";
+        record.subtitle = "Approval required";
+        record.updatedAt = this.externalActions.get(record.id)!.receivedAt;
+      }
+    }
+    this.controlBySession.clear();
+    for (const record of merged) {
+      const existing = this.controlBySession.get(record.id);
+      if (!existing || (record.authority ?? 1) > (existing.authority ?? 1)) {
+        this.controlBySession.set(record.id, structuredClone(record));
+      }
+    }
+    const sessions = normalize(merged);
     const fingerprint = JSON.stringify(sessions);
     if (fingerprint !== this.fingerprint) {
       this.fingerprint = fingerprint;

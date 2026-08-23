@@ -150,8 +150,65 @@ describe("SessionRepository", () => {
     });
   });
 
+  it("routes external Codex approvals through the shared Chat action", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{ ...live, provider: "codex", chatPath: "/tmp/codex.jsonl" }];
+    const repository = new SessionRepository([provider]);
+    await repository.refresh();
+    let decision = "";
+    repository.registerExternalAction("pi-1", {
+      type: "approval", toolUseId: "codex-command-1", toolName: "Command",
+      input: { command: "npm test" }, canPersist: true,
+    }, async (message) => { decision = message.decision; });
+
+    expect((await repository.chatPage("pi-1")).pendingAction).toMatchObject({
+      type: "approval", toolUseId: "codex-command-1",
+    });
+    expect(repository.current().sessions[0]?.section).toBe("needs_you");
+    expect(await repository.chatAction({
+      type: "respond_chat", id: "response-1", sessionId: "pi-1",
+      toolUseId: "codex-command-1", decision: "allow_always",
+    })).toBeUndefined();
+    expect(decision).toBe("allow_always");
+  });
+
+  it("routes focus and Chat through provider-owned control metadata", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{
+      ...live,
+      chatPath: "/tmp/pi.jsonl",
+      messageTransport: "terminal",
+      controlTarget: {
+        kind: "terminal",
+        target: { application: "Ghostty", tty: "ttys012", cwd: live.cwd },
+      },
+    }];
+    const repository = new SessionRepository([provider]);
+    const calls: string[] = [];
+    repository.setControls({
+      focus: async (session) => { calls.push(`focus:${session.id}`); },
+      send: async (session, text) => { calls.push(`send:${session.id}:${text}`); },
+    });
+    await repository.refresh();
+
+    expect(await repository.focusSession("pi-1")).toBeUndefined();
+    expect(await repository.chatAction({
+      type: "send_chat", id: "send-1", sessionId: "pi-1", text: "Continue", images: [],
+    })).toBeUndefined();
+    expect(calls).toEqual(["focus:pi-1", "send:pi-1:Continue"]);
+  });
+
   it("lets an authoritative host replace a duplicate provider row", async () => {
     const pi = new FakeProvider();
+    pi.sessions = [{
+      ...live,
+      chatPath: "/tmp/pi.jsonl",
+      messageTransport: "terminal",
+      controlTarget: {
+        kind: "terminal",
+        target: { application: "Ghostty", tty: "ttys012", cwd: live.cwd },
+      },
+    }];
     const zed: ProviderAdapter = {
       id: "zed",
       async discover() {
@@ -160,6 +217,10 @@ describe("SessionRepository", () => {
           title: "Zed-owned title",
           owner: "Zed",
           authority: 2,
+          controlTarget: {
+            kind: "application",
+            target: { pid: 52, bundleIdentifier: "dev.zed.Zed" },
+          },
         }];
       },
     };
@@ -170,5 +231,13 @@ describe("SessionRepository", () => {
     expect(snapshot.sessions).toHaveLength(1);
     expect(snapshot.sessions[0]?.title).toBe("Zed-owned title");
     expect(snapshot.sessions[0]?.owner).toBe("Zed");
+    expect(repository.chatRecord("pi-1")).toMatchObject({
+      owner: "Zed",
+      controlTarget: {
+        kind: "application",
+        target: { pid: 52, bundleIdentifier: "dev.zed.Zed" },
+      },
+    });
+    expect(repository.chatRecord("pi-1")?.messageTransport).toBeUndefined();
   });
 });

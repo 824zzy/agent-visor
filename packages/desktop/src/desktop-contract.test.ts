@@ -49,6 +49,19 @@ describe("desktop launch contract", () => {
     })).toEqual({ action: "open_sessions" });
     expect(nativeActionFromDaemonMessage({
       type: "native_action",
+      action: "open_session_url",
+      url: "codex://threads/019f3931-ec11-7f31-8400-1c8624aa9e4d",
+    })).toEqual({
+      action: "open_session_url",
+      url: "codex://threads/019f3931-ec11-7f31-8400-1c8624aa9e4d",
+    });
+    expect(nativeActionFromDaemonMessage({
+      type: "native_action",
+      action: "open_session_url",
+      url: "file:///tmp/unsafe",
+    })).toBeUndefined();
+    expect(nativeActionFromDaemonMessage({
+      type: "native_action",
       action: "open_owner",
       owner: "arbitrary --argument",
       sessionId: "session-1",

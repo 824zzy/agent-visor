@@ -83,6 +83,8 @@ describe("live provider adapters", () => {
       provider: "claude_code",
       owner: "Ghostty",
       section: "working",
+      messageTransport: "terminal",
+      controlTarget: { kind: "terminal", target: { application: "Ghostty", tty: "ttys001", cwd } },
     }]);
   });
 
@@ -118,6 +120,8 @@ describe("live provider adapters", () => {
       title: "Active Pi name",
       provider: "pi",
       owner: "Ghostty",
+      messageTransport: "terminal",
+      controlTarget: { kind: "terminal", target: { application: "Ghostty", tty: "ttys001", cwd } },
     });
 
     const appended = [
@@ -163,6 +167,8 @@ describe("live provider adapters", () => {
       provider: "codex",
       owner: "Codex",
       canEnterChat: true,
+      messageTransport: "codex_app_server",
+      controlTarget: { kind: "url", url: "codex://threads/codex-1" },
     });
 
     environment.sqliteRows.set(database, [{
@@ -214,6 +220,10 @@ describe("live provider adapters", () => {
       title: "Cursor title",
       provider: "cursor",
       owner: "Ghostty",
+      controlTarget: {
+        kind: "terminal",
+        target: { application: "Ghostty", tty: "ttys001", cwd: "/Users/me/Codes/agent/visor" },
+      },
     });
   });
 
@@ -247,6 +257,10 @@ describe("live provider adapters", () => {
       provider: "pi",
       owner: "Zed",
       authority: 2,
+      controlTarget: {
+        kind: "application",
+        target: { pid: 52, bundleIdentifier: "dev.zed.Zed" },
+      },
     });
   });
 
