@@ -3,6 +3,7 @@ import {
   daemonUrlFromArguments,
   daemonUrlFromReadyMessage,
   nativeActionFromDaemonMessage,
+  nativeEffectFromDaemonMessage,
   ownerApplication,
   rendererLocation,
 } from "./desktop-contract.js";
@@ -51,6 +52,34 @@ describe("desktop launch contract", () => {
       action: "open_owner",
       owner: "arbitrary --argument",
       sessionId: "session-1",
+    })).toBeUndefined();
+  });
+
+  it("accepts only bounded native effects from the daemon", () => {
+    expect(nativeEffectFromDaemonMessage({
+      type: "native_effect", action: "request_notifications",
+    })).toEqual({ action: "request_notifications" });
+    expect(nativeEffectFromDaemonMessage({
+      type: "native_effect",
+      action: "notify",
+      notification: {
+        id: "ready-session-1", sessionId: "session-1", title: "Review migration",
+        body: "Pi is ready to continue", owner: "Ghostty", sound: "Pop",
+      },
+    })).toMatchObject({ action: "notify", notification: { sessionId: "session-1" } });
+    expect(nativeEffectFromDaemonMessage({
+      type: "native_effect", action: "set_login_item", enabled: true,
+    })).toEqual({ action: "set_login_item", enabled: true });
+    expect(nativeEffectFromDaemonMessage({
+      type: "native_effect",
+      action: "open_update",
+      url: "https://github.com/824zzy/agent-visor/releases/tag/v2.6.3",
+    })).toEqual({
+      action: "open_update",
+      url: "https://github.com/824zzy/agent-visor/releases/tag/v2.6.3",
+    });
+    expect(nativeEffectFromDaemonMessage({
+      type: "native_effect", action: "open_update", url: "https://example.com/update",
     })).toBeUndefined();
   });
 

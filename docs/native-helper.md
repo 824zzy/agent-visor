@@ -24,12 +24,14 @@ Every request contains protocol `version: 1`, a non-empty `id`, and one method:
 
 - `screen_topology` returns screen frames, visible frames, scale factors, and the main screen.
 - `accessibility_status` returns the current Accessibility trust state.
-- `present_pills` accepts at most 64 validated pill descriptions and eight optional usage glances.
+- `request_accessibility` asks macOS for Accessibility access.
+- `open_accessibility_settings` opens the macOS repair destination.
+- `present_pills` accepts at most 64 pill descriptions, eight usage glances, and an optional shortcut family.
 - `focus` requires an exact process identifier and bundle identifier. A window identifier is optional.
 
 Unknown methods, extra fields, oversized frames, invalid identifiers, and malformed JSON are rejected.
 
-Pill presentation is enabled through native status items. Exact-window focus remains disabled until native-services parity implements it.
+Pill presentation is enabled through native status items. Exact-window focus remains disabled and blocks production cutover.
 
 The helper can emit `activate_pill` and `open_sessions` events on the same framed connection.
 

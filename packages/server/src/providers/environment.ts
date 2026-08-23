@@ -37,7 +37,7 @@ export interface ProviderEnvironment {
 }
 
 export class LiveProviderEnvironment implements ProviderEnvironment {
-  readonly observedWindowMs: number;
+  private readonly observedWindow: number | (() => number);
   private processSnapshot: Promise<ProcessRecord[]> | undefined;
   private processSnapshotExpiresAt = 0;
   private readonly cwdByPID = new Map<number, Promise<string | undefined>>();
@@ -45,13 +45,18 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
 
   constructor(
     readonly home: string,
-    options: { observedWindowMs?: number; now?: () => Date } = {},
+    options: { observedWindowMs?: number | (() => number); now?: () => Date } = {},
   ) {
-    this.observedWindowMs = options.observedWindowMs ?? 42 * 60 * 60 * 1_000;
+    this.observedWindow = options.observedWindowMs ?? 42 * 60 * 60 * 1_000;
     this.clock = options.now ?? (() => new Date());
   }
 
   private readonly clock: () => Date;
+
+  get observedWindowMs(): number {
+    return typeof this.observedWindow === "function"
+      ? this.observedWindow() : this.observedWindow;
+  }
 
   now(): Date {
     return this.clock();

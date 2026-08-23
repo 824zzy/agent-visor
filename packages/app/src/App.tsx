@@ -14,6 +14,7 @@ import {
 import type { SessionSummary } from "@agent-visor/protocol";
 import { browserCommand, changeContentScale } from "./browser-shortcuts";
 import { Chat } from "./Chat";
+import { Settings } from "./Settings";
 import {
   moveSessionCursor,
   reconcileSessionCursor,
@@ -22,6 +23,7 @@ import {
   selectSessions,
 } from "./session-groups";
 import { palettes, type Palette } from "./theme";
+import { useNativeServices } from "./use-native-services";
 import { useSessionSnapshot } from "./use-session-snapshot";
 
 const agentImages: Record<string, number> = {
@@ -45,11 +47,29 @@ const hiddenBrowserStyle = {
 
 export function App() {
   const connection = useSessionSnapshot();
+  const nativeServices = useNativeServices();
   const [chatSessionId, setChatSessionId] = useState<string>();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [contentScale, setContentScale] = useState(1);
   const sessions = connection.status === "connected" ? connection.snapshot.sessions : [];
   const chatSession = sessions.find(({ id }) => id === chatSessionId);
-  const palette = palettes[useColorScheme() === "dark" ? "dark" : "light"];
+  const systemScheme = useColorScheme();
+  const appearance = nativeServices.state?.settings.appearance ?? "system";
+  const palette = palettes[
+    appearance === "system" ? (systemScheme === "dark" ? "dark" : "light") : appearance
+  ];
+  const browserHidden = Boolean(chatSessionId || settingsOpen);
+  const adjustContentScale = (delta: -0.1 | 0 | 0.1) => {
+    setContentScale((scale) => {
+      const next = changeContentScale(scale, delta);
+      nativeServices.update({ contentScale: next });
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (nativeServices.state) setContentScale(nativeServices.state.settings.contentScale);
+  }, [nativeServices.state?.settings.contentScale]);
 
   useEffect(() => {
     if (connection.status === "connected" && chatSessionId && !chatSession) {
@@ -63,16 +83,18 @@ export function App() {
   return (
     <View style={{ backgroundColor: palette.background, flex: 1 }}>
       <View
-        aria-hidden={Boolean(chatSessionId)}
-        accessibilityElementsHidden={Boolean(chatSessionId)}
-        importantForAccessibility={chatSessionId ? "no-hide-descendants" : "auto"}
-        style={chatSessionId ? hiddenBrowserStyle : styles.visible}
+        aria-hidden={browserHidden}
+        accessibilityElementsHidden={browserHidden}
+        importantForAccessibility={browserHidden ? "no-hide-descendants" : "auto"}
+        style={browserHidden ? hiddenBrowserStyle : styles.visible}
       >
         <SessionBrowser
-          active={!chatSessionId}
+          active={!browserHidden}
           contentScale={contentScale}
-          onContentScaleChange={(delta) => setContentScale((scale) => changeContentScale(scale, delta))}
+          onContentScaleChange={adjustContentScale}
           onOpenChat={({ id }) => setChatSessionId(id)}
+          onOpenSettings={() => setSettingsOpen(true)}
+          palette={palette}
           sessions={sessions}
         />
       </View>
@@ -80,9 +102,20 @@ export function App() {
         <Chat
           contentScale={contentScale}
           onBack={() => setChatSessionId(undefined)}
-          onContentScaleChange={(delta) => setContentScale((scale) => changeContentScale(scale, delta))}
+          onContentScaleChange={adjustContentScale}
           onOpenOwner={() => openOwner(chatSession)}
+          palette={palette}
           session={chatSession}
+        />
+      ) : null}
+      {settingsOpen ? (
+        <Settings
+          act={nativeServices.act}
+          error={nativeServices.error}
+          onBack={() => setSettingsOpen(false)}
+          palette={palette}
+          state={nativeServices.state}
+          update={nativeServices.update}
         />
       ) : null}
     </View>
@@ -94,12 +127,16 @@ function SessionBrowser({
   contentScale,
   onContentScaleChange,
   onOpenChat,
+  onOpenSettings,
+  palette,
   sessions,
 }: {
   active: boolean;
   contentScale: number;
   onContentScaleChange(delta: -0.1 | 0 | 0.1): void;
   onOpenChat(session: SessionSummary): void;
+  onOpenSettings(): void;
+  palette: Palette;
   sessions: SessionSummary[];
 }) {
   const [query, setQuery] = useState("");
@@ -112,7 +149,6 @@ function SessionBrowser({
   const previous = useRef({ query, ids: [] as string[] });
   const { width } = useWindowDimensions();
   const compact = width < 1_000 || contentScale >= 1.4;
-  const palette = palettes[useColorScheme() === "dark" ? "dark" : "light"];
   const browserStyles = useMemo(
     () => createStyles(palette, contentScale, compact),
     [compact, contentScale, palette],
@@ -221,7 +257,7 @@ function SessionBrowser({
               {visibleIds.length} {visibleIds.length === 1 ? "result" : "results"}
             </Text>
           ) : null}
-          <Pressable accessibilityLabel="Settings" accessibilityRole="button" style={browserStyles.settings}>
+          <Pressable accessibilityLabel="Settings" accessibilityRole="button" onPress={onOpenSettings} style={browserStyles.settings}>
             <Text style={browserStyles.settingsText}>⚙</Text>
           </Pressable>
         </View>

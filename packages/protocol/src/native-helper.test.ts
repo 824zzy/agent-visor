@@ -7,6 +7,8 @@ import {
 const requests = [
   { version: 1, id: "screens", method: "screen_topology" },
   { version: 1, id: "access", method: "accessibility_status" },
+  { version: 1, id: "request-access", method: "request_accessibility" },
+  { version: 1, id: "open-access", method: "open_accessibility_settings" },
   {
     version: 1,
     id: "pills",
@@ -25,6 +27,7 @@ const requests = [
           accessibilityLabel: "Review migration, ready",
         },
       ],
+      shortcutModifierFamily: "controlCommand",
       usageGlances: [
         {
           id: "codex",

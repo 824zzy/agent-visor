@@ -42,10 +42,13 @@ describe("FakeNativeHelper", () => {
 
     expect(await helper.screenTopology()).toEqual([screen]);
     expect(await helper.accessibilityStatus()).toBe(true);
-
+    await helper.requestAccessibility();
+    await helper.openAccessibilitySettings();
     await helper.presentPills([pill], [usage]);
     await helper.focus(focus);
 
+    expect(helper.requestedAccessibility).toBe(true);
+    expect(helper.openedAccessibilitySettings).toBe(true);
     expect(helper.presentedPills).toEqual([pill]);
     expect(helper.presentedUsageGlances).toEqual([usage]);
     expect(helper.focusRequests).toEqual([focus]);

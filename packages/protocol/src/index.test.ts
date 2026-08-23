@@ -3,6 +3,7 @@ import {
   PROTOCOL_VERSION,
   chatPageSchema,
   clientMessageSchema,
+  nativeServicesStateSchema,
   serverMessageSchema,
   sessionSnapshotSchema,
 } from "./index.js";
@@ -71,6 +72,38 @@ describe("session snapshot protocol", () => {
     };
     expect(chatPageSchema.parse(page)).toEqual(page);
     expect(chatPageSchema.safeParse({ ...page, unexpected: true }).success).toBe(false);
+  });
+
+  it("validates settings, permission, and update messages", () => {
+    const state = {
+      type: "native_services_state",
+      revision: 3,
+      settings: {
+        appearance: "dark",
+        contentScale: 1.2,
+        pillsEnabled: true,
+        codexUsageGlanceEnabled: true,
+        claudeUsageGlanceEnabled: false,
+        notificationSound: "Pop",
+        sessionShortcutModifierFamily: "optionCommand",
+        editorPreference: "auto",
+        observedWindowHours: 42,
+        launchAtLogin: false,
+      },
+      permissions: { accessibility: "granted", notifications: "authorized" },
+      update: { status: "up_to_date", currentVersion: "2.6.2" },
+    };
+    expect(nativeServicesStateSchema.parse(state)).toEqual(state);
+    expect(clientMessageSchema.safeParse({ type: "get_native_services" }).success).toBe(true);
+    expect(clientMessageSchema.safeParse({
+      type: "update_settings", id: "settings-1", patch: { appearance: "system" },
+    }).success).toBe(true);
+    expect(clientMessageSchema.safeParse({
+      type: "native_service_action", id: "native-1", action: "request_accessibility",
+    }).success).toBe(true);
+    expect(clientMessageSchema.safeParse({
+      type: "native_service_action", id: "native-2", action: "invented",
+    }).success).toBe(false);
   });
 
   it("validates Chat page, send, and response client messages", () => {

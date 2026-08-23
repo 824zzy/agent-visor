@@ -34,6 +34,64 @@ export function nativeActionFromDaemonMessage(value: unknown): NativeAction | un
   return { action: "open_owner", owner: message.owner, sessionId: message.sessionId };
 }
 
+export type NativeEffect =
+  | { action: "set_login_item"; enabled: boolean }
+  | { action: "open_update"; url: string }
+  | { action: "request_notifications" }
+  | {
+    action: "notify";
+    notification: {
+      id: string;
+      sessionId: string;
+      title: string;
+      body: string;
+      owner: string;
+      sound: string;
+    };
+  };
+
+export function nativeEffectFromDaemonMessage(value: unknown): NativeEffect | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const message = value as Record<string, unknown>;
+  if (message.type !== "native_effect") return undefined;
+  if (message.action === "request_notifications") return { action: "request_notifications" };
+  if (message.action === "notify") {
+    const notification = message.notification;
+    if (typeof notification !== "object" || notification === null) return undefined;
+    const item = notification as Record<string, unknown>;
+    if (typeof item.id !== "string" || !item.id || item.id.length > 128
+      || typeof item.sessionId !== "string" || !item.sessionId || item.sessionId.length > 128
+      || typeof item.title !== "string" || !item.title || item.title.length > 256
+      || typeof item.body !== "string" || !item.body || item.body.length > 1_024
+      || typeof item.owner !== "string" || !ownerApplication(item.owner)
+      || typeof item.sound !== "string" || item.sound.length > 64) return undefined;
+    return {
+      action: "notify",
+      notification: {
+        id: item.id,
+        sessionId: item.sessionId,
+        title: item.title,
+        body: item.body,
+        owner: item.owner,
+        sound: item.sound,
+      },
+    };
+  }
+  if (message.action === "set_login_item" && typeof message.enabled === "boolean") {
+    return { action: "set_login_item", enabled: message.enabled };
+  }
+  if (message.action !== "open_update" || typeof message.url !== "string") return undefined;
+  try {
+    const url = new URL(message.url);
+    const valid = url.protocol === "https:"
+      && url.hostname === "github.com"
+      && /^\/824zzy\/agent-visor\/releases\/tag\/v\d+\.\d+\.\d+$/.test(url.pathname);
+    return valid ? { action: "open_update", url: message.url } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function ownerApplication(owner: string): string | undefined {
   return {
     Auggie: "Auggie",

@@ -6,7 +6,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  useColorScheme,
   View,
 } from "react-native";
 import type {
@@ -17,7 +16,7 @@ import type {
 } from "@agent-visor/protocol";
 import { browserCommand } from "./browser-shortcuts";
 import { groupChatTurns, type ChatTurn } from "./chat-presentation";
-import { palettes, type Palette } from "./theme";
+import type { Palette } from "./theme";
 import { useChat } from "./use-chat";
 
 export function Chat({
@@ -25,17 +24,18 @@ export function Chat({
   onBack,
   onContentScaleChange,
   onOpenOwner,
+  palette,
   session,
 }: {
   contentScale: number;
   onBack(): void;
   onContentScaleChange(delta: -0.1 | 0 | 0.1): void;
   onOpenOwner(): void;
+  palette: Palette;
   session: SessionSummary;
 }) {
   const chat = useChat(session.id);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const palette = palettes[useColorScheme() === "dark" ? "dark" : "light"];
   const styles = useMemo(() => createStyles(palette, contentScale), [contentScale, palette]);
   const turns = useMemo(() => groupChatTurns(chat.page?.items ?? []), [chat.page?.items]);
   const scroll = useRef<ScrollView>(null);

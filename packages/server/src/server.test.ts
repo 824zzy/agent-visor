@@ -155,6 +155,45 @@ describe("Agent Visor daemon", () => {
     socket.close();
   });
 
+  it("delivers native settings and action results", async () => {
+    const state = {
+      type: "native_services_state" as const,
+      revision: 1,
+      settings: {
+        appearance: "dark" as const, contentScale: 1, pillsEnabled: true,
+        codexUsageGlanceEnabled: true, claudeUsageGlanceEnabled: false,
+        notificationSound: "Pop" as const, sessionShortcutModifierFamily: "optionCommand" as const,
+        editorPreference: "auto" as const, observedWindowHours: 42, launchAtLogin: false,
+      },
+      permissions: { accessibility: "granted" as const, notifications: "authorized" as const },
+      update: { status: "idle" as const, currentVersion: "2.6.2" },
+    };
+    const actions: unknown[] = [];
+    const nativeServices = {
+      current: () => state,
+      subscribe: () => () => undefined,
+      action: async (message: unknown) => { actions.push(message); return undefined; },
+    };
+    running = await startServer({ port: 0, snapshot: fixtureSnapshot, token, nativeServices });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    socket.send(JSON.stringify({ type: "get_native_services" }));
+    socket.send(JSON.stringify({
+      type: "update_settings", id: "settings-1", patch: { appearance: "light" },
+    }));
+
+    await expect.poll(() => messages.length).toBe(3);
+    expect(messages[1]).toEqual(state);
+    expect(messages[2]).toEqual({ type: "native_action_result", id: "settings-1", ok: true });
+    expect(actions).toHaveLength(1);
+    socket.close();
+  });
+
   it("ignores malformed client messages", async () => {
     running = await startServer({ port: 0, snapshot: fixtureSnapshot, token });
     const socket = new WebSocket(running.url);

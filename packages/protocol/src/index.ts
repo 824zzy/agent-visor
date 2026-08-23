@@ -74,6 +74,45 @@ export const chatItemSchema = z.discriminatedUnion("kind", [
   }).strict(),
 ]);
 
+export const appSettingsSchema = z.object({
+  appearance: z.enum(["system", "dark", "light"]),
+  contentScale: z.number().min(0.8).max(2.5),
+  pillsEnabled: z.boolean(),
+  codexUsageGlanceEnabled: z.boolean(),
+  claudeUsageGlanceEnabled: z.boolean(),
+  notificationSound: z.enum([
+    "None", "Pop", "Ping", "Tink", "Glass", "Blow", "Bottle", "Frog",
+    "Funk", "Hero", "Morse", "Purr", "Sosumi", "Submarine", "Basso",
+  ]),
+  sessionShortcutModifierFamily: z.enum([
+    "off", "controlCommand", "optionCommand", "controlOptionCommand",
+  ]),
+  editorPreference: z.enum([
+    "auto", "cursor", "vscode", "vscode-insiders", "zed", "xcode", "system-default",
+  ]),
+  observedWindowHours: z.number().int().min(1).max(168),
+  launchAtLogin: z.boolean(),
+}).strict();
+
+export const appSettingsPatchSchema = appSettingsSchema.partial().strict();
+
+export const nativeServicesStateSchema = z.object({
+  type: z.literal("native_services_state"),
+  revision: z.number().int().nonnegative(),
+  settings: appSettingsSchema,
+  permissions: z.object({
+    accessibility: z.enum(["granted", "needed"]),
+    notifications: z.enum(["not_determined", "denied", "authorized"]),
+  }).strict(),
+  update: z.object({
+    status: z.enum(["idle", "checking", "up_to_date", "available", "error"]),
+    currentVersion: z.string().min(1).max(64),
+    availableVersion: z.string().min(1).max(64).optional(),
+    releaseUrl: z.url().optional(),
+    error: z.string().min(1).max(1_024).optional(),
+  }).strict(),
+}).strict();
+
 export const chatCapabilitiesSchema = z.object({
   canSendText: z.boolean(),
   canSendImages: z.boolean(),
@@ -116,6 +155,20 @@ const requestEnvelope = { id: z.string().min(1).max(128) };
 export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("health") }).strict(),
   z.object({ type: z.literal("subscribe_sessions") }).strict(),
+  z.object({ type: z.literal("get_native_services") }).strict(),
+  z.object({
+    ...requestEnvelope,
+    type: z.literal("update_settings"),
+    patch: appSettingsPatchSchema,
+  }).strict(),
+  z.object({
+    ...requestEnvelope,
+    type: z.literal("native_service_action"),
+    action: z.enum([
+      "request_accessibility", "open_accessibility_settings",
+      "request_notifications", "check_updates", "open_update",
+    ]),
+  }).strict(),
   z.object({
     type: z.literal("open_chat"),
     sessionId: z.string().min(1).max(512),
@@ -166,6 +219,13 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("health"), status: z.literal("ok") }),
   sessionSnapshotSchema,
   chatPageSchema,
+  nativeServicesStateSchema,
+  z.object({
+    type: z.literal("native_action_result"),
+    id: z.string().min(1).max(128),
+    ok: z.boolean(),
+    error: z.string().min(1).max(1_024).optional(),
+  }).strict(),
   z.object({
     type: z.literal("chat_action_result"),
     id: z.string().min(1).max(128),
@@ -222,12 +282,15 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
     ...helperEnvelope,
     method: z.literal("accessibility_status"),
   }).strict(),
+  z.object({ ...helperEnvelope, method: z.literal("request_accessibility") }).strict(),
+  z.object({ ...helperEnvelope, method: z.literal("open_accessibility_settings") }).strict(),
   z.object({
     ...helperEnvelope,
     method: z.literal("present_pills"),
     params: z.object({
       pills: z.array(nativeHelperPillSchema).max(64),
       usageGlances: z.array(nativeHelperUsageGlanceSchema).max(8).optional(),
+      shortcutModifierFamily: appSettingsSchema.shape.sessionShortcutModifierFamily.optional(),
     }).strict(),
   }).strict(),
   z.object({
@@ -292,6 +355,8 @@ export const nativeHelperResponseSchema = z.union([
   ]),
 ]);
 
+export type AppSettings = z.infer<typeof appSettingsSchema>;
+export type AppSettingsPatch = z.infer<typeof appSettingsPatchSchema>;
 export type ChatCapabilities = z.infer<typeof chatCapabilitiesSchema>;
 export type ChatImage = z.infer<typeof chatImageSchema>;
 export type ChatItem = z.infer<typeof chatItemSchema>;
@@ -300,6 +365,7 @@ export type ChatPendingAction = z.infer<typeof chatPendingActionSchema>;
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 export type HookEvent = z.infer<typeof hookEventSchema>;
 export type NativeHelperFocusTarget = z.infer<typeof nativeHelperFocusTargetSchema>;
+export type NativeServicesState = z.infer<typeof nativeServicesStateSchema>;
 export type NativeHelperPill = z.infer<typeof nativeHelperPillSchema>;
 export type NativeHelperUsageGlance = z.infer<typeof nativeHelperUsageGlanceSchema>;
 export type NativeHelperRequest = z.infer<typeof nativeHelperRequestSchema>;

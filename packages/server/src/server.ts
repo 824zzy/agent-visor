@@ -3,10 +3,20 @@ import {
   PROTOCOL_VERSION,
   clientMessageSchema,
   sessionSnapshotSchema,
+  type ClientMessage,
+  type NativeServicesState,
   type ServerMessage,
   type SessionSnapshot,
 } from "@agent-visor/protocol";
 import type { SessionSnapshotSource } from "./sessions.js";
+
+export interface NativeServicesSource {
+  current(): NativeServicesState;
+  subscribe(listener: (state: NativeServicesState) => void): () => void;
+  action(message: Extract<ClientMessage, {
+    type: "update_settings" | "native_service_action";
+  }>): Promise<string | undefined>;
+}
 
 export type RunningServer = {
   url: string;
@@ -16,6 +26,7 @@ export type RunningServer = {
 export async function startServer(options: {
   port: number;
   token: string;
+  nativeServices?: NativeServicesSource;
 } & (
   | { snapshot: SessionSnapshot; source?: never }
   | { source: SessionSnapshotSource; snapshot?: never }
@@ -25,6 +36,7 @@ export async function startServer(options: {
   }
   const source = options.source ?? fixedSource(sessionSnapshotSchema.parse(options.snapshot));
   const subscribers = new Set<WebSocket>();
+  const nativeSubscribers = new Set<WebSocket>();
   const server = new WebSocketServer({
     host: "127.0.0.1",
     port: options.port,
@@ -40,9 +52,18 @@ export async function startServer(options: {
     }
   });
 
+  const unsubscribeNative = options.nativeServices?.subscribe((state) => {
+    for (const socket of nativeSubscribers) {
+      if (socket.readyState === WebSocket.OPEN) send(socket, state);
+    }
+  });
+
   server.on("connection", (socket) => {
     send(socket, { type: "hello", protocolVersion: PROTOCOL_VERSION });
-    socket.once("close", () => subscribers.delete(socket));
+    socket.once("close", () => {
+      subscribers.delete(socket);
+      nativeSubscribers.delete(socket);
+    });
 
     socket.on("message", async (data) => {
       let value: unknown;
@@ -60,6 +81,22 @@ export async function startServer(options: {
       } else if (parsed.data.type === "subscribe_sessions") {
         subscribers.add(socket);
         send(socket, source.current());
+      } else if (parsed.data.type === "get_native_services") {
+        if (options.nativeServices) {
+          nativeSubscribers.add(socket);
+          send(socket, options.nativeServices.current());
+        }
+      } else if (parsed.data.type === "update_settings"
+        || parsed.data.type === "native_service_action") {
+        const error = options.nativeServices
+          ? await options.nativeServices.action(parsed.data)
+          : "Native services are unavailable.";
+        send(socket, {
+          type: "native_action_result",
+          id: parsed.data.id,
+          ok: !error,
+          ...(error ? { error } : {}),
+        });
       } else if (parsed.data.type === "open_chat") {
         if (source.chatPage) {
           send(socket, await source.chatPage(
@@ -68,7 +105,7 @@ export async function startServer(options: {
             parsed.data.limit,
           ));
         }
-      } else {
+      } else if (parsed.data.type === "send_chat" || parsed.data.type === "respond_chat") {
         const error = source.chatAction
           ? await source.chatAction(parsed.data)
           : "Chat actions are unavailable.";
@@ -97,6 +134,7 @@ export async function startServer(options: {
     url: `ws://127.0.0.1:${address.port}?token=${encodeURIComponent(options.token)}`,
     close: async () => {
       unsubscribe();
+      unsubscribeNative?.();
       await closeServer(server);
     },
   };

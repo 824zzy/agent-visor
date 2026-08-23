@@ -31,7 +31,7 @@ The authenticated WebSocket client can allow, always allow, deny, or answer a qu
 
 Question answers use the question text as the dictionary key, matching Claude Code’s hook contract.
 
-Text and image message schemas are ready for provider transports. Exact native message delivery remains disabled until the native-services work supplies a verified route.
+Text and image message schemas are ready for provider transports. Exact native message delivery remains disabled and blocks production cutover.
 
 The renderer reports that limit instead of exposing a composer that cannot deliver.
 

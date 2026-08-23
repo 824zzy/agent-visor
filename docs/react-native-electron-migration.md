@@ -30,7 +30,7 @@ The Expo renderer now matches the released browser’s state sections, ranked se
 
 Rows keep fixed owner and Chat columns at desktop and compact widths. Back retains the query, cursor, and viewport because Sessions stays mounted and hidden.
 
-Electron activates only known owner applications. Exact session and window focus remains part of the native-services parity work.
+Electron activates only known owner applications. Exact session and window focus remains a cutover blocker.
 
 Run the Electron accessibility and layout check with:
 
@@ -40,7 +40,7 @@ npm run test:sessions
 
 Chat now renders provider-owned history, grouped work, tool details, images, pagination, approvals, questions, and technical Details.
 
-The daemon contract is defined in [Chat daemon](chat-daemon.md). Exact native message delivery remains part of native-services parity.
+The daemon contract is defined in [Chat daemon](chat-daemon.md). Exact native message delivery remains a cutover blocker.
 
 ## Dependency status
 
@@ -64,5 +64,7 @@ A narrow signed Swift helper keeps Accessibility, native menu items, global sess
 Its socket, validation, and signing contract is defined in [Native macOS helper](native-helper.md).
 
 Its menu behavior and daemon action route are defined in [Native menu bar](native-menu.md).
+
+Settings migration, permissions, notifications, updates, and shutdown behavior are defined in [Native services](native-services.md).
 
 Paseo source informed the system shape, but no Paseo source code is included.

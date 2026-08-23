@@ -1,11 +1,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, Notification, shell } from "electron";
 import {
   daemonUrlFromReadyMessage,
   nativeActionFromDaemonMessage,
+  nativeEffectFromDaemonMessage,
   ownerApplication,
   rendererLocation,
 } from "./desktop-contract.js";
@@ -82,12 +84,45 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
       ELECTRON_RUN_AS_NODE: "1",
       AGENT_VISOR_NATIVE_HELPER: process.env.AGENT_VISOR_NATIVE_HELPER
         ?? path.join(process.resourcesPath, "AgentVisorNativeHelper"),
+      AGENT_VISOR_DATA_DIR: app.getPath("userData"),
+      AGENT_VISOR_SETTINGS_DOMAIN: app.isPackaged
+        ? "com.824zzy.AgentVisor"
+        : "com.824zzy.AgentVisor.Dev",
+      AGENT_VISOR_VERSION: productVersion(),
+      ...(app.isPackaged
+        ? { AGENT_VISOR_LAUNCH_AT_LOGIN: String(app.getLoginItemSettings().openAtLogin) }
+        : {}),
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   child.stdout?.on("data", (data) => process.stdout.write(data));
   child.stderr?.on("data", (data) => process.stderr.write(data));
   child.on("message", (message) => {
+    const effect = nativeEffectFromDaemonMessage(message);
+    if (effect) {
+      if (effect.action === "set_login_item") {
+        if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: effect.enabled });
+      } else if (effect.action === "open_update") {
+        void shell.openExternal(effect.url);
+      } else if (effect.action === "request_notifications") {
+        if (Notification.isSupported()) {
+          new Notification({ title: "Agent Visor", body: "Notifications are ready." }).show();
+        }
+        void shell.openExternal(
+          "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+        );
+      } else if (Notification.isSupported()) {
+        const notification = new Notification({
+          title: effect.notification.title,
+          body: effect.notification.body,
+          silent: effect.notification.sound === "None",
+          ...(effect.notification.sound === "None" ? {} : { sound: effect.notification.sound }),
+        });
+        notification.once("click", () => queueOwnerActivation(effect.notification.owner));
+        notification.show();
+      }
+      return;
+    }
     const action = nativeActionFromDaemonMessage(message);
     if (!action) return;
     nativeActionQueue = nativeActionQueue
@@ -124,6 +159,24 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
       resolve({ process: child, url });
     });
   });
+}
+
+function queueOwnerActivation(owner: string): void {
+  const application = ownerApplication(owner);
+  if (!application) return;
+  nativeActionQueue = nativeActionQueue
+    .then(() => openApplication(application))
+    .catch((error: unknown) => console.error(error));
+}
+
+function productVersion(): string {
+  if (app.isPackaged) return app.getVersion();
+  try {
+    const value = JSON.parse(readFileSync(path.resolve(directory, "../../../package.json"), "utf8"));
+    return typeof value.version === "string" ? value.version : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
 }
 
 async function openApplication(application: string): Promise<void> {

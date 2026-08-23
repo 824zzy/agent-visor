@@ -16,9 +16,12 @@ import {
 export interface NativeHelperAdapter {
   screenTopology(): Promise<NativeHelperScreen[]>;
   accessibilityStatus(): Promise<boolean>;
+  requestAccessibility(): Promise<void>;
+  openAccessibilitySettings(): Promise<void>;
   presentPills(
     pills: NativeHelperPill[],
     usageGlances: NativeHelperUsageGlance[],
+    shortcutModifierFamily?: "off" | "controlCommand" | "optionCommand" | "controlOptionCommand",
   ): Promise<void>;
   focus(target: NativeHelperFocusTarget): Promise<void>;
 }
@@ -29,6 +32,9 @@ export class FakeNativeHelper implements NativeHelperAdapter {
   readonly focusRequests: NativeHelperFocusTarget[] = [];
   presentedPills: NativeHelperPill[] = [];
   presentedUsageGlances: NativeHelperUsageGlance[] = [];
+  shortcutModifierFamily = "optionCommand";
+  requestedAccessibility = false;
+  openedAccessibilitySettings = false;
 
   private readonly screens: NativeHelperScreen[];
   private readonly trusted: boolean;
@@ -49,17 +55,36 @@ export class FakeNativeHelper implements NativeHelperAdapter {
     return this.trusted;
   }
 
+  async requestAccessibility(): Promise<void> {
+    this.requestedAccessibility = true;
+  }
+
+  async openAccessibilitySettings(): Promise<void> {
+    this.openedAccessibilitySettings = true;
+  }
+
   async presentPills(
     pills: NativeHelperPill[],
     usageGlances: NativeHelperUsageGlance[],
+    shortcutModifierFamily: "off" | "controlCommand" | "optionCommand" | "controlOptionCommand" = "optionCommand",
   ): Promise<void> {
     this.presentedPills = structuredClone(pills);
     this.presentedUsageGlances = structuredClone(usageGlances);
+    this.shortcutModifierFamily = shortcutModifierFamily;
   }
 
   async focus(target: NativeHelperFocusTarget): Promise<void> {
     this.focusRequests.push(structuredClone(target));
   }
+}
+
+export class UnavailableNativeHelper implements NativeHelperAdapter {
+  async screenTopology(): Promise<NativeHelperScreen[]> { return []; }
+  async accessibilityStatus(): Promise<boolean> { return false; }
+  async requestAccessibility(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
+  async openAccessibilitySettings(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
+  async presentPills(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
+  async focus(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
 }
 
 export class NativeHelperProcess implements NativeHelperAdapter {
@@ -127,11 +152,24 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     return response.result.trusted;
   }
 
+  async requestAccessibility(): Promise<void> {
+    await this.accepted("request_accessibility");
+  }
+
+  async openAccessibilitySettings(): Promise<void> {
+    await this.accepted("open_accessibility_settings");
+  }
+
   async presentPills(
     pills: NativeHelperPill[],
     usageGlances: NativeHelperUsageGlance[],
+    shortcutModifierFamily?: "off" | "controlCommand" | "optionCommand" | "controlOptionCommand",
   ): Promise<void> {
-    await this.accepted("present_pills", { pills, usageGlances });
+    await this.accepted("present_pills", {
+      pills,
+      usageGlances,
+      ...(shortcutModifierFamily ? { shortcutModifierFamily } : {}),
+    });
   }
 
   async focus(target: NativeHelperFocusTarget): Promise<void> {
@@ -149,7 +187,7 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     await rm(this.root, { recursive: true, force: true });
   }
 
-  private async accepted(method: string, params: unknown): Promise<void> {
+  private async accepted(method: string, params?: unknown): Promise<void> {
     const response = await this.request(method, params);
     if (response.result.type !== "accepted") throw new Error("Unexpected helper response.");
   }

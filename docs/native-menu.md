@@ -26,15 +26,15 @@ The status colors match the released roles:
 
 ## Shortcuts
 
-The helper registers Option-Command-1 through Option-Command-9 for the first nine prioritized items.
+The helper registers the selected modifier family with 1 through 9 for the first nine prioritized items.
 
-Option-Command-0 opens Sessions. These shortcuts use the existing shared shortcut policy.
+The selected modifiers with 0 open Sessions. Off unregisters all session shortcuts.
 
 A helper action travels back through the authenticated local helper connection. The daemon resolves the current session owner.
 
 Electron serializes owner activations and rejects owners outside its application allowlist.
 
-Exact session and window focus remains in native-services parity.
+Exact session and window focus remains a cutover blocker. Owner activation stays source-first until a verified target route exists.
 
 ## Accessibility
 

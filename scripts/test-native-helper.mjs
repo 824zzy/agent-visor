@@ -101,7 +101,7 @@ try {
     phase: "working",
     priority: 0,
     accessibilityLabel: "Adapter session, in progress",
-  }], []);
+  }], [], "controlCommand");
 } finally {
   await adapter.close();
 }

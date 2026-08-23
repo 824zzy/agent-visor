@@ -6,14 +6,19 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         let requests = [
             #"{"version":1,"id":"screens","method":"screen_topology"}"#,
             #"{"version":1,"id":"access","method":"accessibility_status"}"#,
-            #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","subtitle":"Ready to continue","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready"}],"usageGlances":[{"id":"codex","label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage"}]}}"#,
+            #"{"version":1,"id":"request-access","method":"request_accessibility"}"#,
+            #"{"version":1,"id":"open-access","method":"open_accessibility_settings"}"#,
+            #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","subtitle":"Ready to continue","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready"}],"shortcutModifierFamily":"controlCommand","usageGlances":[{"id":"codex","label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage"}]}}"#,
             #"{"version":1,"id":"legacy-pills","method":"present_pills","params":{"pills":[{"id":"legacy","title":"Legacy","phase":"working","priority":2,"accessibilityLabel":"Legacy, in progress"}]}}"#,
             #"{"version":1,"id":"focus","method":"focus","params":{"target":{"pid":42,"bundleIdentifier":"com.mitchellh.ghostty","windowId":7}}}"#,
         ]
 
         XCTAssertEqual(
             try requests.map { try NativeHelperRequest.decode(Data($0.utf8)).id },
-            ["screens", "access", "pills", "legacy-pills", "focus"]
+            [
+                "screens", "access", "request-access", "open-access",
+                "pills", "legacy-pills", "focus",
+            ]
         )
     }
 

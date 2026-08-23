@@ -8,8 +8,11 @@ import { LiveProviderEnvironment } from "./environment.js";
 import { PiProvider } from "./pi.js";
 import { ZedProvider } from "./zed.js";
 
-export function liveProviders(home = os.homedir()): ProviderAdapter[] {
-  const environment = new LiveProviderEnvironment(home);
+export function liveProviders(
+  home = os.homedir(),
+  observedWindowMs?: number | (() => number),
+): ProviderAdapter[] {
+  const environment = new LiveProviderEnvironment(home, { observedWindowMs });
   return [
     new ClaudeProvider(environment),
     new CodexProvider(environment),

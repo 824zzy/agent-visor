@@ -12,6 +12,7 @@ final class NativeMenuController: NSObject {
     private var shortcutSessionIDs: [String] = []
     private var hotKeys: [EventHotKeyRef?] = []
     private var eventHandler: EventHandlerRef?
+    private var shortcutModifierFamily = SessionShortcutModifierFamily.defaultFamily
 
     override init() {
         super.init()
@@ -19,7 +20,16 @@ final class NativeMenuController: NSObject {
         registerShortcuts()
     }
 
-    func present(pills: [NativeHelperPill], usageGlances: [NativeHelperUsageGlance]) {
+    func present(
+        pills: [NativeHelperPill],
+        usageGlances: [NativeHelperUsageGlance],
+        shortcutModifierFamily: SessionShortcutModifierFamily?
+    ) {
+        if let shortcutModifierFamily,
+           shortcutModifierFamily != self.shortcutModifierFamily {
+            self.shortcutModifierFamily = shortcutModifierFamily
+            registerShortcuts()
+        }
         sessionItems.forEach(NSStatusBar.system.removeStatusItem)
         usageItems.forEach(NSStatusBar.system.removeStatusItem)
         sessionItems = pills.sorted { lhs, rhs in
@@ -117,6 +127,16 @@ final class NativeMenuController: NSObject {
     }
 
     private func registerShortcuts() {
+        hotKeys.forEach { reference in
+            if let reference { UnregisterEventHotKey(reference) }
+        }
+        hotKeys.removeAll()
+        if let eventHandler {
+            RemoveEventHandler(eventHandler)
+            self.eventHandler = nil
+        }
+        guard shortcutModifierFamily != .off else { return }
+
         var specification = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
@@ -149,12 +169,19 @@ final class NativeMenuController: NSObject {
         )
 
         let signature = fourCharacterCode("AVSR")
+        let modifiers: UInt32
+        switch shortcutModifierFamily {
+        case .off: return
+        case .controlCommand: modifiers = UInt32(controlKey | cmdKey)
+        case .optionCommand: modifiers = UInt32(optionKey | cmdKey)
+        case .controlOptionCommand: modifiers = UInt32(controlKey | optionKey | cmdKey)
+        }
         for hotKey in GlobalSessionShortcutPolicy.registeredHotKeys {
             var reference: EventHotKeyRef?
             let id = EventHotKeyID(signature: signature, id: hotKey.id)
             RegisterEventHotKey(
                 hotKey.keyCode,
-                UInt32(cmdKey | optionKey),
+                modifiers,
                 id,
                 GetApplicationEventTarget(),
                 0,

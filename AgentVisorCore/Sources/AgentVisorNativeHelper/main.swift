@@ -162,9 +162,23 @@ private func response(
             return .screenTopology(id: id, screens: screenTopology())
         case .accessibilityStatus(let id):
             return .accessibilityStatus(id: id, trusted: AXIsProcessTrusted())
-        case .presentPills(let id, let pills, let usageGlances):
+        case .requestAccessibility(let id):
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+            _ = AXIsProcessTrustedWithOptions(options as CFDictionary)
+            return .accepted(id: id)
+        case .openAccessibilitySettings(let id):
+            let url = URL(
+                string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            )!
+            DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+            return .accepted(id: id)
+        case .presentPills(let id, let pills, let usageGlances, let shortcutFamily):
             DispatchQueue.main.sync {
-                menu.present(pills: pills, usageGlances: usageGlances)
+                menu.present(
+                    pills: pills,
+                    usageGlances: usageGlances,
+                    shortcutModifierFamily: shortcutFamily
+                )
             }
             return .accepted(id: id)
         case .focus(let id, let target):

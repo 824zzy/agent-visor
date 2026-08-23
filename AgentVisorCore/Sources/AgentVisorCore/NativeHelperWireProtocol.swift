@@ -94,13 +94,21 @@ public struct NativeHelperFocusTarget: Codable, Equatable {
 public enum NativeHelperRequest: Equatable {
     case screenTopology(id: String)
     case accessibilityStatus(id: String)
-    case presentPills(id: String, pills: [NativeHelperPill], usageGlances: [NativeHelperUsageGlance])
+    case requestAccessibility(id: String)
+    case openAccessibilitySettings(id: String)
+    case presentPills(
+        id: String,
+        pills: [NativeHelperPill],
+        usageGlances: [NativeHelperUsageGlance],
+        shortcutModifierFamily: SessionShortcutModifierFamily?
+    )
     case focus(id: String, target: NativeHelperFocusTarget)
 
     public var id: String {
         switch self {
         case .screenTopology(let id), .accessibilityStatus(let id),
-             .presentPills(let id, _, _), .focus(let id, _):
+             .requestAccessibility(let id), .openAccessibilitySettings(let id),
+             .presentPills(let id, _, _, _), .focus(let id, _):
             id
         }
     }
@@ -112,7 +120,7 @@ public enum NativeHelperRequest: Equatable {
             throw NativeHelperWireError.invalidRequest
         }
 
-        let requiredKeys: Set<String> = method == "present_pills" || method == "focus"
+        let requiredKeys: Set<String> = ["present_pills", "focus"].contains(method)
             ? ["version", "id", "method", "params"]
             : ["version", "id", "method"]
         guard Set(object.keys) == requiredKeys,
@@ -131,20 +139,33 @@ public enum NativeHelperRequest: Equatable {
             return .screenTopology(id: wire.id)
         case "accessibility_status":
             return .accessibilityStatus(id: wire.id)
+        case "request_accessibility":
+            return .requestAccessibility(id: wire.id)
+        case "open_accessibility_settings":
+            return .openAccessibilitySettings(id: wire.id)
         case "present_pills":
             guard let params = wire.params,
-                  (Set(params.keys) == ["pills"]
-                    || Set(params.keys) == ["pills", "usageGlances"]),
+                  Set(params.keys).contains("pills"),
+                  Set(params.keys).isSubset(of: [
+                    "pills", "usageGlances", "shortcutModifierFamily",
+                  ]),
                   let pills = params.pills, pills.count <= 64,
                   (params.usageGlances?.count ?? 0) <= 8,
                   pills.allSatisfy({ $0.isValid }),
                   (params.usageGlances ?? []).allSatisfy({ $0.isValid }) else {
                 throw NativeHelperWireError.invalidRequest
             }
+            let shortcutFamily = params.shortcutModifierFamily.flatMap(
+                SessionShortcutModifierFamily.init(rawValue:)
+            )
+            guard params.shortcutModifierFamily == nil || shortcutFamily != nil else {
+                throw NativeHelperWireError.invalidRequest
+            }
             return .presentPills(
                 id: wire.id,
                 pills: pills,
-                usageGlances: params.usageGlances ?? []
+                usageGlances: params.usageGlances ?? [],
+                shortcutModifierFamily: shortcutFamily
             )
         case "focus":
             guard let params = wire.params,
@@ -322,8 +343,10 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
     switch method {
     case "present_pills":
         guard let params = object["params"] as? [String: Any],
-              (Set(params.keys) == ["pills"]
-                || Set(params.keys) == ["pills", "usageGlances"]),
+              Set(params.keys).contains("pills"),
+              Set(params.keys).isSubset(of: [
+                "pills", "usageGlances", "shortcutModifierFamily",
+              ]),
               let pills = params["pills"] as? [[String: Any]] else { return false }
         let usageGlances = params["usageGlances"] as? [[String: Any]] ?? []
         let legacyPillKeys: Set<String> = [
@@ -362,6 +385,7 @@ private struct WireRequest: Decodable {
 private struct WireParameters: Decodable {
     let pills: [NativeHelperPill]?
     let usageGlances: [NativeHelperUsageGlance]?
+    let shortcutModifierFamily: String?
     let target: NativeHelperFocusTarget?
     let keys: [String]
 
@@ -372,6 +396,10 @@ private struct WireParameters: Decodable {
         usageGlances = try container.decodeIfPresent(
             [NativeHelperUsageGlance].self,
             forKey: .init("usageGlances")
+        )
+        shortcutModifierFamily = try container.decodeIfPresent(
+            String.self,
+            forKey: .init("shortcutModifierFamily")
         )
         target = try container.decodeIfPresent(NativeHelperFocusTarget.self, forKey: .init("target"))
     }
