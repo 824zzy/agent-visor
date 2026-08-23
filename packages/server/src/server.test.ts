@@ -116,6 +116,45 @@ describe("Agent Visor daemon", () => {
     reconnect.close();
   });
 
+  it("delivers Chat pages and capability action results", async () => {
+    const source = {
+      current: () => fixtureSnapshot,
+      subscribe: () => () => undefined,
+      chatPage: async (sessionId: string) => ({
+        type: "chat_page" as const,
+        sessionId,
+        items: [{ id: "u1", kind: "user" as const, text: "Fix it", images: [] }],
+        hasMoreBefore: false,
+        capabilities: {
+          canSendText: false, canSendImages: false, canApprove: false, canAnswer: false,
+          readOnlyReason: "Read only.",
+        },
+        pendingAction: null,
+      }),
+      chatAction: async () => "Read only.",
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+
+    socket.send(JSON.stringify({ type: "open_chat", sessionId: "pi-ready" }));
+    socket.send(JSON.stringify({
+      type: "send_chat", id: "send-1", sessionId: "pi-ready", text: "Continue", images: [],
+    }));
+
+    await expect.poll(() => messages.length).toBe(3);
+    expect(messages[1]).toMatchObject({ type: "chat_page", sessionId: "pi-ready" });
+    expect(messages[2]).toEqual({
+      type: "chat_action_result", id: "send-1", ok: false, error: "Read only.",
+    });
+    socket.close();
+  });
+
   it("ignores malformed client messages", async () => {
     running = await startServer({ port: 0, snapshot: fixtureSnapshot, token });
     const socket = new WebSocket(running.url);

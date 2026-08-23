@@ -17,10 +17,13 @@ export async function startHookSocket(options: {
   await mkdir(path.dirname(options.socketPath), { recursive: true, mode: 0o700 });
   await removeOwnedSocket(options.socketPath);
 
-  const server = net.createServer((socket) => {
+  const clients = new Set<net.Socket>();
+  const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+    clients.add(socket);
     const chunks: Buffer[] = [];
     let size = 0;
     let handled = false;
+    let unregisterResponder: (() => void) | undefined;
     const deadline = setTimeout(() => socket.destroy(), 500);
 
     socket.on("data", (chunk: Buffer) => {
@@ -33,7 +36,11 @@ export async function startHookSocket(options: {
       tryHandle(false);
     });
     socket.once("end", () => tryHandle(true));
-    socket.once("close", () => clearTimeout(deadline));
+    socket.once("close", () => {
+      clearTimeout(deadline);
+      unregisterResponder?.();
+      clients.delete(socket);
+    });
 
     function tryHandle(final: boolean): void {
       if (handled) return;
@@ -45,8 +52,26 @@ export async function startHookSocket(options: {
       }
       handled = true;
       const parsed = hookEventSchema.safeParse(value);
-      if (parsed.success) applyEvent(options.repository, parsed.data);
-      socket.end();
+      if (!parsed.success) {
+        socket.end();
+        return;
+      }
+      applyEvent(options.repository, parsed.data);
+      const provider = providerID(parsed.data.agent);
+      const expectsResponse = parsed.data.event === "PermissionRequest"
+        && parsed.data.status === "waiting_for_approval"
+        && provider === "claude_code";
+      if (expectsResponse && parsed.data.tool_use_id) {
+        clearTimeout(deadline);
+        unregisterResponder = options.repository.registerHookResponder(
+          parsed.data.session_id,
+          parsed.data.tool_use_id,
+          (response) => socket.end(JSON.stringify(response)),
+        );
+        setTimeout(() => socket.destroy(), 30 * 60_000).unref();
+      } else {
+        socket.end();
+      }
     }
   });
 
@@ -59,6 +84,7 @@ export async function startHookSocket(options: {
 
   return {
     close: async () => {
+      for (const client of clients) client.destroy();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => error ? reject(error) : resolve());
       });
@@ -79,6 +105,12 @@ function applyEvent(repository: SessionRepository, event: HookEvent): void {
     ...(event.pid === undefined ? {} : { pid: event.pid }),
     ...(event.tty ? { tty: event.tty } : {}),
     ...(event.is_idle === undefined ? {} : { isIdle: event.is_idle }),
+    ...(event.session_file ? { sessionFile: event.session_file } : {}),
+    ...(event.tool ? { tool: event.tool } : {}),
+    ...(event.tool_input ? { toolInput: event.tool_input } : {}),
+    ...(event.tool_use_id ? { toolUseId: event.tool_use_id } : {}),
+    ...(event.permission_suggestions
+      ? { permissionSuggestions: event.permission_suggestions } : {}),
     expectsResponse: event.event === "PermissionRequest"
       && event.status === "waiting_for_approval"
       && provider === "claude_code",

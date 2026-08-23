@@ -41,7 +41,7 @@ export function sessionSnapshotFromServerData(data: string): SessionSnapshot | u
   }
 }
 
-function daemonUrl(): string {
+export function daemonUrl(): string {
   if (typeof window === "undefined") return "ws://127.0.0.1:6768";
   return window.agentVisor?.daemonUrl ?? "ws://127.0.0.1:6768";
 }

@@ -114,6 +114,7 @@ async function cursorSession(
     updatedAt: iso(transcript.modifiedAt),
     canOpenOwner: true,
     canEnterChat: true,
+    chatPath: transcript.path,
   };
 }
 

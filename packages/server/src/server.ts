@@ -44,7 +44,7 @@ export async function startServer(options: {
     send(socket, { type: "hello", protocolVersion: PROTOCOL_VERSION });
     socket.once("close", () => subscribers.delete(socket));
 
-    socket.on("message", (data) => {
+    socket.on("message", async (data) => {
       let value: unknown;
       try {
         value = JSON.parse(data.toString());
@@ -57,9 +57,27 @@ export async function startServer(options: {
 
       if (parsed.data.type === "health") {
         send(socket, { type: "health", status: "ok" });
-      } else {
+      } else if (parsed.data.type === "subscribe_sessions") {
         subscribers.add(socket);
         send(socket, source.current());
+      } else if (parsed.data.type === "open_chat") {
+        if (source.chatPage) {
+          send(socket, await source.chatPage(
+            parsed.data.sessionId,
+            parsed.data.before,
+            parsed.data.limit,
+          ));
+        }
+      } else {
+        const error = source.chatAction
+          ? await source.chatAction(parsed.data)
+          : "Chat actions are unavailable.";
+        send(socket, {
+          type: "chat_action_result",
+          id: parsed.data.id,
+          ok: !error,
+          ...(error ? { error } : {}),
+        });
       }
     });
   });
@@ -92,7 +110,7 @@ function fixedSource(snapshot: SessionSnapshot): SessionSnapshotSource {
 }
 
 function send(socket: { send(data: string): void }, message: ServerMessage): void {
-  socket.send(JSON.stringify(message));
+  try { socket.send(JSON.stringify(message)); } catch { /* client disconnected */ }
 }
 
 async function closeServer(server: WebSocketServer): Promise<void> {

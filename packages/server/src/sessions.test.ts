@@ -102,6 +102,54 @@ describe("SessionRepository", () => {
     });
   });
 
+  it("presents and answers Claude questions through the pending hook", async () => {
+    const repository = new SessionRepository([]);
+    repository.applyHook({
+      sessionId: "claude-1",
+      cwd: live.cwd,
+      provider: "claude_code",
+      event: "PermissionRequest",
+      status: "waiting_for_approval",
+      receivedAt: "2026-08-22T08:01:00.000Z",
+      expectsResponse: true,
+      tool: "AskUserQuestion",
+      toolUseId: "question-1",
+      toolInput: {
+        questions: [{
+          header: "Strategy",
+          question: "Which strategy?",
+          options: [{ label: "Minimal" }, { label: "Complete" }],
+          multiSelect: false,
+        }],
+      },
+    });
+    let response: unknown;
+    repository.registerHookResponder("claude-1", "question-1", (value) => { response = value; });
+
+    expect((await repository.chatPage("claude-1")).pendingAction).toEqual({
+      type: "question",
+      toolUseId: "question-1",
+      questions: [{
+        id: "Which strategy?",
+        question: "Which strategy?",
+        choices: ["Minimal", "Complete"],
+        multiple: false,
+      }],
+    });
+    expect(await repository.chatAction({
+      type: "respond_chat",
+      id: "answer-1",
+      sessionId: "claude-1",
+      toolUseId: "question-1",
+      decision: "answer",
+      answers: { "Which strategy?": "Minimal" },
+    })).toBeUndefined();
+    expect(response).toMatchObject({
+      decision: "allow",
+      updated_input: { answers: { "Which strategy?": "Minimal" } },
+    });
+  });
+
   it("lets an authoritative host replace a duplicate provider row", async () => {
     const pi = new FakeProvider();
     const zed: ProviderAdapter = {

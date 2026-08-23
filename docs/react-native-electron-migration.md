@@ -38,7 +38,9 @@ Run the Electron accessibility and layout check with:
 npm run test:sessions
 ```
 
-Chat currently shows the retained-browser handoff surface. Conversation rendering and transport follow in the Chat parity work.
+Chat now renders provider-owned history, grouped work, tool details, images, pagination, approvals, questions, and technical Details.
+
+The daemon contract is defined in [Chat daemon](chat-daemon.md). Exact native message delivery remains part of native-services parity.
 
 ## Dependency status
 

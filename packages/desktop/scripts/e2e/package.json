@@ -1,4 +1,4 @@
 {
-  "main": "../test-sessions-accessibility.mjs",
+  "main": "runner.mjs",
   "type": "module"
 }

@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import type { SessionSummary } from "@agent-visor/protocol";
 import { browserCommand, changeContentScale } from "./browser-shortcuts";
+import { Chat } from "./Chat";
 import {
   moveSessionCursor,
   reconcileSessionCursor,
@@ -20,6 +21,7 @@ import {
   sessionAction,
   selectSessions,
 } from "./session-groups";
+import { palettes, type Palette } from "./theme";
 import { useSessionSnapshot } from "./use-session-snapshot";
 
 const agentImages: Record<string, number> = {
@@ -30,20 +32,6 @@ const agentImages: Record<string, number> = {
   pi: require("../assets/agents/pi.png"),
 };
 
-const palettes = {
-  light: {
-    background: "#f7f7fa", border: "#d8dae5", card: "#e9eaf0", foreground: "#343746",
-    muted: "#70758a", tertiary: "#8b8fa1", accent: "#416fe5", accentWash: "#416fe514",
-    attention: "#c59316", ready: "#278d50", working: "#c04b1c", history: "#73778a",
-  },
-  dark: {
-    background: "#1e1e2e", border: "#45475a", card: "#313244", foreground: "#cdd6f4",
-    muted: "#a6adc8", tertiary: "#7f849c", accent: "#89b4fa", accentWash: "#89b4fa18",
-    attention: "#f9e2af", ready: "#a6e3a1", working: "#fab387", history: "#9399b2",
-  },
-};
-
-type Palette = typeof palettes.light;
 type BrowserStyles = ReturnType<typeof createStyles>;
 const hiddenBrowserStyle = {
   bottom: 0,
@@ -58,9 +46,16 @@ const hiddenBrowserStyle = {
 export function App() {
   const connection = useSessionSnapshot();
   const [chatSessionId, setChatSessionId] = useState<string>();
+  const [contentScale, setContentScale] = useState(1);
   const sessions = connection.status === "connected" ? connection.snapshot.sessions : [];
   const chatSession = sessions.find(({ id }) => id === chatSessionId);
   const palette = palettes[useColorScheme() === "dark" ? "dark" : "light"];
+
+  useEffect(() => {
+    if (connection.status === "connected" && chatSessionId && !chatSession) {
+      setChatSessionId(undefined);
+    }
+  }, [chatSession, chatSessionId, connection.status]);
 
   if (connection.status === "failed") return <CenteredMessage text="Unable to connect to Agent Visor" palette={palette} />;
   if (connection.status === "connecting") return <CenteredMessage text="Connecting to Agent Visor…" palette={palette} />;
@@ -75,15 +70,18 @@ export function App() {
       >
         <SessionBrowser
           active={!chatSessionId}
+          contentScale={contentScale}
+          onContentScaleChange={(delta) => setContentScale((scale) => changeContentScale(scale, delta))}
           onOpenChat={({ id }) => setChatSessionId(id)}
           sessions={sessions}
         />
       </View>
-      {chatSessionId ? (
-        <ChatPending
+      {chatSession ? (
+        <Chat
+          contentScale={contentScale}
           onBack={() => setChatSessionId(undefined)}
-          onOpenOwner={() => chatSession && openOwner(chatSession)}
-          palette={palette}
+          onContentScaleChange={(delta) => setContentScale((scale) => changeContentScale(scale, delta))}
+          onOpenOwner={() => openOwner(chatSession)}
           session={chatSession}
         />
       ) : null}
@@ -93,10 +91,14 @@ export function App() {
 
 function SessionBrowser({
   active,
+  contentScale,
+  onContentScaleChange,
   onOpenChat,
   sessions,
 }: {
   active: boolean;
+  contentScale: number;
+  onContentScaleChange(delta: -0.1 | 0 | 0.1): void;
   onOpenChat(session: SessionSummary): void;
   sessions: SessionSummary[];
 }) {
@@ -104,7 +106,6 @@ function SessionBrowser({
   const [searchFocused, setSearchFocused] = useState(false);
   const [cursorId, setCursorId] = useState<string>();
   const [revealRequest, setRevealRequest] = useState<{ id: string; serial: number }>();
-  const [contentScale, setContentScale] = useState(1);
   const [commandHeld, setCommandHeld] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const searchRef = useRef<TextInput>(null);
@@ -161,7 +162,7 @@ function SessionBrowser({
       event.preventDefault();
       if (command.type === "focus_search") searchRef.current?.focus();
       if (command.type === "clear_search") setQuery("");
-      if (command.type === "scale") setContentScale((scale) => changeContentScale(scale, command.delta));
+      if (command.type === "scale") onContentScaleChange(command.delta);
       if (command.type === "move") {
         const decision = moveSessionCursor(cursorId, visibleIds, command.offset);
         setCursorId(decision.cursorId);
@@ -188,7 +189,7 @@ function SessionBrowser({
       window.removeEventListener("keydown", keyDown);
       window.removeEventListener("keyup", keyUp);
     };
-  }, [active, cursorId, onOpenChat, query, visibleKey]);
+  }, [active, cursorId, onContentScaleChange, onOpenChat, query, visibleKey]);
 
   return (
     <View style={browserStyles.app}>
@@ -396,38 +397,6 @@ function EmptyState({ query, styles }: { query: string; styles: BrowserStyles })
   );
 }
 
-function ChatPending({
-  onBack,
-  onOpenOwner,
-  palette,
-  session,
-}: {
-  onBack(): void;
-  onOpenOwner(): void;
-  palette: Palette;
-  session?: SessionSummary;
-}) {
-  return (
-    <View style={[styles.chat, { backgroundColor: palette.background }]}>
-      <View style={[styles.chatHeader, { borderBottomColor: palette.border }]}>
-        <Pressable accessibilityLabel="Back to Sessions" onPress={onBack} style={styles.backButton}>
-          <Text style={{ color: palette.accent }}>‹ Back to Sessions</Text>
-        </Pressable>
-        <Text numberOfLines={1} style={[styles.chatTitle, { color: palette.foreground }]}>{session?.title ?? "Chat unavailable"}</Text>
-        {session?.canOpenOwner ? (
-          <Pressable accessibilityLabel={`Open in ${session.owner}`} onPress={onOpenOwner} style={styles.ownerButton}>
-            <Text style={{ color: palette.muted }}>↗ Open in {session.owner}</Text>
-          </Pressable>
-        ) : null}
-      </View>
-      <View style={styles.chatEmpty}>
-        <Text style={{ color: palette.foreground, fontSize: 16, fontWeight: "600" }}>Chat migration continues next</Text>
-        <Text style={{ color: palette.muted, fontSize: 12 }}>Back restores your Sessions search, keyboard cursor, and scroll position.</Text>
-      </View>
-    </View>
-  );
-}
-
 function CenteredMessage({ text, palette }: { text: string; palette: Palette }) {
   return <View style={[styles.centered, { backgroundColor: palette.background }]}><Text style={{ color: palette.muted }}>{text}</Text></View>;
 }
@@ -529,10 +498,4 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
 const styles = StyleSheet.create({
   visible: { flex: 1 },
   centered: { alignItems: "center", flex: 1, justifyContent: "center" },
-  chat: { flex: 1 },
-  chatHeader: { alignItems: "center", borderBottomWidth: 1, flexDirection: "row", minHeight: 74, paddingHorizontal: 28, paddingTop: 28 },
-  backButton: { justifyContent: "center", minHeight: 44, paddingRight: 16 },
-  chatTitle: { flex: 1, fontSize: 14, fontWeight: "600" },
-  ownerButton: { justifyContent: "center", minHeight: 44, paddingLeft: 16 },
-  chatEmpty: { alignItems: "center", flex: 1, gap: 8, justifyContent: "center" },
 });

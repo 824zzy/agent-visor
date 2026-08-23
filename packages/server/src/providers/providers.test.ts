@@ -162,7 +162,23 @@ describe("live provider adapters", () => {
       title: "Codex title",
       provider: "codex",
       owner: "Codex",
+      canEnterChat: true,
     });
+
+    environment.sqliteRows.set(database, [{
+      id: "codex-1",
+      rollout_path: rollout,
+      cwd,
+      title: "Codex title",
+      updated_at: Math.floor((now.valueOf() - 3_600_000) / 1_000),
+      archived: 0,
+      source: "vscode",
+    }]);
+    environment.stamps.set(rollout, {
+      modifiedAt: new Date(now.valueOf() - 3_600_000),
+      size: 100,
+    });
+    expect((await new CodexProvider(environment).discover())[0]?.canEnterChat).toBe(false);
   });
 
   it("uses Cursor transcript content without sharing another provider parser", async () => {

@@ -29,9 +29,115 @@ export const sessionSnapshotSchema = z.object({
   sessions: z.array(sessionSummarySchema),
 });
 
+export const chatImageSchema = z.object({
+  name: z.string().min(1).max(512),
+  mimeType: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp"]),
+  data: z.string().max(20_000_000).optional(),
+}).strict();
+
+const chatTimestamp = z.iso.datetime().optional();
+export const chatItemSchema = z.discriminatedUnion("kind", [
+  z.object({
+    id: z.string().min(1).max(512),
+    kind: z.literal("user"),
+    text: z.string().max(20_000_000),
+    images: z.array(chatImageSchema).max(20),
+    timestamp: chatTimestamp,
+  }).strict(),
+  z.object({
+    id: z.string().min(1).max(512),
+    kind: z.literal("assistant"),
+    text: z.string().min(1).max(20_000_000),
+    timestamp: chatTimestamp,
+  }).strict(),
+  z.object({
+    id: z.string().min(1).max(512),
+    kind: z.literal("thinking"),
+    text: z.string().min(1).max(20_000_000),
+    timestamp: chatTimestamp,
+  }).strict(),
+  z.object({
+    id: z.string().min(1).max(512),
+    kind: z.literal("tool"),
+    name: z.string().min(1).max(512),
+    input: z.record(z.string(), z.unknown()),
+    status: z.enum(["running", "waiting", "success", "error", "interrupted"]),
+    result: z.string().max(20_000_000).optional(),
+    timestamp: chatTimestamp,
+  }).strict(),
+  z.object({
+    id: z.string().min(1).max(512),
+    kind: z.literal("system"),
+    text: z.string().min(1).max(20_000_000),
+    tone: z.enum(["neutral", "error", "compact"]),
+    timestamp: chatTimestamp,
+  }).strict(),
+]);
+
+export const chatCapabilitiesSchema = z.object({
+  canSendText: z.boolean(),
+  canSendImages: z.boolean(),
+  canApprove: z.boolean(),
+  canAnswer: z.boolean(),
+  readOnlyReason: z.string().min(1).max(1_024).optional(),
+}).strict();
+
+export const chatPendingActionSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("approval"),
+    toolUseId: z.string().min(1).max(512),
+    toolName: z.string().min(1).max(512),
+    input: z.record(z.string(), z.unknown()),
+    canPersist: z.boolean(),
+  }).strict(),
+  z.object({
+    type: z.literal("question"),
+    toolUseId: z.string().min(1).max(512),
+    questions: z.array(z.object({
+      id: z.string().min(1).max(16_384),
+      question: z.string().min(1).max(16_384),
+      choices: z.array(z.string().min(1).max(4_096)).max(100),
+      multiple: z.boolean(),
+    }).strict()).min(1).max(100),
+  }).strict(),
+]);
+
+export const chatPageSchema = z.object({
+  type: z.literal("chat_page"),
+  sessionId: z.string().min(1).max(512),
+  items: z.array(chatItemSchema).max(1_000),
+  hasMoreBefore: z.boolean(),
+  nextBefore: z.number().int().nonnegative().optional(),
+  capabilities: chatCapabilitiesSchema,
+  pendingAction: chatPendingActionSchema.nullable(),
+}).strict();
+
+const requestEnvelope = { id: z.string().min(1).max(128) };
 export const clientMessageSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("health") }),
-  z.object({ type: z.literal("subscribe_sessions") }),
+  z.object({ type: z.literal("health") }).strict(),
+  z.object({ type: z.literal("subscribe_sessions") }).strict(),
+  z.object({
+    type: z.literal("open_chat"),
+    sessionId: z.string().min(1).max(512),
+    before: z.number().int().nonnegative().optional(),
+    limit: z.number().int().min(1).max(1_000).optional(),
+  }).strict(),
+  z.object({
+    ...requestEnvelope,
+    type: z.literal("send_chat"),
+    sessionId: z.string().min(1).max(512),
+    text: z.string().max(1_000_000),
+    images: z.array(chatImageSchema.required({ data: true })).max(10),
+  }).strict(),
+  z.object({
+    ...requestEnvelope,
+    type: z.literal("respond_chat"),
+    sessionId: z.string().min(1).max(512),
+    toolUseId: z.string().min(1).max(512),
+    decision: z.enum(["allow", "allow_always", "deny", "answer"]),
+    reason: z.string().max(16_384).optional(),
+    answers: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
+  }).strict(),
 ]);
 
 export const hookEventSchema = z.object({
@@ -59,6 +165,13 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("health"), status: z.literal("ok") }),
   sessionSnapshotSchema,
+  chatPageSchema,
+  z.object({
+    type: z.literal("chat_action_result"),
+    id: z.string().min(1).max(128),
+    ok: z.boolean(),
+    error: z.string().min(1).max(1_024).optional(),
+  }).strict(),
 ]);
 
 const helperEnvelope = {
@@ -146,6 +259,11 @@ export const nativeHelperResponseSchema = z.discriminatedUnion("ok", [
   }).strict(),
 ]);
 
+export type ChatCapabilities = z.infer<typeof chatCapabilitiesSchema>;
+export type ChatImage = z.infer<typeof chatImageSchema>;
+export type ChatItem = z.infer<typeof chatItemSchema>;
+export type ChatPage = z.infer<typeof chatPageSchema>;
+export type ChatPendingAction = z.infer<typeof chatPendingActionSchema>;
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 export type HookEvent = z.infer<typeof hookEventSchema>;
 export type NativeHelperFocusTarget = z.infer<typeof nativeHelperFocusTargetSchema>;

@@ -79,6 +79,7 @@ export class PiProvider implements ProviderAdapter {
         updatedAt: iso(file.modifiedAt),
         canOpenOwner: process !== undefined,
         canEnterChat: true,
+        chatPath: file.path,
       };
     }));
   }

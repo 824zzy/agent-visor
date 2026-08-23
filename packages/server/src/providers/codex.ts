@@ -87,7 +87,9 @@ export class CodexProvider implements ProviderAdapter {
       section: "history",
       updatedAt: iso(thread.updatedAt * 1_000),
       canOpenOwner: true,
-      canEnterChat: true,
+      canEnterChat: owner !== "Codex"
+        || this.environment.now().valueOf() - thread.updatedAt * 1_000 <= 120_000,
+      chatPath: thread.rolloutPath,
     };
   }
 }

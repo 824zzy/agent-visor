@@ -1,10 +1,13 @@
 import {
   sessionSnapshotSchema,
+  type ChatPage,
+  type ClientMessage,
   type SessionSection,
   type SessionSnapshot,
   type SessionSummary,
 } from "@agent-visor/protocol";
 import path from "node:path";
+import { readChatPage } from "./chat.js";
 
 export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie";
 
@@ -21,11 +24,14 @@ export type DiscoveredProviderSession = {
   canOpenOwner: boolean;
   canEnterChat: boolean;
   authority?: number;
+  chatPath?: string;
 };
 
 export interface SessionSnapshotSource {
   current(): SessionSnapshot;
   subscribe(listener: (snapshot: SessionSnapshot) => void): () => void;
+  chatPage?(sessionId: string, before?: number, limit?: number): Promise<ChatPage>;
+  chatAction?(message: Extract<ClientMessage, { type: "send_chat" | "respond_chat" }>): Promise<string | undefined>;
 }
 
 export interface ProviderAdapter {
@@ -44,6 +50,18 @@ export type HookSessionEvent = {
   tty?: string;
   expectsResponse?: boolean;
   isIdle?: boolean;
+  sessionFile?: string;
+  tool?: string;
+  toolInput?: Record<string, unknown>;
+  toolUseId?: string;
+  permissionSuggestions?: unknown[];
+};
+
+export type HookResponse = {
+  decision: "allow" | "deny";
+  reason?: string;
+  updated_input?: Record<string, unknown>;
+  updated_permissions?: unknown[];
 };
 
 const providerNames: Record<ProviderID, string> = {
@@ -65,7 +83,12 @@ export class SessionRepository {
   };
   private readonly lastByProvider = new Map<ProviderID, DiscoveredProviderSession[]>();
   private readonly hookBySession = new Map<string, HookSessionEvent>();
+  private readonly chatBySession = new Map<string, DiscoveredProviderSession>();
   private readonly listeners = new Set<(snapshot: SessionSnapshot) => void>();
+  private readonly hookResponders = new Map<string, {
+    sessionId: string;
+    respond(response: HookResponse): void;
+  }>();
 
   constructor(private readonly providers: ProviderAdapter[]) {}
 
@@ -76,6 +99,62 @@ export class SessionRepository {
   subscribe(listener: (snapshot: SessionSnapshot) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  chatRecord(sessionId: string): DiscoveredProviderSession | undefined {
+    const record = this.chatBySession.get(sessionId);
+    return record ? structuredClone(record) : undefined;
+  }
+
+  hookRecord(sessionId: string): HookSessionEvent | undefined {
+    const record = this.hookBySession.get(sessionId);
+    return record ? structuredClone(record) : undefined;
+  }
+
+  registerHookResponder(
+    sessionId: string,
+    toolUseId: string,
+    respond: (response: HookResponse) => void,
+  ): () => void {
+    this.hookResponders.set(toolUseId, { sessionId, respond });
+    return () => {
+      const current = this.hookResponders.get(toolUseId);
+      if (current?.respond === respond) this.hookResponders.delete(toolUseId);
+    };
+  }
+
+  async chatPage(sessionId: string, before?: number, limit?: number): Promise<ChatPage> {
+    const hook = this.hookBySession.get(sessionId);
+    const discovered = this.chatBySession.get(sessionId);
+    const record = discovered ?? (hook ? hookSession(hook) : undefined);
+    if (!record) return unavailableChatPage(sessionId, "This session is no longer available.");
+    const page = await readChatPage(record, before, limit);
+    const pendingAction = pendingChatAction(hook);
+    if (pendingAction) {
+      page.pendingAction = pendingAction;
+      page.capabilities.canApprove = pendingAction.type === "approval";
+      page.capabilities.canAnswer = pendingAction.type === "question";
+    }
+    return page;
+  }
+
+  async chatAction(
+    message: Extract<ClientMessage, { type: "send_chat" | "respond_chat" }>,
+  ): Promise<string | undefined> {
+    if (message.type === "send_chat") {
+      return "Continue in the source app while native message transport is unavailable.";
+    }
+    const pending = this.hookResponders.get(message.toolUseId);
+    const hook = this.hookBySession.get(message.sessionId);
+    if (!pending || pending.sessionId !== message.sessionId || !hook) {
+      return "This action is no longer waiting for a response.";
+    }
+    const response = hookResponse(message, hook);
+    pending.respond(response);
+    this.hookResponders.delete(message.toolUseId);
+    this.hookBySession.delete(message.sessionId);
+    this.publish([...this.lastByProvider.values()].flat());
+    return undefined;
   }
 
   async refresh(): Promise<SessionSnapshot> {
@@ -100,6 +179,22 @@ export class SessionRepository {
   }
 
   private publish(discovered: DiscoveredProviderSession[]): SessionSnapshot {
+    this.chatBySession.clear();
+    const authoritative = new Map<string, DiscoveredProviderSession>();
+    for (const record of discovered) {
+      const existing = authoritative.get(record.id);
+      if (!existing || (record.authority ?? 1) > (existing.authority ?? 1)) {
+        authoritative.set(record.id, record);
+      }
+    }
+    for (const record of discovered) {
+      if (!record.chatPath) continue;
+      const existing = this.chatBySession.get(record.id);
+      if (!existing || (record.authority ?? 1) >= (existing.authority ?? 1)) {
+        const owner = authoritative.get(record.id)?.owner ?? record.owner;
+        this.chatBySession.set(record.id, structuredClone({ ...record, owner }));
+      }
+    }
     const sessions = normalize(applyHooks(discovered, this.hookBySession));
     const fingerprint = JSON.stringify(sessions);
     if (fingerprint !== this.fingerprint) {
@@ -140,6 +235,7 @@ function applyHooks(
       updatedAt: hook.receivedAt,
       canOpenOwner: Boolean(hook.pid || hook.tty),
       canEnterChat: hook.provider !== "auggie",
+      chatPath: hook.sessionFile,
     });
   }
   return sessions;
@@ -167,6 +263,98 @@ function hookOwner(event: HookSessionEvent): string {
   if (event.provider === "codex") return "Codex";
   if (event.provider === "claude_code") return "Claude";
   return providerNames[event.provider];
+}
+
+function hookSession(hook: HookSessionEvent): DiscoveredProviderSession {
+  return {
+    id: hook.sessionId,
+    provider: hook.provider,
+    cwd: hook.cwd,
+    owner: hookOwner(hook),
+    section: hookPhase(hook).section,
+    updatedAt: hook.receivedAt,
+    canOpenOwner: Boolean(hook.pid || hook.tty),
+    canEnterChat: hook.provider !== "auggie",
+    chatPath: hook.sessionFile,
+  };
+}
+
+function unavailableChatPage(sessionId: string, readOnlyReason: string): ChatPage {
+  return {
+    type: "chat_page",
+    sessionId,
+    items: [],
+    hasMoreBefore: false,
+    capabilities: {
+      canSendText: false,
+      canSendImages: false,
+      canApprove: false,
+      canAnswer: false,
+      readOnlyReason,
+    },
+    pendingAction: null,
+  };
+}
+
+function pendingChatAction(hook: HookSessionEvent | undefined): ChatPage["pendingAction"] {
+  if (!hook?.expectsResponse || !hook.toolUseId || !hook.tool) return null;
+  if (hook.tool === "AskUserQuestion") {
+    const raw = Array.isArray(hook.toolInput?.questions) ? hook.toolInput.questions : [];
+    const questions = raw.flatMap((value) => {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
+      const question = value as Record<string, unknown>;
+      const prompt = typeof question.question === "string" ? question.question.trim() : "";
+      if (!prompt) return [];
+      const options = Array.isArray(question.options) ? question.options : [];
+      const choices = options.flatMap((option) => {
+        if (typeof option === "string") return [option];
+        if (typeof option !== "object" || option === null || Array.isArray(option)) return [];
+        const label = (option as Record<string, unknown>).label;
+        return typeof label === "string" && label.trim() ? [label.trim()] : [];
+      });
+      return [{
+        id: prompt,
+        question: prompt,
+        choices,
+        multiple: question.multiSelect === true,
+      }];
+    });
+    return questions.length ? { type: "question", toolUseId: hook.toolUseId, questions } : null;
+  }
+  return {
+    type: "approval",
+    toolUseId: hook.toolUseId,
+    toolName: hook.tool,
+    input: hook.toolInput ?? {},
+    canPersist: hook.permissionSuggestions !== undefined,
+  };
+}
+
+function hookResponse(
+  message: Extract<ClientMessage, { type: "respond_chat" }>,
+  hook: HookSessionEvent,
+): HookResponse {
+  if (message.decision === "deny") {
+    return { decision: "deny", ...(message.reason ? { reason: message.reason } : {}) };
+  }
+  if (message.decision === "answer") {
+    return {
+      decision: "allow",
+      updated_input: {
+        ...(hook.toolInput ?? {}),
+        answers: Object.fromEntries(Object.entries(message.answers ?? {}).map(([question, answer]) => [
+          question,
+          Array.isArray(answer) ? answer.join(", ") : answer,
+        ])),
+      },
+    };
+  }
+  return {
+    decision: "allow",
+    ...(message.reason ? { reason: message.reason } : {}),
+    ...(message.decision === "allow_always" && hook.permissionSuggestions
+      ? { updated_permissions: hook.permissionSuggestions } : {}),
+  };
 }
 
 function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {

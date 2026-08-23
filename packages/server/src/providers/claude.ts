@@ -64,6 +64,7 @@ export class ClaudeProvider implements ProviderAdapter {
         updatedAt: iso(transcriptStamp?.modifiedAt ?? metadataStamp?.modifiedAt ?? this.environment.now()),
         canOpenOwner: true,
         canEnterChat: true,
+        chatPath: transcript,
       });
     }
 
