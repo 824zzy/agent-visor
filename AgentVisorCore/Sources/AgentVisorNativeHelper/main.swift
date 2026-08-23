@@ -1,0 +1,215 @@
+import AgentVisorCore
+import AppKit
+import Darwin
+import Foundation
+
+signal(SIGPIPE, SIG_IGN)
+
+do {
+    let socketPath = try requestedSocketPath()
+    try prepareSocketPath(socketPath)
+    try serve(socketPath: socketPath)
+} catch {
+    FileHandle.standardError.write(Data("AgentVisorNativeHelper: \(error)\n".utf8))
+    exit(EXIT_FAILURE)
+}
+
+private enum HelperFailure: Error {
+    case invalidArguments
+    case unsafeSocketPath
+    case systemCall(String, Int32)
+}
+
+private func requestedSocketPath() throws -> String {
+    let arguments = CommandLine.arguments
+    guard arguments.count == 3, arguments[1] == "--socket" else {
+        throw HelperFailure.invalidArguments
+    }
+    return arguments[2]
+}
+
+private func prepareSocketPath(_ path: String) throws {
+    guard path.hasPrefix("/"), path.utf8.count < MemoryLayout<sockaddr_un>.size - 2 else {
+        throw HelperFailure.unsafeSocketPath
+    }
+
+    let parent = URL(fileURLWithPath: path).deletingLastPathComponent()
+    try FileManager.default.createDirectory(
+        at: parent,
+        withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700]
+    )
+    let attributes = try FileManager.default.attributesOfItem(atPath: parent.path)
+    guard (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
+          ((attributes[.posixPermissions] as? NSNumber)?.uint16Value ?? 0o777) & 0o077 == 0 else {
+        throw HelperFailure.unsafeSocketPath
+    }
+
+    var existing = stat()
+    if lstat(path, &existing) == 0 {
+        guard existing.st_uid == getuid(), existing.st_mode & S_IFMT == S_IFSOCK else {
+            throw HelperFailure.unsafeSocketPath
+        }
+        guard unlink(path) == 0 else { throw systemFailure("unlink") }
+    } else if errno != ENOENT {
+        throw systemFailure("lstat")
+    }
+}
+
+private func serve(socketPath: String) throws -> Never {
+    let listener = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard listener >= 0 else { throw systemFailure("socket") }
+    defer {
+        close(listener)
+        unlink(socketPath)
+    }
+
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    let pathCapacity = MemoryLayout.size(ofValue: address.sun_path)
+    socketPath.withCString { source in
+        withUnsafeMutablePointer(to: &address.sun_path) { destination in
+            let bytes = UnsafeMutableRawPointer(destination).assumingMemoryBound(to: CChar.self)
+            strncpy(bytes, source, pathCapacity - 1)
+        }
+    }
+
+    let bindResult = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    guard bindResult == 0 else { throw systemFailure("bind") }
+    guard chmod(socketPath, 0o600) == 0 else { throw systemFailure("chmod") }
+    guard listen(listener, 4) == 0 else { throw systemFailure("listen") }
+
+    while true {
+        let client = accept(listener, nil, nil)
+        if client < 0 {
+            if errno == EINTR { continue }
+            throw systemFailure("accept")
+        }
+        handle(client: client)
+        close(client)
+    }
+}
+
+private func handle(client: Int32) {
+    var peerUID = uid_t.max
+    var peerGID = gid_t.max
+    guard getpeereid(client, &peerUID, &peerGID) == 0, peerUID == getuid() else { return }
+
+    var decoder = NativeHelperFrameDecoder()
+    var bytes = [UInt8](repeating: 0, count: 16_384)
+
+    while true {
+        let count = Darwin.read(client, &bytes, bytes.count)
+        if count == 0 { return }
+        if count < 0 {
+            if errno == EINTR { continue }
+            return
+        }
+
+        do {
+            for payload in try decoder.append(bytes.prefix(count)) {
+                let response = response(for: payload)
+                try writeAll(try NativeHelperFrameCodec.frame(response.encoded()), to: client)
+            }
+        } catch {
+            let response = NativeHelperResponse.error(
+                id: requestID(in: Data(bytes.prefix(max(count, 0)))),
+                code: .invalidRequest,
+                message: "The helper request is invalid."
+            )
+            try? writeAll(try NativeHelperFrameCodec.frame(response.encoded()), to: client)
+            return
+        }
+    }
+}
+
+private func response(for data: Data) -> NativeHelperResponse {
+    do {
+        switch try NativeHelperRequest.decode(data) {
+        case .screenTopology(let id):
+            return .screenTopology(id: id, screens: screenTopology())
+        case .accessibilityStatus(let id):
+            return .accessibilityStatus(id: id, trusted: AXIsProcessTrusted())
+        case .presentPills(let id, _):
+            return .error(
+                id: id,
+                code: .unsupported,
+                message: "Pill presentation is not enabled in this migration slice."
+            )
+        case .focus(let id, let target):
+            guard target.windowId == nil else {
+                return .error(
+                    id: id,
+                    code: .unsupported,
+                    message: "Exact window focus is not enabled in this migration slice."
+                )
+            }
+            guard let application = NSRunningApplication(processIdentifier: target.pid),
+                  application.bundleIdentifier == target.bundleIdentifier else {
+                return .error(id: id, code: .failed, message: "The requested process identity does not match.")
+            }
+            return application.activate()
+                ? .accepted(id: id)
+                : .error(id: id, code: .failed, message: "The requested application could not be focused.")
+        }
+    } catch {
+        return .error(
+            id: requestID(in: data),
+            code: .invalidRequest,
+            message: "The helper request is invalid."
+        )
+    }
+}
+
+private func screenTopology() -> [NativeHelperScreen] {
+    NSScreen.screens.compactMap { screen in
+        guard let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
+                as? UInt32 else { return nil }
+        return NativeHelperScreen(
+            displayId: displayID,
+            frame: rectangle(screen.frame),
+            visibleFrame: rectangle(screen.visibleFrame),
+            scale: screen.backingScaleFactor,
+            isMain: screen == NSScreen.main
+        )
+    }
+}
+
+private func rectangle(_ value: NSRect) -> NativeHelperRectangle {
+    NativeHelperRectangle(
+        x: value.origin.x,
+        y: value.origin.y,
+        width: value.width,
+        height: value.height
+    )
+}
+
+private func requestID(in data: Data) -> String {
+    guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let id = object["id"] as? String,
+          !id.isEmpty, id.count <= 128 else { return "invalid" }
+    return id
+}
+
+private func writeAll(_ data: Data, to descriptor: Int32) throws {
+    try data.withUnsafeBytes { rawBuffer in
+        guard let base = rawBuffer.baseAddress else { return }
+        var written = 0
+        while written < data.count {
+            let count = Darwin.write(descriptor, base.advanced(by: written), data.count - written)
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw systemFailure("write")
+            }
+            written += count
+        }
+    }
+}
+
+private func systemFailure(_ name: String) -> HelperFailure {
+    .systemCall(name, errno)
+}

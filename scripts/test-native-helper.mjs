@@ -1,0 +1,105 @@
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { nativeHelperResponseSchema } from "../packages/protocol/dist/index.js";
+
+const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-helper-"));
+const socketPath = path.join(root, "helper.sock");
+const bin = spawnSync(
+  "swift",
+  ["build", "--package-path", "AgentVisorCore", "--show-bin-path"],
+  { encoding: "utf8" },
+).stdout.trim();
+const helper = spawn(path.join(bin, "AgentVisorNativeHelper"), ["--socket", socketPath], {
+  stdio: ["ignore", "ignore", "pipe"],
+});
+let stderr = "";
+helper.stderr.on("data", (data) => { stderr += data.toString(); });
+
+try {
+  await waitForSocket(socketPath);
+  const mode = (await stat(socketPath)).mode & 0o777;
+  if (mode !== 0o600) throw new Error(`native helper socket mode is ${mode.toString(8)}`);
+
+  const responses = await exchange(socketPath, [
+    { version: 1, id: "screens", method: "screen_topology" },
+    { version: 1, id: "access", method: "accessibility_status" },
+    { version: 1, id: "bad", method: "parse_provider" },
+  ]);
+
+  if (
+    responses[0]?.ok !== true
+    || responses[0].result.type !== "screen_topology"
+    || responses[0].result.screens.length === 0
+  ) {
+    throw new Error("screen topology response is missing");
+  }
+  if (responses[1]?.ok !== true || responses[1].result.type !== "accessibility_status") {
+    throw new Error("Accessibility response is missing");
+  }
+  if (responses[2]?.ok !== false || responses[2].error.code !== "invalid_request") {
+    throw new Error("invalid helper request was accepted");
+  }
+
+  console.log("Native helper integration PASS: secure socket, framing, topology, Accessibility, and validation.");
+} finally {
+  if (helper.exitCode === null && helper.signalCode === null) {
+    helper.kill("SIGTERM");
+    await new Promise((resolve) => helper.once("exit", resolve));
+  }
+  await rm(root, { recursive: true, force: true });
+  if (helper.exitCode) process.stderr.write(stderr);
+}
+
+async function waitForSocket(socket) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      await stat(socket);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  throw new Error(`native helper did not create its socket: ${stderr}`);
+}
+
+async function exchange(socketPath, messages) {
+  const socket = net.createConnection(socketPath);
+  let buffer = Buffer.alloc(0);
+  const responses = [];
+
+  socket.on("data", (data) => {
+    buffer = Buffer.concat([buffer, data]);
+    while (buffer.length >= 4) {
+      const size = buffer.readUInt32BE(0);
+      if (buffer.length < size + 4) return;
+      const value = JSON.parse(buffer.subarray(4, size + 4).toString("utf8"));
+      responses.push(nativeHelperResponseSchema.parse(value));
+      buffer = buffer.subarray(size + 4);
+    }
+  });
+
+  await new Promise((resolve, reject) => {
+    socket.once("connect", resolve);
+    socket.once("error", reject);
+  });
+  for (const message of messages) socket.write(frame(message));
+
+  for (let attempt = 0; responses.length < messages.length && attempt < 100; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  socket.end();
+  if (responses.length !== messages.length) {
+    throw new Error(`expected ${messages.length} responses, received ${responses.length}`);
+  }
+  return responses;
+}
+
+function frame(value) {
+  const body = Buffer.from(JSON.stringify(value));
+  const header = Buffer.alloc(4);
+  header.writeUInt32BE(body.length);
+  return Buffer.concat([header, body]);
+}

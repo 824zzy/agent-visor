@@ -39,6 +39,8 @@ This slice uses Expo 57 for web only. Review those transitive advisories again b
 
 ## Native helper
 
-A later slice keeps a narrow signed Swift helper for Accessibility, menu-bar geometry, session pills, and exact focus operations.
+A narrow signed Swift helper keeps Accessibility, menu-bar geometry, session pills, and exact focus operations.
+
+Its socket, validation, and signing contract is defined in [Native macOS helper](native-helper.md).
 
 Paseo source informed the system shape, but no Paseo source code is included.
