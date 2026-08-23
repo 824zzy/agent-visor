@@ -35,7 +35,8 @@ export function menuPresentation(
   usageGlances: NativeHelperUsageGlance[],
 ) {
   const pills = snapshot.sessions
-    .filter((session) => session.canOpenOwner || session.canEnterChat)
+    .filter((session) => session.canOpenOwner
+      || (session.section !== "history" && session.canEnterChat))
     .sort((left, right) => phaseOrder[left.section] - phaseOrder[right.section]
       || right.updatedAt.localeCompare(left.updatedAt)
       || left.id.localeCompare(right.id))

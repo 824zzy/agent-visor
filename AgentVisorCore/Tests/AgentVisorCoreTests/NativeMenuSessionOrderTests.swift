@@ -13,6 +13,23 @@ final class NativeMenuSessionOrderTests: XCTestCase {
         )
     }
 
+    func testAcknowledgedReadyMovesBehindWorkingWithoutDisturbingOtherTiers() {
+        XCTAssertEqual(
+            NativeMenuSessionOrder.applyingReadyAcknowledgments(
+                displayedIDs: ["needs", "ready-a", "ready-b", "working", "history"],
+                phases: [
+                    "needs": .needsYou,
+                    "ready-a": .ready,
+                    "ready-b": .ready,
+                    "working": .working,
+                    "history": .history,
+                ],
+                acknowledgedReadyIDs: ["ready-a"]
+            ),
+            ["needs", "ready-b", "working", "ready-a", "history"]
+        )
+    }
+
     func testAdoptsPresentedOrderAfterPhaseOrMembershipChanges() {
         XCTAssertEqual(
             NativeMenuSessionOrder.resolve(

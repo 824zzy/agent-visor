@@ -18,11 +18,15 @@ Display and application changes trigger immediate layout. A bounded half-second 
 
 ## Session items
 
-Needs you items come first, then Ready to continue, then In progress, followed by recent History shortcuts.
+Needs you items come first, then unacknowledged Ready to continue, In progress, acknowledged Ready to continue, and source-backed recent History shortcuts.
 
-Each item matches the released 24-point dark capsule, status dot, medium title, padding, spacing, and full hover help.
+A normal click acknowledges a Ready item and moves it behind In progress. Activity-only refreshes cannot move other pills while the user targets them.
 
-Needs you, Ready to continue, and In progress stay in attention order. Activity-only refreshes cannot move a pill while the user targets it.
+Each item matches the released 24-point dark capsule, six-point status dot, seven-point outer padding, three-point dot-to-title spacing, and full hover help.
+
+Chat-only transcript history remains in Sessions and does not crowd the menu bar.
+
+Visible items retain their normal labels, up to 20 characters plus an ellipsis. The helper uses `+N` instead of compact or tight labels.
 
 Phase and membership changes adopt the new priority order. Existing panels move or update in place without replacing their native buttons.
 

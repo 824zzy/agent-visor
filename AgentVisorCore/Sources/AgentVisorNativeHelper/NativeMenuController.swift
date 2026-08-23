@@ -56,6 +56,7 @@ private final class NativePillPanel: NSPanel {
         pillButton.alignment = .center
         pillButton.imageScaling = .scaleNone
         pillButton.imagePosition = .imageLeading
+        pillButton.imageHugsTitle = true
         pillButton.setAccessibilityElement(false)
         pillButton.wantsLayer = true
         pillButton.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
@@ -84,6 +85,7 @@ final class NativeMenuController: NSObject {
     private var sessionPanels: [String: NativePillPanel] = [:]
     private var sessionPresentations: [String: NativeHelperPill] = [:]
     private var displayedSessionIDs: [String] = []
+    private var acknowledgedReadyIDs = Set<String>()
     private var usagePanels: [String: NativePillPanel] = [:]
     private var usagePresentations: [String: NativeHelperUsageGlance] = [:]
     private var displayedUsageIDs: [String] = []
@@ -135,14 +137,20 @@ final class NativeMenuController: NSObject {
         let orderedPills = pills.sorted { lhs, rhs in
             lhs.priority == rhs.priority ? lhs.id < rhs.id : lhs.priority < rhs.priority
         }.filter { seenSessionIDs.insert($0.id).inserted }
+        let previousPhases = sessionPresentations.mapValues(\.phase)
+        let pillsByID = Dictionary(uniqueKeysWithValues: orderedPills.map { ($0.id, $0) })
+        acknowledgedReadyIDs = Set(acknowledgedReadyIDs.filter { id in
+            previousPhases[id] == .ready && pillsByID[id]?.phase == .ready
+        })
         displayedSessionIDs = NativeMenuSessionOrder.resolve(
             displayedIDs: displayedSessionIDs,
-            previousPhases: sessionPresentations.mapValues(\.phase),
+            previousPhases: previousPhases,
             presentedPills: orderedPills
         )
-        let pillsByID = Dictionary(
-            orderedPills.map { ($0.id, $0) },
-            uniquingKeysWith: { first, _ in first }
+        displayedSessionIDs = NativeMenuSessionOrder.applyingReadyAcknowledgments(
+            displayedIDs: displayedSessionIDs,
+            phases: pillsByID.mapValues(\.phase),
+            acknowledgedReadyIDs: acknowledgedReadyIDs
         )
         for id in sessionPanels.keys where pillsByID[id] == nil {
             sessionPanels.removeValue(forKey: id)?.close()
@@ -220,6 +228,15 @@ final class NativeMenuController: NSObject {
            lastActivation.id == id,
            now - lastActivation.at < 0.2 { return }
         lastActivation = (id, now)
+        if sessionPresentations[id]?.phase == .ready {
+            acknowledgedReadyIDs.insert(id)
+            displayedSessionIDs = NativeMenuSessionOrder.applyingReadyAcknowledgments(
+                displayedIDs: displayedSessionIDs,
+                phases: sessionPresentations.mapValues(\.phase),
+                acknowledgedReadyIDs: acknowledgedReadyIDs
+            )
+            layoutPresentation()
+        }
         sessionPanels[id]?.pillButton.flash()
         emit(.activatePill(sessionId: id, intent: intent))
     }
@@ -326,19 +343,14 @@ final class NativeMenuController: NSObject {
         }
 
         let orderedPills = displayedSessionIDs.compactMap { sessionPresentations[$0] }
-        let labels = Dictionary(
-            uniqueKeysWithValues: orderedPills.map { pill in
-                let full = fullTitle(pill.title)
-                return (pill.id, (full, compactTitle(full), tightTitle(full)))
-            }
-        )
+        let labels = Dictionary(uniqueKeysWithValues: orderedPills.map {
+            ($0.id, fullTitle($0.title))
+        })
         let candidates = orderedPills.compactMap { pill -> PillBarPacker.Candidate? in
             guard let label = labels[pill.id] else { return nil }
             return PillBarPacker.Candidate(
                 id: pill.id,
-                pillWidth: capsuleWidth(label.0, includesDot: true, padding: standardPadding),
-                compactWidth: capsuleWidth(label.1, includesDot: true, padding: standardPadding),
-                minimumWidth: capsuleWidth(label.2, includesDot: true, padding: standardPadding)
+                pillWidth: capsuleWidth(label, includesDot: true, padding: standardPadding)
             )
         }
 
@@ -391,7 +403,6 @@ final class NativeMenuController: NSObject {
         let leftElements = pillElements(
             ids: result.leftVisibleIds,
             labels: labels,
-            result: result,
             padding: padding
         ) + (result.hiddenCount > 0 && result.overflowSide == .left
             ? [.overflow(result.hiddenCount, overflowWidth(result.hiddenCount, padding: padding))]
@@ -399,7 +410,6 @@ final class NativeMenuController: NSObject {
         var rightElements = pillElements(
             ids: result.rightVisibleIds,
             labels: labels,
-            result: result,
             padding: padding
         )
         if result.hiddenCount > 0 && result.overflowSide == .right {
@@ -453,19 +463,13 @@ final class NativeMenuController: NSObject {
 
     private func pillElements(
         ids: [String],
-        labels: [String: (String, String, String)],
-        result: PillBarPacker.PackResult,
+        labels: [String: String],
         padding: CGFloat
     ) -> [LayoutElement] {
         ids.compactMap { id in
-            guard let labels = labels[id] else { return nil }
-            let label: String
-            switch result.labelTier(for: id) {
-            case .full: label = labels.0
-            case .compact: label = labels.1
-            case .tight: label = labels.2
+            labels[id].map {
+                .session(id, capsuleWidth($0, includesDot: true, padding: padding))
             }
-            return .session(id, capsuleWidth(label, includesDot: true, padding: padding))
         }
     }
 
@@ -474,7 +478,7 @@ final class NativeMenuController: NSObject {
         startX: CGFloat,
         y: CGFloat,
         spacing: CGFloat,
-        labels: [String: (String, String, String)],
+        labels: [String: String],
         padding: CGFloat
     ) {
         var x = startX
@@ -483,9 +487,7 @@ final class NativeMenuController: NSObject {
             switch element {
             case .session(let id, _):
                 guard let pill = sessionPresentations[id], let panel = sessionPanels[id] else { break }
-                let labelSet = labels[id] ?? (fullTitle(pill.title), compactTitle(pill.title), tightTitle(pill.title))
-                let label = labelForWidth(element.width, labels: labelSet, padding: padding)
-                renderSession(panel, pill: pill, label: label)
+                renderSession(panel, pill: pill, label: labels[id] ?? fullTitle(pill.title))
                 panel.place(frame: frame)
             case .overflow(let count, _):
                 let panel = overflowPanel ?? NativePillPanel()
@@ -720,30 +722,8 @@ final class NativeMenuController: NSObject {
         return widths.reduce(0, +) + CGFloat(widths.count - 1) * spacing
     }
 
-    private func labelForWidth(
-        _ width: CGFloat,
-        labels: (String, String, String),
-        padding: CGFloat
-    ) -> String {
-        if capsuleWidth(labels.0, includesDot: true, padding: padding) <= width + 0.5 {
-            return labels.0
-        }
-        if capsuleWidth(labels.1, includesDot: true, padding: padding) <= width + 0.5 {
-            return labels.1
-        }
-        return labels.2
-    }
-
     private func fullTitle(_ title: String) -> String {
         truncate(title, threshold: 22, prefix: 20)
-    }
-
-    private func compactTitle(_ title: String) -> String {
-        truncate(title, threshold: 14, prefix: 12)
-    }
-
-    private func tightTitle(_ title: String) -> String {
-        truncate(title, threshold: 10, prefix: 8)
     }
 
     private func truncate(_ title: String, threshold: Int, prefix: Int) -> String {
