@@ -12,6 +12,7 @@ public enum NativeHelperPillPhase: String, Codable, Equatable {
     case needsYou = "needs_you"
     case ready
     case working
+    case history
 }
 
 public struct NativeHelperPill: Codable, Equatable {
@@ -304,17 +305,29 @@ public enum NativeHelperResponse {
     }
 }
 
+public enum NativeHelperPillActivationIntent: String, Encodable, Equatable {
+    case standard
+    case chat
+}
+
 public enum NativeHelperEvent {
-    case activatePill(sessionId: String)
+    case activatePill(
+        sessionId: String,
+        intent: NativeHelperPillActivationIntent = .standard
+    )
     case openSessions
 
     public func encoded() throws -> Data {
         let envelope: EventEnvelope
         switch self {
-        case .activatePill(let sessionId):
-            envelope = EventEnvelope(event: "activate_pill", sessionId: sessionId)
+        case .activatePill(let sessionId, let intent):
+            envelope = EventEnvelope(
+                event: "activate_pill",
+                sessionId: sessionId,
+                intent: intent == .standard ? nil : intent
+            )
         case .openSessions:
-            envelope = EventEnvelope(event: "open_sessions", sessionId: nil)
+            envelope = EventEnvelope(event: "open_sessions", sessionId: nil, intent: nil)
         }
         return try JSONEncoder().encode(envelope)
     }
@@ -325,6 +338,7 @@ private struct EventEnvelope: Encodable {
     let type = "event"
     let event: String
     let sessionId: String?
+    let intent: NativeHelperPillActivationIntent?
 }
 
 public enum NativeHelperFrameCodec {

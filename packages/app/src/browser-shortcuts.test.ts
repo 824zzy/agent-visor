@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { browserCommand, changeContentScale } from "./browser-shortcuts.js";
+import { browserCommand, changeContentScale, sessionShortcutEducation } from "./browser-shortcuts.js";
 
 describe("browser shortcuts", () => {
   it("maps keyboard navigation and capability actions", () => {
@@ -9,6 +9,21 @@ describe("browser shortcuts", () => {
     expect(browserCommand({ key: "Enter", shiftKey: true })).toEqual({ type: "activate", alternate: true });
     expect(browserCommand({ key: "7", metaKey: true })).toEqual({ type: "hotkey", position: 6 });
     expect(browserCommand({ key: "f", metaKey: true })).toEqual({ type: "focus_search" });
+    expect(browserCommand({ key: ",", metaKey: true })).toEqual({ type: "open_settings" });
+    expect(browserCommand({ key: "[", metaKey: true })).toEqual({ type: "back" });
+  });
+
+  it("describes the configured global pill shortcuts", () => {
+    expect(sessionShortcutEducation("optionCommand")).toEqual({
+      hints: [
+        { keys: "⌥⌘1–9", label: "Switch sessions" },
+        { keys: "⌥⌘0", label: "Session menu" },
+      ],
+    });
+    expect(sessionShortcutEducation("off")).toEqual({
+      disabledMessage: "Global shortcuts off · Configure in Settings",
+      hints: [],
+    });
   });
 
   it("keeps global modifier families separate from content scaling", () => {

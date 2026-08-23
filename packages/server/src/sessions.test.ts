@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SessionRepository,
   type DiscoveredProviderSession,
+  type HookSessionEvent,
   type ProviderAdapter,
 } from "./sessions.js";
 
@@ -22,6 +23,11 @@ const live: DiscoveredProviderSession = {
 class FakeProvider implements ProviderAdapter {
   readonly id = "pi";
   sessions = [live];
+  hook?: HookSessionEvent;
+
+  noteHook(event: HookSessionEvent): void {
+    this.hook = structuredClone(event);
+  }
 
   async discover(): Promise<DiscoveredProviderSession[]> {
     return structuredClone(this.sessions);
@@ -73,8 +79,25 @@ describe("SessionRepository", () => {
       event: "PermissionRequest",
       status: "waiting_for_approval",
       receivedAt: "2026-08-22T08:01:00.000Z",
+      pid: 43,
+      tty: "ttys001",
+      sessionFile: "/Users/me/.pi/agent/sessions/pi-1.jsonl",
     });
 
+    expect(provider.hook).toMatchObject({
+      sessionId: "pi-1",
+      pid: 43,
+      tty: "ttys001",
+    });
+    repository.applyHook({
+      sessionId: "pi-1",
+      cwd: live.cwd,
+      provider: "pi",
+      event: "SessionEnd",
+      status: "ended",
+      receivedAt: "2026-08-22T08:00:30.000Z",
+    });
+    expect(provider.hook).toMatchObject({ pid: 43, tty: "ttys001" });
     expect(changed.sessions[0]).toMatchObject({
       title: "Migration",
       section: "needs_you",

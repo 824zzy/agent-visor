@@ -1,5 +1,9 @@
 import path from "node:path";
-import type { DiscoveredProviderSession, ProviderAdapter } from "../sessions.js";
+import type {
+  DiscoveredProviderSession,
+  HookSessionEvent,
+  ProviderAdapter,
+} from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
 import { isRecord, iso, ownerForProcess, terminalTargetForProcess } from "./shared.js";
 
@@ -27,8 +31,17 @@ export class PiProvider implements ProviderAdapter {
   readonly id = "pi" as const;
   private readonly nameCache = new Map<string, PiNameState>();
   private readonly headerCache = new Map<string, PiHeader>();
+  private readonly runtimeBySession = new Map<string, HookSessionEvent>();
 
   constructor(private readonly environment: ProviderEnvironment) {}
+
+  noteHook(event: HookSessionEvent): void {
+    if (event.event === "SessionEnd") {
+      this.runtimeBySession.delete(event.sessionId);
+    } else if (event.pid !== undefined && event.tty) {
+      this.runtimeBySession.set(event.sessionId, structuredClone(event));
+    }
+  }
 
   async discover(): Promise<DiscoveredProviderSession[]> {
     const root = path.join(this.environment.home, ".pi", "agent", "sessions");
@@ -40,6 +53,18 @@ export class PiProvider implements ProviderAdapter {
     const used = new Set<number>();
 
     for (const file of files) {
+      const runtime = this.runtimeBySession.get(file.id);
+      if (runtime?.pid === undefined || runtime.cwd !== file.cwd) continue;
+      if (runtime.sessionFile && path.resolve(runtime.sessionFile) !== path.resolve(file.path)) continue;
+      const process = piProcesses.find((candidate) => candidate.pid === runtime.pid);
+      if (!process || normalizeTTY(process.tty) !== normalizeTTY(runtime.tty)) continue;
+      if (await this.environment.cwd(process.pid) !== file.cwd) continue;
+      used.add(process.pid);
+      matched.set(file.id, process);
+    }
+
+    for (const file of files) {
+      if (matched.has(file.id)) continue;
       let best: { process: ProcessRecord; distance: number } | undefined;
       for (const process of piProcesses) {
         if (used.has(process.pid) || await this.environment.cwd(process.pid) !== file.cwd) continue;
@@ -90,6 +115,10 @@ export class PiProvider implements ProviderAdapter {
       };
     }));
   }
+}
+
+function normalizeTTY(value: string | undefined): string | undefined {
+  return value?.replace(/^\/dev\//, "");
 }
 
 async function piFiles(

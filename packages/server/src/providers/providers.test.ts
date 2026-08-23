@@ -137,6 +137,70 @@ describe("live provider adapters", () => {
     expect((await provider.discover())[0]?.title).toBe("Renamed Pi branch");
   });
 
+  it("uses Pi hook identity for a resumed session in its exact terminal", async () => {
+    const environment = new FixtureEnvironment();
+    const root = `${home}/.pi/agent/sessions`;
+    const project = `${root}/--Users-me-Codes-agent-visor--`;
+    const transcript = `${project}/pi-resumed.jsonl`;
+    const body = [
+      { type: "session", id: "pi-resumed", cwd, timestamp: "2026-08-16T01:39:47.387Z" },
+      { type: "message", id: "message", parentId: "root", role: "user", content: "Continue" },
+    ].map((value) => JSON.stringify(value)).join("\n") + "\n";
+    environment.directories.set(root, ["--Users-me-Codes-agent-visor--"]);
+    environment.directories.set(project, ["pi-resumed.jsonl"]);
+    environment.files.set(transcript, body);
+    environment.headTails.set(transcript, { head: body, tail: body });
+    environment.stamps.set(transcript, { modifiedAt: now, size: Buffer.byteLength(body) });
+    environment.processRows = [
+      { pid: 43, parentPID: 7, tty: "ttys001", command: "/opt/homebrew/bin/pi", arguments: "pi" },
+      terminalProcesses[1]!,
+      { pid: 44, parentPID: 8, tty: "ttys002", command: "/opt/homebrew/bin/pi", arguments: "pi" },
+      { pid: 8, parentPID: 1, tty: "ttys002", command: "/Applications/iTerm.app/Contents/MacOS/iTerm2", arguments: "iTerm2" },
+    ];
+    environment.cwdByPID.set(43, cwd);
+    environment.cwdByPID.set(44, cwd);
+    environment.starts.set(43, new Date("2026-08-22T07:30:00.000Z"));
+    environment.starts.set(44, new Date("2026-08-22T07:31:00.000Z"));
+
+    const provider = new PiProvider(environment);
+    provider.noteHook({
+      sessionId: "pi-resumed",
+      cwd,
+      provider: "pi",
+      event: "SessionHeartbeat",
+      status: "alive",
+      receivedAt: now.toISOString(),
+      pid: 43,
+      tty: "ttys001",
+      sessionFile: transcript,
+    });
+
+    expect(await provider.discover()).toMatchObject([{
+      id: "pi-resumed",
+      owner: "Ghostty",
+      canOpenOwner: true,
+      messageTransport: "terminal",
+      controlTarget: {
+        kind: "terminal",
+        target: { application: "Ghostty", tty: "ttys001", cwd },
+      },
+    }]);
+
+    provider.noteHook({
+      sessionId: "pi-resumed",
+      cwd,
+      provider: "pi",
+      event: "SessionEnd",
+      status: "ended",
+      receivedAt: now.toISOString(),
+    });
+    expect((await provider.discover())[0]).toMatchObject({
+      id: "pi-resumed",
+      owner: "Pi",
+      canOpenOwner: false,
+    });
+  });
+
   it("keeps Codex titles in the Codex thread database", async () => {
     const environment = new FixtureEnvironment();
     const database = `${home}/.codex/sqlite/state_5.sqlite`;

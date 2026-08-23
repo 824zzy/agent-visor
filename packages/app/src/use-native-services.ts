@@ -48,21 +48,19 @@ export function useNativeServices() {
     socket.send(JSON.stringify(message));
   }, []);
 
-  return {
-    state,
-    error,
-    update: (patch: AppSettingsPatch) => send({
-      type: "update_settings",
-      id: crypto.randomUUID(),
-      patch,
-    }),
-    act: (action: "request_accessibility" | "open_accessibility_settings"
-      | "request_notifications" | "check_updates" | "open_update") => send({
+  const update = useCallback((patch: AppSettingsPatch) => send({
+    type: "update_settings",
+    id: crypto.randomUUID(),
+    patch,
+  }), [send]);
+  const act = useCallback((action: "request_accessibility" | "open_accessibility_settings"
+    | "request_notifications" | "check_updates" | "open_update") => send({
       type: "native_service_action",
       id: crypto.randomUUID(),
       action,
-    }),
-  };
+    }), [send]);
+
+  return { state, error, update, act };
 }
 
 export function nativeServicesFromServerData(data: string): NativeServicesState | undefined {

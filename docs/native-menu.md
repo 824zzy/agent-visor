@@ -4,35 +4,44 @@ The signed Swift helper presents Agent Visor’s macOS menu items.
 
 ## Ownership
 
-The TypeScript daemon selects active sessions, assigns priority, reads provider usage, and sends a typed presentation.
+The TypeScript daemon selects active and recent sessions, assigns priority, reads provider usage, and sends a typed presentation.
 
-The helper renders that presentation with native `NSStatusItem` controls. It does not read provider files or credentials.
+The helper renders that presentation with click-sized AppKit panels. It does not read provider files or credentials.
 
-macOS owns status-item placement, display changes, available-space packing, and click hit testing.
+Each panel contains one native button. Transparent menu-bar space has no Agent Visor window and cannot capture clicks.
 
-This removes Agent Visor’s captured global click rectangles. A detached, moved, or resized display cannot leave stale click geometry.
+Button actions and the Accessibility fallback use the live panel frames. No separate click-geometry cache can outlive its rendered capsule.
+
+The helper measures the active application menus, system tray, display, and physical notch. The shared `PillBarPacker` selects the visible priority prefix and overflow.
+
+Display and application changes trigger immediate layout. A bounded half-second refresh covers menu-title and system-tray changes without rebuilding visible pills.
 
 ## Session items
 
-Needs you items come first, then Ready to continue, then In progress. History stays in the Sessions browser.
+Needs you items come first, then Ready to continue, then In progress, followed by recent History shortcuts.
 
-Each item has a status dot and a title of at most 22 characters. Its native hover help shows the full title, state, source, project, and owner.
+Each item matches the released 24-point dark capsule, status dot, medium title, padding, spacing, and full hover help.
 
-The status colors match the released roles:
+Needs you, Ready to continue, and In progress stay in attention order. Activity-only refreshes cannot move a pill while the user targets it.
 
-- Yellow means Needs you.
-- Green means Ready to continue.
-- Orange means In progress.
+Phase and membership changes adopt the new priority order. Existing panels move or update in place without replacing their native buttons.
+
+The status colors match the released sRGB roles:
+
+- `#f4c114` means Needs you.
+- `#a6e3a1` means Ready to continue.
+- `#d97857` means In progress.
+- Recent History uses the muted `#7f849c` role and lighter capsule treatment.
 
 ## Shortcuts
 
-The helper registers the selected modifier family with 1 through 9 for the first nine prioritized items.
+The helper registers the selected modifier family with 1 through 9 for the first nine visible items.
 
-The selected modifiers with 0 open Sessions. Off unregisters all session shortcuts.
+Holding those modifiers freezes the target snapshot and replaces status dots with numbered keycaps. The selected modifiers with 0 open Sessions. Off unregisters all session shortcuts.
 
-A helper action travels back through the authenticated local helper connection. The daemon resolves the current session owner.
+A helper action travels back through the authenticated local helper connection. The daemon resolves current capabilities before acting.
 
-Electron serializes owner activations and rejects owners outside its application allowlist.
+A normal click opens only the source session and never falls back to Agent Visor Chat. Option-click opens Chat when supported. Electron serializes owner activations and rejects owners outside its application allowlist.
 
 Pill actions use the provider-owned exact target when one exists.
 
@@ -58,7 +67,7 @@ Claude usage remains disabled until the paused credential work has a documented 
 
 `present_pills` accepts detailed pill records and optional usage glances. Older version-one pill requests remain valid.
 
-The helper emits `activate_pill` and `open_sessions` events over the same framed Unix connection.
+The helper emits `activate_pill` and `open_sessions` events over the same framed Unix connection. `activate_pill` has an additive optional `chat` intent; standard version-one events remain unchanged.
 
 Run the native checks with:
 

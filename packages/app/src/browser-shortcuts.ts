@@ -12,11 +12,15 @@ export type BrowserCommand =
   | { type: "hotkey"; position: number }
   | { type: "focus_search" }
   | { type: "clear_search" }
+  | { type: "open_settings" }
+  | { type: "back" }
   | { type: "scale"; delta: -0.1 | 0 | 0.1 };
 
 export function browserCommand(input: BrowserKeyInput): BrowserCommand | undefined {
   const commandOnly = input.metaKey && !input.altKey && !input.ctrlKey;
   if (commandOnly && input.key.toLocaleLowerCase() === "f") return { type: "focus_search" };
+  if (commandOnly && input.key === ",") return { type: "open_settings" };
+  if (commandOnly && input.key === "[") return { type: "back" };
   if (commandOnly && /^[1-9]$/.test(input.key)) {
     return { type: "hotkey", position: Number(input.key) - 1 };
   }
@@ -30,6 +34,23 @@ export function browserCommand(input: BrowserKeyInput): BrowserCommand | undefin
     if (input.key === "Escape") return { type: "clear_search" };
   }
   return undefined;
+}
+
+export function sessionShortcutEducation(
+  family: "off" | "controlCommand" | "optionCommand" | "controlOptionCommand",
+): { hints: { keys: string; label: string }[]; disabledMessage?: string } {
+  const modifiers = {
+    off: undefined,
+    controlCommand: "⌃⌘",
+    optionCommand: "⌥⌘",
+    controlOptionCommand: "⌃⌥⌘",
+  }[family];
+  return modifiers ? {
+    hints: [
+      { keys: `${modifiers}1–9`, label: "Switch sessions" },
+      { keys: `${modifiers}0`, label: "Session menu" },
+    ],
+  } : { hints: [], disabledMessage: "Global shortcuts off · Configure in Settings" };
 }
 
 export function changeContentScale(current: number, delta: -0.1 | 0 | 0.1): number {

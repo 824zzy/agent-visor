@@ -62,7 +62,7 @@ const snapshot: SessionSnapshot = {
 };
 
 describe("menu presentation", () => {
-  it("orders active pills by attention and keeps history off the menu bar", () => {
+  it("orders active pills by attention and keeps recent history after them", () => {
     expect(menuPresentation(snapshot, [])).toEqual({
       pills: [
         {
@@ -98,12 +98,23 @@ describe("menu presentation", () => {
           priority: 2,
           accessibilityLabel: "Build menu, in progress, Pi, agent-visor",
         },
+        {
+          id: "history",
+          title: "Old session",
+          subtitle: "Session ended",
+          source: "Codex",
+          project: "agent-visor",
+          owner: "Codex",
+          phase: "history",
+          priority: 3,
+          accessibilityLabel: "Old session, recent session, Codex, agent-visor",
+        },
       ],
       usageGlances: [],
     });
   });
 
-  it("routes helper actions through the daemon using the current owner", () => {
+  it("routes helper actions to the source app or Agent Visor Chat", () => {
     expect(nativeActionFor({
       version: 1,
       type: "event",
@@ -118,10 +129,28 @@ describe("menu presentation", () => {
     expect(nativeActionFor({
       version: 1,
       type: "event",
-      event: "open_sessions",
+      event: "activate_pill",
+      sessionId: "approval",
+      intent: "chat",
     }, snapshot)).toEqual({
       type: "native_action",
-      action: "open_sessions",
+      action: "open_chat",
+      sessionId: "approval",
     });
+    const chatOnly = {
+      ...snapshot,
+      sessions: [{ ...snapshot.sessions[0], id: "chat-only", canOpenOwner: false }],
+    };
+    expect(nativeActionFor({
+      version: 1,
+      type: "event",
+      event: "activate_pill",
+      sessionId: "chat-only",
+    }, chatOnly)).toBeUndefined();
+    expect(nativeActionFor({
+      version: 1,
+      type: "event",
+      event: "open_sessions",
+    }, snapshot)).toEqual({ type: "native_action", action: "open_sessions" });
   });
 });

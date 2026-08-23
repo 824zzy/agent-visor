@@ -54,6 +54,7 @@ export interface SessionSnapshotSource {
 export interface ProviderAdapter {
   readonly id: ProviderID;
   discover(): Promise<DiscoveredProviderSession[]>;
+  noteHook?(event: HookSessionEvent): void;
 }
 
 export type HookSessionEvent = {
@@ -249,6 +250,7 @@ export class SessionRepository {
   applyHook(event: HookSessionEvent): SessionSnapshot {
     const previous = this.hookBySession.get(event.sessionId);
     if (!previous || previous.receivedAt <= event.receivedAt) {
+      this.providers.find((provider) => provider.id === event.provider)?.noteHook?.(event);
       this.hookBySession.set(event.sessionId, structuredClone(event));
     }
     return this.publish([...this.lastByProvider.values()].flat());

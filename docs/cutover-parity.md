@@ -12,20 +12,20 @@ Checked on 2026-08-23 against released Agent Visor 2.6.1.
 | Sessions search | Title, source, project, owner, and path | Ranking and exported renderer checks | Pass |
 | Primary row action | Open the authoritative source | Exact provider control target, then strict owner fallback | Pass |
 | Chat action | Separate action when supported | Fixed Chat column and separate pointer target | Pass |
-| Keyboard use | Search, arrows, Return, Shift-Return, Command-number, and scale | Pure shortcut checks and Electron checks | Pass |
+| Keyboard use | Search, arrows, Return, Shift-Return, Command-number, Settings, Back, global pills, and scale | Pure checks, Electron checks, and Computer Use verification | Pass |
 | Browser retention | Preserve search, cursor, and viewport through Chat | Mounted hidden browser and Electron check | Pass |
 | Responsive layout | Compact widths and large text | One responsive row module from 80% through 250% | Pass |
-| Appearance | Light, dark, and system modes | Shared semantic palette and persisted settings | Pass |
+| Appearance | Released accessible Catppuccin light, dark, and system modes | Exact semantic sRGB tokens, persisted settings, and Computer Use screenshots | Pass |
 | Accessibility | Named controls, stable actions, and hidden retained content | Electron accessibility checks | Pass |
 | Chat history | Grouped turns, reasoning, tools, images, and paging | Provider parsers and Chat Electron check | Pass |
 | Chat actions | Approvals, persistent approvals, denial, and questions | Authenticated Claude hook response checks | Pass |
 | Text delivery | Send to verified active providers | Exact terminal routes and Codex app-server route | Pass |
 | Image delivery | Claude, Pi, and Codex supported image routes | Private path paste, path prompt, and local-image input | Pass |
-| Menu pills | Prioritized native status items | Signed helper integration and live menu checks | Pass |
-| Menu packing | macOS owns placement and display changes | Native status item controller | Pass |
-| Global shortcuts | Configurable session and Sessions shortcuts | Signed helper registration checks | Pass |
+| Menu pills | Released active and recent capsules, colors, actions, keycaps, and attention order | Signed helper integration, pixel comparison, and live visual checks | Pass |
+| Menu packing | App-menu, tray, display, notch, usage, and overflow constraints | Shared packer and click-sized AppKit panels | Pass |
+| Global shortcuts | Configurable visible-session and Sessions shortcuts with modifier reveal | Signed helper registration, frozen snapshots, keycap screenshot, and footer checks | Pass |
 | Usage | Codex limits with retained last valid value | Bounded app-server reader and live probe | Pass |
-| Settings | Preserve known and unknown Swift settings | Atomic `0600` store and complete source property list | Pass |
+| Settings | Native category layout, labels, shortcuts, and preservation | Computer Use, atomic `0600` store, and complete source property list | Pass |
 | Accessibility repair | Stable signed identity and macOS repair destination | Release-signed helper and live trusted state | Pass |
 | Notifications | Native status transitions and source action | Electron notification contract and serialized owner route | Pass |
 | Updates | Signed public release with downgrade prevention | Validated appcast, release identity, manual verified release link | Pass |
@@ -41,7 +41,7 @@ Checked on 2026-08-23 against released Agent Visor 2.6.1.
 | Claude Code in Cursor | Claude metadata remains authoritative | Signed Cursor application focus | Read-only history and hook responses | Pass |
 | Codex CLI | SQLite and rollout history | Exact terminal focus | App-server text and local images | Pass |
 | Codex application | SQLite and recent rollout history | `codex://threads/<id>` | App-server text and local images | Pass |
-| Pi in supported terminals | Incremental provider-owned transcript scan | Exact TTY focus | Text and ordered local-image paths | Pass |
+| Pi in supported terminals | Incremental transcript scan and validated runtime hook link | Exact TTY focus | Text and ordered local-image paths | Pass |
 | Historical Pi | Bounded history | No invented active target | Read-only history | Pass |
 | Cursor CLI in a terminal | Cursor-owned transcript parser | Exact TTY focus | Read-only history | Pass |
 | Historical Cursor | Bounded history | Strict Cursor application fallback | Read-only history | Pass |
@@ -69,6 +69,10 @@ It verifies:
 
 A separately signed archive also opened from a temporary profile and showed Sessions and Settings through its packaged file renderer.
 
+A live resumed Pi session used its hook PID and TTY to recover Ghostty `ttys020`. A normal capsule click selected that exact terminal.
+
+The test started from a different Ghostty terminal. Option-click opened the same session in Agent Visor Chat, preserving the explicit secondary action.
+
 ## Archive and public identity
 
 The candidate packager uses the installed Electron runtime and no packaging dependency.
@@ -81,7 +85,7 @@ The candidate uses:
 - Existing `AgentVisor Release` certificate.
 - Version 2.7.0 and build 54 by default.
 - Hardened runtime entitlements required by Electron.
-- A metadata-clean ZIP with SHA-256 `cb4301c69c5fb376d5cd8952cb62cc1f4b8950efe22b1861209ea65022705b1f`.
+- A metadata-clean ZIP with SHA-256 `965fe52e10f27ea5a268b8f215332ece6667f67ca091240aaea9a89ec5dd9b0b`.
 
 Checks cover strict nested signatures, archive extraction, disabled application sandbox, library validation, and Homebrew ad-hoc re-signing.
 

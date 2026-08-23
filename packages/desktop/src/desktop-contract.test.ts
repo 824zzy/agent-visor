@@ -2,15 +2,22 @@ import { describe, expect, it } from "vitest";
 import {
   daemonUrlFromArguments,
   daemonUrlFromReadyMessage,
+  electronDataName,
   nativeActionFromDaemonMessage,
   nativeEffectFromDaemonMessage,
   ownerApplication,
+  productName,
   rendererLocation,
 } from "./desktop-contract.js";
 
 const daemonUrl = "ws://127.0.0.1:49152?token=secret";
 
 describe("desktop launch contract", () => {
+  it("keeps Electron data separate while preserving the product name", () => {
+    expect(electronDataName).toBe("Agent Visor Next");
+    expect(productName).toBe("Agent Visor");
+  });
+
   it("keeps the daemon credential out of an Expo development URL", () => {
     expect(rendererLocation("http://127.0.0.1:8081")).toEqual({
       kind: "url",
@@ -47,6 +54,16 @@ describe("desktop launch contract", () => {
       type: "native_action",
       action: "open_sessions",
     })).toEqual({ action: "open_sessions" });
+    expect(nativeActionFromDaemonMessage({
+      type: "native_action",
+      action: "open_chat",
+      sessionId: "session-1",
+    })).toEqual({ action: "open_chat", sessionId: "session-1" });
+    expect(nativeActionFromDaemonMessage({
+      type: "native_action",
+      action: "open_chat",
+      sessionId: "",
+    })).toBeUndefined();
     expect(nativeActionFromDaemonMessage({
       type: "native_action",
       action: "open_session_url",

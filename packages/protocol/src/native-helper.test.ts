@@ -26,6 +26,13 @@ const requests = [
           priority: 1,
           accessibilityLabel: "Review migration, ready",
         },
+        {
+          id: "session-2",
+          title: "Recent migration",
+          phase: "history",
+          priority: 2,
+          accessibilityLabel: "Recent migration, recent session",
+        },
       ],
       shortcutModifierFamily: "controlCommand",
       usageGlances: [
@@ -125,6 +132,20 @@ describe("native helper protocol", () => {
       event: "activate_pill",
       sessionId: "session-1",
     }).success).toBe(true);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1,
+      type: "event",
+      event: "activate_pill",
+      sessionId: "session-1",
+      intent: "chat",
+    }).success).toBe(true);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1,
+      type: "event",
+      event: "activate_pill",
+      sessionId: "session-1",
+      intent: "unsafe",
+    }).success).toBe(false);
     expect(nativeHelperResponseSchema.safeParse({
       version: 1,
       type: "event",

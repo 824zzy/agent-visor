@@ -76,24 +76,31 @@ async function run() {
 
     const labels = await window.webContents.executeJavaScript(`[
       'Back to Sessions', 'Launch at login, Off', 'Enable for Accessibility',
-      'Enable for Notifications', 'Check now for Updates', 'Theme', 'Content size',
-      'Show session pills, On', 'Show Codex usage, On', 'Session shortcuts',
-      'Sound', 'Observed session window'
+      'Enable for Notifications', 'Check now for Updates', 'General', 'Appearance',
+      'Pills', 'Notifications', 'Agents'
     ].every((label) => Boolean(document.querySelector('[aria-label="' + label + '"]'))
       || document.body.textContent.includes(label))`);
-    assert(labels, "settings expose permissions, updates, appearance, pills, notifications, and agents");
+    assert(labels, "settings expose native categories, permissions, and updates");
+
+    await clickButton(window, "Appearance");
+    await waitFor(window, `document.body.textContent.includes('Content size')`);
+    await clickButton(window, "Light");
+    await waitUntil(() => actions.some((message) =>
+      message.type === "update_settings" && message.patch.appearance === "light"));
+    await waitFor(window, `[...document.querySelectorAll('*')].some((item) =>
+      getComputedStyle(item).backgroundColor === 'rgb(239, 241, 245)')`);
+
+    await clickButton(window, "Pills");
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Show session pills, On"]'))`);
     assert(
       await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show session pills, On"]')?.getAttribute('aria-checked') === 'true'`),
       "enabled settings expose the correct accessibility value",
     );
-
-    await window.webContents.executeJavaScript(`[...document.querySelectorAll('[role="button"]')]
-      .find((item) => item.textContent === 'light')?.click()`);
-    await waitUntil(() => actions.some((message) =>
-      message.type === "update_settings" && message.patch.appearance === "light"));
-    await waitFor(window, `[...document.querySelectorAll('*')].some((item) =>
-      getComputedStyle(item).backgroundColor === 'rgb(247, 247, 250)')`);
-
+    await clickButton(window, "Notifications");
+    await waitFor(window, `document.body.textContent.includes('Sound')`);
+    await clickButton(window, "Agents");
+    await waitFor(window, `document.body.textContent.includes('Observed session window')`);
+    await clickButton(window, "General");
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Enable for Accessibility"]').click()`);
     await waitUntil(() => actions.some((message) =>
       message.type === "native_service_action" && message.action === "request_accessibility"));
@@ -101,7 +108,16 @@ async function run() {
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Back to Sessions"]').click()`);
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Search sessions"]'))`);
 
-    console.log("Native services accessibility PASS: settings, permissions, updates, persistence messages, theme, and Back.");
+    const chatSession = fixtureSnapshot.sessions.find((session) => session.canEnterChat);
+    assert(chatSession, "fixture provides a Chat session");
+    window.webContents.send("app:navigate", { page: "chat", sessionId: chatSession.id });
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Back to Sessions"]'))`);
+    window.webContents.send("app:navigate", { page: "sessions" });
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Search sessions"]'))`);
+    window.webContents.send("app:navigate", { page: "settings" });
+    await waitFor(window, `document.body.textContent.includes('Launch at login')`);
+
+    console.log("Native services accessibility PASS: settings, app navigation, permissions, updates, theme, and Back.");
   } finally {
     window.destroy();
     await server.close();
@@ -110,6 +126,11 @@ async function run() {
 
 function assert(value, message) {
   if (!value) throw new Error(`Native services accessibility failed: ${message}`);
+}
+
+async function clickButton(window, label) {
+  await window.webContents.executeJavaScript(`[...document.querySelectorAll('[role="button"]')]
+    .find((item) => item.textContent?.trim() === ${JSON.stringify(label)})?.click()`);
 }
 
 async function waitFor(window, expression) {

@@ -26,20 +26,20 @@ Every request contains protocol `version: 1`, a non-empty `id`, and one method:
 - `accessibility_status` returns the current Accessibility trust state.
 - `request_accessibility` asks macOS for Accessibility access.
 - `open_accessibility_settings` opens the macOS repair destination.
-- `present_pills` accepts at most 64 pill descriptions, eight usage glances, and an optional shortcut family.
+- `present_pills` accepts at most 64 active or recent pill descriptions, eight usage glances, and an optional shortcut family.
 - `focus_terminal` selects one allowlisted terminal through its exact TTY.
 - `send_terminal` sends bounded text to that exact terminal and optionally submits it.
 - `focus` requires an exact process identifier and bundle identifier. A window identifier is optional.
 
 Unknown methods, extra fields, oversized frames, invalid identifiers, and malformed JSON are rejected.
 
-Pill presentation is enabled through native status items.
+Pill presentation uses click-sized AppKit panels and one stable VoiceOver status item.
 
 Ghostty focus uses an OSC 7 marker written only to a validated `ttys` device. iTerm2 and Terminal use their native TTY properties.
 
 Application focus still validates the process identifier against the expected bundle identifier.
 
-The helper can emit `activate_pill` and `open_sessions` events on the same framed connection.
+The helper can emit `activate_pill` and `open_sessions` events on the same framed connection. Option-click adds the optional `chat` activation intent.
 
 ## Signing
 

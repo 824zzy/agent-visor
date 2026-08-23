@@ -199,7 +199,7 @@ async function run() {
   assert(scaled.chatHeight >= 32, "scaled Chat action text is not clipped");
 
   assert(
-    await window.webContents.executeJavaScript(`[...document.querySelectorAll('*')].some((item) => getComputedStyle(item).backgroundColor === 'rgb(247, 247, 250)')`),
+    await window.webContents.executeJavaScript(`[...document.querySelectorAll('*')].some((item) => getComputedStyle(item).backgroundColor === 'rgb(239, 241, 245)')`),
     "light appearance uses the semantic light canvas",
   );
   nativeTheme.themeSource = "dark";

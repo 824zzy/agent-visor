@@ -3,12 +3,22 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, Notification, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  Menu,
+  Notification,
+  shell,
+  type MenuItemConstructorOptions,
+} from "electron";
 import {
   daemonUrlFromReadyMessage,
+  electronDataName,
   nativeActionFromDaemonMessage,
   nativeEffectFromDaemonMessage,
   ownerApplication,
+  productName,
   rendererLocation,
 } from "./desktop-contract.js";
 
@@ -17,7 +27,8 @@ let daemon: ChildProcess | undefined;
 let mainWindow: BrowserWindow | undefined;
 let nativeActionQueue = Promise.resolve();
 
-app.setName("Agent Visor Next");
+// Keep Electron data separate from the Swift rollback application.
+app.setName(electronDataName);
 
 app.on("before-quit", () => daemon?.kill("SIGTERM"));
 app.on("window-all-closed", () => app.quit());
@@ -33,6 +44,7 @@ void app.whenReady()
     const daemonResult = await startDaemon();
     daemon = daemonResult.process;
     mainWindow = await createMainWindow(daemonResult.url);
+    configureApplicationMenu();
   })
   .catch((error: unknown) => {
     console.error(error);
@@ -45,8 +57,8 @@ async function createMainWindow(daemonUrl: string): Promise<BrowserWindow> {
     height: 760,
     minWidth: 960,
     minHeight: 680,
-    backgroundColor: "#f1f2f7",
-    title: "Agent Visor Next",
+    backgroundColor: "#eff1f5",
+    title: productName,
     titleBarStyle: "hiddenInset",
     webPreferences: {
       additionalArguments: [`--agent-visor-daemon=${daemonUrl}`],
@@ -106,7 +118,7 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
         void shell.openExternal(effect.url);
       } else if (effect.action === "request_notifications") {
         if (Notification.isSupported()) {
-          new Notification({ title: "Agent Visor", body: "Notifications are ready." }).show();
+          new Notification({ title: productName, body: "Notifications are ready." }).show();
         }
         void shell.openExternal(
           "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
@@ -128,8 +140,11 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
     nativeActionQueue = nativeActionQueue
       .then(async () => {
         if (action.action === "open_sessions") {
-          mainWindow?.show();
-          mainWindow?.focus();
+          navigateRenderer({ page: "sessions" });
+          return;
+        }
+        if (action.action === "open_chat") {
+          navigateRenderer({ page: "chat", sessionId: action.sessionId });
           return;
         }
         if (action.action === "open_session_url") {
@@ -163,6 +178,61 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
       resolve({ process: child, url });
     });
   });
+}
+
+type RendererNavigation =
+  | { page: "sessions" }
+  | { page: "settings"; checkUpdates?: boolean }
+  | { page: "chat"; sessionId: string }
+  | { page: "scale"; delta: -0.1 | 0 | 0.1 };
+
+function navigateRenderer(action: RendererNavigation): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.send("app:navigate", action);
+}
+
+function configureApplicationMenu(): void {
+  const template: MenuItemConstructorOptions[] = [
+    {
+      label: productName,
+      submenu: [
+        { role: "about" },
+        { label: "Check for Updates…", click: () => navigateRenderer({ page: "settings", checkUpdates: true }) },
+        { type: "separator" },
+        { label: "Settings…", accelerator: "CommandOrControl+,", click: () => navigateRenderer({ page: "settings" }) },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+    { role: "editMenu" },
+    {
+      label: "View",
+      submenu: [
+        { label: "Zoom In", accelerator: "CommandOrControl+Plus", click: () => navigateRenderer({ page: "scale", delta: 0.1 }) },
+        { label: "Zoom Out", accelerator: "CommandOrControl+-", click: () => navigateRenderer({ page: "scale", delta: -0.1 }) },
+        { label: "Actual Size", accelerator: "CommandOrControl+0", click: () => navigateRenderer({ page: "scale", delta: 0 }) },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    { role: "windowMenu" },
+    {
+      role: "help",
+      submenu: [{
+        label: "Agent Visor Help",
+        click: () => void shell.openExternal("https://github.com/824zzy/agent-visor"),
+      }],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function queueOwnerActivation(owner: string): void {

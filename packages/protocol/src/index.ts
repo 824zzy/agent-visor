@@ -258,7 +258,7 @@ export const nativeHelperPillSchema = z.object({
   source: z.string().min(1).max(128).optional(),
   project: z.string().min(1).max(256).optional(),
   owner: z.string().min(1).max(128).optional(),
-  phase: sessionSectionSchema.exclude(["history"]),
+  phase: sessionSectionSchema,
   priority: z.number().int(),
   accessibilityLabel: z.string().min(1).max(512),
 }).strict();
@@ -371,6 +371,7 @@ export const nativeHelperResponseSchema = z.union([
       type: z.literal("event"),
       event: z.literal("activate_pill"),
       sessionId: z.string().min(1).max(128),
+      intent: z.enum(["standard", "chat"]).optional(),
     }).strict(),
     z.object({
       version: z.literal(PROTOCOL_VERSION),

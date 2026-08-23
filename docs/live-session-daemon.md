@@ -11,6 +11,7 @@ Each provider keeps a separate adapter and naming parser:
 - Claude Code reads live per-process metadata and Claude JSONL title records.
 - Codex reads the active thread database, session index titles, rollouts, CLI processes, and recent Codex app threads.
 - Pi pairs exact transcript headers with live processes and follows Pi’s active record branch for names.
+- Resumed Pi sessions use validated hook session IDs, process IDs, TTYs, working directories, and transcript paths to recover exact terminal targets.
 - Cursor pairs CLI processes and recent IDE transcripts through Cursor’s project-key rules.
 - Zed reads hosted thread identity, title authority, worktrees, and underlying provider identity from Zed’s database.
 - Auggie remains hook-only because its transcript layout is not verified.

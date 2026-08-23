@@ -8,7 +8,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
             #"{"version":1,"id":"access","method":"accessibility_status"}"#,
             #"{"version":1,"id":"request-access","method":"request_accessibility"}"#,
             #"{"version":1,"id":"open-access","method":"open_accessibility_settings"}"#,
-            #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","subtitle":"Ready to continue","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready"}],"shortcutModifierFamily":"controlCommand","usageGlances":[{"id":"codex","label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage"}]}}"#,
+            #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","subtitle":"Ready to continue","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready"},{"id":"session-2","title":"Recent migration","phase":"history","priority":2,"accessibilityLabel":"Recent migration, recent session"}],"shortcutModifierFamily":"controlCommand","usageGlances":[{"id":"codex","label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage"}]}}"#,
             #"{"version":1,"id":"legacy-pills","method":"present_pills","params":{"pills":[{"id":"legacy","title":"Legacy","phase":"working","priority":2,"accessibilityLabel":"Legacy, in progress"}]}}"#,
             #"{"version":1,"id":"focus","method":"focus","params":{"target":{"pid":42,"bundleIdentifier":"com.mitchellh.ghostty","windowId":7}}}"#,
             #"{"version":1,"id":"focus-terminal","method":"focus_terminal","params":{"target":{"application":"Ghostty","tty":"ttys012","cwd":"/tmp/project"}}}"#,
@@ -51,7 +51,10 @@ final class NativeHelperWireProtocolTests: XCTestCase {
     }
 
     func testEncodesActivationEvents() throws {
-        let activation = try NativeHelperEvent.activatePill(sessionId: "session-1").encoded()
+        let activation = try NativeHelperEvent.activatePill(
+            sessionId: "session-1",
+            intent: .chat
+        ).encoded()
         let open = try NativeHelperEvent.openSessions.encoded()
         let first = try XCTUnwrap(JSONSerialization.jsonObject(with: activation) as? [String: Any])
         let second = try XCTUnwrap(JSONSerialization.jsonObject(with: open) as? [String: Any])
@@ -59,6 +62,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(first["type"] as? String, "event")
         XCTAssertEqual(first["event"] as? String, "activate_pill")
         XCTAssertEqual(first["sessionId"] as? String, "session-1")
+        XCTAssertEqual(first["intent"] as? String, "chat")
         XCTAssertEqual(second["event"] as? String, "open_sessions")
     }
 

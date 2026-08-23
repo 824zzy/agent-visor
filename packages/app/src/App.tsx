@@ -11,8 +11,12 @@ import {
   View,
   type ViewStyle,
 } from "react-native";
-import type { SessionSummary } from "@agent-visor/protocol";
-import { browserCommand, changeContentScale } from "./browser-shortcuts";
+import type { AppSettings, SessionSummary } from "@agent-visor/protocol";
+import {
+  browserCommand,
+  changeContentScale,
+  sessionShortcutEducation,
+} from "./browser-shortcuts";
 import { Chat } from "./Chat";
 import { Settings } from "./Settings";
 import {
@@ -77,6 +81,22 @@ export function App() {
     }
   }, [chatSession, chatSessionId, connection.status]);
 
+  useEffect(() => window.agentVisor?.onNavigate((action) => {
+    if (action.page === "sessions") {
+      setChatSessionId(undefined);
+      setSettingsOpen(false);
+    } else if (action.page === "settings") {
+      setChatSessionId(undefined);
+      setSettingsOpen(true);
+      if (action.checkUpdates) nativeServices.act("check_updates");
+    } else if (action.page === "chat") {
+      setSettingsOpen(false);
+      setChatSessionId(action.sessionId);
+    } else {
+      adjustContentScale(action.delta);
+    }
+  }), [nativeServices.act, nativeServices.update]);
+
   if (connection.status === "failed") return <CenteredMessage text="Unable to connect to Agent Visor" palette={palette} />;
   if (connection.status === "connecting") return <CenteredMessage text="Connecting to Agent Visor…" palette={palette} />;
 
@@ -96,6 +116,7 @@ export function App() {
           onOpenSettings={() => setSettingsOpen(true)}
           palette={palette}
           sessions={sessions}
+          shortcutModifierFamily={nativeServices.state?.settings.sessionShortcutModifierFamily ?? "off"}
         />
       </View>
       {chatSession ? (
@@ -130,6 +151,7 @@ function SessionBrowser({
   onOpenSettings,
   palette,
   sessions,
+  shortcutModifierFamily,
 }: {
   active: boolean;
   contentScale: number;
@@ -138,6 +160,7 @@ function SessionBrowser({
   onOpenSettings(): void;
   palette: Palette;
   sessions: SessionSummary[];
+  shortcutModifierFamily: AppSettings["sessionShortcutModifierFamily"];
 }) {
   const [query, setQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
@@ -159,6 +182,7 @@ function SessionBrowser({
   const cursorSession = selection.orderedSessions.find(({ id }) => id === cursorId);
   const primaryFooterAction = cursorSession ? sessionAction(cursorSession) : "owner";
   const alternateFooterAction = cursorSession ? sessionAction(cursorSession, true) : "chat";
+  const shortcutEducation = sessionShortcutEducation(shortcutModifierFamily);
 
   useEffect(() => {
     const reason = previous.current.query === query ? "background" : "query";
@@ -182,6 +206,7 @@ function SessionBrowser({
 
   useEffect(() => {
     if (active) requestAnimationFrame(() => searchRef.current?.focus());
+    else setCommandHeld(false);
   }, [active]);
 
   useEffect(() => {
@@ -197,6 +222,7 @@ function SessionBrowser({
       if (!command || (command.type === "clear_search" && !query)) return;
       event.preventDefault();
       if (command.type === "focus_search") searchRef.current?.focus();
+      if (command.type === "open_settings") onOpenSettings();
       if (command.type === "clear_search") setQuery("");
       if (command.type === "scale") onContentScaleChange(command.delta);
       if (command.type === "move") {
@@ -225,7 +251,7 @@ function SessionBrowser({
       window.removeEventListener("keydown", keyDown);
       window.removeEventListener("keyup", keyUp);
     };
-  }, [active, cursorId, onContentScaleChange, onOpenChat, query, visibleKey]);
+  }, [active, cursorId, onContentScaleChange, onOpenChat, onOpenSettings, query, visibleKey]);
 
   return (
     <View style={browserStyles.app}>
@@ -273,6 +299,7 @@ function SessionBrowser({
               </View>
               {group.sessions.map((session) => (
                 <SessionRow
+                  active={active}
                   commandHeld={commandHeld}
                   compact={compact}
                   cursor={session.id === cursorId}
@@ -293,7 +320,7 @@ function SessionBrowser({
       </ScrollView>
 
       <View style={browserStyles.footer}>
-        <View style={browserStyles.railRow}>
+        <View style={[browserStyles.railRow, browserStyles.footerRail]}>
           <View style={browserStyles.footerGroup}>
             <FooterHint keys="↑↓" label="Navigate" styles={browserStyles} />
             {primaryFooterAction ? (
@@ -305,7 +332,11 @@ function SessionBrowser({
           </View>
           <View style={browserStyles.footerSpacer} />
           <View style={browserStyles.footerGroup}>
-            <FooterHint keys="⌘1–9" label="Switch sessions" styles={browserStyles} />
+            {shortcutEducation.disabledMessage ? (
+              <Text style={browserStyles.footerText}>{shortcutEducation.disabledMessage}</Text>
+            ) : shortcutEducation.hints.map((hint) => (
+              <FooterHint key={hint.keys} keys={hint.keys} label={hint.label} styles={browserStyles} />
+            ))}
           </View>
         </View>
       </View>
@@ -314,6 +345,7 @@ function SessionBrowser({
 }
 
 function SessionRow({
+  active,
   commandHeld,
   compact,
   cursor,
@@ -325,6 +357,7 @@ function SessionRow({
   session,
   styles: rowStyles,
 }: {
+  active: boolean;
   commandHeld: boolean;
   compact: boolean;
   cursor: boolean;
@@ -338,6 +371,12 @@ function SessionRow({
 }) {
   const [primaryHovered, setPrimaryHovered] = useState(false);
   const [chatHovered, setChatHovered] = useState(false);
+  useEffect(() => {
+    if (!active) {
+      setPrimaryHovered(false);
+      setChatHovered(false);
+    }
+  }, [active]);
   const primary = sessionAction(session);
   const hasSeparateChat = session.canOpenOwner && session.canEnterChat;
   const actionLabel = primary === "owner" ? `Open in ${session.owner}` : "Open Chat";
@@ -524,8 +563,9 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
     emptyTitle: { color: palette.foreground, fontSize: font(16), fontWeight: "600", marginTop: 12 },
     emptyDetail: { color: palette.muted, fontSize: font(12), marginTop: 8, textAlign: "center" },
     footer: { borderTopColor: palette.border, borderTopWidth: 1, minHeight: 42, paddingHorizontal: 28, paddingVertical: 9 },
+    footerRail: { alignItems: scale > 1.6 ? "flex-start" : "center", flexDirection: scale > 1.6 ? "column" : "row" },
     footerGroup: { alignItems: "center", flexDirection: "row", flexWrap: scale > 1.6 ? "wrap" : "nowrap", gap: 16 },
-    footerSpacer: { flex: 1, minWidth: 8 },
+    footerSpacer: { display: scale > 1.6 ? "none" : "flex", flex: 1, minWidth: 8 },
     footerHint: { alignItems: "center", flexDirection: "row", gap: 5 },
     footerKeys: { color: palette.muted, fontSize: font(10), fontWeight: "600" },
     footerText: { color: palette.tertiary, fontSize: font(10) },

@@ -1,3 +1,6 @@
+export const productName = "Agent Visor";
+export const electronDataName = "Agent Visor Next";
+
 export type RendererLocation =
   | { kind: "url"; value: string }
   | { kind: "file"; path: string };
@@ -18,6 +21,7 @@ export function daemonUrlFromReadyMessage(value: unknown): string | undefined {
 
 export type NativeAction =
   | { action: "open_sessions" }
+  | { action: "open_chat"; sessionId: string }
   | { action: "open_owner"; owner: string; sessionId: string }
   | { action: "open_session_url"; url: string };
 
@@ -26,6 +30,13 @@ export function nativeActionFromDaemonMessage(value: unknown): NativeAction | un
   const message = value as Record<string, unknown>;
   if (message.type !== "native_action") return undefined;
   if (message.action === "open_sessions") return { action: "open_sessions" };
+  if (message.action === "open_chat") {
+    return typeof message.sessionId === "string"
+      && message.sessionId.length > 0
+      && message.sessionId.length <= 128
+      ? { action: "open_chat", sessionId: message.sessionId }
+      : undefined;
+  }
   if (message.action === "open_session_url" && typeof message.url === "string") {
     try {
       const url = new URL(message.url);

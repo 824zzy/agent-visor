@@ -50,10 +50,13 @@ if (nativeHelperExecutable) {
   try {
     nativeHelper = await NativeHelperProcess.start(nativeHelperExecutable, (event) => {
       if (event.event === "activate_pill") {
+        const action = nativeActionFor(event, repository.current());
+        if (action?.action === "open_chat") {
+          process.send?.(action);
+          return;
+        }
         void repository.focusSession(event.sessionId).then((error) => {
-          if (!error) return;
-          const action = nativeActionFor(event, repository.current());
-          if (action) process.send?.(action);
+          if (error && action) process.send?.(action);
         });
         return;
       }

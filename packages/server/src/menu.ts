@@ -1,14 +1,13 @@
 import type { NativeHelperUsageGlance, SessionSnapshot } from "@agent-visor/protocol";
 import type { NativeHelperEvent } from "./native-helper.js";
 
-const phaseOrder = { needs_you: 0, ready: 1, working: 2 } as const;
-type ActiveSection = keyof typeof phaseOrder;
-type ActiveSession = SessionSnapshot["sessions"][number] & { section: ActiveSection };
+const phaseOrder = { needs_you: 0, ready: 1, working: 2, history: 3 } as const;
 
 const phaseLabel = {
   needs_you: "needs you",
   ready: "ready to continue",
   working: "in progress",
+  history: "recent session",
 } as const;
 
 export function nativeActionFor(event: NativeHelperEvent, snapshot: SessionSnapshot) {
@@ -16,7 +15,13 @@ export function nativeActionFor(event: NativeHelperEvent, snapshot: SessionSnaps
     return { type: "native_action", action: "open_sessions" } as const;
   }
   const session = snapshot.sessions.find((candidate) => candidate.id === event.sessionId);
-  if (!session?.canOpenOwner) return undefined;
+  if (!session) return undefined;
+  if (event.intent === "chat") {
+    return session.canEnterChat
+      ? { type: "native_action", action: "open_chat", sessionId: session.id } as const
+      : undefined;
+  }
+  if (!session.canOpenOwner) return undefined;
   return {
     type: "native_action",
     action: "open_owner",
@@ -30,7 +35,7 @@ export function menuPresentation(
   usageGlances: NativeHelperUsageGlance[],
 ) {
   const pills = snapshot.sessions
-    .filter((session): session is ActiveSession => session.section !== "history")
+    .filter((session) => session.canOpenOwner || session.canEnterChat)
     .sort((left, right) => phaseOrder[left.section] - phaseOrder[right.section]
       || right.updatedAt.localeCompare(left.updatedAt)
       || left.id.localeCompare(right.id))
@@ -41,7 +46,7 @@ export function menuPresentation(
       subtitle: session.subtitle,
       source: session.source,
       project: session.project,
-      owner: session.owner,
+      ...(session.canOpenOwner ? { owner: session.owner } : {}),
       phase: session.section,
       priority,
       accessibilityLabel: [

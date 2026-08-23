@@ -50,11 +50,14 @@ export function Chat({
       } else if (event.key === "Escape" && detailsOpen) {
         event.preventDefault();
         setDetailsOpen(false);
+      } else if (command?.type === "back" || event.key === "Escape") {
+        event.preventDefault();
+        onBack();
       }
     };
     window.addEventListener("keydown", keyDown);
     return () => window.removeEventListener("keydown", keyDown);
-  }, [detailsOpen, onContentScaleChange]);
+  }, [detailsOpen, onBack, onContentScaleChange]);
 
   return (
     <View style={styles.app}>
@@ -457,8 +460,8 @@ function createStyles(palette: Palette, scale: number) {
     toolDetail: { gap: 7, paddingLeft: 19, paddingTop: 4 },
     toolResult: { color: palette.muted, fontFamily: "monospace", fontSize: font(11), lineHeight: font(16) },
     image: { borderRadius: 9, height: 120, resizeMode: "contain", width: 180 },
-    errorText: { color: "#d9544d" },
-    errorBanner: { backgroundColor: "#d9544d20", color: "#d9544d", fontSize: font(11), paddingHorizontal: 28, paddingVertical: 7 },
+    errorText: { color: palette.error },
+    errorBanner: { backgroundColor: `${palette.error}20`, color: palette.error, fontSize: font(11), paddingHorizontal: 28, paddingVertical: 7 },
     actionPanel: { alignSelf: "stretch", backgroundColor: palette.card, borderColor: palette.border, borderRadius: 10, borderWidth: 1, gap: 9, marginHorizontal: 28, maxHeight: 300, padding: 12 },
     actionTitle: { color: palette.foreground, fontSize: font(13), fontWeight: "600" },
     actionButtons: { flexDirection: "row", gap: 8, justifyContent: "flex-end" },
