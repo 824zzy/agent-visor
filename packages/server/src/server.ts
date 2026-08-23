@@ -1,4 +1,4 @@
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import {
   PROTOCOL_VERSION,
   clientMessageSchema,
@@ -6,6 +6,7 @@ import {
   type ServerMessage,
   type SessionSnapshot,
 } from "@agent-visor/protocol";
+import type { SessionSnapshotSource } from "./sessions.js";
 
 export type RunningServer = {
   url: string;
@@ -14,13 +15,16 @@ export type RunningServer = {
 
 export async function startServer(options: {
   port: number;
-  snapshot: SessionSnapshot;
   token: string;
-}): Promise<RunningServer> {
+} & (
+  | { snapshot: SessionSnapshot; source?: never }
+  | { source: SessionSnapshotSource; snapshot?: never }
+)): Promise<RunningServer> {
   if (options.token.length < 32) {
     throw new Error("The Agent Visor daemon token must contain at least 32 characters.");
   }
-  const snapshot = sessionSnapshotSchema.parse(options.snapshot);
+  const source = options.source ?? fixedSource(sessionSnapshotSchema.parse(options.snapshot));
+  const subscribers = new Set<WebSocket>();
   const server = new WebSocketServer({
     host: "127.0.0.1",
     port: options.port,
@@ -30,8 +34,15 @@ export async function startServer(options: {
     },
   });
 
+  const unsubscribe = source.subscribe((snapshot) => {
+    for (const socket of subscribers) {
+      if (socket.readyState === WebSocket.OPEN) send(socket, snapshot);
+    }
+  });
+
   server.on("connection", (socket) => {
     send(socket, { type: "hello", protocolVersion: PROTOCOL_VERSION });
+    socket.once("close", () => subscribers.delete(socket));
 
     socket.on("message", (data) => {
       let value: unknown;
@@ -47,7 +58,8 @@ export async function startServer(options: {
       if (parsed.data.type === "health") {
         send(socket, { type: "health", status: "ok" });
       } else {
-        send(socket, snapshot);
+        subscribers.add(socket);
+        send(socket, source.current());
       }
     });
   });
@@ -65,7 +77,17 @@ export async function startServer(options: {
 
   return {
     url: `ws://127.0.0.1:${address.port}?token=${encodeURIComponent(options.token)}`,
-    close: () => closeServer(server),
+    close: async () => {
+      unsubscribe();
+      await closeServer(server);
+    },
+  };
+}
+
+function fixedSource(snapshot: SessionSnapshot): SessionSnapshotSource {
+  return {
+    current: () => structuredClone(snapshot),
+    subscribe: () => () => undefined,
   };
 }
 

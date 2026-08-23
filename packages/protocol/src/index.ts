@@ -34,6 +34,24 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("subscribe_sessions") }),
 ]);
 
+export const hookEventSchema = z.object({
+  session_id: z.string().min(1).max(256),
+  cwd: z.string().min(1).max(4_096),
+  event: z.string().min(1).max(128),
+  status: z.string().max(128),
+  pid: z.number().int().positive().optional(),
+  tty: z.string().max(256).nullable().optional(),
+  session_file: z.string().max(4_096).optional(),
+  tool: z.string().max(256).optional(),
+  tool_input: z.record(z.string(), z.unknown()).optional(),
+  tool_use_id: z.string().max(256).optional(),
+  notification_type: z.string().max(256).optional(),
+  message: z.string().max(16_384).optional(),
+  agent: z.enum(["claude", "auggie", "codex", "cursor", "pi"]).optional(),
+  permission_suggestions: z.array(z.unknown()).optional(),
+  is_idle: z.boolean().optional(),
+});
+
 export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("hello"),
@@ -129,6 +147,7 @@ export const nativeHelperResponseSchema = z.discriminatedUnion("ok", [
 ]);
 
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
+export type HookEvent = z.infer<typeof hookEventSchema>;
 export type NativeHelperFocusTarget = z.infer<typeof nativeHelperFocusTargetSchema>;
 export type NativeHelperPill = z.infer<typeof nativeHelperPillSchema>;
 export type NativeHelperRequest = z.infer<typeof nativeHelperRequestSchema>;

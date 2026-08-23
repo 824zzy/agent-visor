@@ -43,11 +43,16 @@ async function createMainWindow(daemonUrl: string): Promise<BrowserWindow> {
     },
   });
 
+  window.once("closed", () => {
+    daemon?.kill("SIGTERM");
+    app.exit(0);
+  });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   const rendererBase = process.env.AGENT_VISOR_RENDERER_URL
     ?? path.resolve(directory, "../../app/dist/index.html");
   const location = rendererLocation(rendererBase);
   if (location.kind === "url") {
+    await window.webContents.session.clearCache();
     await window.loadURL(location.value);
   } else {
     await window.loadFile(location.path);

@@ -18,9 +18,11 @@ npx npm@11.6.2 install
 npm run dev:desktop
 ```
 
-The first slice uses fixture sessions. It proves the local path from Electron through Expo to the typed WebSocket daemon.
+The initial slice proved the local path with fixture sessions.
 
-It does not read live providers or replace release scripts.
+The daemon now reads live providers and streams stable session revisions. Its behavior is defined in [Live session daemon](live-session-daemon.md).
+
+Release scripts still point only at the Swift application.
 
 ## Dependency status
 
@@ -33,7 +35,7 @@ This slice uses Expo 57 for web only. Review those transitive advisories again b
 ## Packages
 
 - `packages/protocol`: Zod wire schemas and shared TypeScript types.
-- `packages/server`: local WebSocket daemon and fixture snapshot.
+- `packages/server`: live provider state, hook intake, and local WebSocket delivery.
 - `packages/app`: Expo and React Native Web Sessions renderer.
 - `packages/desktop`: Electron lifecycle and daemon startup.
 

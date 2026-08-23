@@ -14,7 +14,7 @@
     "typecheck": "npm run build --workspace=@agent-visor/protocol && npm run typecheck --workspace=@agent-visor/server && npm run typecheck --workspace=@agent-visor/app && npm run typecheck --workspace=@agent-visor/desktop"
   },
   "devDependencies": {
-    "typescript": "5.9.3",
+    "typescript": "~6.0.3",
     "vitest": "4.1.6"
   },
   "engines": {

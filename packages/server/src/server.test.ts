@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import { serverMessageSchema } from "@agent-visor/protocol";
 import { fixtureSnapshot } from "./fixture.js";
 import { startServer, type RunningServer } from "./server.js";
+import { SessionRepository, type ProviderAdapter } from "./sessions.js";
 
 const token = "test-token-with-at-least-thirty-two-characters";
 let running: RunningServer | undefined;
@@ -54,6 +55,65 @@ describe("Agent Visor daemon", () => {
     });
 
     expect(statusCode).toBe(401);
+  });
+
+  it("keeps revisions across reconnects and pushes later snapshots", async () => {
+    let title = "First";
+    const provider: ProviderAdapter = {
+      id: "pi",
+      async discover() {
+        return [{
+          id: "pi-1",
+          provider: "pi",
+          title,
+          cwd: "/Users/me/Codes/agent-visor",
+          owner: "Ghostty",
+          section: "working",
+          updatedAt: "2026-08-22T08:00:00.000Z",
+          canOpenOwner: true,
+          canEnterChat: true,
+        }];
+      },
+    };
+    const source = new SessionRepository([provider]);
+    await source.refresh();
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const snapshots: unknown[] = [];
+    socket.on("message", (data) => {
+      const parsed = serverMessageSchema.parse(JSON.parse(data.toString()));
+      if (parsed.type === "session_snapshot") snapshots.push(parsed);
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    socket.send(JSON.stringify({ type: "subscribe_sessions" }));
+    await expect.poll(() => snapshots.length).toBe(1);
+
+    title = "Changed";
+    await source.refresh();
+    await expect.poll(() => snapshots.length).toBe(2);
+    expect(snapshots).toMatchObject([
+      { revision: 1, sessions: [{ title: "First" }] },
+      { revision: 2, sessions: [{ title: "Changed" }] },
+    ]);
+    socket.close();
+    await new Promise((resolve) => socket.once("close", resolve));
+
+    const reconnect = new WebSocket(running.url);
+    let reconnectRevision: number | undefined;
+    reconnect.on("message", (data) => {
+      const parsed = serverMessageSchema.parse(JSON.parse(data.toString()));
+      if (parsed.type === "session_snapshot") reconnectRevision = parsed.revision;
+    });
+    await new Promise<void>((resolve, reject) => {
+      reconnect.once("open", resolve);
+      reconnect.once("error", reject);
+    });
+    reconnect.send(JSON.stringify({ type: "subscribe_sessions" }));
+    await expect.poll(() => reconnectRevision).toBe(2);
+    reconnect.close();
   });
 
   it("ignores malformed client messages", async () => {
