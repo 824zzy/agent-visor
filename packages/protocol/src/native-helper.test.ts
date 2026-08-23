@@ -16,11 +16,39 @@ const requests = [
         {
           id: "session-1",
           title: "Review migration",
+          subtitle: "Ready to continue",
+          source: "Pi",
+          project: "agent-visor",
+          owner: "Ghostty",
           phase: "ready",
           priority: 1,
           accessibilityLabel: "Review migration, ready",
         },
       ],
+      usageGlances: [
+        {
+          id: "codex",
+          label: "5h 82% | 7d 61%",
+          detail: "Codex usage, 5 hour 82 percent remaining, weekly 61 percent remaining",
+          tone: "normal",
+          priority: 100,
+          accessibilityLabel: "Codex usage, 5 hour 82 percent remaining, weekly 61 percent remaining",
+        },
+      ],
+    },
+  },
+  {
+    version: 1,
+    id: "legacy-pills",
+    method: "present_pills",
+    params: {
+      pills: [{
+        id: "legacy-session",
+        title: "Legacy session",
+        phase: "working",
+        priority: 2,
+        accessibilityLabel: "Legacy session, in progress",
+      }],
     },
   },
   {
@@ -61,6 +89,20 @@ describe("native helper protocol", () => {
         params: { target: { pid: 0, bundleIdentifier: "" } },
       }).success,
     ).toBe(false);
+  });
+
+  it("validates helper activation events", () => {
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1,
+      type: "event",
+      event: "activate_pill",
+      sessionId: "session-1",
+    }).success).toBe(true);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1,
+      type: "event",
+      event: "open_sessions",
+    }).success).toBe(true);
   });
 
   it("validates typed results and structured errors", () => {

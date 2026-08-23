@@ -26,6 +26,32 @@ try {
   const responses = await exchange(socketPath, [
     { version: 1, id: "screens", method: "screen_topology" },
     { version: 1, id: "access", method: "accessibility_status" },
+    {
+      version: 1,
+      id: "pills",
+      method: "present_pills",
+      params: {
+        pills: [{
+          id: "session-1",
+          title: "Review migration",
+          subtitle: "Ready to continue",
+          source: "Pi",
+          project: "agent-visor",
+          owner: "Ghostty",
+          phase: "ready",
+          priority: 1,
+          accessibilityLabel: "Review migration, ready",
+        }],
+        usageGlances: [{
+          id: "codex",
+          label: "5h 82%",
+          detail: "Codex usage",
+          tone: "normal",
+          priority: 100,
+          accessibilityLabel: "Codex usage",
+        }],
+      },
+    },
     { version: 1, id: "bad", method: "parse_provider" },
   ]);
 
@@ -39,11 +65,14 @@ try {
   if (responses[1]?.ok !== true || responses[1].result.type !== "accessibility_status") {
     throw new Error("Accessibility response is missing");
   }
-  if (responses[2]?.ok !== false || responses[2].error.code !== "invalid_request") {
+  if (responses[2]?.ok !== true || responses[2].result.type !== "accepted") {
+    throw new Error("pill presentation was not accepted");
+  }
+  if (responses[3]?.ok !== false || responses[3].error.code !== "invalid_request") {
     throw new Error("invalid helper request was accepted");
   }
 
-  console.log("Native helper integration PASS: secure socket, framing, topology, Accessibility, and validation.");
+  console.log("Native helper wire PASS: secure socket, framing, topology, Accessibility, menu pills, and validation.");
 } finally {
   if (helper.exitCode === null && helper.signalCode === null) {
     helper.kill("SIGTERM");
@@ -52,6 +81,31 @@ try {
   await rm(root, { recursive: true, force: true });
   if (helper.exitCode) process.stderr.write(stderr);
 }
+
+const { NativeHelperProcess } = await import("../packages/server/dist/native-helper.js");
+const adapter = await NativeHelperProcess.start(
+  path.join(bin, "AgentVisorNativeHelper"),
+  () => undefined,
+);
+try {
+  if ((await adapter.screenTopology()).length === 0) {
+    throw new Error("production helper adapter received no screens");
+  }
+  await adapter.presentPills([{
+    id: "adapter-session",
+    title: "Adapter session",
+    subtitle: "Agent is working",
+    source: "Pi",
+    project: "agent-visor",
+    owner: "Ghostty",
+    phase: "working",
+    priority: 0,
+    accessibilityLabel: "Adapter session, in progress",
+  }], []);
+} finally {
+  await adapter.close();
+}
+console.log("Native helper adapter PASS: lifecycle, framed requests, menu updates, and cleanup.");
 
 async function waitForSocket(socket) {
   for (let attempt = 0; attempt < 100; attempt += 1) {

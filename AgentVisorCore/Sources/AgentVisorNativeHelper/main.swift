@@ -8,7 +8,22 @@ signal(SIGPIPE, SIG_IGN)
 do {
     let socketPath = try requestedSocketPath()
     try prepareSocketPath(socketPath)
-    try serve(socketPath: socketPath)
+    let writer = ConnectionWriter()
+    NSApplication.shared.setActivationPolicy(.accessory)
+    let menu = MainActor.assumeIsolated {
+        let controller = NativeMenuController()
+        controller.emit = { writer.send(event: $0) }
+        return controller
+    }
+    DispatchQueue.global(qos: .userInitiated).async {
+        do {
+            try serve(socketPath: socketPath, menu: menu, writer: writer)
+        } catch {
+            FileHandle.standardError.write(Data("AgentVisorNativeHelper: \(error)\n".utf8))
+            DispatchQueue.main.async { NSApplication.shared.terminate(nil) }
+        }
+    }
+    NSApplication.shared.run()
 } catch {
     FileHandle.standardError.write(Data("AgentVisorNativeHelper: \(error)\n".utf8))
     exit(EXIT_FAILURE)
@@ -56,7 +71,11 @@ private func prepareSocketPath(_ path: String) throws {
     }
 }
 
-private func serve(socketPath: String) throws -> Never {
+private func serve(
+    socketPath: String,
+    menu: NativeMenuController,
+    writer: ConnectionWriter
+) throws -> Never {
     let listener = socket(AF_UNIX, SOCK_STREAM, 0)
     guard listener >= 0 else { throw systemFailure("socket") }
     defer {
@@ -89,12 +108,18 @@ private func serve(socketPath: String) throws -> Never {
             if errno == EINTR { continue }
             throw systemFailure("accept")
         }
-        handle(client: client)
+        writer.connect(client)
+        handle(client: client, menu: menu, writer: writer)
+        writer.disconnect(client)
         close(client)
     }
 }
 
-private func handle(client: Int32) {
+private func handle(
+    client: Int32,
+    menu: NativeMenuController,
+    writer: ConnectionWriter
+) {
     var peerUID = uid_t.max
     var peerGID = gid_t.max
     guard getpeereid(client, &peerUID, &peerGID) == 0, peerUID == getuid() else { return }
@@ -112,8 +137,8 @@ private func handle(client: Int32) {
 
         do {
             for payload in try decoder.append(bytes.prefix(count)) {
-                let response = response(for: payload)
-                try writeAll(try NativeHelperFrameCodec.frame(response.encoded()), to: client)
+                let response = response(for: payload, menu: menu)
+                try writer.write(try NativeHelperFrameCodec.frame(response.encoded()), to: client)
             }
         } catch {
             let response = NativeHelperResponse.error(
@@ -121,25 +146,27 @@ private func handle(client: Int32) {
                 code: .invalidRequest,
                 message: "The helper request is invalid."
             )
-            try? writeAll(try NativeHelperFrameCodec.frame(response.encoded()), to: client)
+            try? writer.write(try NativeHelperFrameCodec.frame(response.encoded()), to: client)
             return
         }
     }
 }
 
-private func response(for data: Data) -> NativeHelperResponse {
+private func response(
+    for data: Data,
+    menu: NativeMenuController
+) -> NativeHelperResponse {
     do {
         switch try NativeHelperRequest.decode(data) {
         case .screenTopology(let id):
             return .screenTopology(id: id, screens: screenTopology())
         case .accessibilityStatus(let id):
             return .accessibilityStatus(id: id, trusted: AXIsProcessTrusted())
-        case .presentPills(let id, _):
-            return .error(
-                id: id,
-                code: .unsupported,
-                message: "Pill presentation is not enabled in this migration slice."
-            )
+        case .presentPills(let id, let pills, let usageGlances):
+            DispatchQueue.main.sync {
+                menu.present(pills: pills, usageGlances: usageGlances)
+            }
+            return .accepted(id: id)
         case .focus(let id, let target):
             guard target.windowId == nil else {
                 return .error(
@@ -206,6 +233,35 @@ private func writeAll(_ data: Data, to descriptor: Int32) throws {
                 throw systemFailure("write")
             }
             written += count
+        }
+    }
+}
+
+private final class ConnectionWriter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var client: Int32?
+
+    func connect(_ descriptor: Int32) {
+        lock.withLock { client = descriptor }
+    }
+
+    func disconnect(_ descriptor: Int32) {
+        lock.withLock {
+            if client == descriptor { client = nil }
+        }
+    }
+
+    func write(_ data: Data, to descriptor: Int32) throws {
+        try lock.withLock { try writeAll(data, to: descriptor) }
+    }
+
+    func send(event: NativeHelperEvent) {
+        try? lock.withLock {
+            guard let client else { return }
+            try writeAll(
+                try NativeHelperFrameCodec.frame(event.encoded()),
+                to: client
+            )
         }
     }
 }

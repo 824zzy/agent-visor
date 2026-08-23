@@ -6,13 +6,14 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         let requests = [
             #"{"version":1,"id":"screens","method":"screen_topology"}"#,
             #"{"version":1,"id":"access","method":"accessibility_status"}"#,
-            #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready"}]}}"#,
+            #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","subtitle":"Ready to continue","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready"}],"usageGlances":[{"id":"codex","label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage"}]}}"#,
+            #"{"version":1,"id":"legacy-pills","method":"present_pills","params":{"pills":[{"id":"legacy","title":"Legacy","phase":"working","priority":2,"accessibilityLabel":"Legacy, in progress"}]}}"#,
             #"{"version":1,"id":"focus","method":"focus","params":{"target":{"pid":42,"bundleIdentifier":"com.mitchellh.ghostty","windowId":7}}}"#,
         ]
 
         XCTAssertEqual(
             try requests.map { try NativeHelperRequest.decode(Data($0.utf8)).id },
-            ["screens", "access", "pills", "focus"]
+            ["screens", "access", "pills", "legacy-pills", "focus"]
         )
     }
 
@@ -21,7 +22,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         assertInvalid(#"{"version":1,"id":"bad","method":"screen_topology","extra":true}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"focus","params":{"target":{"pid":0,"bundleIdentifier":""}}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"focus","params":{"target":{"pid":42,"bundleIdentifier":"app","provider":"Pi"}}}"#)
-        assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[{"id":"1","title":"A","phase":"ready","priority":1,"accessibilityLabel":"A","provider":"Pi"}]}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[{"id":"1","title":"A","subtitle":"Ready","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"A","provider":"Pi"}],"usageGlances":[]}}"#)
     }
 
     func testEncodesTypedResponseEnvelope() throws {
@@ -39,6 +40,18 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(object["ok"] as? Bool, true)
         XCTAssertEqual(result["type"] as? String, "accessibility_status")
         XCTAssertEqual(result["trusted"] as? Bool, true)
+    }
+
+    func testEncodesActivationEvents() throws {
+        let activation = try NativeHelperEvent.activatePill(sessionId: "session-1").encoded()
+        let open = try NativeHelperEvent.openSessions.encoded()
+        let first = try XCTUnwrap(JSONSerialization.jsonObject(with: activation) as? [String: Any])
+        let second = try XCTUnwrap(JSONSerialization.jsonObject(with: open) as? [String: Any])
+
+        XCTAssertEqual(first["type"] as? String, "event")
+        XCTAssertEqual(first["event"] as? String, "activate_pill")
+        XCTAssertEqual(first["sessionId"] as? String, "session-1")
+        XCTAssertEqual(second["event"] as? String, "open_sessions")
     }
 
     func testFramesFragmentedAndAdjacentMessages() throws {

@@ -5,6 +5,14 @@ import { fileURLToPath } from "node:url";
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(directory, "../../..");
 
+const helperBuild = spawnSync("./scripts/build-native-helper.sh", [], {
+  cwd: root,
+  encoding: "utf8",
+  stdio: "inherit",
+});
+if (helperBuild.status !== 0) process.exit(helperBuild.status ?? 1);
+const helperExecutable = path.join(root, "build/native-helper/AgentVisorNativeHelper");
+
 for (const workspace of ["@agent-visor/protocol", "@agent-visor/server", "@agent-visor/desktop"]) {
   const result = spawnSync("npm", ["run", "build", `--workspace=${workspace}`], {
     cwd: root,
@@ -24,7 +32,11 @@ await waitFor("http://127.0.0.1:8081", 60_000);
 
 const electron = spawn(path.join(root, "node_modules/.bin/electron"), ["packages/desktop/dist/main.js"], {
   cwd: root,
-  env: { ...process.env, AGENT_VISOR_RENDERER_URL: "http://127.0.0.1:8081" },
+  env: {
+    ...process.env,
+    AGENT_VISOR_RENDERER_URL: "http://127.0.0.1:8081",
+    AGENT_VISOR_NATIVE_HELPER: helperExecutable,
+  },
   stdio: "inherit",
 });
 

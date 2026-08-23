@@ -3,11 +3,17 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain } from "electron";
-import { daemonUrlFromReadyMessage, ownerApplication, rendererLocation } from "./desktop-contract.js";
+import {
+  daemonUrlFromReadyMessage,
+  nativeActionFromDaemonMessage,
+  ownerApplication,
+  rendererLocation,
+} from "./desktop-contract.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 let daemon: ChildProcess | undefined;
 let mainWindow: BrowserWindow | undefined;
+let nativeActionQueue = Promise.resolve();
 
 app.setName("Agent Visor Next");
 
@@ -17,7 +23,7 @@ ipcMain.on("session:open-owner", (event, owner: unknown) => {
   if (event.sender !== mainWindow?.webContents || typeof owner !== "string") return;
   const application = ownerApplication(owner);
   if (!application) return;
-  spawn("/usr/bin/open", ["-a", application], { detached: true, stdio: "ignore" }).unref();
+  void openApplication(application);
 });
 
 void app.whenReady()
@@ -74,11 +80,28 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
       AGENT_VISOR_PORT: "0",
       AGENT_VISOR_TOKEN: randomBytes(32).toString("base64url"),
       ELECTRON_RUN_AS_NODE: "1",
+      AGENT_VISOR_NATIVE_HELPER: process.env.AGENT_VISOR_NATIVE_HELPER
+        ?? path.join(process.resourcesPath, "AgentVisorNativeHelper"),
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   child.stdout?.on("data", (data) => process.stdout.write(data));
   child.stderr?.on("data", (data) => process.stderr.write(data));
+  child.on("message", (message) => {
+    const action = nativeActionFromDaemonMessage(message);
+    if (!action) return;
+    nativeActionQueue = nativeActionQueue
+      .then(async () => {
+        if (action.action === "open_sessions") {
+          mainWindow?.show();
+          mainWindow?.focus();
+          return;
+        }
+        const application = ownerApplication(action.owner);
+        if (application) await openApplication(application);
+      })
+      .catch((error: unknown) => console.error(error));
+  });
 
   return await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -99,6 +122,24 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
       if (!url) return;
       clearTimeout(timeout);
       resolve({ process: child, url });
+    });
+  });
+}
+
+async function openApplication(application: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("/usr/bin/open", ["-a", application], { stdio: "ignore" });
+    const deadline = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error(`Opening ${application} timed out.`));
+    }, 5_000);
+    child.once("error", (error) => {
+      clearTimeout(deadline);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(deadline);
+      code === 0 ? resolve() : reject(new Error(`Opening ${application} failed.`));
     });
   });
 }

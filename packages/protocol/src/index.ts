@@ -189,7 +189,20 @@ const rectangleSchema = z.object({
 export const nativeHelperPillSchema = z.object({
   id: z.string().min(1).max(128),
   title: z.string().min(1).max(256),
-  phase: sessionSectionSchema,
+  subtitle: z.string().max(512).optional(),
+  source: z.string().min(1).max(128).optional(),
+  project: z.string().min(1).max(256).optional(),
+  owner: z.string().min(1).max(128).optional(),
+  phase: sessionSectionSchema.exclude(["history"]),
+  priority: z.number().int(),
+  accessibilityLabel: z.string().min(1).max(512),
+}).strict();
+
+export const nativeHelperUsageGlanceSchema = z.object({
+  id: z.enum(["codex", "claude"]),
+  label: z.string().min(1).max(128),
+  detail: z.string().min(1).max(512),
+  tone: z.enum(["normal", "warning", "critical"]),
   priority: z.number().int(),
   accessibilityLabel: z.string().min(1).max(512),
 }).strict();
@@ -212,7 +225,10 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
   z.object({
     ...helperEnvelope,
     method: z.literal("present_pills"),
-    params: z.object({ pills: z.array(nativeHelperPillSchema).max(64) }).strict(),
+    params: z.object({
+      pills: z.array(nativeHelperPillSchema).max(64),
+      usageGlances: z.array(nativeHelperUsageGlanceSchema).max(8).optional(),
+    }).strict(),
   }).strict(),
   z.object({
     ...helperEnvelope,
@@ -243,7 +259,7 @@ const nativeHelperResultSchema = z.discriminatedUnion("type", [
   }).strict(),
 ]);
 
-export const nativeHelperResponseSchema = z.discriminatedUnion("ok", [
+const nativeHelperResponseEnvelopeSchema = z.discriminatedUnion("ok", [
   z.object({
     ...helperEnvelope,
     ok: z.literal(true),
@@ -259,6 +275,23 @@ export const nativeHelperResponseSchema = z.discriminatedUnion("ok", [
   }).strict(),
 ]);
 
+export const nativeHelperResponseSchema = z.union([
+  nativeHelperResponseEnvelopeSchema,
+  z.discriminatedUnion("event", [
+    z.object({
+      version: z.literal(PROTOCOL_VERSION),
+      type: z.literal("event"),
+      event: z.literal("activate_pill"),
+      sessionId: z.string().min(1).max(128),
+    }).strict(),
+    z.object({
+      version: z.literal(PROTOCOL_VERSION),
+      type: z.literal("event"),
+      event: z.literal("open_sessions"),
+    }).strict(),
+  ]),
+]);
+
 export type ChatCapabilities = z.infer<typeof chatCapabilitiesSchema>;
 export type ChatImage = z.infer<typeof chatImageSchema>;
 export type ChatItem = z.infer<typeof chatItemSchema>;
@@ -268,6 +301,7 @@ export type ClientMessage = z.infer<typeof clientMessageSchema>;
 export type HookEvent = z.infer<typeof hookEventSchema>;
 export type NativeHelperFocusTarget = z.infer<typeof nativeHelperFocusTargetSchema>;
 export type NativeHelperPill = z.infer<typeof nativeHelperPillSchema>;
+export type NativeHelperUsageGlance = z.infer<typeof nativeHelperUsageGlanceSchema>;
 export type NativeHelperRequest = z.infer<typeof nativeHelperRequestSchema>;
 export type NativeHelperResponse = z.infer<typeof nativeHelperResponseSchema>;
 export type NativeHelperScreen = z.infer<typeof nativeHelperScreenSchema>;

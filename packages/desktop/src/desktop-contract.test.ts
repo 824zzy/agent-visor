@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   daemonUrlFromArguments,
   daemonUrlFromReadyMessage,
+  nativeActionFromDaemonMessage,
   ownerApplication,
   rendererLocation,
 } from "./desktop-contract.js";
@@ -32,6 +33,25 @@ describe("desktop launch contract", () => {
       daemonUrlFromReadyMessage({ type: "ready", url: "wss://remote.example" }),
     ).toBeUndefined();
     expect(daemonUrlFromReadyMessage({ type: "ready" })).toBeUndefined();
+  });
+
+  it("accepts only bounded native actions from the daemon", () => {
+    expect(nativeActionFromDaemonMessage({
+      type: "native_action",
+      action: "open_owner",
+      owner: "Ghostty",
+      sessionId: "session-1",
+    })).toEqual({ action: "open_owner", owner: "Ghostty", sessionId: "session-1" });
+    expect(nativeActionFromDaemonMessage({
+      type: "native_action",
+      action: "open_sessions",
+    })).toEqual({ action: "open_sessions" });
+    expect(nativeActionFromDaemonMessage({
+      type: "native_action",
+      action: "open_owner",
+      owner: "arbitrary --argument",
+      sessionId: "session-1",
+    })).toBeUndefined();
   });
 
   it("allows only known owner applications", () => {

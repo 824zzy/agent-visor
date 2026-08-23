@@ -11,7 +11,7 @@
     "dev:desktop": "npm run dev --workspace=@agent-visor/desktop",
     "test": "npm run build --workspace=@agent-visor/protocol && npm run test --workspace=@agent-visor/protocol && npm run test --workspace=@agent-visor/server && npm run test --workspace=@agent-visor/app && npm run test --workspace=@agent-visor/desktop",
     "test:chat": "npm run build && npm run test:chat --workspace=@agent-visor/desktop",
-    "test:native-helper": "npm run build --workspace=@agent-visor/protocol && swift build --package-path AgentVisorCore --product AgentVisorNativeHelper && node scripts/test-native-helper.mjs",
+    "test:native-helper": "npm run build --workspace=@agent-visor/protocol && npm run build --workspace=@agent-visor/server && swift build --package-path AgentVisorCore --product AgentVisorNativeHelper && node scripts/test-native-helper.mjs",
     "test:sessions": "npm run build && npm run test:sessions --workspace=@agent-visor/desktop",
     "typecheck": "npm run build --workspace=@agent-visor/protocol && npm run typecheck --workspace=@agent-visor/server && npm run typecheck --workspace=@agent-visor/app && npm run typecheck --workspace=@agent-visor/desktop"
   },

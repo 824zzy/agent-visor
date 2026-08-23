@@ -12,12 +12,15 @@ public enum NativeHelperPillPhase: String, Codable, Equatable {
     case needsYou = "needs_you"
     case ready
     case working
-    case history
 }
 
 public struct NativeHelperPill: Codable, Equatable {
     public let id: String
     public let title: String
+    public let subtitle: String?
+    public let source: String?
+    public let project: String?
+    public let owner: String?
     public let phase: NativeHelperPillPhase
     public let priority: Int
     public let accessibilityLabel: String
@@ -25,13 +28,52 @@ public struct NativeHelperPill: Codable, Equatable {
     public init(
         id: String,
         title: String,
+        subtitle: String? = nil,
+        source: String? = nil,
+        project: String? = nil,
+        owner: String? = nil,
         phase: NativeHelperPillPhase,
         priority: Int,
         accessibilityLabel: String
     ) {
         self.id = id
         self.title = title
+        self.subtitle = subtitle
+        self.source = source
+        self.project = project
+        self.owner = owner
         self.phase = phase
+        self.priority = priority
+        self.accessibilityLabel = accessibilityLabel
+    }
+}
+
+public enum NativeHelperUsageTone: String, Codable, Equatable {
+    case normal
+    case warning
+    case critical
+}
+
+public struct NativeHelperUsageGlance: Codable, Equatable {
+    public let id: String
+    public let label: String
+    public let detail: String
+    public let tone: NativeHelperUsageTone
+    public let priority: Int
+    public let accessibilityLabel: String
+
+    public init(
+        id: String,
+        label: String,
+        detail: String,
+        tone: NativeHelperUsageTone,
+        priority: Int,
+        accessibilityLabel: String
+    ) {
+        self.id = id
+        self.label = label
+        self.detail = detail
+        self.tone = tone
         self.priority = priority
         self.accessibilityLabel = accessibilityLabel
     }
@@ -52,13 +94,13 @@ public struct NativeHelperFocusTarget: Codable, Equatable {
 public enum NativeHelperRequest: Equatable {
     case screenTopology(id: String)
     case accessibilityStatus(id: String)
-    case presentPills(id: String, pills: [NativeHelperPill])
+    case presentPills(id: String, pills: [NativeHelperPill], usageGlances: [NativeHelperUsageGlance])
     case focus(id: String, target: NativeHelperFocusTarget)
 
     public var id: String {
         switch self {
         case .screenTopology(let id), .accessibilityStatus(let id),
-             .presentPills(let id, _), .focus(let id, _):
+             .presentPills(let id, _, _), .focus(let id, _):
             id
         }
     }
@@ -91,12 +133,19 @@ public enum NativeHelperRequest: Equatable {
             return .accessibilityStatus(id: wire.id)
         case "present_pills":
             guard let params = wire.params,
-                  Set(params.keys) == ["pills"],
+                  (Set(params.keys) == ["pills"]
+                    || Set(params.keys) == ["pills", "usageGlances"]),
                   let pills = params.pills, pills.count <= 64,
-                  pills.allSatisfy({ $0.isValid }) else {
+                  (params.usageGlances?.count ?? 0) <= 8,
+                  pills.allSatisfy({ $0.isValid }),
+                  (params.usageGlances ?? []).allSatisfy({ $0.isValid }) else {
                 throw NativeHelperWireError.invalidRequest
             }
-            return .presentPills(id: wire.id, pills: pills)
+            return .presentPills(
+                id: wire.id,
+                pills: pills,
+                usageGlances: params.usageGlances ?? []
+            )
         case "focus":
             guard let params = wire.params,
                   Set(params.keys) == ["target"],
@@ -196,6 +245,29 @@ public enum NativeHelperResponse {
     }
 }
 
+public enum NativeHelperEvent {
+    case activatePill(sessionId: String)
+    case openSessions
+
+    public func encoded() throws -> Data {
+        let envelope: EventEnvelope
+        switch self {
+        case .activatePill(let sessionId):
+            envelope = EventEnvelope(event: "activate_pill", sessionId: sessionId)
+        case .openSessions:
+            envelope = EventEnvelope(event: "open_sessions", sessionId: nil)
+        }
+        return try JSONEncoder().encode(envelope)
+    }
+}
+
+private struct EventEnvelope: Encodable {
+    let version = nativeHelperProtocolVersion
+    let type = "event"
+    let event: String
+    let sessionId: String?
+}
+
 public enum NativeHelperFrameCodec {
     public static func frame(
         _ payload: Data,
@@ -250,12 +322,25 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
     switch method {
     case "present_pills":
         guard let params = object["params"] as? [String: Any],
-              Set(params.keys) == ["pills"],
+              (Set(params.keys) == ["pills"]
+                || Set(params.keys) == ["pills", "usageGlances"]),
               let pills = params["pills"] as? [[String: Any]] else { return false }
-        let pillKeys: Set<String> = [
+        let usageGlances = params["usageGlances"] as? [[String: Any]] ?? []
+        let legacyPillKeys: Set<String> = [
             "id", "title", "phase", "priority", "accessibilityLabel",
         ]
-        return pills.allSatisfy { Set($0.keys) == pillKeys }
+        let detailedPillKeys = legacyPillKeys.union([
+            "subtitle", "source", "project", "owner",
+        ])
+        let usageKeys: Set<String> = [
+            "id", "label", "detail", "tone", "priority", "accessibilityLabel",
+        ]
+        return pills.allSatisfy {
+            let keys = Set($0.keys)
+            return keys.isSuperset(of: legacyPillKeys)
+                && keys.isSubset(of: detailedPillKeys)
+        }
+            && usageGlances.allSatisfy { Set($0.keys) == usageKeys }
     case "focus":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys) == ["target"],
@@ -276,6 +361,7 @@ private struct WireRequest: Decodable {
 
 private struct WireParameters: Decodable {
     let pills: [NativeHelperPill]?
+    let usageGlances: [NativeHelperUsageGlance]?
     let target: NativeHelperFocusTarget?
     let keys: [String]
 
@@ -283,6 +369,10 @@ private struct WireParameters: Decodable {
         let container = try decoder.container(keyedBy: DynamicKey.self)
         keys = container.allKeys.map(\.stringValue)
         pills = try container.decodeIfPresent([NativeHelperPill].self, forKey: .init("pills"))
+        usageGlances = try container.decodeIfPresent(
+            [NativeHelperUsageGlance].self,
+            forKey: .init("usageGlances")
+        )
         target = try container.decodeIfPresent(NativeHelperFocusTarget.self, forKey: .init("target"))
     }
 }
@@ -300,6 +390,19 @@ private extension NativeHelperPill {
     var isValid: Bool {
         !id.isEmpty && id.count <= 128
             && !title.isEmpty && title.count <= 256
+            && (subtitle?.count ?? 0) <= 512
+            && (source == nil || !(source?.isEmpty ?? true)) && (source?.count ?? 0) <= 128
+            && (project == nil || !(project?.isEmpty ?? true)) && (project?.count ?? 0) <= 256
+            && (owner == nil || !(owner?.isEmpty ?? true)) && (owner?.count ?? 0) <= 128
+            && !accessibilityLabel.isEmpty && accessibilityLabel.count <= 512
+    }
+}
+
+private extension NativeHelperUsageGlance {
+    var isValid: Bool {
+        ["codex", "claude"].contains(id)
+            && !label.isEmpty && label.count <= 128
+            && !detail.isEmpty && detail.count <= 512
             && !accessibilityLabel.isEmpty && accessibilityLabel.count <= 512
     }
 }

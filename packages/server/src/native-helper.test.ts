@@ -12,9 +12,22 @@ const screen = {
 const pill = {
   id: "session-1",
   title: "Review migration",
+  subtitle: "Ready to continue",
+  source: "Pi",
+  project: "agent-visor",
+  owner: "Ghostty",
   phase: "ready" as const,
   priority: 1,
   accessibilityLabel: "Review migration, ready",
+};
+
+const usage = {
+  id: "codex" as const,
+  label: "5h 82% | 7d 61%",
+  detail: "Codex usage",
+  tone: "normal" as const,
+  priority: 100,
+  accessibilityLabel: "Codex usage",
 };
 
 const focus = {
@@ -30,10 +43,11 @@ describe("FakeNativeHelper", () => {
     expect(await helper.screenTopology()).toEqual([screen]);
     expect(await helper.accessibilityStatus()).toBe(true);
 
-    await helper.presentPills([pill]);
+    await helper.presentPills([pill], [usage]);
     await helper.focus(focus);
 
     expect(helper.presentedPills).toEqual([pill]);
+    expect(helper.presentedUsageGlances).toEqual([usage]);
     expect(helper.focusRequests).toEqual([focus]);
   });
 
@@ -41,7 +55,7 @@ describe("FakeNativeHelper", () => {
     const helper = new FakeNativeHelper();
     const pills = [pill];
 
-    await helper.presentPills(pills);
+    await helper.presentPills(pills, []);
     pills.length = 0;
 
     expect(helper.presentedPills).toEqual([pill]);

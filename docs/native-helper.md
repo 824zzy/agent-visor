@@ -24,12 +24,14 @@ Every request contains protocol `version: 1`, a non-empty `id`, and one method:
 
 - `screen_topology` returns screen frames, visible frames, scale factors, and the main screen.
 - `accessibility_status` returns the current Accessibility trust state.
-- `present_pills` accepts at most 64 validated pill descriptions.
+- `present_pills` accepts at most 64 validated pill descriptions and eight optional usage glances.
 - `focus` requires an exact process identifier and bundle identifier. A window identifier is optional.
 
 Unknown methods, extra fields, oversized frames, invalid identifiers, and malformed JSON are rejected.
 
-Pill presentation and exact-window focus remain disabled until their parity tickets implement the native behavior. The interface already rejects unsupported calls explicitly.
+Pill presentation is enabled through native status items. Exact-window focus remains disabled until native-services parity implements it.
+
+The helper can emit `activate_pill` and `open_sessions` events on the same framed connection.
 
 ## Signing
 
@@ -49,7 +51,9 @@ The script never creates or rotates a certificate.
 
 ## Test seams
 
-`FakeNativeHelper` implements the daemon adapter without starting native code. It records pill and focus calls and returns configured screen and Accessibility results.
+`FakeNativeHelper` implements the daemon adapter without starting native code. It records pill, usage, and focus calls.
+
+`NativeHelperProcess` owns the signed helper lifecycle, framed requests, event delivery, deadlines, and temporary socket cleanup.
 
 Run the socket integration check with:
 

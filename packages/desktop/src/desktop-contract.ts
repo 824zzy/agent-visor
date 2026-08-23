@@ -16,6 +16,24 @@ export function daemonUrlFromReadyMessage(value: unknown): string | undefined {
   return localDaemonUrl(message.url);
 }
 
+export type NativeAction =
+  | { action: "open_sessions" }
+  | { action: "open_owner"; owner: string; sessionId: string };
+
+export function nativeActionFromDaemonMessage(value: unknown): NativeAction | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const message = value as Record<string, unknown>;
+  if (message.type !== "native_action") return undefined;
+  if (message.action === "open_sessions") return { action: "open_sessions" };
+  if (message.action !== "open_owner"
+    || typeof message.owner !== "string"
+    || typeof message.sessionId !== "string"
+    || !message.sessionId
+    || message.sessionId.length > 128
+    || !ownerApplication(message.owner)) return undefined;
+  return { action: "open_owner", owner: message.owner, sessionId: message.sessionId };
+}
+
 export function ownerApplication(owner: string): string | undefined {
   return {
     Auggie: "Auggie",
