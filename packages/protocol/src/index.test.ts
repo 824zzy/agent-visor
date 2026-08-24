@@ -93,6 +93,10 @@ describe("session snapshot protocol", () => {
         launchAtLogin: false,
       },
       permissions: { accessibility: "granted", notifications: "authorized" },
+      agents: [
+        { id: "claude", name: "Claude Code", available: true, installed: true, control: "toggle" },
+        { id: "cursor", name: "Cursor", available: true, installed: false, control: "read_only" },
+      ],
       update: { status: "up_to_date", currentVersion: "2.6.2" },
     };
     expect(nativeServicesStateSchema.parse(state)).toEqual(state);
@@ -106,6 +110,12 @@ describe("session snapshot protocol", () => {
     expect(clientMessageSchema.safeParse({
       type: "native_service_action", id: "native-1", action: "request_accessibility",
     }).success).toBe(true);
+    expect(clientMessageSchema.safeParse({
+      type: "set_agent_connection", id: "agent-1", agent: "claude", enabled: true,
+    }).success).toBe(true);
+    expect(clientMessageSchema.safeParse({
+      type: "set_agent_connection", id: "agent-2", agent: "cursor", enabled: true,
+    }).success).toBe(false);
     expect(clientMessageSchema.safeParse({
       type: "native_service_action", id: "native-2", action: "invented",
     }).success).toBe(false);

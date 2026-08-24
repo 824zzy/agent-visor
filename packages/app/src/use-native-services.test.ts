@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { nativeServicesFromServerData } from "./use-native-services.js";
+import {
+  agentConnectionRequest,
+  nativeServicesFromServerData,
+} from "./use-native-services.js";
 
 describe("native services messages", () => {
+  it("builds a typed agent connection request", () => {
+    expect(agentConnectionRequest("claude", true, "agent-1")).toEqual({
+      type: "set_agent_connection", id: "agent-1", agent: "claude", enabled: true,
+    });
+  });
+
   it("accepts only a typed native services state", () => {
     const state = {
       type: "native_services_state",
@@ -21,6 +30,10 @@ describe("native services messages", () => {
         launchAtLogin: false,
       },
       permissions: { accessibility: "needed", notifications: "not_determined" },
+      agents: [{
+        id: "claude", name: "Claude Code", available: true,
+        installed: false, control: "toggle",
+      }],
       update: { status: "idle", currentVersion: "2.6.2" },
     };
     expect(nativeServicesFromServerData(JSON.stringify(state))).toEqual(state);

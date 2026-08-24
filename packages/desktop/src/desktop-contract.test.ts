@@ -1,8 +1,12 @@
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   daemonUrlFromArguments,
   daemonUrlFromReadyMessage,
   electronDataName,
+  integrationResourcesPath,
   nativeActionFromDaemonMessage,
   nativeEffectFromDaemonMessage,
   ownerApplication,
@@ -14,6 +18,17 @@ import {
 const daemonUrl = "ws://127.0.0.1:49152?token=secret";
 
 describe("desktop launch contract", () => {
+  it("uses bundled agent integrations when a release folder contains them", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-resources-"));
+    try {
+      await mkdir(path.join(root, "AgentIntegrations"));
+      expect(integrationResourcesPath(root, "/source/integrations"))
+        .toBe(path.join(root, "AgentIntegrations"));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps Electron data separate while preserving the product name", () => {
     expect(electronDataName).toBe("Agent Visor Next");
     expect(productName).toBe("Agent Visor");

@@ -47,6 +47,7 @@ export function Settings({
   onBack,
   update,
   act,
+  setAgentConnection,
   palette,
 }: {
   state?: NativeServicesState;
@@ -56,6 +57,7 @@ export function Settings({
   palette: Palette;
   act(action: "request_accessibility" | "open_accessibility_settings"
     | "request_notifications" | "check_updates" | "open_update"): void;
+  setAgentConnection(agent: "claude" | "auggie" | "codex", enabled: boolean): void;
 }) {
   const styles = useMemo(() => createStyles(palette), [palette]);
   const [category, setCategory] = useState<SettingsCategory>("general");
@@ -188,7 +190,24 @@ export function Settings({
           />
         </Section> : null}
 
-        {category === "agents" ? <Section title="Agents" subtitle="How Agent Visor discovers coding sessions" styles={styles}>
+        {category === "agents" ? <Section title="Agents" subtitle="Connect agents for exact live status and approvals" styles={styles}>
+          {state.agents.map((agent) => agent.control === "toggle"
+            ? agent.available
+              ? <ActionRow
+                  action={agent.installed ? "Disconnect" : "Connect"}
+                  detail={agent.installed ? "Connected" : "Not connected"}
+                  key={agent.id}
+                  label={agent.name}
+                  onPress={() => setAgentConnection(agent.id as "claude" | "auggie" | "codex", !agent.installed)}
+                  styles={styles}
+                />
+              : <ValueRow key={agent.id} label={agent.name} value="Not detected" styles={styles} />
+            : <ValueRow
+                key={agent.id}
+                label={agent.name}
+                value={!agent.available ? "Not detected" : agent.installed ? "Connected automatically" : "Observed automatically"}
+                styles={styles}
+              />)}
           <StepRow
             label="Observed session window"
             value={`${settings.observedWindowHours}h`}

@@ -170,6 +170,10 @@ describe("Agent Visor daemon", () => {
         editorPreference: "auto" as const, observedWindowHours: 42, launchAtLogin: false,
       },
       permissions: { accessibility: "granted" as const, notifications: "authorized" as const },
+      agents: [{
+        id: "claude" as const, name: "Claude Code", available: true,
+        installed: false, control: "toggle" as const,
+      }],
       update: { status: "idle" as const, currentVersion: "2.6.2" },
     };
     const actions: unknown[] = [];
@@ -190,11 +194,15 @@ describe("Agent Visor daemon", () => {
     socket.send(JSON.stringify({
       type: "update_settings", id: "settings-1", patch: { appearance: "light" },
     }));
+    socket.send(JSON.stringify({
+      type: "set_agent_connection", id: "agent-1", agent: "claude", enabled: true,
+    }));
 
-    await expect.poll(() => messages.length).toBe(3);
+    await expect.poll(() => messages.length).toBe(4);
     expect(messages[1]).toEqual(state);
     expect(messages[2]).toEqual({ type: "native_action_result", id: "settings-1", ok: true });
-    expect(actions).toHaveLength(1);
+    expect(messages[3]).toEqual({ type: "native_action_result", id: "agent-1", ok: true });
+    expect(actions).toHaveLength(2);
     socket.close();
   });
 

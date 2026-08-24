@@ -136,6 +136,7 @@ export function App() {
           onBack={() => setSettingsOpen(false)}
           palette={palette}
           state={nativeServices.state}
+          setAgentConnection={nativeServices.setAgentConnection}
           update={nativeServices.update}
         />
       ) : null}

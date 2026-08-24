@@ -5,6 +5,7 @@ import type {
   SessionSnapshot,
 } from "@agent-visor/protocol";
 import type { NativeServicesSource } from "./server.js";
+import type { AgentConnectionsRepository } from "./agent-connections.js";
 import type { NativeHelperAdapter } from "./native-helper.js";
 import type { SettingsRepository } from "./settings.js";
 import type { UpdateState } from "./updates.js";
@@ -34,6 +35,7 @@ export class NativeServicesRepository implements NativeServicesSource {
   constructor(private readonly options: {
     settings: SettingsRepository;
     helper: NativeHelperAdapter;
+    connections: AgentConnectionsRepository;
     currentVersion: string;
     checkUpdates: () => Promise<UpdateState>;
     emitDesktop: (effect: DesktopNativeEffect) => void;
@@ -43,6 +45,7 @@ export class NativeServicesRepository implements NativeServicesSource {
       revision: 0,
       settings: options.settings.current(),
       permissions: { accessibility: "needed", notifications: "not_determined" },
+      agents: options.connections.current(),
       update: { status: "idle", currentVersion: options.currentVersion },
     };
   }
@@ -62,7 +65,7 @@ export class NativeServicesRepository implements NativeServicesSource {
   }
 
   async action(message: Extract<ClientMessage, {
-    type: "update_settings" | "native_service_action";
+    type: "update_settings" | "native_service_action" | "set_agent_connection";
   }>): Promise<string | undefined> {
     try {
       if (message.type === "update_settings") {
@@ -71,6 +74,12 @@ export class NativeServicesRepository implements NativeServicesSource {
         if (next.launchAtLogin !== previous.launchAtLogin) {
           this.options.emitDesktop({ action: "set_login_item", enabled: next.launchAtLogin });
         }
+        return undefined;
+      }
+
+      if (message.type === "set_agent_connection") {
+        await this.options.connections.setEnabled(message.agent, message.enabled);
+        this.publish({ agents: this.options.connections.current() });
         return undefined;
       }
 
@@ -133,11 +142,13 @@ export class NativeServicesRepository implements NativeServicesSource {
 
   async refresh(): Promise<void> {
     const accessibility = await this.options.helper.accessibilityStatus();
+    await this.options.connections.refresh();
     this.publish({
       permissions: {
         ...this.state.permissions,
         accessibility: accessibility ? "granted" : "needed",
       },
+      agents: this.options.connections.current(),
     });
   }
 

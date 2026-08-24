@@ -1,6 +1,6 @@
 # macOS cutover parity
 
-Checked on 2026-08-23 against released Agent Visor 2.6.1.
+Checked on 2026-08-24 against released Agent Visor 2.6.1.
 
 `Pass` means the replacement matches the released behavior or uses a verified safer route.
 
@@ -29,12 +29,12 @@ The 2026-08-24 source audit corrected earlier broad Pass claims. `Partial` names
 | Display policy | User-selected pill display and released full-screen visibility policy | Helper follows the status-item screen and always joins full-screen spaces | Partial |
 | Global shortcuts | Configurable visible-session and Sessions shortcuts with modifier reveal | Signed helper registration, frozen snapshots, keycap screenshot, and footer checks | Pass |
 | Usage | Codex and Claude limits with retained last valid values and click detail | Codex reading works; Claude usage and the click detail popover remain absent | Partial |
-| Settings | Native category layout, controls, shortcuts, integrations, and preservation | Core settings persist; display, full-screen, hidden sessions, Chat visibility, hook controls, and custom recording remain absent | Partial |
+| Settings | Native category layout, controls, shortcuts, integrations, and preservation | Core settings and agent connections persist; display, full-screen, hidden sessions, Chat visibility, and custom recording remain absent | Partial |
 | Accessibility repair | Stable signed identity and macOS repair destination | Release-signed helper and live trusted state | Pass |
 | Notifications | Native status transitions, exact session action, approval actions, and Dock badge | Phase notices work; clicks open only the owner application and interactive actions remain absent | Partial |
 | Updates | Signed public release with downgrade prevention | Validated appcast and manual verified release link; automatic installation remains intentionally disabled | Partial |
 | Lifecycle | Close-to-hide, Dock reopen, launch at login, and quit owned processes only | Window lifecycle and owned-process shutdown checks | Pass |
-| Agent integrations | Detect and install or remove hook-based integrations | Existing hooks work; fresh-profile installation and connection controls remain absent | Partial |
+| Agent integrations | Detect and install or remove hook-based integrations | Fresh profiles connect Claude Code, Auggie, and Codex; Pi connects automatically; Cursor remains read-only | Pass |
 | Pi restoration | Relaunch exact eligible prior-boot Ghostty sessions | No Electron restoration coordinator exists | Missing |
 
 ## Provider matrix

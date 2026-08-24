@@ -14,7 +14,7 @@ export interface NativeServicesSource {
   current(): NativeServicesState;
   subscribe(listener: (state: NativeServicesState) => void): () => void;
   action(message: Extract<ClientMessage, {
-    type: "update_settings" | "native_service_action";
+    type: "update_settings" | "native_service_action" | "set_agent_connection";
   }>): Promise<string | undefined>;
 }
 
@@ -97,7 +97,8 @@ export async function startServer(options: {
           ...(error ? { error } : {}),
         });
       } else if (parsed.data.type === "update_settings"
-        || parsed.data.type === "native_service_action") {
+        || parsed.data.type === "native_service_action"
+        || parsed.data.type === "set_agent_connection") {
         const error = options.nativeServices
           ? await options.nativeServices.action(parsed.data)
           : "Native services are unavailable.";

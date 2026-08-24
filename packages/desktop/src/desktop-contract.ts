@@ -1,5 +1,13 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
+
 export const productName = "Agent Visor";
 export const electronDataName = "Agent Visor Next";
+
+export function integrationResourcesPath(resourcesPath: string, sourcePath: string): string {
+  const bundled = path.join(resourcesPath, "AgentIntegrations");
+  return existsSync(bundled) ? bundled : sourcePath;
+}
 
 export function windowCloseAction(quitting: boolean): "hide" | "close" {
   return quitting ? "close" : "hide";

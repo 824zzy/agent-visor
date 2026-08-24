@@ -27,10 +27,15 @@ async function run() {
     settings: {
       appearance: "dark", contentScale: 1, pillsEnabled: true,
       codexUsageGlanceEnabled: true, claudeUsageGlanceEnabled: false,
-      notificationSound: "Pop", sessionShortcutModifierFamily: "optionCommand",
-      editorPreference: "auto", observedWindowHours: 42, launchAtLogin: false,
+      notificationSound: "Pop", hotkeyTrigger: "shift", customHotkeyCombo: null,
+      sessionShortcutModifierFamily: "optionCommand", editorPreference: "auto",
+      observedWindowHours: 42, launchAtLogin: false,
     },
     permissions: { accessibility: "needed", notifications: "not_determined" },
+    agents: [
+      { id: "claude", name: "Claude Code", available: true, installed: false, control: "toggle" },
+      { id: "pi", name: "Pi", available: true, installed: true, control: "automatic" },
+    ],
     update: { status: "idle", currentVersion: "2.6.2" },
   };
   const subscribers = new Set();
@@ -48,6 +53,14 @@ async function run() {
           ...state,
           revision: state.revision + 1,
           settings: { ...state.settings, ...message.patch },
+        };
+        for (const subscriber of subscribers) subscriber(state);
+      } else if (message.type === "set_agent_connection") {
+        state = {
+          ...state,
+          revision: state.revision + 1,
+          agents: state.agents.map((agent) => agent.id === message.agent
+            ? { ...agent, installed: message.enabled } : agent),
         };
         for (const subscriber of subscribers) subscriber(state);
       }
@@ -100,6 +113,10 @@ async function run() {
     await waitFor(window, `document.body.textContent.includes('Sound')`);
     await clickButton(window, "Agents");
     await waitFor(window, `document.body.textContent.includes('Observed session window')`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Connect for Claude Code"]').click()`);
+    await waitUntil(() => actions.some((message) => message.type === "set_agent_connection"
+      && message.agent === "claude" && message.enabled));
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Disconnect for Claude Code"]'))`);
     await clickButton(window, "General");
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Enable for Accessibility"]').click()`);
     await waitUntil(() => actions.some((message) =>
@@ -117,7 +134,7 @@ async function run() {
     window.webContents.send("app:navigate", { page: "settings" });
     await waitFor(window, `document.body.textContent.includes('Launch at login')`);
 
-    console.log("Native services accessibility PASS: settings, app navigation, permissions, updates, theme, and Back.");
+    console.log("Native services accessibility PASS: settings, agent connections, navigation, permissions, updates, theme, and Back.");
   } finally {
     window.destroy();
     await server.close();

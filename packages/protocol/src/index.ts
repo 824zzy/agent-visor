@@ -114,6 +114,14 @@ export const appSettingsSchema = z.object({
 
 export const appSettingsPatchSchema = appSettingsSchema.partial().strict();
 
+export const agentConnectionSchema = z.object({
+  id: z.enum(["claude", "auggie", "codex", "cursor", "pi"]),
+  name: z.string().min(1).max(64),
+  available: z.boolean(),
+  installed: z.boolean(),
+  control: z.enum(["toggle", "automatic", "read_only"]),
+}).strict();
+
 export const nativeServicesStateSchema = z.object({
   type: z.literal("native_services_state"),
   revision: z.number().int().nonnegative(),
@@ -122,6 +130,7 @@ export const nativeServicesStateSchema = z.object({
     accessibility: z.enum(["granted", "needed"]),
     notifications: z.enum(["not_determined", "denied", "authorized"]),
   }).strict(),
+  agents: z.array(agentConnectionSchema).max(5),
   update: z.object({
     status: z.enum(["idle", "checking", "up_to_date", "available", "error"]),
     currentVersion: z.string().min(1).max(64),
@@ -191,6 +200,12 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
       "request_accessibility", "open_accessibility_settings",
       "request_notifications", "check_updates", "open_update",
     ]),
+  }).strict(),
+  z.object({
+    ...requestEnvelope,
+    type: z.literal("set_agent_connection"),
+    agent: z.enum(["claude", "auggie", "codex"]),
+    enabled: z.boolean(),
   }).strict(),
   z.object({
     type: z.literal("open_chat"),
@@ -418,6 +433,7 @@ export const nativeHelperResponseSchema = z.union([
   ]),
 ]);
 
+export type AgentConnection = z.infer<typeof agentConnectionSchema>;
 export type AppSettings = z.infer<typeof appSettingsSchema>;
 export type AppSettingsPatch = z.infer<typeof appSettingsPatchSchema>;
 export type ChatCapabilities = z.infer<typeof chatCapabilitiesSchema>;

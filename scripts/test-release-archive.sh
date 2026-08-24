@@ -23,6 +23,16 @@ fi
 mkdir -p "$EXTRACT_ROOT"
 ditto -x -k "$ZIP_PATH" "$EXTRACT_ROOT"
 [[ -d "$EXTRACTED_APP" ]]
+for integration in \
+    agent-visor-state.py \
+    agent-visor-codex-state.py \
+    agent-visor-state-auggie.sh \
+    agent-visor-pi.ts.txt; do
+    [[ -f "$EXTRACTED_APP/Contents/Resources/AgentIntegrations/$integration" ]] || {
+        echo "ERROR: release archive is missing $integration" >&2
+        exit 1
+    }
+done
 "$SCRIPT_DIR/test-release-bundle.sh" "$EXTRACTED_APP"
 SIGNING_INFO="$(codesign -dvvv "$EXTRACTED_APP" 2>&1)"
 DISTRIBUTION_MODE="$(release_distribution_mode "$SIGNING_INFO")"

@@ -62,6 +62,14 @@ cp "$ROOT/packages/protocol/package.json" "$RESOURCES/app/node_modules/@agent-vi
 ditto "$ROOT/node_modules/ws" "$RESOURCES/app/node_modules/ws"
 ditto "$ROOT/node_modules/zod" "$RESOURCES/app/node_modules/zod"
 cp "$OUTPUT/native-helper/AgentVisorNativeHelper" "$RESOURCES/AgentVisorNativeHelper"
+mkdir -p "$RESOURCES/AgentIntegrations"
+for integration in \
+  agent-visor-state.py \
+  agent-visor-codex-state.py \
+  agent-visor-state-auggie.sh \
+  agent-visor-pi.ts.txt; do
+  cp "$ROOT/AgentVisor/Resources/$integration" "$RESOURCES/AgentIntegrations/$integration"
+done
 
 codesign --force --deep --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
   --sign "$IDENTITY" "$APP"

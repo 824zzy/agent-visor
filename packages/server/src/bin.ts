@@ -1,11 +1,13 @@
 import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { NativeHelperUsageGlance } from "@agent-visor/protocol";
 import { stopCodexTurns } from "./codex-turn.js";
 import { startHookSocket, type RunningHookSocket } from "./hook-socket.js";
 import { menuPresentation, nativeActionFor } from "./menu.js";
 import { NativeHelperProcess, UnavailableNativeHelper } from "./native-helper.js";
+import { AgentConnectionsRepository } from "./agent-connections.js";
 import { NativeServicesRepository } from "./native-services.js";
 import { liveProviders } from "./providers/index.js";
 import { startServer } from "./server.js";
@@ -21,6 +23,9 @@ const currentVersion = process.env.AGENT_VISOR_VERSION ?? "0.0.0";
 const dataRoot = process.env.AGENT_VISOR_DATA_DIR
   ?? path.join(os.homedir(), "Library/Application Support/Agent Visor Next");
 const settingsDomain = process.env.AGENT_VISOR_SETTINGS_DOMAIN ?? "com.824zzy.AgentVisor.Dev";
+const integrationResources = process.env.AGENT_VISOR_INTEGRATIONS_DIR ?? path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)), "../../../AgentVisor/Resources",
+);
 const settings = await SettingsRepository.open({
   root: dataRoot,
   readLegacy: () => readLegacyDefaults(settingsDomain, dataRoot),
@@ -113,6 +118,9 @@ repository.setControls(sessionControls);
 nativeServices = new NativeServicesRepository({
   settings,
   helper: helperAdapter,
+  connections: new AgentConnectionsRepository({
+    home: os.homedir(), resources: integrationResources,
+  }),
   currentVersion,
   checkUpdates: () => checkForUpdates(currentVersion),
   emitDesktop: (effect) => process.send?.({ type: "native_effect", ...effect }),

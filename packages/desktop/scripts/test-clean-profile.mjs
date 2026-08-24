@@ -42,12 +42,24 @@ try {
   const native = messages.find(({ type }) => type === "native_services_state");
   assert(snapshot.sessions.length === 0, "clean HOME starts without provider rows");
   assert(native.settings.appearance === "dark", "clean settings use typed defaults");
+  assert(native.agents.find(({ id }) => id === "claude")?.available === true,
+    "clean profile offers Claude connection setup");
+  ws.send(JSON.stringify({
+    type: "set_agent_connection", id: "connect-claude", agent: "claude", enabled: true,
+  }));
+  await waitFor(() => messages.some(({ type, id, ok }) =>
+    type === "native_action_result" && id === "connect-claude" && ok));
+  const claudeSettings = JSON.parse(await readFile(path.join(home, ".claude/settings.json"), "utf8"));
+  assert(JSON.stringify(claudeSettings).includes("agent-visor-state.py"),
+    "clean profile installs Claude hooks through the daemon");
+  assert((await readFile(path.join(home, ".claude/hooks/agent-visor-state.py"), "utf8"))
+    .includes("Agent Visor Hook"), "clean profile installs the packaged Claude integration");
   const settings = JSON.parse(await readFile(path.join(data, "settings.json"), "utf8"));
   assert(settings.version === 1, "clean settings use version one");
   assert(((await stat(path.join(data, "settings.json"))).mode & 0o777) === 0o600,
     "clean settings file uses mode 0600");
   ws.close();
-  console.log("Clean profile PASS: Electron profile isolation and empty daemon settings, providers, protocol, and lifecycle.");
+  console.log("Clean profile PASS: profile isolation, agent setup, settings, protocol, and lifecycle.");
 } finally {
   const exited = new Promise((resolve) => child.once("exit", resolve));
   child.kill("SIGTERM");

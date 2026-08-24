@@ -29,6 +29,22 @@ Observed-session changes take effect without restarting the daemon. Session shor
 
 Launch-at-login changes use Electron’s packaged application API. Development builds preserve the value without registering the Electron development binary.
 
+## Agent connections
+
+Settings reports Claude Code, Auggie, Codex, Cursor, and Pi connections.
+
+Claude Code, Auggie, and Codex use explicit Connect and Disconnect actions. The daemon changes only Agent Visor hook entries and preserves other JSON settings.
+
+Pi installs its bundled extension automatically when Pi is detected. Identical refreshes do not rewrite the extension.
+
+Cursor remains automatic and read-only because it has no hook interface.
+
+The daemon detects standard application, Homebrew, local-bin, and nvm installations. A new Claude profile can connect before its configuration directory exists.
+
+Agent configuration and integration files use temporary files and atomic renames. Malformed configuration stops the requested change without replacing user data.
+
+The release package stores the four integration files under `Contents/Resources/AgentIntegrations`. Provider code remains outside the Swift helper.
+
 ## Permissions
 
 The helper checks Accessibility with its stable signed identity.

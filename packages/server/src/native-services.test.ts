@@ -1,7 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { AgentConnectionsRepository } from "./agent-connections.js";
 import { FakeNativeHelper } from "./native-helper.js";
 import { NativeServicesRepository } from "./native-services.js";
 import { SettingsRepository } from "./settings.js";
@@ -11,6 +12,34 @@ afterEach(async () => Promise.all(roots.splice(0).map((root) =>
   rm(root, { recursive: true, force: true }))));
 
 describe("native services", () => {
+  it("publishes and changes agent connections", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-native-services-"));
+    roots.push(root);
+    const home = path.join(root, "home");
+    const resources = path.join(root, "resources");
+    await mkdir(path.join(home, ".claude"), { recursive: true });
+    await mkdir(resources, { recursive: true });
+    await writeFile(path.join(resources, "agent-visor-state.py"), "# hook\n");
+    const settings = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
+    const services = new NativeServicesRepository({
+      settings,
+      helper: new FakeNativeHelper({ trusted: true }),
+      connections: new AgentConnectionsRepository({ home, resources }),
+      currentVersion: "2.7.0",
+      checkUpdates: async () => ({ status: "up_to_date", currentVersion: "2.7.0" }),
+      emitDesktop: () => undefined,
+    });
+    await services.start();
+
+    expect(services.current().agents.find(({ id }) => id === "claude"))
+      .toMatchObject({ installed: false, control: "toggle" });
+    expect(await services.action({
+      type: "set_agent_connection", id: "agent-1", agent: "claude", enabled: true,
+    })).toBeUndefined();
+    expect(services.current().agents.find(({ id }) => id === "claude"))
+      .toMatchObject({ installed: true, control: "toggle" });
+  });
+
   it("repairs permissions, persists settings, and emits desktop effects", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-native-services-"));
     roots.push(root);
@@ -20,6 +49,9 @@ describe("native services", () => {
     const services = new NativeServicesRepository({
       settings,
       helper,
+      connections: new AgentConnectionsRepository({
+        home: path.join(root, "home"), resources: path.join(root, "resources"),
+      }),
       currentVersion: "2.6.2",
       checkUpdates: async () => ({
         status: "available",
@@ -82,6 +114,9 @@ describe("native services", () => {
     const services = new NativeServicesRepository({
       settings,
       helper,
+      connections: new AgentConnectionsRepository({
+        home: path.join(root, "home"), resources: path.join(root, "resources"),
+      }),
       currentVersion: "2.6.2",
       checkUpdates: async () => ({ status: "up_to_date", currentVersion: "2.6.2" }),
       emitDesktop: (effect) => effects.push(effect),

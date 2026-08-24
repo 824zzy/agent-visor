@@ -15,6 +15,7 @@ import {
 import {
   daemonUrlFromReadyMessage,
   electronDataName,
+  integrationResourcesPath,
   nativeActionFromDaemonMessage,
   nativeEffectFromDaemonMessage,
   ownerApplication,
@@ -103,6 +104,11 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
       AGENT_VISOR_NATIVE_HELPER: process.env.AGENT_VISOR_NATIVE_HELPER
         ?? path.join(process.resourcesPath, "AgentVisorNativeHelper"),
       AGENT_VISOR_DATA_DIR: app.getPath("userData"),
+      AGENT_VISOR_INTEGRATIONS_DIR: process.env.AGENT_VISOR_INTEGRATIONS_DIR
+        ?? integrationResourcesPath(
+          process.resourcesPath,
+          path.resolve(directory, "../../../AgentVisor/Resources"),
+        ),
       AGENT_VISOR_SETTINGS_DOMAIN: app.isPackaged
         ? "com.824zzy.AgentVisor"
         : "com.824zzy.AgentVisor.Dev",

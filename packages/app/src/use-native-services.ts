@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   serverMessageSchema,
+  type AgentConnection,
   type AppSettingsPatch,
   type NativeServicesState,
 } from "@agent-visor/protocol";
@@ -59,8 +60,20 @@ export function useNativeServices() {
       id: crypto.randomUUID(),
       action,
     }), [send]);
+  const setAgentConnection = useCallback((
+    agent: Extract<AgentConnection["id"], "claude" | "auggie" | "codex">,
+    enabled: boolean,
+  ) => send(agentConnectionRequest(agent, enabled, crypto.randomUUID())), [send]);
 
-  return { state, error, update, act };
+  return { state, error, update, act, setAgentConnection };
+}
+
+export function agentConnectionRequest(
+  agent: "claude" | "auggie" | "codex",
+  enabled: boolean,
+  id: string,
+) {
+  return { type: "set_agent_connection" as const, id, agent, enabled };
 }
 
 export function nativeServicesFromServerData(data: string): NativeServicesState | undefined {
