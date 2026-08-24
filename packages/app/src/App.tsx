@@ -523,7 +523,7 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
     searchShell: { alignItems: "center", backgroundColor: palette.card, borderColor: palette.border, borderRadius: 10, borderWidth: 1, flex: 1, flexDirection: "row", minHeight: Math.max(40, 28 + font(12)), paddingHorizontal: 13 },
     searchFocused: { borderColor: palette.accent, borderWidth: 1.2 },
     searchIcon: { color: palette.tertiary, fontSize: font(13), fontWeight: "600" },
-    search: { color: palette.foreground, flex: 1, fontSize: font(14), outlineColor: "transparent", paddingHorizontal: 10, paddingVertical: 8 },
+    search: { backgroundColor: "transparent", borderWidth: 0, color: palette.foreground, flex: 1, fontSize: font(14), outlineColor: "transparent", outlineStyle: "solid", outlineWidth: 0, paddingHorizontal: 10, paddingVertical: 8 },
     searchTrailing: { alignItems: "center", justifyContent: "center", width: 34 },
     searchHint: { color: palette.tertiary, fontSize: font(10), fontWeight: "600" },
     resultCount: { color: palette.tertiary, fontSize: font(11) },
