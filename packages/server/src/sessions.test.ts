@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   SessionRepository,
@@ -103,6 +106,129 @@ describe("SessionRepository", () => {
       section: "needs_you",
       subtitle: "Approval required",
     });
+  });
+
+  it("keeps repeated idle heartbeats phase-neutral for an already Ready Pi session", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{ ...live, section: "ready", updatedAt: "2026-08-22T08:00:00.000Z" }];
+    const repository = new SessionRepository([provider]);
+    const before = await repository.refresh();
+
+    const after = repository.applyHook(heartbeat({
+      receivedAt: "2026-08-22T09:00:00.000Z",
+      isIdle: true,
+    }));
+
+    expect(provider.hook?.event).toBe("SessionHeartbeat");
+    expect(after).toEqual(before);
+  });
+
+  it("keeps busy Pi heartbeats phase-neutral", async () => {
+    const provider = new FakeProvider();
+    const repository = new SessionRepository([provider]);
+    const before = await repository.refresh();
+
+    const after = repository.applyHook(heartbeat({
+      receivedAt: "2026-08-22T09:00:00.000Z",
+      isIdle: false,
+    }));
+
+    expect(after).toEqual(before);
+  });
+
+  it("clears old stuck Pi work without announcing late attention", async () => {
+    const transcript = temporaryTranscript("2026-08-22T08:00:00.000Z");
+    try {
+      const provider = new FakeProvider();
+      const repository = new SessionRepository([provider]);
+      await repository.refresh();
+
+      const changed = repository.applyHook(heartbeat({
+        receivedAt: "2026-08-22T08:20:00.000Z",
+        isIdle: true,
+        sessionFile: transcript.path,
+      }));
+
+      expect(changed.sessions[0]).toMatchObject({
+        section: "history",
+        updatedAt: "2026-08-22T08:00:00.000Z",
+      });
+    } finally {
+      transcript.remove();
+    }
+  });
+
+  it("repairs a fresh dropped Pi completion once", async () => {
+    const transcript = temporaryTranscript("2026-08-22T08:00:50.000Z");
+    try {
+      const provider = new FakeProvider();
+      const repository = new SessionRepository([provider]);
+      await repository.refresh();
+      const first = repository.applyHook(heartbeat({
+        receivedAt: "2026-08-22T08:01:00.000Z",
+        isIdle: true,
+        sessionFile: transcript.path,
+      }));
+      const repeated = repository.applyHook(heartbeat({
+        receivedAt: "2026-08-22T08:01:10.000Z",
+        isIdle: true,
+        sessionFile: transcript.path,
+      }));
+
+      expect(first.sessions[0]).toMatchObject({
+        section: "ready",
+        updatedAt: "2026-08-22T08:01:00.000Z",
+      });
+      expect(repeated).toEqual(first);
+    } finally {
+      transcript.remove();
+    }
+  });
+
+  it("reattaches a heartbeat-only Pi session as History", () => {
+    const transcript = temporaryTranscript("2026-08-22T08:00:00.000Z");
+    try {
+      const repository = new SessionRepository([]);
+      const snapshot = repository.applyHook(heartbeat({
+        receivedAt: "2026-08-22T10:00:00.000Z",
+        isIdle: true,
+        sessionFile: transcript.path,
+      }));
+
+      expect(snapshot.sessions[0]).toMatchObject({
+        section: "history",
+        updatedAt: "2026-08-22T08:00:00.000Z",
+      });
+    } finally {
+      transcript.remove();
+    }
+  });
+
+  it("ignores a same-process heartbeat after Pi ended", () => {
+    const provider = new FakeProvider();
+    provider.sessions = [];
+    const repository = new SessionRepository([provider]);
+    const ended = repository.applyHook({
+      ...heartbeat(),
+      event: "SessionEnd",
+      status: "ended",
+    });
+
+    const repeated = repository.applyHook(heartbeat({
+      receivedAt: "2026-08-22T08:02:00.000Z",
+      isIdle: true,
+    }));
+
+    expect(provider.hook?.event).toBe("SessionEnd");
+    expect(repeated).toEqual(ended);
+  });
+
+  it("ignores a Pi heartbeat without a liveness PID", () => {
+    const repository = new SessionRepository([]);
+
+    const snapshot = repository.applyHook(heartbeat({ pid: undefined, tty: undefined }));
+
+    expect(snapshot.sessions).toEqual([]);
   });
 
   it("creates an Auggie row from its hook-only integration", () => {
@@ -264,3 +390,29 @@ describe("SessionRepository", () => {
     expect(repository.chatRecord("pi-1")?.messageTransport).toBeUndefined();
   });
 });
+
+function heartbeat(overrides: Partial<HookSessionEvent> = {}): HookSessionEvent {
+  return {
+    sessionId: "pi-1",
+    cwd: live.cwd,
+    provider: "pi",
+    event: "SessionHeartbeat",
+    status: "alive",
+    receivedAt: "2026-08-22T08:01:00.000Z",
+    pid: 43,
+    tty: "ttys001",
+    ...overrides,
+  };
+}
+
+function temporaryTranscript(modifiedAt: string): { path: string; remove(): void } {
+  const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-heartbeat-"));
+  const transcriptPath = path.join(directory, "session.jsonl");
+  writeFileSync(transcriptPath, "{}\n");
+  const date = new Date(modifiedAt);
+  utimesSync(transcriptPath, date, date);
+  return {
+    path: transcriptPath,
+    remove: () => rmSync(directory, { recursive: true, force: true }),
+  };
+}

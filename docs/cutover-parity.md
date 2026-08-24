@@ -85,7 +85,7 @@ The candidate uses:
 - Existing `AgentVisor Release` certificate.
 - Version 2.7.0 and build 54 by default.
 - Hardened runtime entitlements required by Electron.
-- A metadata-clean ZIP with SHA-256 `84c575c3e0e94ed55878645b5ad6903ebe445a5ef35a1686fa63d714758d543b`.
+- A metadata-clean ZIP with SHA-256 `0bf5ff2b517688c5e65b846931be463bdbdc8c63f96eaa6b859b3971e138caff`.
 
 Checks cover strict nested signatures, archive extraction, disabled application sandbox, library validation, and Homebrew ad-hoc re-signing.
 

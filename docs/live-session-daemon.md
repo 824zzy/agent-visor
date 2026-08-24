@@ -24,6 +24,8 @@ No generic title parser combines provider formats.
 
 A transient provider failure retains that provider’s last complete rows. Empty Codex and Zed database reads do not replace a previous non-empty read.
 
+Pi heartbeats update exact runtime identity without refreshing phase or activity. An idle heartbeat repairs only a Working row: recent transcript writes become Ready, while older or unreadable writes become History without attention.
+
 Connected clients receive later revisions automatically. A reconnect receives the current revision without rebuilding session identity.
 
 ## Machine work

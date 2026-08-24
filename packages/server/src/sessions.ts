@@ -10,6 +10,7 @@ import {
   type SessionSnapshot,
   type SessionSummary,
 } from "@agent-visor/protocol";
+import { statSync } from "node:fs";
 import path from "node:path";
 import { readChatPage } from "./chat.js";
 
@@ -64,6 +65,7 @@ export type HookSessionEvent = {
   event: string;
   status: string;
   receivedAt: string;
+  activityAt?: string;
   pid?: number;
   tty?: string;
   expectsResponse?: boolean;
@@ -81,6 +83,9 @@ export type HookResponse = {
   updated_input?: Record<string, unknown>;
   updated_permissions?: unknown[];
 };
+
+const piReadyRecoveryWindowMs = 90_000;
+const distantPast = "1970-01-01T00:00:00.000Z";
 
 const providerNames: Record<ProviderID, string> = {
   claude_code: "Claude Code",
@@ -100,6 +105,7 @@ export class SessionRepository {
     sessions: [],
   };
   private readonly lastByProvider = new Map<ProviderID, DiscoveredProviderSession[]>();
+  private readonly latestHookAtBySession = new Map<string, string>();
   private readonly hookBySession = new Map<string, HookSessionEvent>();
   private readonly chatBySession = new Map<string, DiscoveredProviderSession>();
   private readonly listeners = new Set<(snapshot: SessionSnapshot) => void>();
@@ -248,10 +254,20 @@ export class SessionRepository {
   }
 
   applyHook(event: HookSessionEvent): SessionSnapshot {
-    const previous = this.hookBySession.get(event.sessionId);
-    if (!previous || previous.receivedAt <= event.receivedAt) {
-      this.providers.find((provider) => provider.id === event.provider)?.noteHook?.(event);
-      this.hookBySession.set(event.sessionId, structuredClone(event));
+    const latestAt = this.latestHookAtBySession.get(event.sessionId);
+    if (!latestAt || latestAt <= event.receivedAt) {
+      this.latestHookAtBySession.set(event.sessionId, event.receivedAt);
+      const previous = this.hookBySession.get(event.sessionId);
+      if (!shouldIgnorePiHeartbeat(event, previous)) {
+        this.providers.find((provider) => provider.id === event.provider)?.noteHook?.(event);
+        if (isPiHeartbeat(event)) {
+          const current = this.snapshotValue.sessions.find((session) => session.id === event.sessionId);
+          const recovered = piHeartbeatPresentation(event, current, previous);
+          if (recovered) this.hookBySession.set(event.sessionId, recovered);
+        } else {
+          this.hookBySession.set(event.sessionId, structuredClone(event));
+        }
+      }
     }
     return this.publish([...this.lastByProvider.values()].flat());
   }
@@ -321,7 +337,7 @@ function applyHooks(
     if (existing) {
       existing.section = phase.section;
       existing.subtitle = phase.subtitle;
-      existing.updatedAt = hook.receivedAt;
+      existing.updatedAt = hook.activityAt ?? hook.receivedAt;
       continue;
     }
     sessions.push({
@@ -331,13 +347,70 @@ function applyHooks(
       owner: hookOwner(hook),
       section: phase.section,
       subtitle: phase.subtitle,
-      updatedAt: hook.receivedAt,
+      updatedAt: hook.activityAt ?? hook.receivedAt,
       canOpenOwner: Boolean(hook.pid || hook.tty),
       canEnterChat: hook.provider !== "auggie",
       chatPath: hook.sessionFile,
     });
   }
   return sessions;
+}
+
+function isPiHeartbeat(event: HookSessionEvent): boolean {
+  return event.provider === "pi" && event.event === "SessionHeartbeat";
+}
+
+function shouldIgnorePiHeartbeat(
+  event: HookSessionEvent,
+  previous: HookSessionEvent | undefined,
+): boolean {
+  return isPiHeartbeat(event) && (
+    event.pid === undefined
+    || (previous?.event === "SessionEnd" && previous.pid === event.pid)
+  );
+}
+
+function piHeartbeatPresentation(
+  event: HookSessionEvent,
+  current: SessionSummary | undefined,
+  previous: HookSessionEvent | undefined,
+): HookSessionEvent | undefined {
+  if (current?.section !== "working") {
+    if (current) return previous;
+    return {
+      ...structuredClone(event),
+      status: "inactive",
+      activityAt: transcriptModifiedAt(event) ?? distantPast,
+    };
+  }
+  if (event.isIdle !== true) return previous;
+
+  const completionAt = transcriptModifiedAt(event);
+  const age = completionAt
+    ? Date.parse(event.receivedAt) - Date.parse(completionAt)
+    : Number.POSITIVE_INFINITY;
+  if (age <= piReadyRecoveryWindowMs) {
+    return {
+      ...structuredClone(event),
+      event: "Stop",
+      status: "idle",
+      activityAt: event.receivedAt,
+    };
+  }
+  return {
+    ...structuredClone(event),
+    status: "inactive",
+    activityAt: completionAt ?? current.updatedAt,
+  };
+}
+
+function transcriptModifiedAt(event: HookSessionEvent): string | undefined {
+  if (!event.sessionFile) return undefined;
+  try {
+    return statSync(event.sessionFile).mtime.toISOString();
+  } catch {
+    return undefined;
+  }
 }
 
 function hookPhase(event: HookSessionEvent): { section: SessionSection; subtitle: string } {
@@ -350,7 +423,8 @@ function hookPhase(event: HookSessionEvent): { section: SessionSection; subtitle
     || ["ended", "exited", "closed", "inactive", "stopped", "terminated"].includes(status)) {
     return { section: "history", subtitle: "Session ended" };
   }
-  if (event.event === "Stop" || event.isIdle === true || status === "idle") {
+  if (event.event === "Stop"
+    || (!isPiHeartbeat(event) && (event.isIdle === true || status === "idle"))) {
     return { section: "ready", subtitle: "Ready to continue" };
   }
   return { section: "working", subtitle: "Agent is working" };
@@ -371,7 +445,7 @@ function hookSession(hook: HookSessionEvent): DiscoveredProviderSession {
     cwd: hook.cwd,
     owner: hookOwner(hook),
     section: hookPhase(hook).section,
-    updatedAt: hook.receivedAt,
+    updatedAt: hook.activityAt ?? hook.receivedAt,
     canOpenOwner: Boolean(hook.pid || hook.tty),
     canEnterChat: hook.provider !== "auggie",
     chatPath: hook.sessionFile,
