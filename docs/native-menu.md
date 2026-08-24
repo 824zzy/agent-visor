@@ -22,6 +22,8 @@ Needs you items come first, then unacknowledged Ready to continue, In progress, 
 
 A normal click acknowledges a Ready item and moves it behind In progress. Activity-only refreshes cannot move other pills while the user targets them.
 
+An observed transition into Ready pulses its status dot for up to seven minutes. Initial snapshots do not invent completions, and acknowledgment stops the pulse.
+
 Each item matches the released 24-point dark capsule, six-point status dot, seven-point outer padding, three-point dot-to-title spacing, and full hover help.
 
 Chat-only transcript history remains in Sessions and does not crowd the menu bar.

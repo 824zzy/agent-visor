@@ -2,6 +2,8 @@ import Foundation
 
 public enum ReadyAttentionPolicy {
     public static let defaultPulseWindow: TimeInterval = 7 * 60
+    public static let defaultPulsePeriod: TimeInterval = 1.5
+    public static let defaultPulseMinimumOpacity = 0.35
     public static let defaultPositionHold: TimeInterval = 2
 
     public static func isAcknowledged(
@@ -44,6 +46,30 @@ public enum ReadyAttentionPolicy {
             phaseChangedAt: phaseChangedAt,
             acknowledgedAt: acknowledgedAt
         )
+    }
+
+    public static func pulseOpacity(
+        isReady: Bool,
+        phaseChangedAt: Date,
+        acknowledgedAt: Date?,
+        now: Date,
+        pulseWindow: TimeInterval = defaultPulseWindow,
+        pulsePeriod: TimeInterval = defaultPulsePeriod,
+        minimumOpacity: Double = defaultPulseMinimumOpacity
+    ) -> Double {
+        guard shouldPulse(
+            isReady: isReady,
+            phaseChangedAt: phaseChangedAt,
+            acknowledgedAt: acknowledgedAt,
+            now: now,
+            pulseWindow: pulseWindow
+        ) else { return 1 }
+        let period = max(.leastNonzeroMagnitude, pulsePeriod)
+        let phase = now.timeIntervalSince(phaseChangedAt)
+            .truncatingRemainder(dividingBy: period) / period
+        let wave = 0.5 + 0.5 * cos(phase * 2 * .pi)
+        let floor = min(1, max(0, minimumOpacity))
+        return floor + (1 - floor) * wave
     }
 
     public static func shouldRemainProminent(

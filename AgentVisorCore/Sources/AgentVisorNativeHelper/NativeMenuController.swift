@@ -85,7 +85,7 @@ final class NativeMenuController: NSObject {
     private var sessionPanels: [String: NativePillPanel] = [:]
     private var sessionPresentations: [String: NativeHelperPill] = [:]
     private var displayedSessionIDs: [String] = []
-    private var acknowledgedReadyIDs = Set<String>()
+    private var readyAttention = NativeMenuReadyAttention()
     private var usagePanels: [String: NativePillPanel] = [:]
     private var usagePresentations: [String: NativeHelperUsageGlance] = [:]
     private var displayedUsageIDs: [String] = []
@@ -96,6 +96,7 @@ final class NativeMenuController: NSObject {
     private var eventHandler: EventHandlerRef?
     private var shortcutModifierFamily = SessionShortcutModifierFamily.defaultFamily
     private var density: PillBarPacker.Density = .standard
+    private var readyPulseTimer: Timer?
     private var layoutTimer: Timer?
     private var layoutObservers: [NSObjectProtocol] = []
     private var localClickMonitor: Any?
@@ -139,9 +140,11 @@ final class NativeMenuController: NSObject {
         }.filter { seenSessionIDs.insert($0.id).inserted }
         let previousPhases = sessionPresentations.mapValues(\.phase)
         let pillsByID = Dictionary(uniqueKeysWithValues: orderedPills.map { ($0.id, $0) })
-        acknowledgedReadyIDs = Set(acknowledgedReadyIDs.filter { id in
-            previousPhases[id] == .ready && pillsByID[id]?.phase == .ready
-        })
+        readyAttention.present(
+            previousPhases: previousPhases,
+            pills: orderedPills,
+            now: Date()
+        )
         displayedSessionIDs = NativeMenuSessionOrder.resolve(
             displayedIDs: displayedSessionIDs,
             previousPhases: previousPhases,
@@ -150,7 +153,7 @@ final class NativeMenuController: NSObject {
         displayedSessionIDs = NativeMenuSessionOrder.applyingReadyAcknowledgments(
             displayedIDs: displayedSessionIDs,
             phases: pillsByID.mapValues(\.phase),
-            acknowledgedReadyIDs: acknowledgedReadyIDs
+            acknowledgedReadyIDs: readyAttention.acknowledgedReadyIDs
         )
         for id in sessionPanels.keys where pillsByID[id] == nil {
             sessionPanels.removeValue(forKey: id)?.close()
@@ -178,6 +181,49 @@ final class NativeMenuController: NSObject {
         usagePresentations = usageByID
 
         layoutPresentation()
+        refreshReadyPulse()
+    }
+
+    private func refreshReadyPulse() {
+        let now = Date()
+        updateReadyPulse(now: now)
+        guard readyAttention.hasActivePulse(
+            pills: Array(sessionPresentations.values),
+            now: now
+        ) else {
+            stopReadyPulse()
+            return
+        }
+        guard readyPulseTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tickReadyPulse() }
+        }
+        readyPulseTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func tickReadyPulse() {
+        let now = Date()
+        updateReadyPulse(now: now)
+        if !readyAttention.hasActivePulse(
+            pills: Array(sessionPresentations.values),
+            now: now
+        ) {
+            stopReadyPulse()
+        }
+    }
+
+    private func updateReadyPulse(now: Date) {
+        for (id, pill) in sessionPresentations
+        where pill.phase == .ready && shortcutSnapshot?.positions[id] == nil {
+            sessionPanels[id]?.pillButton.contentTintColor = color(for: pill.phase)
+                .withAlphaComponent(readyAttention.opacity(id: id, phase: pill.phase, now: now))
+        }
+    }
+
+    private func stopReadyPulse() {
+        readyPulseTimer?.invalidate()
+        readyPulseTimer = nil
     }
 
     private func startClickMonitoring() {
@@ -229,13 +275,14 @@ final class NativeMenuController: NSObject {
            now - lastActivation.at < 0.2 { return }
         lastActivation = (id, now)
         if sessionPresentations[id]?.phase == .ready {
-            acknowledgedReadyIDs.insert(id)
+            readyAttention.acknowledgeReady(id: id)
             displayedSessionIDs = NativeMenuSessionOrder.applyingReadyAcknowledgments(
                 displayedIDs: displayedSessionIDs,
                 phases: sessionPresentations.mapValues(\.phase),
-                acknowledgedReadyIDs: acknowledgedReadyIDs
+                acknowledgedReadyIDs: readyAttention.acknowledgedReadyIDs
             )
             layoutPresentation()
+            refreshReadyPulse()
         }
         sessionPanels[id]?.pillButton.flash()
         emit(.activatePill(sessionId: id, intent: intent))
@@ -526,7 +573,7 @@ final class NativeMenuController: NSObject {
             title: label,
             fontSize: 11,
             foregroundColor: .white.withAlphaComponent(isRecent ? 0.62 : 0.85),
-            image: shortcutPosition.map(keycapImage) ?? dotImage(color: color(for: pill.phase)),
+            image: shortcutPosition.map(keycapImage) ?? dotImage(),
             tooltip: tooltip,
             identifier: pill.id,
             backgroundAlpha: isRecent ? 0.24 : 0.35,
@@ -538,6 +585,11 @@ final class NativeMenuController: NSObject {
                 )
             }
         )
+        if shortcutPosition == nil {
+            panel.pillButton.contentTintColor = color(for: pill.phase).withAlphaComponent(
+                readyAttention.opacity(id: pill.id, phase: pill.phase, now: Date())
+            )
+        }
     }
 
     private func renderUsage(_ panel: NativePillPanel, glance: NativeHelperUsageGlance) {
@@ -745,13 +797,13 @@ final class NativeMenuController: NSObject {
         button.setAccessibilityHelp("Opens the session browser")
     }
 
-    private func dotImage(color: NSColor) -> NSImage {
+    private func dotImage() -> NSImage {
         let image = NSImage(size: NSSize(width: 6, height: 6), flipped: false) { bounds in
-            color.setFill()
+            NSColor.black.setFill()
             NSBezierPath(ovalIn: bounds).fill()
             return true
         }
-        image.isTemplate = false
+        image.isTemplate = true
         return image
     }
 
