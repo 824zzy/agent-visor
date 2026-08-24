@@ -34,6 +34,7 @@ export function daemonUrlFromReadyMessage(value: unknown): string | undefined {
 export type NativeAction =
   | { action: "open_sessions" }
   | { action: "toggle_sessions" }
+  | { action: "open_settings" }
   | { action: "open_chat"; sessionId: string }
   | { action: "open_owner"; owner: string; sessionId: string }
   | { action: "open_session_url"; url: string };
@@ -42,7 +43,9 @@ export function nativeActionFromDaemonMessage(value: unknown): NativeAction | un
   if (typeof value !== "object" || value === null) return undefined;
   const message = value as Record<string, unknown>;
   if (message.type !== "native_action") return undefined;
-  if (message.action === "open_sessions" || message.action === "toggle_sessions") {
+  if (message.action === "open_sessions"
+    || message.action === "toggle_sessions"
+    || message.action === "open_settings") {
     return { action: message.action };
   }
   if (message.action === "open_chat") {

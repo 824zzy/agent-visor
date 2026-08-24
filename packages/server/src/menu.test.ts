@@ -76,7 +76,7 @@ const snapshot: SessionSnapshot = {
 
 describe("menu presentation", () => {
   it("orders active pills by attention and keeps recent history after them", () => {
-    const presentation = menuPresentation(snapshot, []);
+    const { navigatorPills: _, ...presentation } = menuPresentation(snapshot, []);
     expect({
       ...presentation,
       pills: presentation.pills.map(({ inspector: _, ...pill }) => pill),
@@ -129,6 +129,13 @@ describe("menu presentation", () => {
       ],
       usageGlances: [],
     });
+  });
+
+  it("keeps Chat-only history searchable without packing it into the menu", () => {
+    const presentation = menuPresentation(snapshot, []);
+
+    expect(presentation.pills.map(({ id }) => id)).not.toContain("history-chat-only");
+    expect(presentation.navigatorPills.map(({ id }) => id)).toContain("history-chat-only");
   });
 
   it("builds the Swift inspector content from authoritative session fields", () => {
@@ -186,5 +193,10 @@ describe("menu presentation", () => {
       type: "event",
       event: "toggle_sessions",
     }, snapshot)).toEqual({ type: "native_action", action: "toggle_sessions" });
+    expect(nativeActionFor({
+      version: 1,
+      type: "event",
+      event: "open_settings",
+    }, snapshot)).toEqual({ type: "native_action", action: "open_settings" });
   });
 });

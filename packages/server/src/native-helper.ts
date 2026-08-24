@@ -26,6 +26,7 @@ export interface NativeHelperAdapter {
     shortcutModifierFamily?: AppSettings["sessionShortcutModifierFamily"],
     hotkeyTrigger?: AppSettings["hotkeyTrigger"],
     customHotkeyCombo?: AppSettings["customHotkeyCombo"],
+    navigatorPills?: NativeHelperPill[],
   ): Promise<void>;
   focus(target: NativeHelperFocusTarget): Promise<void>;
   focusTerminal(target: NativeHelperTerminalTarget): Promise<void>;
@@ -39,6 +40,7 @@ export class FakeNativeHelper implements NativeHelperAdapter {
   readonly terminalFocusRequests: NativeHelperTerminalTarget[] = [];
   readonly terminalSendRequests: Array<{ target: NativeHelperTerminalTarget; text: string; submit: boolean }> = [];
   presentedPills: NativeHelperPill[] = [];
+  presentedNavigatorPills: NativeHelperPill[] = [];
   presentedUsageGlances: NativeHelperUsageGlance[] = [];
   shortcutModifierFamily: AppSettings["sessionShortcutModifierFamily"] = "optionCommand";
   hotkeyTrigger: AppSettings["hotkeyTrigger"] = "shift";
@@ -79,8 +81,10 @@ export class FakeNativeHelper implements NativeHelperAdapter {
     shortcutModifierFamily: AppSettings["sessionShortcutModifierFamily"] = "optionCommand",
     hotkeyTrigger: AppSettings["hotkeyTrigger"] = "shift",
     customHotkeyCombo: AppSettings["customHotkeyCombo"] = null,
+    navigatorPills: NativeHelperPill[] = pills,
   ): Promise<void> {
     this.presentedPills = structuredClone(pills);
+    this.presentedNavigatorPills = structuredClone(navigatorPills);
     this.presentedUsageGlances = structuredClone(usageGlances);
     this.shortcutModifierFamily = shortcutModifierFamily;
     this.hotkeyTrigger = hotkeyTrigger;
@@ -190,9 +194,11 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     shortcutModifierFamily?: AppSettings["sessionShortcutModifierFamily"],
     hotkeyTrigger?: AppSettings["hotkeyTrigger"],
     customHotkeyCombo?: AppSettings["customHotkeyCombo"],
+    navigatorPills?: NativeHelperPill[],
   ): Promise<void> {
     await this.accepted("present_pills", {
       pills,
+      ...(navigatorPills ? { navigatorPills } : {}),
       usageGlances,
       ...(shortcutModifierFamily ? { shortcutModifierFamily } : {}),
       ...(hotkeyTrigger ? { hotkeyTrigger, customHotkeyCombo } : {}),

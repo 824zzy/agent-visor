@@ -21,6 +21,16 @@ const pill = {
   accessibilityLabel: "Review migration, ready",
 };
 
+const navigatorPill = {
+  ...pill,
+  id: "history-chat-only",
+  title: "Chat history",
+  owner: undefined,
+  phase: "history" as const,
+  priority: 2,
+  accessibilityLabel: "Chat history, recent session",
+};
+
 const usage = {
   id: "codex" as const,
   label: "5h 82% | 7d 61%",
@@ -44,7 +54,9 @@ describe("FakeNativeHelper", () => {
     expect(await helper.accessibilityStatus()).toBe(true);
     await helper.requestAccessibility();
     await helper.openAccessibilitySettings();
-    await helper.presentPills([pill], [usage], "controlCommand", "custom", "49:8");
+    await helper.presentPills(
+      [pill], [usage], "controlCommand", "custom", "49:8", [pill, navigatorPill],
+    );
     await helper.focus(focus);
     const terminal = { application: "Ghostty" as const, tty: "ttys012", cwd: "/tmp/project" };
     await helper.focusTerminal(terminal);
@@ -53,6 +65,7 @@ describe("FakeNativeHelper", () => {
     expect(helper.requestedAccessibility).toBe(true);
     expect(helper.openedAccessibilitySettings).toBe(true);
     expect(helper.presentedPills).toEqual([pill]);
+    expect(helper.presentedNavigatorPills).toEqual([pill, navigatorPill]);
     expect(helper.presentedUsageGlances).toEqual([usage]);
     expect(helper.shortcutModifierFamily).toBe("controlCommand");
     expect(helper.hotkeyTrigger).toBe("custom");

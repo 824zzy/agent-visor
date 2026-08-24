@@ -24,7 +24,7 @@ The 2026-08-24 source audit corrected earlier broad Pass claims. `Partial` names
 | Chat actions | Approvals, persistent approvals, denial, questions, and provider controls | Authenticated Claude hook response checks; permission, model, context, and visibility controls remain absent | Partial |
 | Text delivery | Send to verified active providers | Exact terminal routes and Codex app-server route | Pass |
 | Image delivery | Claude, Pi, and Codex supported image routes | Private path paste, path prompt, and local-image input | Pass |
-| Menu pills | Released capsules, colors, actions, keycaps, hover inspectors, and attention order | Core capsules match; the searchable `+N` navigator and `Pill Settings...` menu remain absent | Partial |
+| Menu pills | Released capsules, colors, actions, keycaps, hover inspectors, and attention order | Capsules and the searchable `+N` navigator match; the `Pill Settings...` menu remains absent | Partial |
 | Menu packing | App-menu, tray, display, notch, usage, and overflow constraints | Shared packer and click-sized AppKit panels | Pass |
 | Display policy | User-selected pill display and released full-screen visibility policy | Helper follows the status-item screen and always joins full-screen spaces | Partial |
 | Global shortcuts | Configurable visible-session and Sessions shortcuts with modifier reveal | Signed helper registration, frozen snapshots, keycap screenshot, and footer checks | Pass |

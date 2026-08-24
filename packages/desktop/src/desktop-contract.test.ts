@@ -81,6 +81,10 @@ describe("desktop launch contract", () => {
     })).toEqual({ action: "toggle_sessions" });
     expect(nativeActionFromDaemonMessage({
       type: "native_action",
+      action: "open_settings",
+    })).toEqual({ action: "open_settings" });
+    expect(nativeActionFromDaemonMessage({
+      type: "native_action",
       action: "open_chat",
       sessionId: "session-1",
     })).toEqual({ action: "open_chat", sessionId: "session-1" });

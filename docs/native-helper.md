@@ -33,7 +33,7 @@ Every request contains protocol `version: 1`, a non-empty `id`, and one method:
 
 Unknown methods, extra fields, oversized frames, invalid identifiers, and malformed JSON are rejected.
 
-Pill presentation uses click-sized AppKit panels and one stable VoiceOver status item.
+Pill presentation uses click-sized AppKit panels and one stable VoiceOver status item. An optional bounded navigator catalog adds searchable rows without adding menu panels.
 
 Optional inspector content is already display-safe. It can include runtime items, bounded detail rows, project path, activity time, and context usage. The helper never parses provider records.
 
@@ -41,7 +41,7 @@ Ghostty focus uses an OSC 7 marker written only to a validated `ttys` device. iT
 
 Application focus still validates the process identifier against the expected bundle identifier.
 
-The helper can emit `activate_pill`, `open_sessions`, and `toggle_sessions` events on the same framed connection. Option-click adds the optional `chat` activation intent.
+The helper can emit `activate_pill`, `open_sessions`, `toggle_sessions`, and `open_settings` events on the same framed connection. Option-click adds the optional `chat` activation intent.
 
 Modifier double taps reuse `HotkeyDoubleTapDetector`. A separate key-down monitor cancels chords and supports a migrated custom shortcut.
 

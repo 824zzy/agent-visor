@@ -150,6 +150,7 @@ public enum NativeHelperRequest: Equatable {
     case presentPills(
         id: String,
         pills: [NativeHelperPill],
+        navigatorPills: [NativeHelperPill],
         usageGlances: [NativeHelperUsageGlance],
         shortcutModifierFamily: SessionShortcutModifierFamily?,
         hotkeyTrigger: NativeHelperHotkeyTrigger?,
@@ -163,7 +164,7 @@ public enum NativeHelperRequest: Equatable {
         switch self {
         case .screenTopology(let id), .accessibilityStatus(let id),
              .requestAccessibility(let id), .openAccessibilitySettings(let id),
-             .presentPills(let id, _, _, _, _, _), .focus(let id, _),
+             .presentPills(let id, _, _, _, _, _, _), .focus(let id, _),
              .focusTerminal(let id, _), .sendTerminal(let id, _, _, _):
             id
         }
@@ -205,12 +206,14 @@ public enum NativeHelperRequest: Equatable {
             guard let params = wire.params,
                   Set(params.keys).contains("pills"),
                   Set(params.keys).isSubset(of: [
-                    "pills", "usageGlances", "shortcutModifierFamily",
+                    "pills", "navigatorPills", "usageGlances", "shortcutModifierFamily",
                     "hotkeyTrigger", "customHotkeyCombo",
                   ]),
                   let pills = params.pills, pills.count <= 64,
+                  (params.navigatorPills?.count ?? 0) <= 512,
                   (params.usageGlances?.count ?? 0) <= 8,
                   pills.allSatisfy({ $0.isValid }),
+                  (params.navigatorPills ?? []).allSatisfy({ $0.isValid }),
                   (params.usageGlances ?? []).allSatisfy({ $0.isValid }) else {
                 throw NativeHelperWireError.invalidRequest
             }
@@ -233,6 +236,7 @@ public enum NativeHelperRequest: Equatable {
             return .presentPills(
                 id: wire.id,
                 pills: pills,
+                navigatorPills: params.navigatorPills ?? pills,
                 usageGlances: params.usageGlances ?? [],
                 shortcutModifierFamily: shortcutFamily,
                 hotkeyTrigger: hotkeyTrigger,
@@ -364,6 +368,7 @@ public enum NativeHelperEvent {
     )
     case openSessions
     case toggleSessions
+    case openSettings
 
     public func encoded() throws -> Data {
         let envelope: EventEnvelope
@@ -378,6 +383,8 @@ public enum NativeHelperEvent {
             envelope = EventEnvelope(event: "open_sessions", sessionId: nil, intent: nil)
         case .toggleSessions:
             envelope = EventEnvelope(event: "toggle_sessions", sessionId: nil, intent: nil)
+        case .openSettings:
+            envelope = EventEnvelope(event: "open_settings", sessionId: nil, intent: nil)
         }
         return try JSONEncoder().encode(envelope)
     }
@@ -447,10 +454,11 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         guard let params = object["params"] as? [String: Any],
               Set(params.keys).contains("pills"),
               Set(params.keys).isSubset(of: [
-                "pills", "usageGlances", "shortcutModifierFamily",
+                "pills", "navigatorPills", "usageGlances", "shortcutModifierFamily",
                 "hotkeyTrigger", "customHotkeyCombo",
               ]),
               let pills = params["pills"] as? [[String: Any]] else { return false }
+        let navigatorPills = params["navigatorPills"] as? [[String: Any]] ?? []
         let usageGlances = params["usageGlances"] as? [[String: Any]] ?? []
         let legacyPillKeys: Set<String> = [
             "id", "title", "phase", "priority", "accessibilityLabel",
@@ -461,7 +469,7 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         let usageKeys: Set<String> = [
             "id", "label", "detail", "tone", "priority", "accessibilityLabel",
         ]
-        return pills.allSatisfy {
+        return (pills + navigatorPills).allSatisfy {
             let keys = Set($0.keys)
             return keys.isSuperset(of: legacyPillKeys)
                 && keys.isSubset(of: detailedPillKeys)
@@ -498,6 +506,7 @@ private struct WireRequest: Decodable {
 
 private struct WireParameters: Decodable {
     let pills: [NativeHelperPill]?
+    let navigatorPills: [NativeHelperPill]?
     let usageGlances: [NativeHelperUsageGlance]?
     let shortcutModifierFamily: String?
     let hotkeyTrigger: String?
@@ -512,6 +521,10 @@ private struct WireParameters: Decodable {
         let container = try decoder.container(keyedBy: DynamicKey.self)
         keys = container.allKeys.map(\.stringValue)
         pills = try container.decodeIfPresent([NativeHelperPill].self, forKey: .init("pills"))
+        navigatorPills = try container.decodeIfPresent(
+            [NativeHelperPill].self,
+            forKey: .init("navigatorPills")
+        )
         usageGlances = try container.decodeIfPresent(
             [NativeHelperUsageGlance].self,
             forKey: .init("usageGlances")

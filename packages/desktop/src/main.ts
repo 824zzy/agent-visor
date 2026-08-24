@@ -160,6 +160,10 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
           else navigateRenderer({ page: "sessions" });
           return;
         }
+        if (action.action === "open_settings") {
+          navigateRenderer({ page: "settings" });
+          return;
+        }
         if (action.action === "open_chat") {
           navigateRenderer({ page: "chat", sessionId: action.sessionId });
           return;

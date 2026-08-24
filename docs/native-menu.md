@@ -38,6 +38,12 @@ Chat-only transcript history remains in Sessions and does not crowd the menu bar
 
 Visible items retain their normal labels, up to 20 characters plus an ellipsis. The helper uses `+N` instead of compact or tight labels.
 
+Clicking `+N` opens a nonactivating More Sessions popover. Its initial rows are the exact sessions omitted by the current pill layout.
+
+The popover freezes that layout while open. Search covers the complete bounded navigator catalog, including visible items and Chat-only History that does not enter menu packing.
+
+Rows open the exact source session. Footer actions open Sessions or Settings, and a second `+N` activation closes the popover.
+
 Phase and membership changes adopt the new priority order. Existing panels move or update in place without replacing their native buttons.
 
 The status colors match the released sRGB roles:
@@ -51,7 +57,7 @@ The status colors match the released sRGB roles:
 
 The helper registers the selected modifier family with 1 through 9 for the first nine visible items.
 
-Holding those modifiers freezes the target snapshot and replaces status dots with numbered keycaps. The selected modifiers with 0 open Sessions. Off unregisters all session shortcuts.
+Holding those modifiers freezes the target snapshot and replaces status dots with numbered keycaps. The selected modifiers with 0 toggle More Sessions. Off unregisters all session shortcuts.
 
 The independent application shortcut defaults to double Shift. Modifier taps use the released timing and chord-cancellation policy. A migrated custom chord remains usable.
 
@@ -71,6 +77,8 @@ One stable square status item remains present when no sessions exist. It is name
 
 Presentation-only session and usage items are hidden from accessibility. Their information remains available through the stable item and Sessions browser.
 
+The open More Sessions popover gives its search field, session rows, Sessions action, and Settings action explicit accessibility labels.
+
 ## Usage
 
 The daemon reads Codex rate limits through Codex’s documented local app-server protocol every five minutes.
@@ -83,9 +91,9 @@ Claude usage remains disabled until the paused credential work has a documented 
 
 ## Protocol
 
-`present_pills` accepts detailed pill records and optional usage glances. Older version-one pill requests remain valid.
+`present_pills` accepts detailed menu pills, an optional bounded navigator catalog, and optional usage glances. Older version-one pill requests remain valid.
 
-The helper emits `activate_pill` and `open_sessions` events over the same framed Unix connection. `activate_pill` has an additive optional `chat` intent; standard version-one events remain unchanged.
+The helper emits `activate_pill`, `open_sessions`, and `open_settings` events over the same framed Unix connection. `activate_pill` has an additive optional `chat` intent; standard version-one events remain unchanged.
 
 Run the native checks with:
 

@@ -35,38 +35,48 @@ export function menuPresentation(
   snapshot: SessionSnapshot,
   usageGlances: NativeHelperUsageGlance[],
 ) {
-  const pills = snapshot.sessions
-    .filter((session) => session.canOpenOwner
-      || (session.section !== "history" && session.canEnterChat))
+  const ordered = snapshot.sessions
+    .filter((session) => session.canOpenOwner || session.canEnterChat)
     .sort((left, right) => phaseOrder[left.section] - phaseOrder[right.section]
       || right.updatedAt.localeCompare(left.updatedAt)
-      || left.id.localeCompare(right.id))
+      || left.id.localeCompare(right.id));
+  const navigatorPills = ordered.slice(0, 512).map(presentationPill);
+  const pills = ordered
+    .filter((session) => session.canOpenOwner
+      || (session.section !== "history" && session.canEnterChat))
     .slice(0, 64)
-    .map((session, priority) => ({
-      id: session.id,
-      title: session.title,
-      subtitle: session.subtitle,
-      source: session.source,
-      project: session.project,
-      ...(session.canOpenOwner ? { owner: session.owner } : {}),
-      inspector: {
-        status: inspectorStatus(session.section, session.subtitle),
-        runtimeItems: [runtimeSource(session.source, session.owner)],
-        detailRows: [],
-        projectPath: displayPath(session.cwd),
-        activityAt: session.updatedAt,
-      },
-      phase: session.section,
-      priority,
-      accessibilityLabel: [
-        session.title,
-        phaseLabel[session.section],
-        session.source,
-        session.project,
-      ].join(", "),
-    }));
+    .map(presentationPill);
 
-  return { pills, usageGlances };
+  return { pills, navigatorPills, usageGlances };
+}
+
+function presentationPill(
+  session: SessionSnapshot["sessions"][number],
+  priority: number,
+) {
+  return {
+    id: session.id,
+    title: session.title,
+    subtitle: session.subtitle,
+    source: session.source,
+    project: session.project,
+    ...(session.canOpenOwner ? { owner: session.owner } : {}),
+    inspector: {
+      status: inspectorStatus(session.section, session.subtitle),
+      runtimeItems: [runtimeSource(session.source, session.owner)],
+      detailRows: [],
+      projectPath: displayPath(session.cwd),
+      activityAt: session.updatedAt,
+    },
+    phase: session.section,
+    priority,
+    accessibilityLabel: [
+      session.title,
+      phaseLabel[session.section],
+      session.source,
+      session.project,
+    ].join(", "),
+  };
 }
 
 function inspectorStatus(section: keyof typeof phaseOrder, subtitle: string): string {

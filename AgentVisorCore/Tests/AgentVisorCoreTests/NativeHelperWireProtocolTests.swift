@@ -24,11 +24,22 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         )
     }
 
+    func testDecodesSeparateNavigatorCatalog() throws {
+        let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"visible","title":"Visible","phase":"working","priority":0,"accessibilityLabel":"Visible, in progress"}],"navigatorPills":[{"id":"visible","title":"Visible","phase":"working","priority":0,"accessibilityLabel":"Visible, in progress"},{"id":"chat-history","title":"Chat history","phase":"history","priority":1,"accessibilityLabel":"Chat history, recent session"}]}}"#
+
+        let request = try NativeHelperRequest.decode(Data(json.utf8))
+        guard case .presentPills(_, let pills, let navigatorPills, _, _, _, _) = request else {
+            return XCTFail("Expected pills")
+        }
+        XCTAssertEqual(pills.map(\.id), ["visible"])
+        XCTAssertEqual(navigatorPills.map(\.id), ["visible", "chat-history"])
+    }
+
     func testDecodesBoundedSessionInspector() throws {
         let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready","inspector":{"status":"Ready","runtimeItems":["Pi · Ghostty","Claude Sonnet 4"],"detailRows":[{"label":"Reasoning","value":"High"}],"projectPath":"~/Codes/agent-visor","activityAt":"2026-08-22T21:02:18.000Z","context":{"usedLabel":"84k","windowLabel":"200k","percentage":42}}}],"hotkeyTrigger":"custom","customHotkeyCombo":"49:8"}}"#
 
         let request = try NativeHelperRequest.decode(Data(json.utf8))
-        guard case .presentPills(_, let pills, _, _, let trigger, let combo) = request else {
+        guard case .presentPills(_, let pills, _, _, _, let trigger, let combo) = request else {
             return XCTFail("Expected pills")
         }
         let inspector = try XCTUnwrap(pills.first?.inspector)
@@ -76,9 +87,11 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         ).encoded()
         let open = try NativeHelperEvent.openSessions.encoded()
         let toggle = try NativeHelperEvent.toggleSessions.encoded()
+        let settings = try NativeHelperEvent.openSettings.encoded()
         let first = try XCTUnwrap(JSONSerialization.jsonObject(with: activation) as? [String: Any])
         let second = try XCTUnwrap(JSONSerialization.jsonObject(with: open) as? [String: Any])
         let third = try XCTUnwrap(JSONSerialization.jsonObject(with: toggle) as? [String: Any])
+        let fourth = try XCTUnwrap(JSONSerialization.jsonObject(with: settings) as? [String: Any])
 
         XCTAssertEqual(first["type"] as? String, "event")
         XCTAssertEqual(first["event"] as? String, "activate_pill")
@@ -86,6 +99,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(first["intent"] as? String, "chat")
         XCTAssertEqual(second["event"] as? String, "open_sessions")
         XCTAssertEqual(third["event"] as? String, "toggle_sessions")
+        XCTAssertEqual(fourth["event"] as? String, "open_settings")
     }
 
     func testFramesFragmentedAndAdjacentMessages() throws {

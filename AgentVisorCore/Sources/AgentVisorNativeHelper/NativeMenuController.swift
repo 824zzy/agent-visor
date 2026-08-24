@@ -239,14 +239,19 @@ final class NativeMenuController: NSObject {
     private let stableItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private var sessionPanels: [String: NativePillPanel] = [:]
     private var sessionPresentations: [String: NativeHelperPill] = [:]
+    private var navigatorPills: [NativeHelperPill] = []
     private var displayedSessionIDs: [String] = []
+    private var visibleSessionIDs = Set<String>()
     private var readyAttention = NativeMenuReadyAttention()
     private var usagePanels: [String: NativePillPanel] = [:]
     private var usagePresentations: [String: NativeHelperUsageGlance] = [:]
     private var displayedUsageIDs: [String] = []
     private var overflowPanel: NativePillPanel?
+    private var overflowPopover: NSPopover?
+    private var currentOverflowCount = 0
     private var shortcutSessionIDs: [String] = []
     private var shortcutSnapshot: NativeMenuShortcutSnapshot?
+    private var hotKeyPressState = NativeMenuHotKeyPressState()
     private var hotKeys: [EventHotKeyRef?] = []
     private var eventHandler: EventHandlerRef?
     private var shortcutModifierFamily = SessionShortcutModifierFamily.defaultFamily
@@ -284,6 +289,7 @@ final class NativeMenuController: NSObject {
 
     func present(
         pills: [NativeHelperPill],
+        navigatorPills: [NativeHelperPill],
         usageGlances: [NativeHelperUsageGlance],
         shortcutModifierFamily: SessionShortcutModifierFamily?,
         hotkeyTrigger: NativeHelperHotkeyTrigger?,
@@ -329,6 +335,10 @@ final class NativeMenuController: NSObject {
         }
         sessionPresentations = pillsByID
         sessionHoverState.retain(sessionIDs: Set(pillsByID.keys))
+        var seenNavigatorIDs = Set<String>()
+        self.navigatorPills = navigatorPills.sorted { lhs, rhs in
+            lhs.priority == rhs.priority ? lhs.id < rhs.id : lhs.priority < rhs.priority
+        }.filter { seenNavigatorIDs.insert($0.id).inserted }
 
         var seenUsageIDs = Set<String>()
         let orderedUsage = usageGlances.sorted { lhs, rhs in
@@ -422,7 +432,8 @@ final class NativeMenuController: NSObject {
         ) {
         case .session(let id): activateSession(id, intent: activationIntent(for: modifiers))
         case .overflow: activateOverflow()
-        case .none: break
+        case .none:
+            if !overflowPopoverContains(point) { dismissOverflowPopover() }
         }
     }
 
@@ -493,6 +504,7 @@ final class NativeMenuController: NSObject {
     ) {
         sessionHoverState.pointerExited(id)
         dismissSessionPopover()
+        dismissOverflowPopover()
         let now = ProcessInfo.processInfo.systemUptime
         if let lastActivation,
            lastActivation.id == id,
@@ -517,7 +529,64 @@ final class NativeMenuController: NSObject {
         if let lastOverflowActivation, now - lastOverflowActivation < 0.2 { return }
         lastOverflowActivation = now
         overflowPanel?.pillButton.flash()
-        emit(.openSessions)
+        if overflowPopover?.isShown == true {
+            dismissOverflowPopover()
+            return
+        }
+        guard let panel = overflowPanel, panel.isVisible else { return }
+        let snapshot = NativeMenuOverflowSnapshot(
+            menuPills: displayedSessionIDs.compactMap { sessionPresentations[$0] },
+            navigatorPills: navigatorPills,
+            visibleSessionIDs: visibleSessionIDs
+        )
+        guard !snapshot.overflowSessionIDs.isEmpty else { return }
+        dismissSessionPopover()
+        let popover = NSPopover()
+        popover.behavior = .applicationDefined
+        popover.animates = false
+        let content = NSHostingController(rootView: NativeMenuOverflowView(
+            snapshot: snapshot,
+            onSelect: { [weak self] id in
+                self?.dismissOverflowPopover()
+                self?.activateSession(id)
+            },
+            onSelectChat: { [weak self] id in
+                self?.dismissOverflowPopover()
+                self?.activateSession(id, intent: .chat)
+            },
+            onOpenSessions: { [weak self] in
+                self?.dismissOverflowPopover()
+                self?.emit(.openSessions)
+            },
+            onOpenSettings: { [weak self] in
+                self?.dismissOverflowPopover()
+                self?.emit(.openSettings)
+            },
+            onDismiss: { [weak self] in self?.dismissOverflowPopover() }
+        ))
+        popover.contentViewController = content
+        let fittingSize = content.view.fittingSize
+        popover.contentSize = NSSize(
+            width: fittingSize.width,
+            height: min(fittingSize.height, 620)
+        )
+        popover.show(
+            relativeTo: panel.pillButton.bounds,
+            of: panel.pillButton,
+            preferredEdge: .minY
+        )
+        overflowPopover = popover
+    }
+
+    private func dismissOverflowPopover() {
+        overflowPopover?.close()
+        overflowPopover = nil
+    }
+
+    private func overflowPopoverContains(_ point: CGPoint) -> Bool {
+        guard let popover = overflowPopover, popover.isShown,
+              let window = popover.contentViewController?.view.window else { return false }
+        return window.frame.contains(point)
     }
 
     private func startShortcutRevealMonitoring() {
@@ -621,6 +690,10 @@ final class NativeMenuController: NSObject {
             panel.renderKey = ""
             renderSession(panel, pill: pill, label: panel.renderedTitle)
         }
+        if currentOverflowCount > 0, let panel = overflowPanel, panel.isVisible {
+            panel.renderKey = ""
+            renderOverflow(panel, count: currentOverflowCount)
+        }
     }
 
     private func startLayoutUpdates() {
@@ -701,10 +774,12 @@ final class NativeMenuController: NSObject {
             }
         )
         density = result.density
+        currentOverflowCount = result.hiddenCount
         let spacing = result.density == .pressure ? pressureSpacing : standardSpacing
         let padding = result.density == .pressure ? pressurePadding : standardPadding
 
         let visibleSessionIDs = result.leftVisibleIds + result.rightVisibleIds
+        self.visibleSessionIDs = Set(visibleSessionIDs)
         if shortcutSnapshot == nil {
             shortcutSessionIDs = Array(visibleSessionIDs.prefix(9))
         }
@@ -762,6 +837,7 @@ final class NativeMenuController: NSObject {
 
         if result.hiddenCount == 0 {
             overflowPanel?.orderOut(nil)
+            dismissOverflowPopover()
         }
     }
 
@@ -874,15 +950,17 @@ final class NativeMenuController: NSObject {
     }
 
     private func renderOverflow(_ panel: NativePillPanel, count: Int) {
-        let key = "+\(count)"
+        let title = "+\(count)"
+        let showsShortcut = shortcutSnapshot != nil
+        let key = "\(title)|\(showsShortcut)"
         guard panel.renderKey != key else { return }
         panel.renderKey = key
         configure(
             panel,
-            title: key,
+            title: showsShortcut ? "" : title,
             fontSize: 11,
             foregroundColor: .white.withAlphaComponent(0.85),
-            image: nil,
+            image: showsShortcut ? keycapImage(0) : nil,
             tooltip: "Open \(count) more sessions",
             identifier: "overflow",
             onActivate: { [weak self] _ in self?.activateOverflow() }
@@ -1020,6 +1098,7 @@ final class NativeMenuController: NSObject {
         sessionPanels.values.forEach { $0.orderOut(nil) }
         usagePanels.values.forEach { $0.orderOut(nil) }
         overflowPanel?.orderOut(nil)
+        dismissOverflowPopover()
     }
 
     private func capsuleWidth(
@@ -1137,38 +1216,50 @@ final class NativeMenuController: NSObject {
             RemoveEventHandler(eventHandler)
             self.eventHandler = nil
         }
+        hotKeyPressState = NativeMenuHotKeyPressState()
         guard shortcutModifierFamily != .off else { return }
 
-        var specification = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            { _, event, context in
-                guard let event, let context else { return noErr }
-                var id = EventHotKeyID()
-                let status = GetEventParameter(
-                    event,
-                    EventParamName(kEventParamDirectObject),
-                    EventParamType(typeEventHotKeyID),
-                    nil,
-                    MemoryLayout<EventHotKeyID>.size,
-                    nil,
-                    &id
-                )
-                guard status == noErr else { return status }
-                let controller = Unmanaged<NativeMenuController>
-                    .fromOpaque(context)
-                    .takeUnretainedValue()
-                Task { @MainActor in controller.handleShortcut(id.id) }
-                return noErr
-            },
-            1,
-            &specification,
-            Unmanaged.passUnretained(self).toOpaque(),
-            &eventHandler
-        )
+        var specifications = [
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyPressed)
+            ),
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyReleased)
+            ),
+        ]
+        specifications.withUnsafeMutableBufferPointer { buffer in
+            InstallEventHandler(
+                GetApplicationEventTarget(),
+                { _, event, context in
+                    guard let event, let context else { return noErr }
+                    var id = EventHotKeyID()
+                    let status = GetEventParameter(
+                        event,
+                        EventParamName(kEventParamDirectObject),
+                        EventParamType(typeEventHotKeyID),
+                        nil,
+                        MemoryLayout<EventHotKeyID>.size,
+                        nil,
+                        &id
+                    )
+                    guard status == noErr else { return status }
+                    let controller = Unmanaged<NativeMenuController>
+                        .fromOpaque(context)
+                        .takeUnretainedValue()
+                    let isPressed = GetEventKind(event) == UInt32(kEventHotKeyPressed)
+                    Task { @MainActor in
+                        controller.handleShortcut(id.id, isPressed: isPressed)
+                    }
+                    return noErr
+                },
+                buffer.count,
+                buffer.baseAddress,
+                Unmanaged.passUnretained(self).toOpaque(),
+                &eventHandler
+            )
+        }
 
         let signature = fourCharacterCode("AVSR")
         let modifiers: UInt32
@@ -1193,8 +1284,9 @@ final class NativeMenuController: NSObject {
         }
     }
 
-    private func handleShortcut(_ id: UInt32) {
-        guard let action = GlobalSessionShortcutPolicy.action(forRegisteredHotKeyID: id) else {
+    private func handleShortcut(_ id: UInt32, isPressed: Bool) {
+        guard hotKeyPressState.shouldHandle(id: id, isPressed: isPressed),
+              let action = GlobalSessionShortcutPolicy.action(forRegisteredHotKeyID: id) else {
             return
         }
         switch action {

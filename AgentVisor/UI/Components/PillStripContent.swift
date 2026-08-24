@@ -12,7 +12,6 @@
 import AppKit
 import AgentVisorCore
 import Combine
-import os.log
 import SwiftUI
 
 enum MenuBarPillMetrics {
@@ -83,129 +82,6 @@ struct FirstMouseHostingContainer<Content: View>: NSViewRepresentable {
 
     func updateNSView(_ nsView: FirstMouseHostingView<Content>, context: Context) {
         nsView.rootView = content
-    }
-}
-
-@MainActor
-final class SessionNavigatorKeyboardEventMonitor: ObservableObject {
-    private static let logger = Logger(subsystem: AppBranding.loggerSubsystem, category: "SessionNavigatorKeyboard")
-
-    var onEvent: ((SessionNavigatorKeyboardEvent) -> Void)?
-
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
-    private var localMonitor: Any?
-
-    func start() {
-        guard localMonitor == nil else { return }
-
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self,
-                  let keyboardEvent = self.keyboardEvent(
-                    keyCode: event.keyCode,
-                    modifiers: ModifierMask.fromNSEvent(event.modifierFlags),
-                    text: event.characters
-                  ) else {
-                return event
-            }
-            self.onEvent?(keyboardEvent)
-            return nil
-        }
-
-        let eventMask = CGEventMask(1 << CGEventType.keyDown.rawValue)
-        guard let eventTap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: eventMask,
-            callback: { _, type, event, userInfo in
-                guard let userInfo else { return Unmanaged.passUnretained(event) }
-                let monitor = Unmanaged<SessionNavigatorKeyboardEventMonitor>
-                    .fromOpaque(userInfo)
-                    .takeUnretainedValue()
-                return monitor.handleEventTap(type: type, event: event)
-            },
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        ) else {
-            Self.logger.error("unable to create keyboard event tap")
-            return
-        }
-
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
-        self.eventTap = eventTap
-        runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: eventTap, enable: true)
-    }
-
-    func stop() {
-        if let localMonitor {
-            NSEvent.removeMonitor(localMonitor)
-            self.localMonitor = nil
-        }
-        if let runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
-            self.runLoopSource = nil
-        }
-        if let eventTap {
-            CFMachPortInvalidate(eventTap)
-            self.eventTap = nil
-        }
-    }
-
-    fileprivate func handleEventTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let eventTap {
-                CGEvent.tapEnable(tap: eventTap, enable: true)
-            }
-            return Unmanaged.passUnretained(event)
-        }
-
-        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        guard let keyboardEvent = keyboardEvent(
-            keyCode: keyCode,
-            modifiers: ModifierMask.fromCGEvent(event.flags),
-            text: text(from: event)
-        ) else {
-            return Unmanaged.passUnretained(event)
-        }
-        onEvent?(keyboardEvent)
-        return nil
-    }
-
-    private func keyboardEvent(
-        keyCode: UInt16,
-        modifiers: ModifierMask,
-        text: String?
-    ) -> SessionNavigatorKeyboardEvent? {
-        SessionNavigatorKeyboardInputPolicy.event(
-            keyCode: keyCode,
-            modifiers: modifiers,
-            text: text
-        )
-    }
-
-    private func text(from event: CGEvent) -> String? {
-        var characters = [UniChar](repeating: 0, count: 16)
-        var length = 0
-        event.keyboardGetUnicodeString(
-            maxStringLength: characters.count,
-            actualStringLength: &length,
-            unicodeString: &characters
-        )
-        guard length > 0 else { return nil }
-        return String(utf16CodeUnits: characters, count: length)
-    }
-}
-
-private extension ModifierMask {
-    static func fromCGEvent(_ flags: CGEventFlags) -> ModifierMask {
-        var result: ModifierMask = []
-        if flags.contains(.maskCommand) { result.insert(.command) }
-        if flags.contains(.maskControl) { result.insert(.control) }
-        if flags.contains(.maskAlternate) { result.insert(.option) }
-        if flags.contains(.maskShift) { result.insert(.shift) }
-        return result
     }
 }
 

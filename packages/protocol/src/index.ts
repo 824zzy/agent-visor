@@ -350,6 +350,7 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
     method: z.literal("present_pills"),
     params: z.object({
       pills: z.array(nativeHelperPillSchema).max(64),
+      navigatorPills: z.array(nativeHelperPillSchema).max(512).optional(),
       usageGlances: z.array(nativeHelperUsageGlanceSchema).max(8).optional(),
       shortcutModifierFamily: appSettingsSchema.shape.sessionShortcutModifierFamily.optional(),
       hotkeyTrigger: appSettingsSchema.shape.hotkeyTrigger.optional(),
@@ -428,7 +429,7 @@ export const nativeHelperResponseSchema = z.union([
     z.object({
       version: z.literal(PROTOCOL_VERSION),
       type: z.literal("event"),
-      event: z.enum(["open_sessions", "toggle_sessions"]),
+      event: z.enum(["open_sessions", "toggle_sessions", "open_settings"]),
     }).strict(),
   ]),
 ]);

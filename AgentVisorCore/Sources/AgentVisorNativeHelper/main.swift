@@ -175,6 +175,7 @@ private func response(
         case .presentPills(
             let id,
             let pills,
+            let navigatorPills,
             let usageGlances,
             let shortcutFamily,
             let hotkeyTrigger,
@@ -183,6 +184,7 @@ private func response(
             DispatchQueue.main.sync {
                 menu.present(
                     pills: pills,
+                    navigatorPills: navigatorPills,
                     usageGlances: usageGlances,
                     shortcutModifierFamily: shortcutFamily,
                     hotkeyTrigger: hotkeyTrigger,

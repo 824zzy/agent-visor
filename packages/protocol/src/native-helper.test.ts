@@ -42,6 +42,13 @@ const requests = [
           accessibilityLabel: "Recent migration, recent session",
         },
       ],
+      navigatorPills: [{
+        id: "chat-history",
+        title: "Chat history",
+        phase: "history",
+        priority: 3,
+        accessibilityLabel: "Chat history, recent session",
+      }],
       shortcutModifierFamily: "controlCommand",
       hotkeyTrigger: "custom",
       customHotkeyCombo: "49:8",
@@ -171,6 +178,11 @@ describe("native helper protocol", () => {
       version: 1,
       type: "event",
       event: "toggle_sessions",
+    }).success).toBe(true);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1,
+      type: "event",
+      event: "open_settings",
     }).success).toBe(true);
   });
 

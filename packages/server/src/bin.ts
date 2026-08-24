@@ -75,13 +75,14 @@ if (nativeHelperExecutable) {
           repository.current(),
           preferences.codexUsageGlanceEnabled ? usageGlances : [],
         )
-        : { pills: [], usageGlances: [] };
+        : { pills: [], navigatorPills: [], usageGlances: [] };
       void nativeHelper?.presentPills(
         presentation.pills,
         presentation.usageGlances,
         preferences.sessionShortcutModifierFamily,
         preferences.hotkeyTrigger,
         preferences.customHotkeyCombo,
+        presentation.navigatorPills,
       )
         .catch((error: unknown) => console.warn(`Agent Visor menu update failed: ${String(error)}`));
     };
