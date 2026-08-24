@@ -415,6 +415,9 @@ function transcriptModifiedAt(event: HookSessionEvent): string | undefined {
 
 function hookPhase(event: HookSessionEvent): { section: SessionSection; subtitle: string } {
   const status = event.status.trim().toLowerCase();
+  if (event.event === "Stop") {
+    return { section: "ready", subtitle: "Ready to continue" };
+  }
   if (event.expectsResponse || event.event === "PermissionRequest"
     || status.includes("approval") || status === "waiting_for_input") {
     return { section: "needs_you", subtitle: "Approval required" };
@@ -423,8 +426,7 @@ function hookPhase(event: HookSessionEvent): { section: SessionSection; subtitle
     || ["ended", "exited", "closed", "inactive", "stopped", "terminated"].includes(status)) {
     return { section: "history", subtitle: "Session ended" };
   }
-  if (event.event === "Stop"
-    || (!isPiHeartbeat(event) && (event.isIdle === true || status === "idle"))) {
+  if (!isPiHeartbeat(event) && (event.isIdle === true || status === "idle")) {
     return { section: "ready", subtitle: "Ready to continue" };
   }
   return { section: "working", subtitle: "Agent is working" };

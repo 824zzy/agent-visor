@@ -108,6 +108,21 @@ describe("SessionRepository", () => {
     });
   });
 
+  it("maps Pi's settled Stop event to Ready", () => {
+    const repository = new SessionRepository([]);
+
+    const snapshot = repository.applyHook({
+      ...heartbeat(),
+      event: "Stop",
+      status: "waiting_for_input",
+    });
+
+    expect(snapshot.sessions[0]).toMatchObject({
+      section: "ready",
+      subtitle: "Ready to continue",
+    });
+  });
+
   it("keeps repeated idle heartbeats phase-neutral for an already Ready Pi session", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{ ...live, section: "ready", updatedAt: "2026-08-22T08:00:00.000Z" }];
