@@ -8,7 +8,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
             #"{"version":1,"id":"access","method":"accessibility_status"}"#,
             #"{"version":1,"id":"request-access","method":"request_accessibility"}"#,
             #"{"version":1,"id":"open-access","method":"open_accessibility_settings"}"#,
-            #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","subtitle":"Ready to continue","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready"},{"id":"session-2","title":"Recent migration","phase":"history","priority":2,"accessibilityLabel":"Recent migration, recent session"}],"shortcutModifierFamily":"controlCommand","usageGlances":[{"id":"codex","label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage"}]}}"#,
+            #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","subtitle":"Ready to continue","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready"},{"id":"session-2","title":"Recent migration","phase":"history","priority":2,"accessibilityLabel":"Recent migration, recent session"}],"shortcutModifierFamily":"controlCommand","hotkeyTrigger":"custom","customHotkeyCombo":"49:8","usageGlances":[{"id":"codex","label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage"}]}}"#,
             #"{"version":1,"id":"legacy-pills","method":"present_pills","params":{"pills":[{"id":"legacy","title":"Legacy","phase":"working","priority":2,"accessibilityLabel":"Legacy, in progress"}]}}"#,
             #"{"version":1,"id":"focus","method":"focus","params":{"target":{"pid":42,"bundleIdentifier":"com.mitchellh.ghostty","windowId":7}}}"#,
             #"{"version":1,"id":"focus-terminal","method":"focus_terminal","params":{"target":{"application":"Ghostty","tty":"ttys012","cwd":"/tmp/project"}}}"#,
@@ -24,6 +24,24 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         )
     }
 
+    func testDecodesBoundedSessionInspector() throws {
+        let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready","inspector":{"status":"Ready","runtimeItems":["Pi · Ghostty","Claude Sonnet 4"],"detailRows":[{"label":"Reasoning","value":"High"}],"projectPath":"~/Codes/agent-visor","activityAt":"2026-08-22T21:02:18.000Z","context":{"usedLabel":"84k","windowLabel":"200k","percentage":42}}}],"hotkeyTrigger":"custom","customHotkeyCombo":"49:8"}}"#
+
+        let request = try NativeHelperRequest.decode(Data(json.utf8))
+        guard case .presentPills(_, let pills, _, _, let trigger, let combo) = request else {
+            return XCTFail("Expected pills")
+        }
+        let inspector = try XCTUnwrap(pills.first?.inspector)
+        XCTAssertEqual(inspector.status, "Ready")
+        XCTAssertEqual(inspector.runtimeItems, ["Pi · Ghostty", "Claude Sonnet 4"])
+        XCTAssertEqual(inspector.detailRows.first?.label, "Reasoning")
+        XCTAssertEqual(inspector.projectPath, "~/Codes/agent-visor")
+        XCTAssertEqual(inspector.activityAt, "2026-08-22T21:02:18.000Z")
+        XCTAssertEqual(inspector.context?.percentage, 42)
+        XCTAssertEqual(trigger, .custom)
+        XCTAssertEqual(combo, KeyCombo(keyCode: 49, modifiers: .command))
+    }
+
     func testRejectsUnknownMethodsExtraFieldsAndInexactFocus() {
         assertInvalid(#"{"version":1,"id":"bad","method":"parse_provider"}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"screen_topology","extra":true}"#)
@@ -31,6 +49,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         assertInvalid(#"{"version":1,"id":"bad","method":"focus","params":{"target":{"pid":42,"bundleIdentifier":"app","provider":"Pi"}}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"focus_terminal","params":{"target":{"application":"Ghostty","tty":"/dev/null","cwd":"/"}}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[{"id":"1","title":"A","subtitle":"Ready","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"A","provider":"Pi"}],"usageGlances":[]}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[{"id":"1","title":"A","phase":"ready","priority":1,"accessibilityLabel":"A","inspector":{"status":"Ready","runtimeItems":["Pi"],"detailRows":[],"projectPath":"/tmp","activityAt":"2026-08-22T21:02:18.000Z","provider":"Pi"}}]}}"#)
     }
 
     func testEncodesTypedResponseEnvelope() throws {
@@ -56,14 +75,17 @@ final class NativeHelperWireProtocolTests: XCTestCase {
             intent: .chat
         ).encoded()
         let open = try NativeHelperEvent.openSessions.encoded()
+        let toggle = try NativeHelperEvent.toggleSessions.encoded()
         let first = try XCTUnwrap(JSONSerialization.jsonObject(with: activation) as? [String: Any])
         let second = try XCTUnwrap(JSONSerialization.jsonObject(with: open) as? [String: Any])
+        let third = try XCTUnwrap(JSONSerialization.jsonObject(with: toggle) as? [String: Any])
 
         XCTAssertEqual(first["type"] as? String, "event")
         XCTAssertEqual(first["event"] as? String, "activate_pill")
         XCTAssertEqual(first["sessionId"] as? String, "session-1")
         XCTAssertEqual(first["intent"] as? String, "chat")
         XCTAssertEqual(second["event"] as? String, "open_sessions")
+        XCTAssertEqual(third["event"] as? String, "toggle_sessions")
     }
 
     func testFramesFragmentedAndAdjacentMessages() throws {

@@ -172,12 +172,21 @@ private func response(
             )!
             DispatchQueue.main.async { NSWorkspace.shared.open(url) }
             return .accepted(id: id)
-        case .presentPills(let id, let pills, let usageGlances, let shortcutFamily):
+        case .presentPills(
+            let id,
+            let pills,
+            let usageGlances,
+            let shortcutFamily,
+            let hotkeyTrigger,
+            let customHotkeyCombo
+        ):
             DispatchQueue.main.sync {
                 menu.present(
                     pills: pills,
                     usageGlances: usageGlances,
-                    shortcutModifierFamily: shortcutFamily
+                    shortcutModifierFamily: shortcutFamily,
+                    hotkeyTrigger: hotkeyTrigger,
+                    customHotkeyCombo: customHotkeyCombo
                 )
             }
             return .accepted(id: id)

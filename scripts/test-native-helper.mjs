@@ -38,10 +38,19 @@ try {
           source: "Pi",
           project: "agent-visor",
           owner: "Ghostty",
+          inspector: {
+            status: "Ready",
+            runtimeItems: ["Pi · Ghostty"],
+            detailRows: [],
+            projectPath: "~/Codes/agent-visor",
+            activityAt: "2026-08-22T21:02:18.000Z",
+          },
           phase: "ready",
           priority: 1,
           accessibilityLabel: "Review migration, ready",
         }],
+        hotkeyTrigger: "shift",
+        customHotkeyCombo: null,
         usageGlances: [{
           id: "codex",
           label: "5h 82%",
@@ -101,7 +110,7 @@ try {
     phase: "working",
     priority: 0,
     accessibilityLabel: "Adapter session, in progress",
-  }], [], "controlCommand");
+  }], [], "controlCommand", "shift", null);
 } finally {
   await adapter.close();
 }

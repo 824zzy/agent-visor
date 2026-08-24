@@ -6,12 +6,20 @@ import type { Palette } from "./theme";
 
 const sounds = ["None", "Pop", "Ping", "Tink", "Glass"] as const;
 const shortcuts = ["off", "controlCommand", "optionCommand", "controlOptionCommand"] as const;
+const hotkeyTriggers = ["off", "cmd", "ctrl", "option", "shift"] as const;
 const editors = ["auto", "cursor", "vscode", "vscode-insiders", "zed", "xcode", "system-default"] as const;
 const shortcutLabels = {
   off: "Off",
   controlCommand: "⌃⌘ Control–Command",
   optionCommand: "⌥⌘ Option–Command",
   controlOptionCommand: "⌃⌥⌘ Control–Option–Command",
+};
+const hotkeyLabels = {
+  off: "Off",
+  cmd: "Double-tap ⌘",
+  ctrl: "Double-tap ⌃",
+  option: "Double-tap ⌥",
+  shift: "Double-tap ⇧",
 };
 const editorLabels = {
   auto: "Auto-detect",
@@ -95,6 +103,17 @@ export function Settings({
         {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
         {category === "general" ? <Section title="General" subtitle="How Agent Visor starts up and stays accessible" styles={styles}>
           <ToggleRow label="Launch at login" value={settings.launchAtLogin} onPress={() => update({ launchAtLogin: !settings.launchAtLogin })} styles={styles} />
+          <ChoiceRow
+            label="App shortcut"
+            values={hotkeyTriggers}
+            value={settings.hotkeyTrigger}
+            labelFor={(value) => hotkeyLabels[value]}
+            onChoose={(hotkeyTrigger) => update({ hotkeyTrigger })}
+            styles={styles}
+          />
+          {settings.hotkeyTrigger === "custom"
+            ? <ValueRow label="Custom shortcut" value="Migrated from Agent Visor" styles={styles} />
+            : null}
           <ChoiceRow
             label="File links"
             values={editors}
@@ -200,7 +219,7 @@ function ActionRow({ label, detail, action, onPress, styles }: { label: string; 
   return <View style={styles.row}><View style={styles.grow}><Text style={styles.label}>{label}</Text><Text style={styles.detail}>{detail}</Text></View><Pressable accessibilityLabel={`${action} for ${label}`} accessibilityRole="button" onPress={onPress} style={styles.button}><Text style={styles.buttonText}>{action}</Text></Pressable></View>;
 }
 
-function ChoiceRow<T extends string>({ label, values, value, labelFor = (item) => item, onChoose, styles }: { label: string; values: readonly T[]; value: T; labelFor?(value: T): string; onChoose(value: T): void; styles: ReturnType<typeof createStyles> }) {
+function ChoiceRow<T extends string>({ label, values, value, labelFor = (item) => item, onChoose, styles }: { label: string; values: readonly T[]; value: string; labelFor?(value: T): string; onChoose(value: T): void; styles: ReturnType<typeof createStyles> }) {
   return <View style={styles.choiceRow}><Text style={styles.label}>{label}</Text><View style={styles.choices}>{values.map((item) => <Pressable key={item} accessibilityRole="button" accessibilityState={{ selected: item === value }} onPress={() => onChoose(item)} style={item === value ? styles.choiceSelected : styles.choice}><Text style={styles.buttonText}>{labelFor(item)}</Text></Pressable>)}</View></View>;
 }
 

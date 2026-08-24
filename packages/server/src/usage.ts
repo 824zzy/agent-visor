@@ -8,14 +8,15 @@ export function codexUsageGlance(value: unknown): NativeHelperUsageGlance | unde
   const root = record(value);
   const limits = record(root?.rateLimits);
   if (!limits) return undefined;
-  const windows = [limits.primary, limits.secondary]
-    .map(usageWindow)
-    .filter((window): window is UsageWindow => Boolean(window));
+  const primary = usageWindow(limits.primary);
+  const secondary = usageWindow(limits.secondary);
+  const windows = [primary, secondary].filter((window): window is UsageWindow => Boolean(window));
   if (!windows.length) return undefined;
 
-  const fiveHour = windows.find((window) => window.minutes === 300) ?? windows[0];
+  const fiveHour = windows.find((window) => window.minutes === 300)
+    ?? (primary?.minutes === undefined ? primary : undefined);
   const weekly = windows.find((window) => window.minutes === 10_080)
-    ?? windows.find((window) => window !== fiveHour);
+    ?? (secondary?.minutes === undefined ? secondary : undefined);
   const values = [fiveHour && { label: "5h", detail: "5 hour", value: fiveHour.remaining }];
   if (weekly) values.push({ label: "7d", detail: "weekly", value: weekly.remaining });
   const available = values.filter((item): item is NonNullable<typeof item> => Boolean(item));

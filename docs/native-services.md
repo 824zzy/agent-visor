@@ -18,13 +18,14 @@ The migrated settings include:
 
 - Appearance and content size.
 - Session-pill and Codex-usage visibility.
+- Window hotkey and migrated custom chord.
 - Session shortcut modifiers.
 - Notification sound.
 - File-link editor preference.
 - Observed session window.
 - Launch at login.
 
-Observed-session changes take effect without restarting the daemon. Shortcut changes re-register the helper’s native hotkeys.
+Observed-session changes take effect without restarting the daemon. Session shortcuts re-register native hotkeys, while the application shortcut reconfigures the existing monitors.
 
 Launch-at-login changes use Electron’s packaged application API. Development builds preserve the value without registering the Electron development binary.
 
@@ -61,6 +62,10 @@ Existing release scripts remain responsible for archive signing, notarization, p
 `scripts/package-electron.sh` prepares a separate release-signed 2.7.0 candidate. It does not change the public appcast or cask.
 
 ## Lifecycle
+
+Closing the Sessions window hides it while the daemon and helper continue running. The Dock and application hotkey raise the retained window.
+
+A real Quit closes the window and stops owned processes.
 
 Electron owns only the daemon it starts. The daemon owns only its helper, hook socket, timers, and temporary Codex usage process.
 

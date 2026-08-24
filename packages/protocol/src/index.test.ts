@@ -85,6 +85,8 @@ describe("session snapshot protocol", () => {
         codexUsageGlanceEnabled: true,
         claudeUsageGlanceEnabled: false,
         notificationSound: "Pop",
+        hotkeyTrigger: "shift",
+        customHotkeyCombo: null,
         sessionShortcutModifierFamily: "optionCommand",
         editorPreference: "auto",
         observedWindowHours: 42,

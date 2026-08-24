@@ -74,6 +74,22 @@ export const chatItemSchema = z.discriminatedUnion("kind", [
   }).strict(),
 ]);
 
+const macFunctionKeyCodes = new Set([
+  122, 120, 99, 118, 96, 97, 98, 100, 101, 109,
+  103, 111, 105, 107, 113, 106, 64, 79, 80, 90,
+]);
+
+const customHotkeyComboSchema = z.string()
+  .regex(/^\d{1,5}:\d{1,2}$/)
+  .max(8)
+  .refine((value) => {
+    const parts = value.split(":").map(Number);
+    const keyCode = parts[0]!;
+    const modifiers = parts[1]!;
+    return keyCode <= 65_535 && modifiers <= 15
+      && (modifiers > 0 || macFunctionKeyCodes.has(keyCode));
+  });
+
 export const appSettingsSchema = z.object({
   appearance: z.enum(["system", "dark", "light"]),
   contentScale: z.number().min(0.8).max(2.5),
@@ -84,6 +100,8 @@ export const appSettingsSchema = z.object({
     "None", "Pop", "Ping", "Tink", "Glass", "Blow", "Bottle", "Frog",
     "Funk", "Hero", "Morse", "Purr", "Sosumi", "Submarine", "Basso",
   ]),
+  hotkeyTrigger: z.enum(["off", "cmd", "ctrl", "option", "shift", "custom"]),
+  customHotkeyCombo: customHotkeyComboSchema.nullable(),
   sessionShortcutModifierFamily: z.enum([
     "off", "controlCommand", "optionCommand", "controlOptionCommand",
   ]),
@@ -251,6 +269,22 @@ const rectangleSchema = z.object({
   height: z.number().finite().nonnegative(),
 }).strict();
 
+const nativeHelperSessionInspectorSchema = z.object({
+  status: z.string().min(1).max(64),
+  runtimeItems: z.array(z.string().min(1).max(256)).min(1).max(4),
+  detailRows: z.array(z.object({
+    label: z.string().min(1).max(64),
+    value: z.string().min(1).max(512),
+  }).strict()).max(8),
+  projectPath: z.string().min(1).max(4_096),
+  activityAt: z.iso.datetime(),
+  context: z.object({
+    usedLabel: z.string().min(1).max(64),
+    windowLabel: z.string().min(1).max(64),
+    percentage: z.number().int().min(0).max(100),
+  }).strict().optional(),
+}).strict();
+
 export const nativeHelperPillSchema = z.object({
   id: z.string().min(1).max(128),
   title: z.string().min(1).max(256),
@@ -258,6 +292,7 @@ export const nativeHelperPillSchema = z.object({
   source: z.string().min(1).max(128).optional(),
   project: z.string().min(1).max(256).optional(),
   owner: z.string().min(1).max(128).optional(),
+  inspector: nativeHelperSessionInspectorSchema.optional(),
   phase: sessionSectionSchema,
   priority: z.number().int(),
   accessibilityLabel: z.string().min(1).max(512),
@@ -302,6 +337,8 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
       pills: z.array(nativeHelperPillSchema).max(64),
       usageGlances: z.array(nativeHelperUsageGlanceSchema).max(8).optional(),
       shortcutModifierFamily: appSettingsSchema.shape.sessionShortcutModifierFamily.optional(),
+      hotkeyTrigger: appSettingsSchema.shape.hotkeyTrigger.optional(),
+      customHotkeyCombo: appSettingsSchema.shape.customHotkeyCombo.optional(),
     }).strict(),
   }).strict(),
   z.object({
@@ -376,7 +413,7 @@ export const nativeHelperResponseSchema = z.union([
     z.object({
       version: z.literal(PROTOCOL_VERSION),
       type: z.literal("event"),
-      event: z.literal("open_sessions"),
+      event: z.enum(["open_sessions", "toggle_sessions"]),
     }).strict(),
   ]),
 ]);

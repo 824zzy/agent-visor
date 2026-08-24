@@ -1,3 +1,4 @@
+import os from "node:os";
 import type { NativeHelperUsageGlance, SessionSnapshot } from "@agent-visor/protocol";
 import type { NativeHelperEvent } from "./native-helper.js";
 
@@ -11,8 +12,8 @@ const phaseLabel = {
 } as const;
 
 export function nativeActionFor(event: NativeHelperEvent, snapshot: SessionSnapshot) {
-  if (event.event === "open_sessions") {
-    return { type: "native_action", action: "open_sessions" } as const;
+  if (!("sessionId" in event)) {
+    return { type: "native_action", action: event.event } as const;
   }
   const session = snapshot.sessions.find((candidate) => candidate.id === event.sessionId);
   if (!session) return undefined;
@@ -48,6 +49,13 @@ export function menuPresentation(
       source: session.source,
       project: session.project,
       ...(session.canOpenOwner ? { owner: session.owner } : {}),
+      inspector: {
+        status: inspectorStatus(session.section, session.subtitle),
+        runtimeItems: [runtimeSource(session.source, session.owner)],
+        detailRows: [],
+        projectPath: displayPath(session.cwd),
+        activityAt: session.updatedAt,
+      },
       phase: session.section,
       priority,
       accessibilityLabel: [
@@ -59,4 +67,26 @@ export function menuPresentation(
     }));
 
   return { pills, usageGlances };
+}
+
+function inspectorStatus(section: keyof typeof phaseOrder, subtitle: string): string {
+  switch (section) {
+    case "needs_you": return "Needs attention";
+    case "ready": return "Ready";
+    case "working": return "Working";
+    case "history": return subtitle.toLowerCase().includes("ended") ? "Ended" : "Recent";
+  }
+}
+
+function runtimeSource(source: string, owner: string): string {
+  if (source === "Codex" && owner === "Codex") return "Codex Desktop";
+  return source.localeCompare(owner, undefined, { sensitivity: "accent" }) === 0
+    ? source
+    : `${source} · ${owner}`;
+}
+
+function displayPath(cwd: string): string {
+  const home = os.homedir();
+  if (cwd === home) return "~";
+  return cwd.startsWith(`${home}/`) ? `~${cwd.slice(home.length)}` : cwd;
 }

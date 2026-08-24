@@ -75,6 +75,8 @@ if (nativeHelperExecutable) {
         presentation.pills,
         presentation.usageGlances,
         preferences.sessionShortcutModifierFamily,
+        preferences.hotkeyTrigger,
+        preferences.customHotkeyCombo,
       )
         .catch((error: unknown) => console.warn(`Agent Visor menu update failed: ${String(error)}`));
     };

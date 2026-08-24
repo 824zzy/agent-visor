@@ -15,6 +15,8 @@ const defaults: AppSettings = {
   codexUsageGlanceEnabled: true,
   claudeUsageGlanceEnabled: true,
   notificationSound: "Pop",
+  hotkeyTrigger: "shift",
+  customHotkeyCombo: null,
   sessionShortcutModifierFamily: "optionCommand",
   editorPreference: "auto",
   observedWindowHours: 42,
@@ -40,11 +42,21 @@ export class SettingsRepository {
     const file = path.join(options.root, "settings.json");
     try {
       const stored = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
-      return new SettingsRepository(
+      const storedSettings = record(stored.settings);
+      const needsHotkeyDefaults = storedSettings != null
+        && (!Object.hasOwn(storedSettings, "hotkeyTrigger")
+          || !Object.hasOwn(storedSettings, "customHotkeyCombo"));
+      const repository = new SettingsRepository(
         file,
-        appSettingsSchema.parse(stored.settings),
+        appSettingsSchema.parse({
+          hotkeyTrigger: defaults.hotkeyTrigger,
+          customHotkeyCombo: defaults.customHotkeyCombo,
+          ...storedSettings,
+        }),
         record(stored.legacy) ?? {},
       );
+      if (needsHotkeyDefaults) await repository.save();
+      return repository;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -110,8 +122,8 @@ export async function readLegacyDefaults(
   };
   const keys = [
     "appearance", "chatFontScale", "pillsEnabled", "codexUsageGlanceEnabled",
-    "claudeUsageGlanceEnabled", "notificationSound", "sessionShortcutModifierFamily",
-    "editorPreference", "observedWindowHours",
+    "claudeUsageGlanceEnabled", "notificationSound", "hotkeyTrigger", "customHotkeyCombo",
+    "sessionShortcutModifierFamily", "editorPreference", "observedWindowHours",
   ];
   for (const key of keys) {
     const extracted = await runProcess(
@@ -138,6 +150,11 @@ function migrate(legacy: Record<string, unknown>): AppSettings {
       "None", "Pop", "Ping", "Tink", "Glass", "Blow", "Bottle", "Frog",
       "Funk", "Hero", "Morse", "Purr", "Sosumi", "Submarine", "Basso",
     ]) ?? defaults.notificationSound,
+    hotkeyTrigger: oneOf(legacy.hotkeyTrigger, [
+      "off", "cmd", "ctrl", "option", "shift", "custom",
+    ]) ?? defaults.hotkeyTrigger,
+    customHotkeyCombo: customHotkeyCombo(legacy.customHotkeyCombo)
+      ?? defaults.customHotkeyCombo,
     sessionShortcutModifierFamily: oneOf(legacy.sessionShortcutModifierFamily, [
       "off", "controlCommand", "optionCommand", "controlOptionCommand",
     ]) ?? defaults.sessionShortcutModifierFamily,
@@ -175,6 +192,11 @@ function number(value: unknown): number | undefined {
 
 function oneOf<T extends string>(value: unknown, values: readonly T[]): T | undefined {
   return typeof value === "string" && values.includes(value as T) ? value as T : undefined;
+}
+
+function customHotkeyCombo(value: unknown): AppSettings["customHotkeyCombo"] | undefined {
+  const parsed = appSettingsSchema.shape.customHotkeyCombo.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

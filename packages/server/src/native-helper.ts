@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   nativeHelperResponseSchema,
+  type AppSettings,
   type NativeHelperFocusTarget,
   type NativeHelperPill,
   type NativeHelperTerminalTarget,
@@ -22,7 +23,9 @@ export interface NativeHelperAdapter {
   presentPills(
     pills: NativeHelperPill[],
     usageGlances: NativeHelperUsageGlance[],
-    shortcutModifierFamily?: "off" | "controlCommand" | "optionCommand" | "controlOptionCommand",
+    shortcutModifierFamily?: AppSettings["sessionShortcutModifierFamily"],
+    hotkeyTrigger?: AppSettings["hotkeyTrigger"],
+    customHotkeyCombo?: AppSettings["customHotkeyCombo"],
   ): Promise<void>;
   focus(target: NativeHelperFocusTarget): Promise<void>;
   focusTerminal(target: NativeHelperTerminalTarget): Promise<void>;
@@ -37,7 +40,9 @@ export class FakeNativeHelper implements NativeHelperAdapter {
   readonly terminalSendRequests: Array<{ target: NativeHelperTerminalTarget; text: string; submit: boolean }> = [];
   presentedPills: NativeHelperPill[] = [];
   presentedUsageGlances: NativeHelperUsageGlance[] = [];
-  shortcutModifierFamily = "optionCommand";
+  shortcutModifierFamily: AppSettings["sessionShortcutModifierFamily"] = "optionCommand";
+  hotkeyTrigger: AppSettings["hotkeyTrigger"] = "shift";
+  customHotkeyCombo: AppSettings["customHotkeyCombo"] = null;
   requestedAccessibility = false;
   openedAccessibilitySettings = false;
 
@@ -71,11 +76,15 @@ export class FakeNativeHelper implements NativeHelperAdapter {
   async presentPills(
     pills: NativeHelperPill[],
     usageGlances: NativeHelperUsageGlance[],
-    shortcutModifierFamily: "off" | "controlCommand" | "optionCommand" | "controlOptionCommand" = "optionCommand",
+    shortcutModifierFamily: AppSettings["sessionShortcutModifierFamily"] = "optionCommand",
+    hotkeyTrigger: AppSettings["hotkeyTrigger"] = "shift",
+    customHotkeyCombo: AppSettings["customHotkeyCombo"] = null,
   ): Promise<void> {
     this.presentedPills = structuredClone(pills);
     this.presentedUsageGlances = structuredClone(usageGlances);
     this.shortcutModifierFamily = shortcutModifierFamily;
+    this.hotkeyTrigger = hotkeyTrigger;
+    this.customHotkeyCombo = customHotkeyCombo;
   }
 
   async focus(target: NativeHelperFocusTarget): Promise<void> {
@@ -178,12 +187,15 @@ export class NativeHelperProcess implements NativeHelperAdapter {
   async presentPills(
     pills: NativeHelperPill[],
     usageGlances: NativeHelperUsageGlance[],
-    shortcutModifierFamily?: "off" | "controlCommand" | "optionCommand" | "controlOptionCommand",
+    shortcutModifierFamily?: AppSettings["sessionShortcutModifierFamily"],
+    hotkeyTrigger?: AppSettings["hotkeyTrigger"],
+    customHotkeyCombo?: AppSettings["customHotkeyCombo"],
   ): Promise<void> {
     await this.accepted("present_pills", {
       pills,
       usageGlances,
       ...(shortcutModifierFamily ? { shortcutModifierFamily } : {}),
+      ...(hotkeyTrigger ? { hotkeyTrigger, customHotkeyCombo } : {}),
     });
   }
 

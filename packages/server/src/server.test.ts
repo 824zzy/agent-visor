@@ -165,7 +165,8 @@ describe("Agent Visor daemon", () => {
       settings: {
         appearance: "dark" as const, contentScale: 1, pillsEnabled: true,
         codexUsageGlanceEnabled: true, claudeUsageGlanceEnabled: false,
-        notificationSound: "Pop" as const, sessionShortcutModifierFamily: "optionCommand" as const,
+        notificationSound: "Pop" as const, hotkeyTrigger: "shift" as const,
+        customHotkeyCombo: null, sessionShortcutModifierFamily: "optionCommand" as const,
         editorPreference: "auto" as const, observedWindowHours: 42, launchAtLogin: false,
       },
       permissions: { accessibility: "granted" as const, notifications: "authorized" as const },

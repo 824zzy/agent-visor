@@ -21,6 +21,8 @@ describe("settings repository", () => {
       codexUsageGlanceEnabled: false,
       claudeUsageGlanceEnabled: true,
       notificationSound: "Ping",
+      hotkeyTrigger: "custom",
+      customHotkeyCombo: "49:8",
       sessionShortcutModifierFamily: "controlCommand",
       editorPreference: "zed",
       observedWindowHours: 72,
@@ -38,12 +40,36 @@ describe("settings repository", () => {
       codexUsageGlanceEnabled: false,
       claudeUsageGlanceEnabled: true,
       notificationSound: "Ping",
+      hotkeyTrigger: "custom",
+      customHotkeyCombo: "49:8",
       sessionShortcutModifierFamily: "controlCommand",
       editorPreference: "zed",
       observedWindowHours: 72,
     });
     expect(JSON.parse(await readFile(path.join(root, "settings.json"), "utf8")))
       .toMatchObject({ legacy });
+  });
+
+  it("adds new hotkey defaults to an existing Electron settings file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-settings-"));
+    roots.push(root);
+    const file = path.join(root, "settings.json");
+    await writeFile(file, JSON.stringify({
+      version: 1,
+      settings: {
+        appearance: "dark", contentScale: 1, pillsEnabled: true,
+        codexUsageGlanceEnabled: true, claudeUsageGlanceEnabled: true,
+        notificationSound: "Pop", sessionShortcutModifierFamily: "optionCommand",
+        editorPreference: "auto", observedWindowHours: 42, launchAtLogin: false,
+      },
+      legacy: {},
+    }));
+
+    const repository = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
+
+    expect(repository.current()).toMatchObject({ hotkeyTrigger: "shift", customHotkeyCombo: null });
+    expect(JSON.parse(await readFile(file, "utf8")).settings)
+      .toMatchObject({ hotkeyTrigger: "shift", customHotkeyCombo: null });
   });
 
   it("does not overwrite an unreadable settings file", async () => {

@@ -2,12 +2,37 @@ import AgentVisorCore
 import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
+import SwiftUI
 
 private final class NativePillButton: NSButton {
     var normalBackgroundColor = NSColor.black.withAlphaComponent(0.35)
     var onActivate: ((NSEvent.ModifierFlags) -> Void)?
+    var onHoverChange: ((Bool) -> Void)?
+    private var hoverTrackingArea: NSTrackingArea?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        onHoverChange?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        onHoverChange?(false)
+    }
 
     override func highlight(_ flag: Bool) {
         super.highlight(flag)
@@ -77,6 +102,136 @@ private final class NativePillPanel: NSPanel {
     }
 }
 
+private struct NativeMenuSessionDetailView: View {
+    let presentation: NativeMenuSessionDetailPresentation
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var statusTint: Color {
+        switch (presentation.phase, colorScheme) {
+        case (.needsYou, .light): return Color(red: 0.874, green: 0.557, blue: 0.114)
+        case (.ready, .light): return Color(red: 0.251, green: 0.627, blue: 0.169)
+        case (.working, .light): return Color(red: 0.996, green: 0.392, blue: 0.043)
+        case (.history, .light): return Color(red: 0.549, green: 0.561, blue: 0.631)
+        case (.needsYou, .dark): return Color(red: 0.957, green: 0.757, blue: 0.078)
+        case (.ready, .dark): return Color(red: 0.651, green: 0.890, blue: 0.631)
+        case (.working, .dark): return Color(red: 0.851, green: 0.471, blue: 0.341)
+        case (.history, .dark): return Color(red: 0.498, green: 0.518, blue: 0.612)
+        @unknown default: return Color(nsColor: .secondaryLabelColor)
+        }
+    }
+
+    private var contextTint: Color {
+        let percentage = presentation.context?.percentage ?? 0
+        switch (percentage, colorScheme) {
+        case (..<75, .light): return Color(red: 0.251, green: 0.627, blue: 0.169)
+        case (..<90, .light): return Color(red: 0.874, green: 0.557, blue: 0.114)
+        case (_, .light): return Color(red: 0.824, green: 0.059, blue: 0.224)
+        case (..<75, .dark): return Color(red: 0.651, green: 0.890, blue: 0.631)
+        case (..<90, .dark): return Color(red: 0.976, green: 0.886, blue: 0.686)
+        case (_, .dark): return Color(red: 0.953, green: 0.545, blue: 0.659)
+        @unknown default: return statusTint
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(presentation.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(statusTint)
+                        .frame(width: 6, height: 6)
+                    Text(presentation.status)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                }
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(statusTint.opacity(0.14)))
+                .fixedSize()
+            }
+            Divider().overlay(Color(nsColor: .separatorColor))
+            ForEach(presentation.rows, id: \.label) { row in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(row.label)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                        .frame(width: 62, alignment: .leading)
+                    Text(row.value)
+                        .font(.system(
+                            size: 10,
+                            weight: .medium,
+                            design: row.label == "Project" ? .monospaced : .default
+                        ))
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        .lineLimit(row.label == "Access" ? 2 : 1)
+                        .truncationMode(row.label == "Project" ? .middle : .tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            if let context = presentation.context {
+                contextRow(context)
+            }
+            if let shortcutLabel = presentation.shortcutLabel {
+                Divider().overlay(Color(nsColor: .separatorColor))
+                HStack(spacing: 7) {
+                    Image(systemName: "keyboard")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                    Text(shortcutLabel)
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color(nsColor: .labelColor))
+                    Text("Open directly")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .padding(12)
+        .frame(width: 300, alignment: .leading)
+        .background(Color(nsColor: .textBackgroundColor))
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(
+                    Color(nsColor: .labelColor).opacity(colorScheme == .dark ? 0.40 : 0.35),
+                    lineWidth: 1
+                )
+        )
+    }
+
+    private func contextRow(_ context: SessionHoverContextPresentation) -> some View {
+        HStack(spacing: 8) {
+            Text("Context")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                .frame(width: 62, alignment: .leading)
+            Text("\(context.usedLabel) / \(context.windowLabel)")
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(Color(nsColor: .quaternaryLabelColor))
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(contextTint)
+                        .frame(width: max(2, geometry.size.width * CGFloat(context.percentage) / 100))
+                }
+            }
+            .frame(height: 6)
+            Text("\(context.percentage)%")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(contextTint)
+                .frame(width: 30, alignment: .trailing)
+        }
+    }
+}
+
 @MainActor
 final class NativeMenuController: NSObject {
     var emit: (NativeHelperEvent) -> Void = { _ in }
@@ -95,6 +250,7 @@ final class NativeMenuController: NSObject {
     private var hotKeys: [EventHotKeyRef?] = []
     private var eventHandler: EventHandlerRef?
     private var shortcutModifierFamily = SessionShortcutModifierFamily.defaultFamily
+    private var hotkeyState = NativeMenuHotkeyState()
     private var density: PillBarPacker.Density = .standard
     private var readyPulseTimer: Timer?
     private var layoutTimer: Timer?
@@ -105,6 +261,10 @@ final class NativeMenuController: NSObject {
     private var globalFlagsMonitor: Any?
     private var lastActivation: (id: String, at: TimeInterval)?
     private var lastOverflowActivation: TimeInterval?
+    private var sessionHoverState = NativeMenuSessionHoverState()
+    private var sessionHoverWorkItem: DispatchWorkItem?
+    private var sessionPopover: NSPopover?
+    private var sessionPopoverID: String?
 
     private let pillHeight: CGFloat = 24
     private let standardSpacing: CGFloat = 4
@@ -125,8 +285,13 @@ final class NativeMenuController: NSObject {
     func present(
         pills: [NativeHelperPill],
         usageGlances: [NativeHelperUsageGlance],
-        shortcutModifierFamily: SessionShortcutModifierFamily?
+        shortcutModifierFamily: SessionShortcutModifierFamily?,
+        hotkeyTrigger: NativeHelperHotkeyTrigger?,
+        customHotkeyCombo: KeyCombo?
     ) {
+        if let hotkeyTrigger {
+            hotkeyState.configure(trigger: hotkeyTrigger, customCombo: customHotkeyCombo)
+        }
         if let shortcutModifierFamily,
            shortcutModifierFamily != self.shortcutModifierFamily {
             self.shortcutModifierFamily = shortcutModifierFamily
@@ -156,12 +321,14 @@ final class NativeMenuController: NSObject {
             acknowledgedReadyIDs: readyAttention.acknowledgedReadyIDs
         )
         for id in sessionPanels.keys where pillsByID[id] == nil {
+            if sessionPopoverID == id { dismissSessionPopover() }
             sessionPanels.removeValue(forKey: id)?.close()
         }
         for id in pillsByID.keys where sessionPanels[id] == nil {
             sessionPanels[id] = NativePillPanel()
         }
         sessionPresentations = pillsByID
+        sessionHoverState.retain(sessionIDs: Set(pillsByID.keys))
 
         var seenUsageIDs = Set<String>()
         let orderedUsage = usageGlances.sorted { lhs, rhs in
@@ -259,6 +426,61 @@ final class NativeMenuController: NSObject {
         }
     }
 
+    private func handleSessionHover(_ id: String, hovering: Bool) {
+        sessionHoverWorkItem?.cancel()
+        if hovering {
+            sessionHoverState.pointerEntered(id, at: ProcessInfo.processInfo.systemUptime)
+            dismissSessionPopover()
+            let work = DispatchWorkItem { [weak self] in
+                Task { @MainActor in self?.showSessionPopover(for: id) }
+            }
+            sessionHoverWorkItem = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + NativeMenuSessionHoverState.delay,
+                execute: work
+            )
+        } else {
+            sessionHoverState.pointerExited(id)
+            dismissSessionPopover()
+        }
+    }
+
+    private func showSessionPopover(for id: String) {
+        let shortcutPosition = shortcutSnapshot?.positions[id]
+            ?? shortcutSessionIDs.firstIndex(of: id).map { $0 + 1 }
+        let shortcutLabel = shortcutPosition.flatMap {
+            GlobalSessionShortcutPolicy.displayLabel(
+                forPosition: $0,
+                family: shortcutModifierFamily
+            )
+        }
+        guard let panel = sessionPanels[id], panel.isVisible,
+              let presentation = sessionHoverState.presentation(
+                pills: sessionPresentations,
+                at: ProcessInfo.processInfo.systemUptime,
+                shortcutLabel: shortcutLabel
+              ), presentation.id == id else { return }
+        let popover = NSPopover()
+        popover.behavior = .applicationDefined
+        popover.animates = false
+        let content = NSHostingController(
+            rootView: NativeMenuSessionDetailView(presentation: presentation)
+        )
+        popover.contentViewController = content
+        popover.contentSize = content.view.fittingSize
+        popover.show(relativeTo: panel.pillButton.bounds, of: panel.pillButton, preferredEdge: .minY)
+        sessionPopover = popover
+        sessionPopoverID = id
+    }
+
+    private func dismissSessionPopover() {
+        sessionHoverWorkItem?.cancel()
+        sessionHoverWorkItem = nil
+        sessionPopover?.close()
+        sessionPopover = nil
+        sessionPopoverID = nil
+    }
+
     private func activationIntent(
         for modifiers: NSEvent.ModifierFlags
     ) -> NativeHelperPillActivationIntent {
@@ -269,6 +491,8 @@ final class NativeMenuController: NSObject {
         _ id: String,
         intent: NativeHelperPillActivationIntent = .standard
     ) {
+        sessionHoverState.pointerExited(id)
+        dismissSessionPopover()
         let now = ProcessInfo.processInfo.systemUptime
         if let lastActivation,
            lastActivation.id == id,
@@ -297,15 +521,60 @@ final class NativeMenuController: NSObject {
     }
 
     private func startShortcutRevealMonitoring() {
-        localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) {
+        let mask: NSEvent.EventTypeMask = [.flagsChanged, .keyDown]
+        localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) {
             [weak self] event in
-            self?.handleModifierFlags(event.modifierFlags)
+            self?.handleShortcutEvent(event)
             return event
         }
-        globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) {
+        globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) {
             [weak self] event in
+            let type = event.type
             let flags = event.modifierFlags
-            Task { @MainActor in self?.handleModifierFlags(flags) }
+            let keyCode = event.keyCode
+            Task { @MainActor in
+                self?.handleShortcutEvent(type: type, flags: flags, keyCode: keyCode)
+            }
+        }
+    }
+
+    private func handleShortcutEvent(_ event: NSEvent) {
+        handleShortcutEvent(
+            type: event.type,
+            flags: event.modifierFlags,
+            keyCode: event.keyCode
+        )
+    }
+
+    private func handleShortcutEvent(
+        type: NSEvent.EventType,
+        flags: NSEvent.ModifierFlags,
+        keyCode: UInt16
+    ) {
+        switch type {
+        case .flagsChanged:
+            handleModifierFlags(flags)
+            handleHotkeyModifierFlags(flags)
+        case .keyDown:
+            handleHotkeyKeyDown(keyCode: keyCode, flags: flags)
+        default:
+            break
+        }
+    }
+
+    private func handleHotkeyModifierFlags(_ flags: NSEvent.ModifierFlags) {
+        if hotkeyState.modifierFlagsChanged(modifierMask(flags), at: Date()) {
+            emit(.toggleSessions)
+        }
+    }
+
+    private func handleHotkeyKeyDown(keyCode: UInt16, flags: NSEvent.ModifierFlags) {
+        if hotkeyState.keyDown(
+            keyCode: keyCode,
+            modifiers: modifierMask(flags),
+            at: Date()
+        ) {
+            emit(.toggleSessions)
         }
     }
 
@@ -551,19 +820,12 @@ final class NativeMenuController: NSObject {
     }
 
     private func renderSession(_ panel: NativePillPanel, pill: NativeHelperPill, label: String) {
-        let tooltip = [
-            pill.title,
-            pill.subtitle ?? "",
-            [pill.source, pill.project].compactMap { $0 }.joined(separator: " · "),
-            pill.owner.map { "Open in \($0)" } ?? "Open in Agent Visor",
-        ].filter { !$0.isEmpty }.joined(separator: "\n")
         let shortcutPosition = shortcutSnapshot?.positions[pill.id]
         let key = [
             pill.id,
             label,
             pill.phase.rawValue,
             shortcutPosition.map(String.init) ?? "",
-            tooltip,
         ].joined(separator: "|")
         guard panel.renderKey != key else { return }
         panel.renderKey = key
@@ -574,7 +836,7 @@ final class NativeMenuController: NSObject {
             fontSize: 11,
             foregroundColor: .white.withAlphaComponent(isRecent ? 0.62 : 0.85),
             image: shortcutPosition.map(keycapImage) ?? dotImage(),
-            tooltip: tooltip,
+            tooltip: nil,
             identifier: pill.id,
             backgroundAlpha: isRecent ? 0.24 : 0.35,
             borderAlpha: isRecent ? 0.07 : 0,
@@ -583,6 +845,9 @@ final class NativeMenuController: NSObject {
                     pill.id,
                     intent: self?.activationIntent(for: modifiers) ?? .standard
                 )
+            },
+            onHoverChange: { [weak self] hovering in
+                self?.handleSessionHover(pill.id, hovering: hovering)
             }
         )
         if shortcutPosition == nil {
@@ -630,11 +895,12 @@ final class NativeMenuController: NSObject {
         fontSize: CGFloat,
         foregroundColor: NSColor,
         image: NSImage?,
-        tooltip: String,
+        tooltip: String?,
         identifier: String,
         backgroundAlpha: CGFloat = 0.35,
         borderAlpha: CGFloat = 0,
-        onActivate: ((NSEvent.ModifierFlags) -> Void)?
+        onActivate: ((NSEvent.ModifierFlags) -> Void)?,
+        onHoverChange: ((Bool) -> Void)? = nil
     ) {
         let font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
         panel.renderedTitle = title
@@ -652,6 +918,7 @@ final class NativeMenuController: NSObject {
         panel.pillButton.target = nil
         panel.pillButton.action = nil
         panel.pillButton.onActivate = onActivate
+        panel.pillButton.onHoverChange = onHoverChange
     }
 
     private struct LayoutBounds {

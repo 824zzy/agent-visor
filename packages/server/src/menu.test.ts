@@ -76,7 +76,11 @@ const snapshot: SessionSnapshot = {
 
 describe("menu presentation", () => {
   it("orders active pills by attention and keeps recent history after them", () => {
-    expect(menuPresentation(snapshot, [])).toEqual({
+    const presentation = menuPresentation(snapshot, []);
+    expect({
+      ...presentation,
+      pills: presentation.pills.map(({ inspector: _, ...pill }) => pill),
+    }).toEqual({
       pills: [
         {
           id: "approval",
@@ -127,6 +131,18 @@ describe("menu presentation", () => {
     });
   });
 
+  it("builds the Swift inspector content from authoritative session fields", () => {
+    const presentation = menuPresentation(snapshot, []);
+
+    expect(presentation.pills.find((pill) => pill.id === "work")?.inspector).toEqual({
+      status: "Working",
+      runtimeItems: ["Pi · Ghostty"],
+      detailRows: [],
+      projectPath: "/repo",
+      activityAt: "2026-08-22T21:00:00.000Z",
+    });
+  });
+
   it("routes helper actions to the source app or Agent Visor Chat", () => {
     expect(nativeActionFor({
       version: 1,
@@ -165,5 +181,10 @@ describe("menu presentation", () => {
       type: "event",
       event: "open_sessions",
     }, snapshot)).toEqual({ type: "native_action", action: "open_sessions" });
+    expect(nativeActionFor({
+      version: 1,
+      type: "event",
+      event: "toggle_sessions",
+    }, snapshot)).toEqual({ type: "native_action", action: "toggle_sessions" });
   });
 });

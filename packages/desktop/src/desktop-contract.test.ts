@@ -8,6 +8,7 @@ import {
   ownerApplication,
   productName,
   rendererLocation,
+  windowCloseAction,
 } from "./desktop-contract.js";
 
 const daemonUrl = "ws://127.0.0.1:49152?token=secret";
@@ -16,6 +17,11 @@ describe("desktop launch contract", () => {
   it("keeps Electron data separate while preserving the product name", () => {
     expect(electronDataName).toBe("Agent Visor Next");
     expect(productName).toBe("Agent Visor");
+  });
+
+  it("hides the main window unless the application is quitting", () => {
+    expect(windowCloseAction(false)).toBe("hide");
+    expect(windowCloseAction(true)).toBe("close");
   });
 
   it("keeps the daemon credential out of an Expo development URL", () => {
@@ -54,6 +60,10 @@ describe("desktop launch contract", () => {
       type: "native_action",
       action: "open_sessions",
     })).toEqual({ action: "open_sessions" });
+    expect(nativeActionFromDaemonMessage({
+      type: "native_action",
+      action: "toggle_sessions",
+    })).toEqual({ action: "toggle_sessions" });
     expect(nativeActionFromDaemonMessage({
       type: "native_action",
       action: "open_chat",

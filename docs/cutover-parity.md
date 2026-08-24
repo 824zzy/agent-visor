@@ -4,6 +4,8 @@ Checked on 2026-08-23 against released Agent Visor 2.6.1.
 
 `Pass` means the replacement matches the released behavior or uses a verified safer route.
 
+The 2026-08-24 source audit corrected earlier broad Pass claims. `Partial` names a working subset with released behavior still missing.
+
 ## Product surfaces
 
 | Surface | Released behavior | Replacement evidence | Status |
@@ -14,22 +16,26 @@ Checked on 2026-08-23 against released Agent Visor 2.6.1.
 | Chat action | Separate action when supported | Fixed Chat column and separate pointer target | Pass |
 | Keyboard use | Search, arrows, Return, Shift-Return, Command-number, Settings, Back, global pills, and scale | Pure checks, Electron checks, and Computer Use verification | Pass |
 | Browser retention | Preserve search, cursor, and viewport through Chat | Mounted hidden browser and Electron check | Pass |
+| Session management | Inspect, hide, and unhide Sessions rows | Owner and Chat actions work; Inspect and hidden-session controls remain absent | Partial |
 | Responsive layout | Compact widths and large text | One responsive row module from 80% through 250% | Pass |
 | Appearance | Released accessible Catppuccin light, dark, and system modes | Exact semantic sRGB tokens, persisted settings, and Computer Use screenshots | Pass |
 | Accessibility | Named controls, stable actions, and hidden retained content | Electron accessibility checks | Pass |
 | Chat history | Grouped turns, reasoning, tools, images, and paging | Provider parsers and Chat Electron check | Pass |
-| Chat actions | Approvals, persistent approvals, denial, and questions | Authenticated Claude hook response checks | Pass |
+| Chat actions | Approvals, persistent approvals, denial, questions, and provider controls | Authenticated Claude hook response checks; permission, model, context, and visibility controls remain absent | Partial |
 | Text delivery | Send to verified active providers | Exact terminal routes and Codex app-server route | Pass |
 | Image delivery | Claude, Pi, and Codex supported image routes | Private path paste, path prompt, and local-image input | Pass |
-| Menu pills | Released active and recent capsules, colors, actions, keycaps, and attention order | Signed helper integration, pixel comparison, and live visual checks | Pass |
+| Menu pills | Released capsules, colors, actions, keycaps, hover inspectors, and attention order | Core capsules match; the searchable `+N` navigator and `Pill Settings...` menu remain absent | Partial |
 | Menu packing | App-menu, tray, display, notch, usage, and overflow constraints | Shared packer and click-sized AppKit panels | Pass |
+| Display policy | User-selected pill display and released full-screen visibility policy | Helper follows the status-item screen and always joins full-screen spaces | Partial |
 | Global shortcuts | Configurable visible-session and Sessions shortcuts with modifier reveal | Signed helper registration, frozen snapshots, keycap screenshot, and footer checks | Pass |
-| Usage | Codex limits with retained last valid value | Bounded app-server reader and live probe | Pass |
-| Settings | Native category layout, labels, shortcuts, and preservation | Computer Use, atomic `0600` store, and complete source property list | Pass |
+| Usage | Codex and Claude limits with retained last valid values and click detail | Codex reading works; Claude usage and the click detail popover remain absent | Partial |
+| Settings | Native category layout, controls, shortcuts, integrations, and preservation | Core settings persist; display, full-screen, hidden sessions, Chat visibility, hook controls, and custom recording remain absent | Partial |
 | Accessibility repair | Stable signed identity and macOS repair destination | Release-signed helper and live trusted state | Pass |
-| Notifications | Native status transitions and source action | Electron notification contract and serialized owner route | Pass |
-| Updates | Signed public release with downgrade prevention | Validated appcast, release identity, manual verified release link | Pass |
-| Lifecycle | Quit owned processes only | Clean shutdown checks preserve independent provider processes | Pass |
+| Notifications | Native status transitions, exact session action, approval actions, and Dock badge | Phase notices work; clicks open only the owner application and interactive actions remain absent | Partial |
+| Updates | Signed public release with downgrade prevention | Validated appcast and manual verified release link; automatic installation remains intentionally disabled | Partial |
+| Lifecycle | Close-to-hide, Dock reopen, launch at login, and quit owned processes only | Window lifecycle and owned-process shutdown checks | Pass |
+| Agent integrations | Detect and install or remove hook-based integrations | Existing hooks work; fresh-profile installation and connection controls remain absent | Partial |
+| Pi restoration | Relaunch exact eligible prior-boot Ghostty sessions | No Electron restoration coordinator exists | Missing |
 
 ## Provider matrix
 
@@ -45,7 +51,7 @@ Checked on 2026-08-23 against released Agent Visor 2.6.1.
 | Historical Pi | Bounded history | No invented active target | Read-only history | Pass |
 | Cursor CLI in a terminal | Cursor-owned transcript parser | Exact TTY focus | Read-only history | Pass |
 | Historical Cursor | Bounded history | Strict Cursor application fallback | Read-only history | Pass |
-| Zed-hosted agents | Zed database has title authority | Signed Zed application focus | Read-only history | Pass |
+| Zed-hosted agents | Zed database has title authority | Signed Zed application focus without the released verified thread reveal | Read-only history | Partial |
 | Auggie | Authenticated hook lifecycle | Strict owner fallback | Observe-only, matching the released integration | Pass |
 
 Zed documents `zed:///agent/thread/<id>` but reports that it does not select the referenced thread.
@@ -85,7 +91,7 @@ The candidate uses:
 - Existing `AgentVisor Release` certificate.
 - Version 2.7.0 and build 54 by default.
 - Hardened runtime entitlements required by Electron.
-- A metadata-clean ZIP with SHA-256 `a03ccbbccf062eaccd43a3d507e9c0d27bb6bf381cb9a61cb373a16d1e9630be`.
+- A metadata-clean ZIP with SHA-256 `3cb9228b35e213b67e8e8abd3eb1406614470c65e253d42a3a8ac2e30a39f50f`.
 
 Checks cover strict nested signatures, archive extraction, disabled application sandbox, library validation, and Homebrew ad-hoc re-signing.
 
@@ -110,7 +116,9 @@ Rollback remains the public Swift release:
 3. Start the Swift application with the same signing identity.
 4. Keep `Agent Visor Next/settings.json` for diagnosis or remove it after rollback approval.
 
-The complete migrated Swift property list remains in the private settings file.
+The raw migrated Swift property list remains in the private settings file. It does not mean every released control or behavior is implemented.
+
+The detailed source audit is stored at `/Users/zhengyuanz/Codes/.scratch/agent-visor-electron-parity-audit/report.md`.
 
 ## Removal decision
 

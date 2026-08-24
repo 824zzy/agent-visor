@@ -1,6 +1,10 @@
 export const productName = "Agent Visor";
 export const electronDataName = "Agent Visor Next";
 
+export function windowCloseAction(quitting: boolean): "hide" | "close" {
+  return quitting ? "close" : "hide";
+}
+
 export type RendererLocation =
   | { kind: "url"; value: string }
   | { kind: "file"; path: string };
@@ -21,6 +25,7 @@ export function daemonUrlFromReadyMessage(value: unknown): string | undefined {
 
 export type NativeAction =
   | { action: "open_sessions" }
+  | { action: "toggle_sessions" }
   | { action: "open_chat"; sessionId: string }
   | { action: "open_owner"; owner: string; sessionId: string }
   | { action: "open_session_url"; url: string };
@@ -29,7 +34,9 @@ export function nativeActionFromDaemonMessage(value: unknown): NativeAction | un
   if (typeof value !== "object" || value === null) return undefined;
   const message = value as Record<string, unknown>;
   if (message.type !== "native_action") return undefined;
-  if (message.action === "open_sessions") return { action: "open_sessions" };
+  if (message.action === "open_sessions" || message.action === "toggle_sessions") {
+    return { action: message.action };
+  }
   if (message.action === "open_chat") {
     return typeof message.sessionId === "string"
       && message.sessionId.length > 0

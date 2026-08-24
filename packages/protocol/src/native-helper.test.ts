@@ -22,6 +22,14 @@ const requests = [
           source: "Pi",
           project: "agent-visor",
           owner: "Ghostty",
+          inspector: {
+            status: "Ready",
+            runtimeItems: ["Pi · Ghostty", "Claude Sonnet 4"],
+            detailRows: [{ label: "Reasoning", value: "High" }],
+            projectPath: "~/Codes/agent-visor",
+            activityAt: "2026-08-22T21:02:18.000Z",
+            context: { usedLabel: "84k", windowLabel: "200k", percentage: 42 },
+          },
           phase: "ready",
           priority: 1,
           accessibilityLabel: "Review migration, ready",
@@ -35,6 +43,8 @@ const requests = [
         },
       ],
       shortcutModifierFamily: "controlCommand",
+      hotkeyTrigger: "custom",
+      customHotkeyCombo: "49:8",
       usageGlances: [
         {
           id: "codex",
@@ -123,6 +133,12 @@ describe("native helper protocol", () => {
         params: { target: { application: "Ghostty", tty: "/dev/null", cwd: "/" } },
       }).success,
     ).toBe(false);
+    expect(nativeHelperRequestSchema.safeParse({
+      version: 1,
+      id: "unsafe-hotkey",
+      method: "present_pills",
+      params: { pills: [], hotkeyTrigger: "custom", customHotkeyCombo: "99999:99" },
+    }).success).toBe(false);
   });
 
   it("validates helper activation events", () => {
@@ -150,6 +166,11 @@ describe("native helper protocol", () => {
       version: 1,
       type: "event",
       event: "open_sessions",
+    }).success).toBe(true);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1,
+      type: "event",
+      event: "toggle_sessions",
     }).success).toBe(true);
   });
 

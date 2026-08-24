@@ -15,6 +15,26 @@ public enum NativeHelperPillPhase: String, Codable, Equatable {
     case history
 }
 
+public struct NativeHelperSessionInspectorRow: Codable, Equatable, Sendable {
+    public let label: String
+    public let value: String
+}
+
+public struct NativeHelperSessionInspectorContext: Codable, Equatable, Sendable {
+    public let usedLabel: String
+    public let windowLabel: String
+    public let percentage: Int
+}
+
+public struct NativeHelperSessionInspector: Codable, Equatable, Sendable {
+    public let status: String
+    public let runtimeItems: [String]
+    public let detailRows: [NativeHelperSessionInspectorRow]
+    public let projectPath: String
+    public let activityAt: String
+    public let context: NativeHelperSessionInspectorContext?
+}
+
 public struct NativeHelperPill: Codable, Equatable {
     public let id: String
     public let title: String
@@ -22,6 +42,7 @@ public struct NativeHelperPill: Codable, Equatable {
     public let source: String?
     public let project: String?
     public let owner: String?
+    public let inspector: NativeHelperSessionInspector?
     public let phase: NativeHelperPillPhase
     public let priority: Int
     public let accessibilityLabel: String
@@ -33,6 +54,7 @@ public struct NativeHelperPill: Codable, Equatable {
         source: String? = nil,
         project: String? = nil,
         owner: String? = nil,
+        inspector: NativeHelperSessionInspector? = nil,
         phase: NativeHelperPillPhase,
         priority: Int,
         accessibilityLabel: String
@@ -43,6 +65,7 @@ public struct NativeHelperPill: Codable, Equatable {
         self.source = source
         self.project = project
         self.owner = owner
+        self.inspector = inspector
         self.phase = phase
         self.priority = priority
         self.accessibilityLabel = accessibilityLabel
@@ -110,6 +133,15 @@ public struct NativeHelperFocusTarget: Codable, Equatable {
     }
 }
 
+public enum NativeHelperHotkeyTrigger: String, Codable, Equatable {
+    case off
+    case cmd
+    case ctrl
+    case option
+    case shift
+    case custom
+}
+
 public enum NativeHelperRequest: Equatable {
     case screenTopology(id: String)
     case accessibilityStatus(id: String)
@@ -119,7 +151,9 @@ public enum NativeHelperRequest: Equatable {
         id: String,
         pills: [NativeHelperPill],
         usageGlances: [NativeHelperUsageGlance],
-        shortcutModifierFamily: SessionShortcutModifierFamily?
+        shortcutModifierFamily: SessionShortcutModifierFamily?,
+        hotkeyTrigger: NativeHelperHotkeyTrigger?,
+        customHotkeyCombo: KeyCombo?
     )
     case focus(id: String, target: NativeHelperFocusTarget)
     case focusTerminal(id: String, target: NativeHelperTerminalTarget)
@@ -129,7 +163,7 @@ public enum NativeHelperRequest: Equatable {
         switch self {
         case .screenTopology(let id), .accessibilityStatus(let id),
              .requestAccessibility(let id), .openAccessibilitySettings(let id),
-             .presentPills(let id, _, _, _), .focus(let id, _),
+             .presentPills(let id, _, _, _, _, _), .focus(let id, _),
              .focusTerminal(let id, _), .sendTerminal(let id, _, _, _):
             id
         }
@@ -172,6 +206,7 @@ public enum NativeHelperRequest: Equatable {
                   Set(params.keys).contains("pills"),
                   Set(params.keys).isSubset(of: [
                     "pills", "usageGlances", "shortcutModifierFamily",
+                    "hotkeyTrigger", "customHotkeyCombo",
                   ]),
                   let pills = params.pills, pills.count <= 64,
                   (params.usageGlances?.count ?? 0) <= 8,
@@ -182,14 +217,26 @@ public enum NativeHelperRequest: Equatable {
             let shortcutFamily = params.shortcutModifierFamily.flatMap(
                 SessionShortcutModifierFamily.init(rawValue:)
             )
-            guard params.shortcutModifierFamily == nil || shortcutFamily != nil else {
+            let hotkeyTrigger = params.hotkeyTrigger.flatMap(
+                NativeHelperHotkeyTrigger.init(rawValue:)
+            )
+            let customCombo = params.customHotkeyCombo.flatMap(KeyCombo.fromSerialized)
+            guard params.shortcutModifierFamily == nil || shortcutFamily != nil,
+                  params.hotkeyTrigger == nil || hotkeyTrigger != nil,
+                  params.customHotkeyCombo == nil || (
+                    (params.customHotkeyCombo?.count ?? 0) <= 8
+                    && customCombo.map(KeyComboValidator.isValid) == true
+                    && customCombo.map { $0.modifiers.rawValue & ~15 == 0 } == true
+                  ) else {
                 throw NativeHelperWireError.invalidRequest
             }
             return .presentPills(
                 id: wire.id,
                 pills: pills,
                 usageGlances: params.usageGlances ?? [],
-                shortcutModifierFamily: shortcutFamily
+                shortcutModifierFamily: shortcutFamily,
+                hotkeyTrigger: hotkeyTrigger,
+                customHotkeyCombo: customCombo
             )
         case "focus":
             guard let params = wire.params,
@@ -316,6 +363,7 @@ public enum NativeHelperEvent {
         intent: NativeHelperPillActivationIntent = .standard
     )
     case openSessions
+    case toggleSessions
 
     public func encoded() throws -> Data {
         let envelope: EventEnvelope
@@ -328,6 +376,8 @@ public enum NativeHelperEvent {
             )
         case .openSessions:
             envelope = EventEnvelope(event: "open_sessions", sessionId: nil, intent: nil)
+        case .toggleSessions:
+            envelope = EventEnvelope(event: "toggle_sessions", sessionId: nil, intent: nil)
         }
         return try JSONEncoder().encode(envelope)
     }
@@ -398,6 +448,7 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
               Set(params.keys).contains("pills"),
               Set(params.keys).isSubset(of: [
                 "pills", "usageGlances", "shortcutModifierFamily",
+                "hotkeyTrigger", "customHotkeyCombo",
               ]),
               let pills = params["pills"] as? [[String: Any]] else { return false }
         let usageGlances = params["usageGlances"] as? [[String: Any]] ?? []
@@ -405,7 +456,7 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
             "id", "title", "phase", "priority", "accessibilityLabel",
         ]
         let detailedPillKeys = legacyPillKeys.union([
-            "subtitle", "source", "project", "owner",
+            "subtitle", "source", "project", "owner", "inspector",
         ])
         let usageKeys: Set<String> = [
             "id", "label", "detail", "tone", "priority", "accessibilityLabel",
@@ -414,6 +465,7 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
             let keys = Set($0.keys)
             return keys.isSuperset(of: legacyPillKeys)
                 && keys.isSubset(of: detailedPillKeys)
+                && ($0["inspector"].map(hasStrictInspectorFields) ?? true)
         }
             && usageGlances.allSatisfy { Set($0.keys) == usageKeys }
     case "focus":
@@ -448,6 +500,8 @@ private struct WireParameters: Decodable {
     let pills: [NativeHelperPill]?
     let usageGlances: [NativeHelperUsageGlance]?
     let shortcutModifierFamily: String?
+    let hotkeyTrigger: String?
+    let customHotkeyCombo: String?
     let target: NativeHelperFocusTarget?
     let terminalTarget: NativeHelperTerminalTarget?
     let text: String?
@@ -465,6 +519,14 @@ private struct WireParameters: Decodable {
         shortcutModifierFamily = try container.decodeIfPresent(
             String.self,
             forKey: .init("shortcutModifierFamily")
+        )
+        hotkeyTrigger = try container.decodeIfPresent(
+            String.self,
+            forKey: .init("hotkeyTrigger")
+        )
+        customHotkeyCombo = try container.decodeIfPresent(
+            String.self,
+            forKey: .init("customHotkeyCombo")
         )
         target = try? container.decodeIfPresent(NativeHelperFocusTarget.self, forKey: .init("target"))
         terminalTarget = try? container.decodeIfPresent(
@@ -496,6 +558,21 @@ private extension NativeHelperTerminalTarget {
     }
 }
 
+private func hasStrictInspectorFields(_ value: Any) -> Bool {
+    guard let inspector = value as? [String: Any] else { return false }
+    let required: Set<String> = [
+        "status", "runtimeItems", "detailRows", "projectPath", "activityAt",
+    ]
+    let keys = Set(inspector.keys)
+    guard keys.isSuperset(of: required), keys.isSubset(of: required.union(["context"])),
+          let rows = inspector["detailRows"] as? [[String: Any]] else { return false }
+    return rows.allSatisfy { Set($0.keys) == ["label", "value"] }
+        && (inspector["context"].map {
+            guard let context = $0 as? [String: Any] else { return false }
+            return Set(context.keys) == ["usedLabel", "windowLabel", "percentage"]
+        } ?? true)
+}
+
 private extension NativeHelperPill {
     var isValid: Bool {
         !id.isEmpty && id.count <= 128
@@ -504,7 +581,33 @@ private extension NativeHelperPill {
             && (source == nil || !(source?.isEmpty ?? true)) && (source?.count ?? 0) <= 128
             && (project == nil || !(project?.isEmpty ?? true)) && (project?.count ?? 0) <= 256
             && (owner == nil || !(owner?.isEmpty ?? true)) && (owner?.count ?? 0) <= 128
+            && (inspector?.isValid ?? true)
             && !accessibilityLabel.isEmpty && accessibilityLabel.count <= 512
+    }
+}
+
+private extension NativeHelperSessionInspector {
+    var isValid: Bool {
+        !status.isEmpty && status.count <= 64
+            && (1...4).contains(runtimeItems.count)
+            && runtimeItems.allSatisfy { !$0.isEmpty && $0.count <= 256 }
+            && detailRows.count <= 8
+            && detailRows.allSatisfy {
+                !$0.label.isEmpty && $0.label.count <= 64
+                    && !$0.value.isEmpty && $0.value.count <= 512
+            }
+            && !projectPath.isEmpty && projectPath.count <= 4_096
+            && activityAt.count <= 64
+            && (try? Date(activityAt, strategy: .iso8601)) != nil
+            && (context?.isValid ?? true)
+    }
+}
+
+private extension NativeHelperSessionInspectorContext {
+    var isValid: Bool {
+        !usedLabel.isEmpty && usedLabel.count <= 64
+            && !windowLabel.isEmpty && windowLabel.count <= 64
+            && (0...100).contains(percentage)
     }
 }
 

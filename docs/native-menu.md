@@ -24,7 +24,15 @@ A normal click acknowledges a Ready item and moves it behind In progress. Activi
 
 An observed transition into Ready pulses its status dot for up to seven minutes. Initial snapshots do not invent completions, and acknowledgment stops the pulse.
 
-Each item matches the released 24-point dark capsule, six-point status dot, seven-point outer padding, three-point dot-to-title spacing, and full hover help.
+Each item matches the released 24-point dark capsule, six-point status dot, seven-point outer padding, and three-point dot-to-title spacing.
+
+Hovering for 0.35 seconds opens a compact session inspector. Leaving the item dismisses it, while clicking keeps the normal source action.
+
+The inspector matches Swift’s content order: title, phase badge, latest runtime, conditional detail rows, project path, conditional context, activity, and direct-open shortcut.
+
+Reasoning, mode, access, model, and context appear only when the daemon has authoritative values. Missing provider data never creates placeholder claims.
+
+The inspector retains Swift’s layout, typography, native arrow, and shadow. Semantic macOS colors provide a white light-mode card and a dark dark-mode card.
 
 Chat-only transcript history remains in Sessions and does not crowd the menu bar.
 
@@ -44,6 +52,10 @@ The status colors match the released sRGB roles:
 The helper registers the selected modifier family with 1 through 9 for the first nine visible items.
 
 Holding those modifiers freezes the target snapshot and replaces status dots with numbered keycaps. The selected modifiers with 0 open Sessions. Off unregisters all session shortcuts.
+
+The independent application shortcut defaults to double Shift. Modifier taps use the released timing and chord-cancellation policy. A migrated custom chord remains usable.
+
+The application shortcut hides an active Sessions window. Otherwise it raises Sessions above the current application.
 
 A helper action travels back through the authenticated local helper connection. The daemon resolves current capabilities before acting.
 

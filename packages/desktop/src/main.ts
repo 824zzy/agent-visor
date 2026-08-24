@@ -20,18 +20,23 @@ import {
   ownerApplication,
   productName,
   rendererLocation,
+  windowCloseAction,
 } from "./desktop-contract.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 let daemon: ChildProcess | undefined;
 let mainWindow: BrowserWindow | undefined;
 let nativeActionQueue = Promise.resolve();
+let quitting = false;
 
 // Keep Electron data separate from the Swift rollback application.
 app.setName(electronDataName);
 
-app.on("before-quit", () => daemon?.kill("SIGTERM"));
-app.on("window-all-closed", () => app.quit());
+app.on("before-quit", () => {
+  quitting = true;
+  daemon?.kill("SIGTERM");
+});
+app.on("activate", () => navigateRenderer({ page: "sessions" }));
 ipcMain.on("session:open-owner", (event, owner: unknown) => {
   if (event.sender !== mainWindow?.webContents || typeof owner !== "string") return;
   const application = ownerApplication(owner);
@@ -69,9 +74,10 @@ async function createMainWindow(daemonUrl: string): Promise<BrowserWindow> {
     },
   });
 
-  window.once("closed", () => {
-    daemon?.kill("SIGTERM");
-    app.exit(0);
+  window.on("close", (event) => {
+    if (windowCloseAction(quitting) === "close") return;
+    event.preventDefault();
+    window.hide();
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   const rendererBase = process.env.AGENT_VISOR_RENDERER_URL
@@ -141,6 +147,11 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
       .then(async () => {
         if (action.action === "open_sessions") {
           navigateRenderer({ page: "sessions" });
+          return;
+        }
+        if (action.action === "toggle_sessions") {
+          if (mainWindow?.isVisible() && mainWindow.isFocused()) mainWindow.hide();
+          else navigateRenderer({ page: "sessions" });
           return;
         }
         if (action.action === "open_chat") {
