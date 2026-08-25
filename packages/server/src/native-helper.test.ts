@@ -3,6 +3,8 @@ import { FakeNativeHelper } from "./native-helper.js";
 
 const screen = {
   displayId: 1,
+  name: "Built-in Retina Display",
+  isBuiltIn: true,
   frame: { x: 0, y: 0, width: 1512, height: 982 },
   visibleFrame: { x: 0, y: 37, width: 1512, height: 945 },
   scale: 2,
@@ -56,6 +58,7 @@ describe("FakeNativeHelper", () => {
     await helper.openAccessibilitySettings();
     await helper.presentPills(
       [pill], [usage], "controlCommand", "custom", "49:8", [pill, navigatorPill],
+      { mode: "specific", displayId: 5, name: "XZ322QU V3" }, "alwaysHide",
     );
     await helper.focus(focus);
     const terminal = { application: "Ghostty" as const, tty: "ttys012", cwd: "/tmp/project" };
@@ -70,6 +73,10 @@ describe("FakeNativeHelper", () => {
     expect(helper.shortcutModifierFamily).toBe("controlCommand");
     expect(helper.hotkeyTrigger).toBe("custom");
     expect(helper.customHotkeyCombo).toBe("49:8");
+    expect(helper.pillScreen).toEqual({
+      mode: "specific", displayId: 5, name: "XZ322QU V3",
+    });
+    expect(helper.fullScreenPolicy).toBe("alwaysHide");
     expect(helper.focusRequests).toEqual([focus]);
     expect(helper.terminalFocusRequests).toEqual([terminal]);
     expect(helper.terminalSendRequests).toEqual([{ target: terminal, text: "Continue", submit: true }]);

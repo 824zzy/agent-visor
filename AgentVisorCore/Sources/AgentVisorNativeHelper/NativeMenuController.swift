@@ -371,6 +371,8 @@ final class NativeMenuController: NSObject {
     private var hotKeys: [EventHotKeyRef?] = []
     private var eventHandler: EventHandlerRef?
     private var shortcutModifierFamily = SessionShortcutModifierFamily.defaultFamily
+    private var pillScreen = NativeHelperPillScreen.automatic
+    private var fullScreenPolicy = FullScreenPillPolicy.onDemand
     private var hotkeyState = NativeMenuHotkeyState()
     private var density: PillBarPacker.Density = .standard
     private var readyPulseTimer: Timer?
@@ -383,6 +385,22 @@ final class NativeMenuController: NSObject {
     private var globalClickMonitor: Any?
     private var localFlagsMonitor: Any?
     private var globalFlagsMonitor: Any?
+    private var localPointerMonitor: Any?
+    private var globalPointerMonitor: Any?
+    private var fullScreenPointerHideWorkItem: DispatchWorkItem?
+    private var fullScreenShortcutHideWorkItem: DispatchWorkItem?
+    private var isFullScreenActive = false
+    private var isFullScreenPointerRevealActive = false
+    private var isFullScreenShortcutRevealActive = false
+    private var explicitPopoverRevealActive = false
+    private var presentationIsVisible = true
+    private var fullScreenProbeRunning = false
+    private var fullScreenProbePending = false
+    private var lastFullScreenProbeAt: TimeInterval = 0
+    private let fullScreenScanQueue = DispatchQueue(
+        label: "com.824zzy.AgentVisor.fullscreen-detect",
+        qos: .userInitiated
+    )
     private var lastActivation: (id: String, at: TimeInterval)?
     private var lastOverflowActivation: TimeInterval?
     private var sessionHoverState = NativeMenuSessionHoverState()
@@ -404,6 +422,7 @@ final class NativeMenuController: NSObject {
         startLayoutUpdates()
         startClickMonitoring()
         startShortcutRevealMonitoring()
+        startFullScreenPointerMonitoring()
     }
 
     func present(
@@ -411,12 +430,21 @@ final class NativeMenuController: NSObject {
         navigatorPills: [NativeHelperPill],
         usageGlances: [NativeHelperUsageGlance],
         shortcutModifierFamily: SessionShortcutModifierFamily?,
+        pillScreen: NativeHelperPillScreen?,
+        fullScreenPolicy: FullScreenPillPolicy?,
         hotkeyTrigger: NativeHelperHotkeyTrigger?,
         customHotkeyCombo: KeyCombo?
     ) {
         if let hotkeyTrigger {
             hotkeyState.configure(trigger: hotkeyTrigger, customCombo: customHotkeyCombo)
         }
+        if let pillScreen, pillScreen != self.pillScreen {
+            self.pillScreen = pillScreen
+            isFullScreenActive = false
+            lastFullScreenProbeAt = 0
+        }
+        if let fullScreenPolicy { self.fullScreenPolicy = fullScreenPolicy }
+        syncFullScreenRevealState()
         if let shortcutModifierFamily,
            shortcutModifierFamily != self.shortcutModifierFamily {
             self.shortcutModifierFamily = shortcutModifierFamily
@@ -549,6 +577,7 @@ final class NativeMenuController: NSObject {
     private func handleClick(at point: CGPoint, modifiers: NSEvent.ModifierFlags) {
         let isInsidePopover = popover(overflowPopover, contains: point)
             || popover(usagePopover, contains: point)
+        guard presentationIsVisible else { return }
         guard renderedGeometryIsFresh() else {
             if !isInsidePopover {
                 dismissOverflowPopover()
@@ -641,6 +670,7 @@ final class NativeMenuController: NSObject {
         popover.show(relativeTo: panel.pillButton.bounds, of: panel.pillButton, preferredEdge: .minY)
         sessionPopover = popover
         sessionPopoverID = id
+        updatePresentationVisibility()
     }
 
     private func dismissSessionPopover() {
@@ -649,6 +679,7 @@ final class NativeMenuController: NSObject {
         sessionPopover?.close()
         sessionPopover = nil
         sessionPopoverID = nil
+        updatePresentationVisibility()
     }
 
     private func activationIntent(
@@ -726,6 +757,8 @@ final class NativeMenuController: NSObject {
             onDismiss: { [weak self] in self?.dismissOverflowPopover() }
         ))
         popover.contentViewController = content
+        explicitPopoverRevealActive = true
+        updatePresentationVisibility()
         let fittingSize = content.view.fittingSize
         popover.contentSize = NSSize(
             width: fittingSize.width,
@@ -742,6 +775,8 @@ final class NativeMenuController: NSObject {
     private func dismissOverflowPopover() {
         overflowPopover?.close()
         overflowPopover = nil
+        if usagePopover?.isShown != true { explicitPopoverRevealActive = false }
+        updatePresentationVisibility()
     }
 
     private func activateUsage(_ id: String) {
@@ -760,6 +795,8 @@ final class NativeMenuController: NSObject {
         popover.animates = false
         let content = NSHostingController(rootView: NativeMenuUsageView(glances: glances))
         popover.contentViewController = content
+        explicitPopoverRevealActive = true
+        updatePresentationVisibility()
         popover.contentSize = content.view.fittingSize
         popover.show(
             relativeTo: panel.pillButton.bounds,
@@ -773,6 +810,8 @@ final class NativeMenuController: NSObject {
     private func dismissUsagePopover() {
         usagePopover?.close()
         usagePopover = nil
+        if overflowPopover?.isShown != true { explicitPopoverRevealActive = false }
+        updatePresentationVisibility()
     }
 
     private func popover(_ popover: NSPopover?, contains point: CGPoint) -> Bool {
@@ -841,6 +880,7 @@ final class NativeMenuController: NSObject {
 
     private func handleModifierFlags(_ flags: NSEvent.ModifierFlags) {
         let isArmed = shortcutsAreArmed(flags)
+        updateFullScreenShortcutReveal(isRevealing: isArmed)
         if isArmed, shortcutSnapshot == nil {
             shortcutSnapshot = NativeMenuShortcutSnapshot(
                 visibleSessionIDs: shortcutSessionIDs
@@ -888,6 +928,161 @@ final class NativeMenuController: NSObject {
         }
     }
 
+    private func startFullScreenPointerMonitoring() {
+        localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) {
+            [weak self] event in
+            self?.updateFullScreenPointerReveal(at: NSEvent.mouseLocation)
+            return event
+        }
+        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) {
+            [weak self] _ in
+            let point = NSEvent.mouseLocation
+            Task { @MainActor in self?.updateFullScreenPointerReveal(at: point) }
+        }
+    }
+
+    private func syncFullScreenRevealState() {
+        guard isFullScreenActive, fullScreenPolicy == .onDemand else {
+            fullScreenPointerHideWorkItem?.cancel()
+            fullScreenPointerHideWorkItem = nil
+            fullScreenShortcutHideWorkItem?.cancel()
+            fullScreenShortcutHideWorkItem = nil
+            isFullScreenPointerRevealActive = false
+            isFullScreenShortcutRevealActive = false
+            updatePresentationVisibility()
+            return
+        }
+        updateFullScreenPointerReveal(at: NSEvent.mouseLocation)
+        updateFullScreenShortcutReveal(isRevealing: shortcutsAreArmed(NSEvent.modifierFlags))
+        updatePresentationVisibility()
+    }
+
+    private func updateFullScreenPointerReveal(at point: CGPoint) {
+        guard isFullScreenActive, fullScreenPolicy == .onDemand,
+              let screen = targetScreen() else {
+            fullScreenPointerHideWorkItem?.cancel()
+            fullScreenPointerHideWorkItem = nil
+            isFullScreenPointerRevealActive = false
+            updatePresentationVisibility()
+            return
+        }
+        if FullScreenPillPointerZonePolicy.contains(
+            pointer: point,
+            screenRect: screen.frame,
+            isRevealed: isFullScreenPointerRevealActive
+        ) {
+            fullScreenPointerHideWorkItem?.cancel()
+            fullScreenPointerHideWorkItem = nil
+            isFullScreenPointerRevealActive = true
+            updatePresentationVisibility()
+        } else if isFullScreenPointerRevealActive,
+                  fullScreenPointerHideWorkItem == nil {
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.fullScreenPointerHideWorkItem = nil
+                self?.isFullScreenPointerRevealActive = false
+                self?.updatePresentationVisibility()
+            }
+            fullScreenPointerHideWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.65, execute: workItem)
+        }
+    }
+
+    private func updateFullScreenShortcutReveal(isRevealing: Bool) {
+        guard isFullScreenActive, fullScreenPolicy == .onDemand else {
+            fullScreenShortcutHideWorkItem?.cancel()
+            fullScreenShortcutHideWorkItem = nil
+            isFullScreenShortcutRevealActive = false
+            updatePresentationVisibility()
+            return
+        }
+        if isRevealing {
+            fullScreenShortcutHideWorkItem?.cancel()
+            fullScreenShortcutHideWorkItem = nil
+            isFullScreenShortcutRevealActive = true
+            updatePresentationVisibility()
+        } else if isFullScreenShortcutRevealActive,
+                  fullScreenShortcutHideWorkItem == nil {
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.fullScreenShortcutHideWorkItem = nil
+                self?.isFullScreenShortcutRevealActive = false
+                self?.updatePresentationVisibility()
+            }
+            fullScreenShortcutHideWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
+        }
+    }
+
+    private func updatePresentationVisibility() {
+        let visible = FullScreenPillVisibilityPolicy.isVisible(
+            isFullScreenActive: isFullScreenActive,
+            policy: fullScreenPolicy,
+            pointerRevealActive: isFullScreenPointerRevealActive,
+            shortcutRevealActive: isFullScreenShortcutRevealActive,
+            popoverPresented: explicitPopoverRevealActive
+                || sessionPopover?.isShown == true
+                || overflowPopover?.isShown == true
+                || usagePopover?.isShown == true
+        )
+        let panels = Array(sessionPanels.values) + Array(usagePanels.values)
+            + [overflowPanel].compactMap { $0 }
+        panels.forEach { $0.ignoresMouseEvents = !visible }
+        if visible == presentationIsVisible {
+            panels.forEach { $0.alphaValue = visible ? 1 : 0 }
+        } else {
+            presentationIsVisible = visible
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.15
+                panels.forEach { $0.animator().alphaValue = visible ? 1 : 0 }
+            }
+        }
+    }
+
+    private func refreshFullScreenState(on screen: NSScreen, force: Bool = false) {
+        guard !sessionPresentations.isEmpty || !usagePresentations.isEmpty else { return }
+        if fullScreenProbeRunning {
+            if force { fullScreenProbePending = true }
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard force || now - lastFullScreenProbeAt >= 1 else { return }
+        guard let displayId = (screen.deviceDescription[
+            NSDeviceDescriptionKey("NSScreenNumber")
+        ] as? NSNumber)?.uint32Value else { return }
+        fullScreenProbeRunning = true
+        lastFullScreenProbeAt = now
+        let screenFrame = screen.frame
+        let screenRect = cgScreenRect(for: screen)
+        fullScreenScanQueue.async { [weak self] in
+            let active = FullScreenWindowDetector.ownerPID(intersecting: screenRect) != nil
+            Task { @MainActor in
+                guard let self else { return }
+                self.fullScreenProbeRunning = false
+                let repeatProbe = self.fullScreenProbePending
+                self.fullScreenProbePending = false
+                guard let liveScreen = self.targetScreen(),
+                      (liveScreen.deviceDescription[
+                        NSDeviceDescriptionKey("NSScreenNumber")
+                      ] as? NSNumber)?.uint32Value == displayId,
+                      MenuBarGeometryFreshness.isFresh(
+                        captured: screenFrame,
+                        live: liveScreen.frame
+                      ) else {
+                    if let screen = self.targetScreen() {
+                        self.refreshFullScreenState(on: screen, force: true)
+                    }
+                    return
+                }
+                if self.isFullScreenActive != active {
+                    self.isFullScreenActive = active
+                    self.syncFullScreenRevealState()
+                }
+                if repeatProbe {
+                    self.refreshFullScreenState(on: liveScreen, force: true)
+                }
+            }
+        }
+    }
+
     private func startLayoutUpdates() {
         layoutTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.layoutPresentation() }
@@ -900,13 +1095,29 @@ final class NativeMenuController: NSObject {
         ) { [weak self] _ in
             Task { @MainActor in self?.layoutPresentation() }
         })
-        layoutObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.layoutPresentation() }
-        })
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        for name in [
+            NSWorkspace.activeSpaceDidChangeNotification,
+            NSWorkspace.didActivateApplicationNotification,
+            NSWorkspace.didLaunchApplicationNotification,
+            NSWorkspace.didTerminateApplicationNotification,
+            NSWorkspace.didHideApplicationNotification,
+            NSWorkspace.didUnhideApplicationNotification,
+        ] {
+            layoutObservers.append(workspaceCenter.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.layoutPresentation()
+                    if let screen = self.targetScreen() {
+                        self.refreshFullScreenState(on: screen, force: true)
+                    }
+                }
+            })
+        }
     }
 
     private func layoutPresentation() {
@@ -916,6 +1127,10 @@ final class NativeMenuController: NSObject {
         guard let screen = targetScreen() else {
             hidePresentation()
             return
+        }
+        refreshFullScreenState(on: screen)
+        if isFullScreenActive, fullScreenPolicy == .onDemand {
+            updateFullScreenPointerReveal(at: NSEvent.mouseLocation)
         }
         let bounds = layoutBounds(on: screen)
         guard bounds.leftWidth > 0 || bounds.rightWidth > 0 else {
@@ -1042,6 +1257,7 @@ final class NativeMenuController: NSObject {
             dismissOverflowPopover()
         }
         capturePanelHitSnapshot()
+        updatePresentationVisibility()
     }
 
     private enum LayoutElement {
@@ -1237,7 +1453,11 @@ final class NativeMenuController: NSObject {
         let innerPadding = hasNotch ? edgePadding : standardSpacing / 2
         let appMenuEdge = activeApplicationMenuRightEdge(on: screen)
             ?? screenFrame.minX + min(520, screenFrame.width * 0.4)
-        let trayEdge = stableItem.button?.window?.frame.minX
+        let stableTrayEdge = stableItem.button?.window.flatMap {
+            $0.screen == screen ? $0.frame.minX : nil
+        }
+        let trayEdge = statusTrayLeftEdge(on: screen)
+            ?? stableTrayEdge
             ?? screenFrame.maxX - min(360, screenFrame.width * 0.25)
         let menuHeight = min(
             40,
@@ -1272,7 +1492,36 @@ final class NativeMenuController: NSObject {
             &childrenValue
         ) == .success,
         let children = childrenValue as? [AXUIElement] else { return nil }
-        return children.compactMap(axFrame).map(\.maxX).max()
+        let target = cgScreenRect(for: screen)
+        return children.compactMap(axFrame).filter {
+            target.contains(CGPoint(x: $0.midX, y: $0.midY))
+        }.map(\.maxX).max()
+    }
+
+    private func statusTrayLeftEdge(on screen: NSScreen) -> CGFloat? {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly],
+            kCGNullWindowID
+        ) as? [[String: Any]] else { return nil }
+        let frames = windows.compactMap { window -> CGRect? in
+            guard (window[kCGWindowLayer as String] as? Int ?? 0) == 25,
+                  let bounds = window[kCGWindowBounds as String] as? NSDictionary else { return nil }
+            return CGRect(dictionaryRepresentation: bounds)
+        }
+        return StatusTrayLayoutPolicy.observedLeftEdge(
+            targetScreenRect: cgScreenRect(for: screen),
+            statusItemFrames: frames
+        ).map { screen.frame.minX + $0 }
+    }
+
+    private func cgScreenRect(for screen: NSScreen) -> CGRect {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+        return CGRect(
+            x: screen.frame.minX,
+            y: primaryHeight - screen.frame.maxY,
+            width: screen.frame.width,
+            height: screen.frame.height
+        )
     }
 
     private func axFrame(_ element: AXUIElement) -> CGRect? {
@@ -1300,11 +1549,37 @@ final class NativeMenuController: NSObject {
     }
 
     private func targetScreen() -> NSScreen? {
-        if let frame = stableItem.button?.window?.frame,
-           let screen = NSScreen.screens.first(where: { $0.frame.intersects(frame) }) {
-            return screen
+        let screens = NSScreen.screens.compactMap { screen -> NativeHelperScreen? in
+            guard let displayId = (screen.deviceDescription[
+                NSDeviceDescriptionKey("NSScreenNumber")
+            ] as? NSNumber)?.uint32Value else { return nil }
+            return NativeHelperScreen(
+                displayId: displayId,
+                name: screen.localizedName,
+                isBuiltIn: CGDisplayIsBuiltin(displayId) != 0,
+                frame: nativeRectangle(screen.frame),
+                visibleFrame: nativeRectangle(screen.visibleFrame),
+                scale: screen.backingScaleFactor,
+                isMain: screen == NSScreen.main
+            )
         }
-        return NSScreen.main ?? NSScreen.screens.first
+        guard let displayId = NativeMenuScreenSelectionPolicy.resolve(
+            preference: pillScreen,
+            screens: screens
+        ) else { return nil }
+        return NSScreen.screens.first {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+                .uint32Value == displayId
+        }
+    }
+
+    private func nativeRectangle(_ value: CGRect) -> NativeHelperRectangle {
+        NativeHelperRectangle(
+            x: value.origin.x,
+            y: value.origin.y,
+            width: value.width,
+            height: value.height
+        )
     }
 
     private func renderedGeometryIsFresh() -> Bool {

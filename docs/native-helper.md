@@ -22,11 +22,11 @@ AgentVisorNativeHelper --socket /absolute/private/path/helper.sock
 
 Every request contains protocol `version: 1`, a non-empty `id`, and one method:
 
-- `screen_topology` returns screen frames, visible frames, scale factors, and the main screen.
+- `screen_topology` returns screen names, built-in and main-screen roles, frames, visible frames, and scale factors.
 - `accessibility_status` returns the current Accessibility trust state.
 - `request_accessibility` asks macOS for Accessibility access.
 - `open_accessibility_settings` opens the macOS repair destination.
-- `present_pills` accepts at most 64 active or recent pill descriptions, bounded optional inspector content, eight usage glances, session shortcuts, and the window hotkey.
+- `present_pills` accepts at most 64 active or recent pill descriptions, bounded optional inspector content, eight usage glances, session shortcuts, the window hotkey, pill-screen selection, and full-screen policy.
 - Each usage glance may include two bounded limit windows, fixed capsule width, per-window tone, reset times, reset-credit count, sync time, and stale state.
 - `focus_terminal` selects one allowlisted terminal through its exact TTY.
 - `send_terminal` sends bounded text to that exact terminal and optionally submits it.
@@ -35,6 +35,10 @@ Every request contains protocol `version: 1`, a non-empty `id`, and one method:
 Unknown methods, extra fields, oversized frames, invalid identifiers, and malformed JSON are rejected.
 
 Pill presentation uses click-sized AppKit panels and one stable VoiceOver status item. An optional bounded navigator catalog adds searchable rows without adding menu panels.
+
+Automatic screen selection prefers the built-in display, then the main display. A specific selection matches display ID, then name, before using that automatic fallback.
+
+The helper detects native full-screen windows on the selected display through `AXFullScreen`. Hidden panels keep their layout but become transparent and ignore pointer actions.
 
 Optional inspector content is already display-safe. It can include runtime items, bounded detail rows, project path, activity time, and context usage. The helper never parses provider records.
 

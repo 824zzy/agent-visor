@@ -7,6 +7,7 @@ import type { Palette } from "./theme";
 const sounds = ["None", "Pop", "Ping", "Tink", "Glass"] as const;
 const shortcuts = ["off", "controlCommand", "optionCommand", "controlOptionCommand"] as const;
 const hotkeyTriggers = ["off", "cmd", "ctrl", "option", "shift"] as const;
+const fullScreenPolicies = ["onDemand", "alwaysHide", "alwaysShow"] as const;
 const editors = ["auto", "cursor", "vscode", "vscode-insiders", "zed", "xcode", "system-default"] as const;
 const shortcutLabels = {
   off: "Off",
@@ -31,6 +32,11 @@ const editorLabels = {
   "system-default": "System default",
 };
 const themeLabels = { system: "System", dark: "Dark", light: "Light" };
+const fullScreenPolicyLabels = {
+  onDemand: "Show on demand",
+  alwaysHide: "Always hide",
+  alwaysShow: "Always show",
+};
 const categories = ["general", "appearance", "pills", "notifications", "agents"] as const;
 type SettingsCategory = typeof categories[number];
 const categoryLabels: Record<SettingsCategory, string> = {
@@ -73,6 +79,10 @@ export function Settings({
   }, [onBack]);
   if (!state) return <View style={styles.page}><Text style={styles.muted}>{error ?? "Loading settings…"}</Text></View>;
   const settings = state.settings;
+  const selectedPillScreen = settings.pillScreen.mode === "automatic"
+    ? "automatic" : String(settings.pillScreen.displayId);
+  const pillScreenValues = ["automatic", ...state.pillScreens.map(({ displayId }) => String(displayId))];
+  if (!pillScreenValues.includes(selectedPillScreen)) pillScreenValues.push(selectedPillScreen);
   const updateText = state.update.status === "available"
     ? `Version ${state.update.availableVersion} is available`
     : state.update.status === "up_to_date" ? "Agent Visor is up to date"
@@ -168,6 +178,36 @@ export function Settings({
 
         {category === "pills" ? <Section title="Pills" subtitle="Menu-bar shortcuts for active and recent sessions" styles={styles}>
           <ToggleRow label="Show session pills" value={settings.pillsEnabled} onPress={() => update({ pillsEnabled: !settings.pillsEnabled })} styles={styles} />
+          <ChoiceRow
+            label="Pill screen"
+            values={pillScreenValues}
+            value={selectedPillScreen}
+            labelFor={(value) => {
+              if (value === "automatic") return "Automatic";
+              return state.pillScreens.find(({ displayId }) => String(displayId) === value)?.name
+                ?? (settings.pillScreen.mode === "specific"
+                  ? `${settings.pillScreen.name} (Unavailable)` : value);
+            }}
+            onChoose={(value) => {
+              const screen = state.pillScreens.find(({ displayId }) => String(displayId) === value);
+              if (screen) {
+                update({ pillScreen: {
+                  mode: "specific", displayId: screen.displayId, name: screen.name,
+                } });
+              } else if (value === "automatic") {
+                update({ pillScreen: { mode: "automatic" } });
+              }
+            }}
+            styles={styles}
+          />
+          <ChoiceRow
+            label="Full-screen visibility"
+            values={fullScreenPolicies}
+            value={settings.fullScreenPolicy}
+            labelFor={(value) => fullScreenPolicyLabels[value]}
+            onChoose={(fullScreenPolicy) => update({ fullScreenPolicy })}
+            styles={styles}
+          />
           <ToggleRow label="Show Codex usage" value={settings.codexUsageGlanceEnabled} onPress={() => update({ codexUsageGlanceEnabled: !settings.codexUsageGlanceEnabled })} styles={styles} />
           <ValueRow label="Claude usage" value="Waiting for a supported credential route" styles={styles} />
           <ChoiceRow

@@ -46,6 +46,7 @@ export class NativeServicesRepository implements NativeServicesSource {
       settings: options.settings.current(),
       permissions: { accessibility: "needed", notifications: "not_determined" },
       agents: options.connections.current(),
+      pillScreens: [],
       update: { status: "idle", currentVersion: options.currentVersion },
     };
   }
@@ -142,6 +143,7 @@ export class NativeServicesRepository implements NativeServicesSource {
 
   async refresh(): Promise<void> {
     const accessibility = await this.options.helper.accessibilityStatus();
+    const screens = await this.options.helper.screenTopology();
     await this.options.connections.refresh();
     this.publish({
       permissions: {
@@ -149,6 +151,9 @@ export class NativeServicesRepository implements NativeServicesSource {
         accessibility: accessibility ? "granted" : "needed",
       },
       agents: this.options.connections.current(),
+      pillScreens: screens.map(({ displayId, name, isBuiltIn, isMain }) => ({
+        displayId, name, isBuiltIn, isMain,
+      })),
     });
   }
 

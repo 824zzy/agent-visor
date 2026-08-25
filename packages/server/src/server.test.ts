@@ -164,6 +164,7 @@ describe("Agent Visor daemon", () => {
       revision: 1,
       settings: {
         appearance: "dark" as const, contentScale: 1, pillsEnabled: true,
+        pillScreen: { mode: "automatic" as const }, fullScreenPolicy: "onDemand" as const,
         codexUsageGlanceEnabled: true, claudeUsageGlanceEnabled: false,
         notificationSound: "Pop" as const, hotkeyTrigger: "shift" as const,
         customHotkeyCombo: null, sessionShortcutModifierFamily: "optionCommand" as const,
@@ -173,6 +174,9 @@ describe("Agent Visor daemon", () => {
       agents: [{
         id: "claude" as const, name: "Claude Code", available: true,
         installed: false, control: "toggle" as const,
+      }],
+      pillScreens: [{
+        displayId: 1, name: "Built-in Retina Display", isBuiltIn: true, isMain: true,
       }],
       update: { status: "idle" as const, currentVersion: "2.6.2" },
     };

@@ -26,10 +26,10 @@ The 2026-08-24 source audit corrected earlier broad Pass claims. `Partial` names
 | Image delivery | Claude, Pi, and Codex supported image routes | Private path paste, path prompt, and local-image input | Pass |
 | Menu pills | Released capsules, colors, actions, keycaps, hover inspectors, and attention order | Capsules and the searchable `+N` navigator match; the `Pill Settings...` menu remains absent | Partial |
 | Menu packing | App-menu, tray, display, notch, usage, and overflow constraints | Shared packer and click-sized AppKit panels | Pass |
-| Display policy | User-selected pill display and released full-screen visibility policy | Helper follows the status-item screen and always joins full-screen spaces | Partial |
+| Display policy | User-selected pill display and released full-screen visibility policy | Migrated display selection, screen-specific full-screen detection, all three visibility choices, intent reveal, and hidden hit testing | Pass |
 | Global shortcuts | Configurable visible-session and Sessions shortcuts with modifier reveal | Signed helper registration, frozen snapshots, keycap screenshot, and footer checks | Pass |
 | Usage | Codex and Claude limits with retained last valid values and click detail | Codex reading and the shared click detail popover work; Claude usage remains absent | Partial |
-| Settings | Native category layout, controls, shortcuts, integrations, and preservation | Core settings and agent connections persist; display, full-screen, hidden sessions, Chat visibility, and custom recording remain absent | Partial |
+| Settings | Native category layout, controls, shortcuts, integrations, and preservation | Core settings, display and full-screen controls, and agent connections persist; hidden sessions, Chat visibility, and custom recording remain absent | Partial |
 | Accessibility repair | Stable signed identity and macOS repair destination | Release-signed helper and live trusted state | Pass |
 | Notifications | Native status transitions, exact session action, approval actions, and Dock badge | Phase notices work; clicks open only the owner application and interactive actions remain absent | Partial |
 | Updates | Signed public release with downgrade prevention | Validated appcast and manual verified release link; automatic installation remains intentionally disabled | Partial |

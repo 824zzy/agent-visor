@@ -26,6 +26,7 @@ async function run() {
     revision: 1,
     settings: {
       appearance: "dark", contentScale: 1, pillsEnabled: true,
+      pillScreen: { mode: "automatic" }, fullScreenPolicy: "onDemand",
       codexUsageGlanceEnabled: true, claudeUsageGlanceEnabled: false,
       notificationSound: "Pop", hotkeyTrigger: "shift", customHotkeyCombo: null,
       sessionShortcutModifierFamily: "optionCommand", editorPreference: "auto",
@@ -35,6 +36,10 @@ async function run() {
     agents: [
       { id: "claude", name: "Claude Code", available: true, installed: false, control: "toggle" },
       { id: "pi", name: "Pi", available: true, installed: true, control: "automatic" },
+    ],
+    pillScreens: [
+      { displayId: 1, name: "Built-in Retina Display", isBuiltIn: true, isMain: true },
+      { displayId: 5, name: "XZ322QU V3", isBuiltIn: false, isMain: false },
     ],
     update: { status: "idle", currentVersion: "2.6.2" },
   };
@@ -109,6 +114,14 @@ async function run() {
       await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show session pills, On"]')?.getAttribute('aria-checked') === 'true'`),
       "enabled settings expose the correct accessibility value",
     );
+    await waitFor(window, `document.body.textContent.includes('Pill screen')
+      && document.body.textContent.includes('Full-screen visibility')`);
+    await clickButton(window, "XZ322QU V3");
+    await waitUntil(() => actions.some((message) => message.type === "update_settings"
+      && message.patch.pillScreen?.displayId === 5));
+    await clickButton(window, "Always hide");
+    await waitUntil(() => actions.some((message) => message.type === "update_settings"
+      && message.patch.fullScreenPolicy === "alwaysHide"));
     await clickButton(window, "Notifications");
     await waitFor(window, `document.body.textContent.includes('Sound')`);
     await clickButton(window, "Agents");

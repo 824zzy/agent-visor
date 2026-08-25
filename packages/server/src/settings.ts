@@ -12,6 +12,8 @@ const defaults: AppSettings = {
   appearance: "dark",
   contentScale: 1,
   pillsEnabled: true,
+  pillScreen: { mode: "automatic" },
+  fullScreenPolicy: "onDemand",
   codexUsageGlanceEnabled: true,
   claudeUsageGlanceEnabled: true,
   notificationSound: "Pop",
@@ -43,19 +45,15 @@ export class SettingsRepository {
     try {
       const stored = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
       const storedSettings = record(stored.settings);
-      const needsHotkeyDefaults = storedSettings != null
-        && (!Object.hasOwn(storedSettings, "hotkeyTrigger")
-          || !Object.hasOwn(storedSettings, "customHotkeyCombo"));
+      const needsDefaults = storedSettings != null
+        && Object.keys(defaults).some((key) => !Object.hasOwn(storedSettings, key));
+      const legacy = await restoreDisplayLegacy(record(stored.legacy) ?? {}, options.root);
       const repository = new SettingsRepository(
         file,
-        appSettingsSchema.parse({
-          hotkeyTrigger: defaults.hotkeyTrigger,
-          customHotkeyCombo: defaults.customHotkeyCombo,
-          ...storedSettings,
-        }),
-        record(stored.legacy) ?? {},
+        appSettingsSchema.parse({ ...migrate(legacy), ...storedSettings }),
+        legacy,
       );
-      if (needsHotkeyDefaults) await repository.save();
+      if (needsDefaults) await repository.save();
       return repository;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -108,6 +106,39 @@ export class SettingsRepository {
   }
 }
 
+async function restoreDisplayLegacy(
+  legacy: Record<string, unknown>,
+  scratchRoot: string,
+): Promise<Record<string, unknown>> {
+  const hasDisplay = Object.hasOwn(legacy, "screenSelectionMode")
+    && (legacy.screenSelectionMode !== "specificScreen"
+      || Object.hasOwn(legacy, "selectedScreenIdentifier"));
+  if (typeof legacy.__rawPlistBase64 !== "string"
+      || (hasDisplay && Object.hasOwn(legacy, "fullScreenPolicy"))) return legacy;
+  const plist = path.join(scratchRoot, "preserved-legacy-settings.plist");
+  const restored = { ...legacy };
+  try {
+    await writeFile(plist, Buffer.from(legacy.__rawPlistBase64, "base64"), { mode: 0o600 });
+    for (const key of ["screenSelectionMode", "selectedScreenIdentifier", "fullScreenPolicy"]) {
+      const extracted = await runProcess(
+        "/usr/bin/plutil",
+        ["-extract", key, "raw", "-o", "-", plist],
+        { deadlineMs: 1_000, maxOutputBytes: 4_096 },
+      );
+      if (extracted.status === "success") restored[key] = rawValue(extracted.stdout.trim());
+    }
+    if (restored.screenSelectionMode === "specificScreen"
+        && !Object.hasOwn(restored, "selectedScreenIdentifier")) {
+      restored.screenSelectionMode = "automatic";
+    }
+    restored.screenSelectionMode ??= "automatic";
+    restored.fullScreenPolicy ??= "onDemand";
+  } finally {
+    await rm(plist, { force: true });
+  }
+  return restored;
+}
+
 export async function readLegacyDefaults(
   domain: string,
   scratchRoot: string,
@@ -124,6 +155,7 @@ export async function readLegacyDefaults(
     "appearance", "chatFontScale", "pillsEnabled", "codexUsageGlanceEnabled",
     "claudeUsageGlanceEnabled", "notificationSound", "hotkeyTrigger", "customHotkeyCombo",
     "sessionShortcutModifierFamily", "editorPreference", "observedWindowHours",
+    "screenSelectionMode", "selectedScreenIdentifier", "fullScreenPolicy",
   ];
   for (const key of keys) {
     const extracted = await runProcess(
@@ -142,6 +174,11 @@ function migrate(legacy: Record<string, unknown>): AppSettings {
     appearance: oneOf(legacy.appearance, ["system", "dark", "light"]) ?? defaults.appearance,
     contentScale: clamp(number(legacy.chatFontScale) ?? defaults.contentScale, 0.8, 2.5),
     pillsEnabled: boolean(legacy.pillsEnabled) ?? defaults.pillsEnabled,
+    pillScreen: migratedPillScreen(
+      legacy.screenSelectionMode,
+      legacy.selectedScreenIdentifier,
+    ),
+    fullScreenPolicy: migratedFullScreenPolicy(legacy.fullScreenPolicy),
     codexUsageGlanceEnabled: boolean(legacy.codexUsageGlanceEnabled)
       ?? defaults.codexUsageGlanceEnabled,
     claudeUsageGlanceEnabled: boolean(legacy.claudeUsageGlanceEnabled)
@@ -168,6 +205,29 @@ function migrate(legacy: Record<string, unknown>): AppSettings {
     )),
     launchAtLogin: defaults.launchAtLogin,
   });
+}
+
+function migratedPillScreen(
+  mode: unknown,
+  value: unknown,
+): AppSettings["pillScreen"] {
+  if (mode !== "specificScreen" || typeof value !== "string") return defaults.pillScreen;
+  try {
+    const identifier = record(JSON.parse(Buffer.from(value, "base64").toString("utf8")));
+    const displayId = number(identifier?.displayID);
+    const name = identifier?.localizedName;
+    return displayId != null && Number.isInteger(displayId)
+      && displayId >= 0 && displayId <= 4_294_967_295
+      && typeof name === "string" && name.length > 0 && name.length <= 128
+      ? { mode: "specific", displayId, name }
+      : defaults.pillScreen;
+  } catch {
+    return defaults.pillScreen;
+  }
+}
+
+function migratedFullScreenPolicy(value: unknown): AppSettings["fullScreenPolicy"] {
+  return oneOf(value, ["onDemand", "alwaysHide", "alwaysShow"]) ?? "onDemand";
 }
 
 function rawValue(value: string): string | number | boolean {

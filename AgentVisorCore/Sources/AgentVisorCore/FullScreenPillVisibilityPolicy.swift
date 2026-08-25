@@ -1,6 +1,6 @@
 import CoreGraphics
 
-public enum FullScreenPillPolicy: String, CaseIterable, Sendable {
+public enum FullScreenPillPolicy: String, CaseIterable, Codable, Equatable, Sendable {
     case onDemand
     case alwaysHide
     case alwaysShow

@@ -90,6 +90,8 @@ if (nativeHelperExecutable) {
         preferences.hotkeyTrigger,
         preferences.customHotkeyCombo,
         presentation.navigatorPills,
+        preferences.pillScreen,
+        preferences.fullScreenPolicy,
       )
         .catch((error: unknown) => console.warn(`Agent Visor menu update failed: ${String(error)}`));
     };

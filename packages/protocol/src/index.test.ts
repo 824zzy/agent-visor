@@ -82,6 +82,8 @@ describe("session snapshot protocol", () => {
         appearance: "dark",
         contentScale: 1.2,
         pillsEnabled: true,
+        pillScreen: { mode: "automatic" },
+        fullScreenPolicy: "onDemand",
         codexUsageGlanceEnabled: true,
         claudeUsageGlanceEnabled: false,
         notificationSound: "Pop",
@@ -97,6 +99,9 @@ describe("session snapshot protocol", () => {
         { id: "claude", name: "Claude Code", available: true, installed: true, control: "toggle" },
         { id: "cursor", name: "Cursor", available: true, installed: false, control: "read_only" },
       ],
+      pillScreens: [{
+        displayId: 1, name: "Built-in Retina Display", isBuiltIn: true, isMain: true,
+      }],
       update: { status: "up_to_date", currentVersion: "2.6.2" },
     };
     expect(nativeServicesStateSchema.parse(state)).toEqual(state);

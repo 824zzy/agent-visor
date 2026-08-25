@@ -16,6 +16,18 @@ The helper measures the active application menus, system tray, display, and phys
 
 Display and application changes trigger immediate layout. A bounded half-second refresh covers menu-title and system-tray changes without rebuilding visible pills.
 
+## Display and full-screen behavior
+
+Automatic placement prefers the built-in display, then the main display. A selected display matches its saved display ID, then its saved name after reconnection.
+
+`Show on demand` is the default full-screen choice. Pills hide at rest and reveal at the selected screen’s top edge, while session modifiers are held, or while a native popover is open.
+
+Pointer exit waits 650 milliseconds. Modifier release waits 350 milliseconds. `Always hide` ignores passive reveal, while `Always show` remains visible.
+
+Hidden panels keep their frames and shortcut snapshot current. They have zero opacity, ignore direct mouse input, and are excluded from global hit routing.
+
+Full-screen detection uses native `AXFullScreen` evidence on the selected display. A full-screen window on another display does not hide the pills.
+
 ## Session items
 
 Needs you items come first, then unacknowledged Ready to continue, In progress, acknowledged Ready to continue, and source-backed recent History shortcuts.
@@ -95,7 +107,7 @@ Claude usage remains disabled until the paused credential work has a documented 
 
 ## Protocol
 
-`present_pills` accepts detailed menu pills, an optional bounded navigator catalog, and optional usage glances. Older version-one pill requests remain valid.
+`present_pills` accepts detailed menu pills, an optional bounded navigator catalog, optional usage glances, pill-screen selection, and full-screen policy. Older version-one pill requests remain valid.
 
 The helper emits `activate_pill`, `open_sessions`, `open_settings`, and `refresh_usage` events over the same framed Unix connection. `activate_pill` has an additive optional `chat` intent; standard version-one events remain unchanged.
 

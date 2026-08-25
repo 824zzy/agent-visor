@@ -146,7 +146,7 @@ class PillStripViewModel: ObservableObject {
 
         fullScreenScanQueue.async { [weak self] in
             guard let self = self else { return }
-            let result = Self.fullScreenOwnerPid(intersecting: cgScreenRect)
+            let result = FullScreenWindowDetector.ownerPID(intersecting: cgScreenRect)
             DispatchQueue.main.async {
                 let foundFullScreen = result != nil
                 if self.isFullScreenAppActive != foundFullScreen {
@@ -158,54 +158,6 @@ class PillStripViewModel: ObservableObject {
                 }
             }
         }
-    }
-
-    /// Walk running .regular apps via AX, find a window with `AXFullScreen`
-    /// set whose frame intersects the target screen rect (CG coords).
-    /// Returns the owning pid on first match, or nil if no full-screen
-    /// window covers the screen. Skips our own pid. `nonisolated` so the
-    /// scan can run on `fullScreenScanQueue` without bouncing through the
-    /// main actor for AX work.
-    nonisolated private static func fullScreenOwnerPid(intersecting cgScreenRect: CGRect) -> pid_t? {
-        let myPid = getpid()
-        let apps = NSWorkspace.shared.runningApplications.filter {
-            $0.activationPolicy == .regular && $0.processIdentifier != myPid
-        }
-        for app in apps {
-            let axApp = AXUIElementCreateApplication(app.processIdentifier)
-            var windowsRef: CFTypeRef?
-            let listRC = AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef)
-            guard listRC == .success, let windows = windowsRef as? [AXUIElement] else { continue }
-            for window in windows {
-                var fsRef: CFTypeRef?
-                let fsRC = AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fsRef)
-                guard fsRC == .success, (fsRef as? Bool) == true else { continue }
-
-                // Confirm the fullscreen window is on this screen.
-                var posRef: CFTypeRef?
-                var sizeRef: CFTypeRef?
-                _ = AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posRef)
-                _ = AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef)
-                var pos = CGPoint.zero
-                var size = CGSize.zero
-                if let posRef, CFGetTypeID(posRef) == AXValueGetTypeID() {
-                    let p = unsafeBitCast(posRef, to: AXValue.self)
-                    AXValueGetValue(p, .cgPoint, &pos)
-                }
-                if let sizeRef, CFGetTypeID(sizeRef) == AXValueGetTypeID() {
-                    let s = unsafeBitCast(sizeRef, to: AXValue.self)
-                    AXValueGetValue(s, .cgSize, &size)
-                }
-                let frame = CGRect(origin: pos, size: size)
-                if cgScreenRect.intersects(frame) || frame == .zero {
-                    // frame == .zero is rare but seen on apps that hand back
-                    // garbage AX values for fullscreen windows; treat as
-                    // "is fullscreen somewhere" and conservatively hide.
-                    return app.processIdentifier
-                }
-            }
-        }
-        return nil
     }
 
     private func observeSelectors() {

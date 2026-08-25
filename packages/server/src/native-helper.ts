@@ -27,6 +27,8 @@ export interface NativeHelperAdapter {
     hotkeyTrigger?: AppSettings["hotkeyTrigger"],
     customHotkeyCombo?: AppSettings["customHotkeyCombo"],
     navigatorPills?: NativeHelperPill[],
+    pillScreen?: AppSettings["pillScreen"],
+    fullScreenPolicy?: AppSettings["fullScreenPolicy"],
   ): Promise<void>;
   focus(target: NativeHelperFocusTarget): Promise<void>;
   focusTerminal(target: NativeHelperTerminalTarget): Promise<void>;
@@ -45,6 +47,8 @@ export class FakeNativeHelper implements NativeHelperAdapter {
   shortcutModifierFamily: AppSettings["sessionShortcutModifierFamily"] = "optionCommand";
   hotkeyTrigger: AppSettings["hotkeyTrigger"] = "shift";
   customHotkeyCombo: AppSettings["customHotkeyCombo"] = null;
+  pillScreen: AppSettings["pillScreen"] = { mode: "automatic" };
+  fullScreenPolicy: AppSettings["fullScreenPolicy"] = "onDemand";
   requestedAccessibility = false;
   openedAccessibilitySettings = false;
 
@@ -82,6 +86,8 @@ export class FakeNativeHelper implements NativeHelperAdapter {
     hotkeyTrigger: AppSettings["hotkeyTrigger"] = "shift",
     customHotkeyCombo: AppSettings["customHotkeyCombo"] = null,
     navigatorPills: NativeHelperPill[] = pills,
+    pillScreen: AppSettings["pillScreen"] = { mode: "automatic" },
+    fullScreenPolicy: AppSettings["fullScreenPolicy"] = "onDemand",
   ): Promise<void> {
     this.presentedPills = structuredClone(pills);
     this.presentedNavigatorPills = structuredClone(navigatorPills);
@@ -89,6 +95,8 @@ export class FakeNativeHelper implements NativeHelperAdapter {
     this.shortcutModifierFamily = shortcutModifierFamily;
     this.hotkeyTrigger = hotkeyTrigger;
     this.customHotkeyCombo = customHotkeyCombo;
+    this.pillScreen = structuredClone(pillScreen);
+    this.fullScreenPolicy = fullScreenPolicy;
   }
 
   async focus(target: NativeHelperFocusTarget): Promise<void> {
@@ -195,12 +203,16 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     hotkeyTrigger?: AppSettings["hotkeyTrigger"],
     customHotkeyCombo?: AppSettings["customHotkeyCombo"],
     navigatorPills?: NativeHelperPill[],
+    pillScreen?: AppSettings["pillScreen"],
+    fullScreenPolicy?: AppSettings["fullScreenPolicy"],
   ): Promise<void> {
     await this.accepted("present_pills", {
       pills,
       ...(navigatorPills ? { navigatorPills } : {}),
       usageGlances,
       ...(shortcutModifierFamily ? { shortcutModifierFamily } : {}),
+      ...(pillScreen ? { pillScreen } : {}),
+      ...(fullScreenPolicy ? { fullScreenPolicy } : {}),
       ...(hotkeyTrigger ? { hotkeyTrigger, customHotkeyCombo } : {}),
     });
   }

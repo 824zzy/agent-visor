@@ -40,6 +40,40 @@ describe("native services", () => {
       .toMatchObject({ installed: true, control: "toggle" });
   });
 
+  it("publishes available pill screens from the signed helper", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-native-services-"));
+    roots.push(root);
+    const settings = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
+    const helper = new FakeNativeHelper({ trusted: true, screens: [{
+      displayId: 5,
+      name: "XZ322QU V3",
+      isBuiltIn: false,
+      frame: { x: 0, y: 0, width: 2_052, height: 1_080 },
+      visibleFrame: { x: 0, y: 0, width: 2_052, height: 1_055 },
+      scale: 2,
+      isMain: true,
+    }] });
+    const services = new NativeServicesRepository({
+      settings,
+      helper,
+      connections: new AgentConnectionsRepository({
+        home: path.join(root, "home"), resources: path.join(root, "resources"),
+      }),
+      currentVersion: "2.7.0",
+      checkUpdates: async () => ({ status: "up_to_date", currentVersion: "2.7.0" }),
+      emitDesktop: () => undefined,
+    });
+
+    await services.start();
+
+    expect(services.current().pillScreens).toEqual([{
+      displayId: 5,
+      name: "XZ322QU V3",
+      isBuiltIn: false,
+      isMain: true,
+    }]);
+  });
+
   it("repairs permissions, persists settings, and emits desktop effects", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-native-services-"));
     roots.push(root);

@@ -19,6 +19,8 @@ describe("native services messages", () => {
         appearance: "dark",
         contentScale: 1,
         pillsEnabled: true,
+        pillScreen: { mode: "automatic" },
+        fullScreenPolicy: "onDemand",
         codexUsageGlanceEnabled: true,
         claudeUsageGlanceEnabled: false,
         notificationSound: "Pop",
@@ -33,6 +35,9 @@ describe("native services messages", () => {
       agents: [{
         id: "claude", name: "Claude Code", available: true,
         installed: false, control: "toggle",
+      }],
+      pillScreens: [{
+        displayId: 1, name: "Built-in Retina Display", isBuiltIn: true, isMain: true,
       }],
       update: { status: "idle", currentVersion: "2.6.2" },
     };

@@ -178,6 +178,8 @@ private func response(
             let navigatorPills,
             let usageGlances,
             let shortcutFamily,
+            let pillScreen,
+            let fullScreenPolicy,
             let hotkeyTrigger,
             let customHotkeyCombo
         ):
@@ -187,6 +189,8 @@ private func response(
                     navigatorPills: navigatorPills,
                     usageGlances: usageGlances,
                     shortcutModifierFamily: shortcutFamily,
+                    pillScreen: pillScreen,
+                    fullScreenPolicy: fullScreenPolicy,
                     hotkeyTrigger: hotkeyTrigger,
                     customHotkeyCombo: customHotkeyCombo
                 )
@@ -231,6 +235,8 @@ private func screenTopology() -> [NativeHelperScreen] {
                 as? UInt32 else { return nil }
         return NativeHelperScreen(
             displayId: displayID,
+            name: screen.localizedName,
+            isBuiltIn: CGDisplayIsBuiltin(displayID) != 0,
             frame: rectangle(screen.frame),
             visibleFrame: rectangle(screen.visibleFrame),
             scale: screen.backingScaleFactor,

@@ -90,10 +90,21 @@ const customHotkeyComboSchema = z.string()
       && (modifiers > 0 || macFunctionKeyCodes.has(keyCode));
   });
 
+export const pillScreenSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("automatic") }).strict(),
+  z.object({
+    mode: z.literal("specific"),
+    displayId: z.number().int().nonnegative().max(4_294_967_295),
+    name: z.string().min(1).max(128),
+  }).strict(),
+]);
+
 export const appSettingsSchema = z.object({
   appearance: z.enum(["system", "dark", "light"]),
   contentScale: z.number().min(0.8).max(2.5),
   pillsEnabled: z.boolean(),
+  pillScreen: pillScreenSchema,
+  fullScreenPolicy: z.enum(["onDemand", "alwaysHide", "alwaysShow"]),
   codexUsageGlanceEnabled: z.boolean(),
   claudeUsageGlanceEnabled: z.boolean(),
   notificationSound: z.enum([
@@ -114,6 +125,13 @@ export const appSettingsSchema = z.object({
 
 export const appSettingsPatchSchema = appSettingsSchema.partial().strict();
 
+export const pillScreenOptionSchema = z.object({
+  displayId: z.number().int().nonnegative().max(4_294_967_295),
+  name: z.string().min(1).max(128),
+  isBuiltIn: z.boolean(),
+  isMain: z.boolean(),
+}).strict();
+
 export const agentConnectionSchema = z.object({
   id: z.enum(["claude", "auggie", "codex", "cursor", "pi"]),
   name: z.string().min(1).max(64),
@@ -131,6 +149,7 @@ export const nativeServicesStateSchema = z.object({
     notifications: z.enum(["not_determined", "denied", "authorized"]),
   }).strict(),
   agents: z.array(agentConnectionSchema).max(5),
+  pillScreens: z.array(pillScreenOptionSchema).max(16),
   update: z.object({
     status: z.enum(["idle", "checking", "up_to_date", "available", "error"]),
     currentVersion: z.string().min(1).max(64),
@@ -364,6 +383,8 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
       navigatorPills: z.array(nativeHelperPillSchema).max(512).optional(),
       usageGlances: z.array(nativeHelperUsageGlanceSchema).max(8).optional(),
       shortcutModifierFamily: appSettingsSchema.shape.sessionShortcutModifierFamily.optional(),
+      pillScreen: pillScreenSchema.optional(),
+      fullScreenPolicy: appSettingsSchema.shape.fullScreenPolicy.optional(),
       hotkeyTrigger: appSettingsSchema.shape.hotkeyTrigger.optional(),
       customHotkeyCombo: appSettingsSchema.shape.customHotkeyCombo.optional(),
     }).strict(),
@@ -391,6 +412,8 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
 
 export const nativeHelperScreenSchema = z.object({
   displayId: z.number().int().nonnegative().max(4_294_967_295),
+  name: z.string().min(1).max(128),
+  isBuiltIn: z.boolean(),
   frame: rectangleSchema,
   visibleFrame: rectangleSchema,
   scale: z.number().finite().positive(),

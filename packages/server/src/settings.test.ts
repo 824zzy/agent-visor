@@ -26,6 +26,12 @@ describe("settings repository", () => {
       sessionShortcutModifierFamily: "controlCommand",
       editorPreference: "zed",
       observedWindowHours: 72,
+      screenSelectionMode: "specificScreen",
+      selectedScreenIdentifier: Buffer.from(JSON.stringify({
+        displayID: 5,
+        localizedName: "XZ322QU V3",
+      })).toString("base64"),
+      fullScreenPolicy: "alwaysHide",
       futureReleasedSetting: { nested: true },
     };
     const repository = await SettingsRepository.open({
@@ -45,12 +51,14 @@ describe("settings repository", () => {
       sessionShortcutModifierFamily: "controlCommand",
       editorPreference: "zed",
       observedWindowHours: 72,
+      pillScreen: { mode: "specific", displayId: 5, name: "XZ322QU V3" },
+      fullScreenPolicy: "alwaysHide",
     });
     expect(JSON.parse(await readFile(path.join(root, "settings.json"), "utf8")))
       .toMatchObject({ legacy });
   });
 
-  it("adds new hotkey defaults to an existing Electron settings file", async () => {
+  it("adds new defaults to an existing Electron settings file", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-settings-"));
     roots.push(root);
     const file = path.join(root, "settings.json");
@@ -67,9 +75,49 @@ describe("settings repository", () => {
 
     const repository = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
 
-    expect(repository.current()).toMatchObject({ hotkeyTrigger: "shift", customHotkeyCombo: null });
-    expect(JSON.parse(await readFile(file, "utf8")).settings)
-      .toMatchObject({ hotkeyTrigger: "shift", customHotkeyCombo: null });
+    const addedDefaults = {
+      hotkeyTrigger: "shift",
+      customHotkeyCombo: null,
+      pillScreen: { mode: "automatic" },
+      fullScreenPolicy: "onDemand",
+    };
+    expect(repository.current()).toMatchObject(addedDefaults);
+    expect(JSON.parse(await readFile(file, "utf8")).settings).toMatchObject(addedDefaults);
+  });
+
+  it("restores display settings from the preserved legacy plist", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-settings-"));
+    roots.push(root);
+    const file = path.join(root, "settings.json");
+    const identifier = Buffer.from(JSON.stringify({
+      displayID: 9,
+      localizedName: "Studio Display",
+    })).toString("base64");
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>
+      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+      <plist version="1.0"><dict>
+        <key>screenSelectionMode</key><string>specificScreen</string>
+        <key>selectedScreenIdentifier</key><data>${identifier}</data>
+        <key>fullScreenPolicy</key><string>alwaysShow</string>
+      </dict></plist>`;
+    await writeFile(file, JSON.stringify({
+      version: 1,
+      settings: {
+        appearance: "dark", contentScale: 1, pillsEnabled: true,
+        codexUsageGlanceEnabled: true, claudeUsageGlanceEnabled: true,
+        notificationSound: "Pop", hotkeyTrigger: "shift", customHotkeyCombo: null,
+        sessionShortcutModifierFamily: "optionCommand", editorPreference: "auto",
+        observedWindowHours: 42, launchAtLogin: false,
+      },
+      legacy: { __rawPlistBase64: Buffer.from(plist).toString("base64") },
+    }));
+
+    const repository = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
+
+    expect(repository.current()).toMatchObject({
+      pillScreen: { mode: "specific", displayId: 9, name: "Studio Display" },
+      fullScreenPolicy: "alwaysShow",
+    });
   });
 
   it("does not overwrite an unreadable settings file", async () => {

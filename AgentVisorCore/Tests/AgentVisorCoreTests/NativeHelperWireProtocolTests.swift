@@ -28,18 +28,29 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"visible","title":"Visible","phase":"working","priority":0,"accessibilityLabel":"Visible, in progress"}],"navigatorPills":[{"id":"visible","title":"Visible","phase":"working","priority":0,"accessibilityLabel":"Visible, in progress"},{"id":"chat-history","title":"Chat history","phase":"history","priority":1,"accessibilityLabel":"Chat history, recent session"}]}}"#
 
         let request = try NativeHelperRequest.decode(Data(json.utf8))
-        guard case .presentPills(_, let pills, let navigatorPills, _, _, _, _) = request else {
+        guard case .presentPills(_, let pills, let navigatorPills, _, _, _, _, _, _) = request else {
             return XCTFail("Expected pills")
         }
         XCTAssertEqual(pills.map(\.id), ["visible"])
         XCTAssertEqual(navigatorPills.map(\.id), ["visible", "chat-history"])
     }
 
+    func testDecodesDisplayAndFullScreenPreferences() throws {
+        let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[],"pillScreen":{"mode":"specific","displayId":5,"name":"XZ322QU V3"},"fullScreenPolicy":"alwaysHide"}}"#
+
+        let request = try NativeHelperRequest.decode(Data(json.utf8))
+        guard case .presentPills(_, _, _, _, _, let screen, let policy, _, _) = request else {
+            return XCTFail("Expected pills")
+        }
+        XCTAssertEqual(screen, .specific(displayId: 5, name: "XZ322QU V3"))
+        XCTAssertEqual(policy, .alwaysHide)
+    }
+
     func testDecodesAuthoritativeUsagePopoverDetails() throws {
         let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[],"usageGlances":[{"id":"codex","heading":"Codex Usage","width":114,"label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage","observedAt":"2026-08-24T12:00:00.000Z","windows":[{"title":"5 hour limit","remainingPercent":82,"tone":"normal","resetsAt":"2026-08-24T13:00:00.000Z"},{"title":"Weekly limit","remainingPercent":61,"tone":"normal"}],"resetCreditsAvailable":3,"stale":true}]}}"#
 
         let request = try NativeHelperRequest.decode(Data(json.utf8))
-        guard case .presentPills(_, _, _, let glances, _, _, _) = request else {
+        guard case .presentPills(_, _, _, let glances, _, _, _, _, _) = request else {
             return XCTFail("Expected pills")
         }
         let glance = try XCTUnwrap(glances.first)
@@ -58,7 +69,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready","inspector":{"status":"Ready","runtimeItems":["Pi · Ghostty","Claude Sonnet 4"],"detailRows":[{"label":"Reasoning","value":"High"}],"projectPath":"~/Codes/agent-visor","activityAt":"2026-08-22T21:02:18.000Z","context":{"usedLabel":"84k","windowLabel":"200k","percentage":42}}}],"hotkeyTrigger":"custom","customHotkeyCombo":"49:8"}}"#
 
         let request = try NativeHelperRequest.decode(Data(json.utf8))
-        guard case .presentPills(_, let pills, _, _, _, let trigger, let combo) = request else {
+        guard case .presentPills(_, let pills, _, _, _, _, _, let trigger, let combo) = request else {
             return XCTFail("Expected pills")
         }
         let inspector = try XCTUnwrap(pills.first?.inspector)
@@ -82,6 +93,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[{"id":"1","title":"A","phase":"ready","priority":1,"accessibilityLabel":"A","inspector":{"status":"Ready","runtimeItems":["Pi"],"detailRows":[],"projectPath":"/tmp","activityAt":"2026-08-22T21:02:18.000Z","provider":"Pi"}}]}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[],"usageGlances":[{"id":"codex","label":"5h 0%","detail":"Codex usage","tone":"critical","priority":100,"accessibilityLabel":"Codex usage","windows":[{"title":"5 hour limit","remainingPercent":101}]}]}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[],"usageGlances":[{"id":"codex","label":"5h 82%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage","windows":[{"remainingPercent":82}]}]}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[],"pillScreen":{"mode":"automatic","name":"Injected"}}}"#)
     }
 
     func testEncodesTypedResponseEnvelope() throws {

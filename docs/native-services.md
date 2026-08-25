@@ -18,6 +18,8 @@ The migrated settings include:
 
 - Appearance and content size.
 - Session-pill and Codex-usage visibility.
+- Pill-screen selection by display ID and reconnect-safe name.
+- Full-screen visibility choice, including legacy safe-default migration.
 - Window hotkey and migrated custom chord.
 - Session shortcut modifiers.
 - Notification sound.
@@ -26,6 +28,8 @@ The migrated settings include:
 - Launch at login.
 
 Observed-session changes take effect without restarting the daemon. Session shortcuts re-register native hotkeys, while the application shortcut reconfigures the existing monitors.
+
+Settings receives bounded screen names and roles from the signed helper. Display and full-screen changes update the existing native panels without restarting the helper.
 
 Launch-at-login changes use Electron’s packaged application API. Development builds preserve the value without registering the Electron development binary.
 

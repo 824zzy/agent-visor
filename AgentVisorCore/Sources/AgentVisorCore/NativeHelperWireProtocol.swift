@@ -179,6 +179,33 @@ public enum NativeHelperHotkeyTrigger: String, Codable, Equatable {
     case custom
 }
 
+public struct NativeHelperPillScreen: Codable, Equatable {
+    public enum Mode: String, Codable, Equatable {
+        case automatic
+        case specific
+    }
+
+    public let mode: Mode
+    public let displayId: UInt32?
+    public let name: String?
+
+    public static let automatic = NativeHelperPillScreen(
+        mode: .automatic,
+        displayId: nil,
+        name: nil
+    )
+
+    public static func specific(displayId: UInt32, name: String) -> Self {
+        NativeHelperPillScreen(mode: .specific, displayId: displayId, name: name)
+    }
+
+    public init(mode: Mode, displayId: UInt32?, name: String?) {
+        self.mode = mode
+        self.displayId = displayId
+        self.name = name
+    }
+}
+
 public enum NativeHelperRequest: Equatable {
     case screenTopology(id: String)
     case accessibilityStatus(id: String)
@@ -190,6 +217,8 @@ public enum NativeHelperRequest: Equatable {
         navigatorPills: [NativeHelperPill],
         usageGlances: [NativeHelperUsageGlance],
         shortcutModifierFamily: SessionShortcutModifierFamily?,
+        pillScreen: NativeHelperPillScreen?,
+        fullScreenPolicy: FullScreenPillPolicy?,
         hotkeyTrigger: NativeHelperHotkeyTrigger?,
         customHotkeyCombo: KeyCombo?
     )
@@ -201,7 +230,7 @@ public enum NativeHelperRequest: Equatable {
         switch self {
         case .screenTopology(let id), .accessibilityStatus(let id),
              .requestAccessibility(let id), .openAccessibilitySettings(let id),
-             .presentPills(let id, _, _, _, _, _, _), .focus(let id, _),
+             .presentPills(let id, _, _, _, _, _, _, _, _), .focus(let id, _),
              .focusTerminal(let id, _), .sendTerminal(let id, _, _, _):
             id
         }
@@ -244,7 +273,7 @@ public enum NativeHelperRequest: Equatable {
                   Set(params.keys).contains("pills"),
                   Set(params.keys).isSubset(of: [
                     "pills", "navigatorPills", "usageGlances", "shortcutModifierFamily",
-                    "hotkeyTrigger", "customHotkeyCombo",
+                    "pillScreen", "fullScreenPolicy", "hotkeyTrigger", "customHotkeyCombo",
                   ]),
                   let pills = params.pills, pills.count <= 64,
                   (params.navigatorPills?.count ?? 0) <= 512,
@@ -260,8 +289,13 @@ public enum NativeHelperRequest: Equatable {
             let hotkeyTrigger = params.hotkeyTrigger.flatMap(
                 NativeHelperHotkeyTrigger.init(rawValue:)
             )
+            let fullScreenPolicy = params.fullScreenPolicy.flatMap(
+                FullScreenPillPolicy.init(rawValue:)
+            )
             let customCombo = params.customHotkeyCombo.flatMap(KeyCombo.fromSerialized)
             guard params.shortcutModifierFamily == nil || shortcutFamily != nil,
+                  params.pillScreen?.isValid ?? true,
+                  params.fullScreenPolicy == nil || fullScreenPolicy != nil,
                   params.hotkeyTrigger == nil || hotkeyTrigger != nil,
                   params.customHotkeyCombo == nil || (
                     (params.customHotkeyCombo?.count ?? 0) <= 8
@@ -276,6 +310,8 @@ public enum NativeHelperRequest: Equatable {
                 navigatorPills: params.navigatorPills ?? pills,
                 usageGlances: params.usageGlances ?? [],
                 shortcutModifierFamily: shortcutFamily,
+                pillScreen: params.pillScreen,
+                fullScreenPolicy: fullScreenPolicy,
                 hotkeyTrigger: hotkeyTrigger,
                 customHotkeyCombo: customCombo
             )
@@ -326,6 +362,8 @@ public struct NativeHelperRectangle: Codable, Equatable {
 
 public struct NativeHelperScreen: Codable, Equatable {
     public let displayId: UInt32
+    public let name: String
+    public let isBuiltIn: Bool
     public let frame: NativeHelperRectangle
     public let visibleFrame: NativeHelperRectangle
     public let scale: Double
@@ -333,12 +371,16 @@ public struct NativeHelperScreen: Codable, Equatable {
 
     public init(
         displayId: UInt32,
+        name: String,
+        isBuiltIn: Bool,
         frame: NativeHelperRectangle,
         visibleFrame: NativeHelperRectangle,
         scale: Double,
         isMain: Bool
     ) {
         self.displayId = displayId
+        self.name = name
+        self.isBuiltIn = isBuiltIn
         self.frame = frame
         self.visibleFrame = visibleFrame
         self.scale = scale
@@ -495,7 +537,7 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
               Set(params.keys).contains("pills"),
               Set(params.keys).isSubset(of: [
                 "pills", "navigatorPills", "usageGlances", "shortcutModifierFamily",
-                "hotkeyTrigger", "customHotkeyCombo",
+                "pillScreen", "fullScreenPolicy", "hotkeyTrigger", "customHotkeyCombo",
               ]),
               let pills = params["pills"] as? [[String: Any]] else { return false }
         let navigatorPills = params["navigatorPills"] as? [[String: Any]] ?? []
@@ -513,6 +555,7 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
                 && ($0["inspector"].map(hasStrictInspectorFields) ?? true)
         }
             && usageGlances.allSatisfy(hasStrictUsageFields)
+            && (params["pillScreen"].map(hasStrictPillScreenFields) ?? true)
     case "focus":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys) == ["target"],
@@ -546,6 +589,8 @@ private struct WireParameters: Decodable {
     let navigatorPills: [NativeHelperPill]?
     let usageGlances: [NativeHelperUsageGlance]?
     let shortcutModifierFamily: String?
+    let pillScreen: NativeHelperPillScreen?
+    let fullScreenPolicy: String?
     let hotkeyTrigger: String?
     let customHotkeyCombo: String?
     let target: NativeHelperFocusTarget?
@@ -569,6 +614,14 @@ private struct WireParameters: Decodable {
         shortcutModifierFamily = try container.decodeIfPresent(
             String.self,
             forKey: .init("shortcutModifierFamily")
+        )
+        pillScreen = try container.decodeIfPresent(
+            NativeHelperPillScreen.self,
+            forKey: .init("pillScreen")
+        )
+        fullScreenPolicy = try container.decodeIfPresent(
+            String.self,
+            forKey: .init("fullScreenPolicy")
         )
         hotkeyTrigger = try container.decodeIfPresent(
             String.self,
@@ -595,6 +648,26 @@ private struct DynamicKey: CodingKey {
     init(_ value: String) { stringValue = value }
     init?(stringValue: String) { self.init(stringValue) }
     init?(intValue: Int) { return nil }
+}
+
+private func hasStrictPillScreenFields(_ value: Any) -> Bool {
+    guard let screen = value as? [String: Any],
+          let mode = screen["mode"] as? String else { return false }
+    return mode == "automatic"
+        ? Set(screen.keys) == ["mode"]
+        : mode == "specific" && Set(screen.keys) == ["mode", "displayId", "name"]
+}
+
+private extension NativeHelperPillScreen {
+    var isValid: Bool {
+        switch mode {
+        case .automatic:
+            return displayId == nil && name == nil
+        case .specific:
+            return displayId != nil
+                && (name.map { !$0.isEmpty && $0.count <= 128 } ?? false)
+        }
+    }
 }
 
 private extension NativeHelperTerminalTarget {

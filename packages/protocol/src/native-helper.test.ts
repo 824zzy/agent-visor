@@ -50,6 +50,8 @@ const requests = [
         accessibilityLabel: "Chat history, recent session",
       }],
       shortcutModifierFamily: "controlCommand",
+      pillScreen: { mode: "specific", displayId: 5, name: "XZ322QU V3" },
+      fullScreenPolicy: "alwaysHide",
       hotkeyTrigger: "custom",
       customHotkeyCombo: "49:8",
       usageGlances: [
@@ -183,6 +185,12 @@ describe("native helper protocol", () => {
     }).success).toBe(false);
     expect(nativeHelperRequestSchema.safeParse({
       version: 1,
+      id: "unsafe-screen",
+      method: "present_pills",
+      params: { pills: [], pillScreen: { mode: "automatic", name: "Injected" } },
+    }).success).toBe(false);
+    expect(nativeHelperRequestSchema.safeParse({
+      version: 1,
       id: "untitled-usage",
       method: "present_pills",
       params: {
@@ -254,6 +262,8 @@ describe("native helper protocol", () => {
           screens: [
             {
               displayId: 1,
+              name: "Built-in Retina Display",
+              isBuiltIn: true,
               frame: { x: 0, y: 0, width: 1512, height: 982 },
               visibleFrame: { x: 0, y: 37, width: 1512, height: 945 },
               scale: 2,
