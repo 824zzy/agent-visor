@@ -11,7 +11,17 @@ import {
   type SessionSnapshot,
   type SessionSummary,
 } from "@agent-visor/protocol";
-import { statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { readChatPage } from "./chat.js";
 
@@ -87,6 +97,26 @@ export type HookResponse = {
 
 const piReadyRecoveryWindowMs = 90_000;
 const distantPast = "1970-01-01T00:00:00.000Z";
+const maxPiRuntimeLinks = 64;
+const maxPiRuntimeStateBytes = 1_048_576;
+
+type SessionRepositoryOptions = {
+  piRuntimeStatePath?: string;
+  bootSessionUUID?: string;
+};
+
+type PiRuntimeState = {
+  path: string;
+  bootSessionUUID: string;
+};
+
+type PersistedPiRuntimeLink = {
+  sessionId: string;
+  cwd: string;
+  pid: number;
+  tty: string;
+  sessionFile: string;
+};
 
 const providerNames: Record<ProviderID, string> = {
   claude_code: "Claude Code",
@@ -113,6 +143,8 @@ export class SessionRepository {
   private readonly piRemovedRestorationSessionIds = new Set<string>();
   private piDiscoveryGeneration = 0;
   private piRestorationFingerprint: string | undefined;
+  private piRuntimeState: PiRuntimeState | undefined;
+  private piRuntimeStateFingerprint: string | undefined;
   private readonly piRestorationListeners = new Set<(
     update: NativeHelperPiRestorationUpdate,
   ) => void>();
@@ -130,7 +162,24 @@ export class SessionRepository {
     respond(response: HookResponse): void;
   }>();
 
-  constructor(private readonly providers: ProviderAdapter[]) {}
+  constructor(
+    private readonly providers: ProviderAdapter[],
+    options: SessionRepositoryOptions = {},
+  ) {
+    const bootSessionUUID = canonicalBootSessionUUID(options.bootSessionUUID);
+    if (!options.piRuntimeStatePath || !bootSessionUUID) return;
+    this.piRuntimeState = { path: options.piRuntimeStatePath, bootSessionUUID };
+    for (const event of readPiRuntimeLinks(this.piRuntimeState)) {
+      this.latestHookAtBySession.set(event.sessionId, event.receivedAt);
+      this.piRuntimeBySession.set(event.sessionId, event);
+      this.piRuntimeDiscoveryGeneration.set(event.sessionId, this.piDiscoveryGeneration);
+      this.providers.find((provider) => provider.id === "pi")?.noteHook?.(event);
+    }
+    this.piRuntimeStateFingerprint = serializePiRuntimeState(
+      this.piRuntimeState,
+      this.piRuntimeBySession.values(),
+    );
+  }
 
   setControls(controls: SessionControls): void {
     this.controls = controls;
@@ -356,6 +405,7 @@ export class SessionRepository {
             this.piRuntimeDiscoveryGeneration.set(event.sessionId, this.piDiscoveryGeneration);
             this.piRemovedRestorationSessionIds.delete(event.sessionId);
           }
+          this.persistPiRuntimeLinks();
         }
         if (isPiHeartbeat(event)) {
           const current = this.snapshotValue.sessions.find((session) => session.id === event.sessionId);
@@ -390,6 +440,27 @@ export class SessionRepository {
     }
   }
 
+  private persistPiRuntimeLinks(): void {
+    const state = this.piRuntimeState;
+    if (!state) return;
+    const serialized = serializePiRuntimeState(state, this.piRuntimeBySession.values());
+    if (serialized === this.piRuntimeStateFingerprint) return;
+    const temporaryPath = `${state.path}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      mkdirSync(path.dirname(state.path), { recursive: true, mode: 0o700 });
+      writeFileSync(temporaryPath, serialized, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      });
+      chmodSync(temporaryPath, 0o600);
+      renameSync(temporaryPath, state.path);
+      this.piRuntimeStateFingerprint = serialized;
+    } catch {
+      try { rmSync(temporaryPath, { force: true }); } catch { /* best-effort cache */ }
+    }
+  }
+
   private removeConcludedPiRuntimes(): void {
     const sessions = new Map(
       (this.lastByProvider.get("pi") ?? []).map((session) => [session.id, session]),
@@ -402,6 +473,7 @@ export class SessionRepository {
       this.piRuntimeDiscoveryGeneration.delete(sessionId);
       this.rememberPiRestorationRemoval(sessionId);
     }
+    this.persistPiRuntimeLinks();
   }
 
   private publish(discovered: DiscoveredProviderSession[]): SessionSnapshot {
@@ -456,6 +528,74 @@ export class SessionRepository {
     }
     return this.current();
   }
+}
+
+function canonicalBootSessionUUID(value: unknown): string | undefined {
+  if (typeof value !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    return undefined;
+  }
+  return value.toUpperCase();
+}
+
+function readPiRuntimeLinks(state: PiRuntimeState): HookSessionEvent[] {
+  try {
+    const metadata = lstatSync(state.path);
+    if (!metadata.isFile() || metadata.size > maxPiRuntimeStateBytes) return [];
+    const value: unknown = JSON.parse(readFileSync(state.path, "utf8"));
+    if (!isRecord(value) || value.version !== 1
+      || canonicalBootSessionUUID(value.bootSessionUUID) !== state.bootSessionUUID
+      || !Array.isArray(value.links) || value.links.length > maxPiRuntimeLinks) return [];
+    return value.links.flatMap((link) => {
+      const persisted = persistedPiRuntimeLink(link);
+      return persisted ? [{
+        ...persisted,
+        provider: "pi" as const,
+        event: "SessionHeartbeat",
+        status: "alive",
+        receivedAt: distantPast,
+      }] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function serializePiRuntimeState(
+  state: PiRuntimeState,
+  events: Iterable<HookSessionEvent>,
+): string {
+  // ponytail: keep the helper's 64-session ceiling; page only if concurrent Pi use reaches it.
+  const links = [...events].flatMap((event) => {
+    const persisted = persistedPiRuntimeLink(event);
+    return persisted ? [persisted] : [];
+  }).slice(-maxPiRuntimeLinks)
+    .sort((left, right) => left.sessionId.localeCompare(right.sessionId));
+  return JSON.stringify({ version: 1, bootSessionUUID: state.bootSessionUUID, links });
+}
+
+function persistedPiRuntimeLink(value: unknown): PersistedPiRuntimeLink | undefined {
+  if (!isRecord(value)) return undefined;
+  const sessionId = boundedString(value.sessionId, 256);
+  const cwd = boundedString(value.cwd, 4_096);
+  const tty = boundedString(value.tty, 128);
+  const sessionFile = boundedString(value.sessionFile, 4_096);
+  const pid = value.pid;
+  if (!sessionId || !cwd || !tty || !sessionFile
+    || !path.isAbsolute(cwd) || !path.isAbsolute(sessionFile)
+    || !Number.isSafeInteger(pid) || (pid as number) < 1
+    || !isExistingDirectory(cwd) || !isPersistedRegularFile(sessionFile)) return undefined;
+  return { sessionId, cwd, pid: pid as number, tty, sessionFile };
+}
+
+function boundedString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function applyHooks(

@@ -26,6 +26,8 @@ A transient provider failure retains that provider’s last complete rows. Empty
 
 Pi heartbeats update exact runtime identity without refreshing phase or activity. An idle heartbeat repairs only a Working row: recent transcript writes become Ready, while older or unreadable writes become History without attention.
 
+A bounded, boot-scoped Pi runtime-link file preserves exact focus across daemon restarts. Fresh provider discovery must validate each link before use.
+
 Connected clients receive later revisions automatically. A reconnect receives the current revision without rebuilding session identity.
 
 ## Machine work

@@ -93,6 +93,14 @@ This guardrail deliberately does not infer Pi branch identity, add a leaf ID to 
 
 A live process using an older already-loaded copy of the extension cannot be upgraded invisibly. It continues through fallback behavior until the user runs `/reload` or starts Pi again; Agent Visor must not inject `/reload` or terminal input to force adoption.
 
+### Same-boot navigation links
+
+The Electron daemon keeps at most 64 exact Pi runtime links in `pi-runtime-links.json` under its Application Support directory. Each link contains only session ID, working directory, PID, TTY, and session-file path. Writes are atomic and use mode `0600`. Prompt, response, tool, credential, and transcript content are excluded.
+
+The file is authorized only when its canonical boot-session UUID matches the current value from bounded `/usr/sbin/sysctl` execution. Missing or malformed UUIDs disable loading and writing. The cache never authorizes a launch or reboot restoration.
+
+A fresh repository seeds only `PiProvider` runtime identity. Provider discovery must still match the exact persisted transcript, live Pi PID, TTY, working directory, and terminal owner before focus becomes available. `SessionEnd`, missing files, missing processes, and failed exact discovery remove the link. Visible phase still waits for fresh lifecycle evidence.
+
 ## Reboot Restoration
 
 Agent Visor maintains one atomic, schema-versioned restoration snapshot under its Application Support directory. Only accepted, persisted, interactive Pi runtimes whose canonical terminal host is Ghostty enter it. Historical rows, fallback-unmatched processes, print/JSON/RPC/SDK invocations, ephemeral sessions, subagents, other terminal hosts, and competing live owners are excluded.

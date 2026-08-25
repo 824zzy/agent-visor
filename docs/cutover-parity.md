@@ -35,7 +35,7 @@ The 2026-08-24 source audit corrected earlier broad Pass claims. `Partial` names
 | Updates | Signed public release with downgrade prevention | Validated appcast and manual verified release link; automatic installation remains intentionally disabled | Partial |
 | Lifecycle | Close-to-hide, Dock reopen, launch at login, and quit owned processes only | Window lifecycle and owned-process shutdown checks | Pass |
 | Agent integrations | Detect and install or remove hook-based integrations | Fresh profiles connect Claude Code, Auggie, and Codex; Pi connects automatically; Cursor remains read-only | Pass |
-| Pi restoration | Relaunch exact eligible prior-boot Ghostty sessions | Atomic helper coordination, bounded exact evidence, claim-before-launch, layout reuse, and clean invalidation pass automated checks; a physical reboot remains | Partial |
+| Pi restoration | Relaunch exact eligible prior-boot Ghostty sessions | Same-boot exact navigation survives daemon restarts. Atomic prior-boot restoration passes automated checks; a physical reboot remains | Partial |
 
 ## Provider matrix
 

@@ -27,13 +27,22 @@ class FakeProvider implements ProviderAdapter {
   readonly id = "pi";
   sessions = [live];
   hook?: HookSessionEvent;
+  requiresHook = false;
 
   noteHook(event: HookSessionEvent): void {
     this.hook = structuredClone(event);
   }
 
   async discover(): Promise<DiscoveredProviderSession[]> {
-    return structuredClone(this.sessions);
+    return structuredClone(this.sessions.map((session) => this.requiresHook && !this.hook
+      ? {
+          ...session,
+          owner: "Pi",
+          canOpenOwner: false,
+          controlTarget: undefined,
+          messageTransport: undefined,
+        }
+      : session));
   }
 }
 
@@ -539,6 +548,93 @@ describe("SessionRepository", () => {
       toolUseId: "codex-command-1", decision: "allow_always",
     })).toBeUndefined();
     expect(decision).toBe("allow_always");
+  });
+
+  it("reattaches exact Pi focus after a same-boot repository restart", async () => {
+    const transcript = temporaryTranscript("2026-08-22T08:00:00.000Z");
+    const statePath = path.join(path.dirname(transcript.path), "pi-runtime.json");
+    const bootSessionUUID = "7715CBA2-964F-4562-9F25-67CCF1DD8C22";
+    const session = {
+      ...live,
+      cwd: path.dirname(transcript.path),
+      chatPath: transcript.path,
+      controlTarget: {
+        kind: "terminal" as const,
+        target: {
+          application: "Ghostty" as const,
+          tty: "ttys012",
+          cwd: path.dirname(transcript.path),
+        },
+      },
+    };
+    try {
+      const firstProvider = new FakeProvider();
+      firstProvider.requiresHook = true;
+      firstProvider.sessions = [session];
+      const first = new SessionRepository(
+        [firstProvider],
+        { piRuntimeStatePath: statePath, bootSessionUUID },
+      );
+      first.applyHook(heartbeat({
+        cwd: session.cwd,
+        tty: "ttys012",
+        sessionFile: transcript.path,
+      }));
+      await first.refresh();
+
+      const restartedProvider = new FakeProvider();
+      restartedProvider.requiresHook = true;
+      restartedProvider.sessions = [session];
+      const restarted = new SessionRepository(
+        [restartedProvider],
+        { piRuntimeStatePath: statePath, bootSessionUUID },
+      );
+      const focused: string[] = [];
+      restarted.setControls({
+        focus: async (record) => { focused.push(record.id); },
+        send: async () => undefined,
+      });
+
+      await restarted.refresh();
+
+      expect(await restarted.focusSession("pi-1")).toBeUndefined();
+      expect(focused).toEqual(["pi-1"]);
+
+      const wrongBootProvider = new FakeProvider();
+      wrongBootProvider.requiresHook = true;
+      wrongBootProvider.sessions = [session];
+      const wrongBoot = new SessionRepository(
+        [wrongBootProvider],
+        {
+          piRuntimeStatePath: statePath,
+          bootSessionUUID: "6333390E-5726-479B-B8D5-F9AB4D4FAE29",
+        },
+      );
+      wrongBoot.setControls({ focus: async () => undefined, send: async () => undefined });
+      await wrongBoot.refresh();
+      expect(await wrongBoot.focusSession("pi-1")).toBe("Exact session focus is unavailable.");
+
+      restarted.applyHook({
+        sessionId: "pi-1",
+        cwd: session.cwd,
+        provider: "pi",
+        event: "SessionEnd",
+        status: "ended",
+        receivedAt: "2026-08-22T08:02:00.000Z",
+      });
+      const endedProvider = new FakeProvider();
+      endedProvider.requiresHook = true;
+      endedProvider.sessions = [session];
+      const ended = new SessionRepository(
+        [endedProvider],
+        { piRuntimeStatePath: statePath, bootSessionUUID },
+      );
+      ended.setControls({ focus: async () => undefined, send: async () => undefined });
+      await ended.refresh();
+      expect(await ended.focusSession("pi-1")).toBe("Exact session focus is unavailable.");
+    } finally {
+      transcript.remove();
+    }
   });
 
   it("routes focus and Chat through provider-owned control metadata", async () => {

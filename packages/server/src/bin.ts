@@ -6,6 +6,7 @@ import type { NativeHelperUsageGlance } from "@agent-visor/protocol";
 import { stopCodexTurns } from "./codex-turn.js";
 import { startHookSocket, type RunningHookSocket } from "./hook-socket.js";
 import { menuPresentation, nativeActionFor } from "./menu.js";
+import { runProcess } from "./machine.js";
 import { NativeHelperProcess, UnavailableNativeHelper } from "./native-helper.js";
 import { AgentConnectionsRepository } from "./agent-connections.js";
 import { NativeServicesRepository } from "./native-services.js";
@@ -34,10 +35,16 @@ const settings = await SettingsRepository.open({
 if (process.env.AGENT_VISOR_LAUNCH_AT_LOGIN) {
   await settings.update({ launchAtLogin: process.env.AGENT_VISOR_LAUNCH_AT_LOGIN === "true" });
 }
-const repository = new SessionRepository(liveProviders(
-  os.homedir(),
-  () => settings.current().observedWindowHours * 60 * 60 * 1_000,
-));
+const repository = new SessionRepository(
+  liveProviders(
+    os.homedir(),
+    () => settings.current().observedWindowHours * 60 * 60 * 1_000,
+  ),
+  {
+    piRuntimeStatePath: path.join(dataRoot, "pi-runtime-links.json"),
+    bootSessionUUID: await macBootSessionUUID(),
+  },
+);
 
 let hookSocket: RunningHookSocket | undefined;
 let nativeHelper: NativeHelperProcess | undefined;
@@ -228,6 +235,19 @@ async function stop(): Promise<void> {
   });
   await running.close();
   process.exit(0);
+}
+
+async function macBootSessionUUID(): Promise<string | undefined> {
+  const result = await runProcess(
+    "/usr/sbin/sysctl",
+    ["-n", "kern.bootsessionuuid"],
+    { deadlineMs: 500, maxOutputBytes: 1_024 },
+  );
+  if (result.status !== "success") return undefined;
+  const value = result.stdout.trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    ? value.toUpperCase()
+    : undefined;
 }
 
 process.once("SIGINT", () => void stop());
