@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { FakeNativeHelper } from "./native-helper.js";
+import { describe, expect, it, vi } from "vitest";
+import { FakeNativeHelper, retryNativeHelperStart } from "./native-helper.js";
 
 const screen = {
   displayId: 1,
@@ -66,6 +66,24 @@ const piRestorationCandidate = {
   pid: 43,
   tty: "ttys001",
 };
+
+describe("retryNativeHelperStart", () => {
+  it("retries one transient startup failure", async () => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    const started = retryNativeHelperStart(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("Launch Services was not ready");
+      return "helper";
+    });
+
+    await vi.runAllTimersAsync();
+
+    await expect(started).resolves.toBe("helper");
+    expect(attempts).toBe(2);
+    vi.useRealTimers();
+  });
+});
 
 describe("FakeNativeHelper", () => {
   it("supports daemon tests without a native process", async () => {

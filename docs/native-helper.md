@@ -74,7 +74,7 @@ The script never creates or rotates a certificate.
 
 It packages the executable as a background helper application. This preserves its signed identity and gives modern notifications a valid bundle identity.
 
-The daemon starts that application through Launch Services. A clean close first invalidates Pi restoration authority. An unexpected socket close preserves the latest atomic active snapshot. The helper freezes that snapshot when macOS announces system power-off.
+The daemon starts that application through Launch Services and retries once after 250 milliseconds if startup fails. A clean close first invalidates Pi restoration authority. An unexpected socket close preserves the latest atomic active snapshot. The helper freezes that snapshot when macOS announces system power-off.
 
 ## Test seams
 

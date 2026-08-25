@@ -7,7 +7,11 @@ import { stopCodexTurns } from "./codex-turn.js";
 import { startHookSocket, type RunningHookSocket } from "./hook-socket.js";
 import { menuPresentation, nativeActionFor } from "./menu.js";
 import { runProcess } from "./machine.js";
-import { NativeHelperProcess, UnavailableNativeHelper } from "./native-helper.js";
+import {
+  NativeHelperProcess,
+  retryNativeHelperStart,
+  UnavailableNativeHelper,
+} from "./native-helper.js";
 import { AgentConnectionsRepository } from "./agent-connections.js";
 import { NativeServicesRepository } from "./native-services.js";
 import { handleNotificationAction } from "./notification-actions.js";
@@ -73,7 +77,7 @@ try {
 const nativeHelperExecutable = process.env.AGENT_VISOR_NATIVE_HELPER;
 if (nativeHelperExecutable) {
   try {
-    nativeHelper = await NativeHelperProcess.start(nativeHelperExecutable, (event) => {
+    nativeHelper = await retryNativeHelperStart(() => NativeHelperProcess.start(nativeHelperExecutable, (event) => {
       if (event.event === "notification_permission") {
         nativeServices?.setNotificationPermission(event.status);
         return;
@@ -111,7 +115,7 @@ if (nativeHelperExecutable) {
       }
       const action = nativeActionFor(event, repository.current());
       if (action) process.send?.(action);
-    });
+    }));
     presentNativeMenu = () => {
       const preferences = settings.current();
       const presentation = preferences.pillsEnabled

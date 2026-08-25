@@ -179,6 +179,15 @@ export class UnavailableNativeHelper implements NativeHelperAdapter {
   async sendTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
 }
 
+export async function retryNativeHelperStart<T>(start: () => Promise<T>): Promise<T> {
+  try {
+    return await start();
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return start();
+  }
+}
+
 export class NativeHelperProcess implements NativeHelperAdapter {
   private buffer = Buffer.alloc(0);
   private closed = false;
