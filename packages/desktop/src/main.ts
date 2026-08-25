@@ -29,8 +29,9 @@ let mainWindow: BrowserWindow | undefined;
 let nativeActionQueue = Promise.resolve();
 let quitting = false;
 
-// Keep Electron data separate from the Swift rollback application.
-app.setName(electronDataName);
+// Keep Electron data separate from the Swift rollback application without exposing its directory name.
+app.setPath("userData", path.join(app.getPath("appData"), electronDataName));
+app.setName(productName);
 
 app.on("before-quit", () => {
   quitting = true;
