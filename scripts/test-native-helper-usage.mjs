@@ -1,12 +1,15 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 
 const root = await mkdtemp(path.join("/tmp", "agent-visor-usage-ui-"));
+const helperRoot = path.resolve("build/native-helper-usage-tests", String(process.pid));
+await rm(helperRoot, { recursive: true, force: true });
+await mkdir(helperRoot, { recursive: true });
 const socketPath = path.join(root, "helper.sock");
-const input = path.join(root, "input");
-const fullScreenHostPath = path.join(root, "full-screen-host");
+const input = path.join(helperRoot, "input");
+const fullScreenHostPath = path.join(helperRoot, "full-screen-host");
 const bin = spawnSync(
   "swift",
   ["build", "--package-path", "AgentVisorCore", "--show-bin-path"],
@@ -268,6 +271,7 @@ try {
     await new Promise((resolve) => helper.once("exit", resolve));
   }
   await rm(root, { recursive: true, force: true });
+  await rm(helperRoot, { recursive: true, force: true });
   if (helper.exitCode) process.stderr.write(stderr);
 }
 

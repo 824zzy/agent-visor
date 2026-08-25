@@ -10,6 +10,8 @@ import {
   type NativeHelperFocusTarget,
   type NativeHelperNotification,
   type NativeHelperNotificationPermission,
+  type NativeHelperPiRestorationCandidate,
+  type NativeHelperPiRestorationUpdate,
   type NativeHelperPill,
   type NativeHelperTerminalTarget,
   type NativeHelperResponse,
@@ -26,6 +28,7 @@ export interface NativeHelperAdapter {
     notifications: NativeHelperNotification[],
     presentNew: boolean,
   ): Promise<void>;
+  reconcilePiRestoration(update: NativeHelperPiRestorationUpdate): Promise<void>;
   requestAccessibility(): Promise<void>;
   openAccessibilitySettings(): Promise<void>;
   presentPills(
@@ -52,6 +55,10 @@ export class FakeNativeHelper implements NativeHelperAdapter {
   presentedPills: NativeHelperPill[] = [];
   presentedNotifications: NativeHelperNotification[] = [];
   presentedNewNotifications = false;
+  piRestorationCandidates: NativeHelperPiRestorationCandidate[] = [];
+  piRestorationLiveSessionIds: string[] = [];
+  piRestorationRemovedSessionIds: string[] = [];
+  invalidatedPiRestoration = false;
   readonly notificationPresentations: Array<{
     notifications: NativeHelperNotification[];
     presentNew: boolean;
@@ -109,6 +116,13 @@ export class FakeNativeHelper implements NativeHelperAdapter {
     });
   }
 
+  async reconcilePiRestoration(update: NativeHelperPiRestorationUpdate): Promise<void> {
+    this.piRestorationCandidates = structuredClone(update.candidates);
+    this.piRestorationLiveSessionIds = structuredClone(update.liveSessionIds);
+    this.piRestorationRemovedSessionIds = structuredClone(update.removeCandidateSessionIds);
+    this.invalidatedPiRestoration = update.cleanTermination;
+  }
+
   async requestAccessibility(): Promise<void> {
     this.requestedAccessibility = true;
   }
@@ -156,6 +170,7 @@ export class UnavailableNativeHelper implements NativeHelperAdapter {
   async notificationStatus(): Promise<NativeHelperNotificationPermission> { return "not_determined"; }
   async requestNotifications(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async reconcileNotifications(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
+  async reconcilePiRestoration(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async requestAccessibility(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async openAccessibilitySettings(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async presentPills(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
@@ -257,6 +272,10 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     await this.accepted("reconcile_notifications", { notifications, presentNew });
   }
 
+  async reconcilePiRestoration(update: NativeHelperPiRestorationUpdate): Promise<void> {
+    await this.accepted("reconcile_pi_restoration", update);
+  }
+
   async openAccessibilitySettings(): Promise<void> {
     await this.accepted("open_accessibility_settings");
   }
@@ -296,6 +315,17 @@ export class NativeHelperProcess implements NativeHelperAdapter {
 
   async close(): Promise<void> {
     if (this.closed) return;
+    let invalidationError: unknown;
+    try {
+      await this.reconcilePiRestoration({
+        candidates: [],
+        liveSessionIds: [],
+        removeCandidateSessionIds: [],
+        cleanTermination: true,
+      });
+    } catch (error) {
+      invalidationError = error;
+    }
     this.closed = true;
     this.socket.end();
     if (this.child.exitCode === null && this.child.signalCode === null) {
@@ -310,6 +340,7 @@ export class NativeHelperProcess implements NativeHelperAdapter {
       }
     }
     await rm(this.root, { recursive: true, force: true });
+    if (invalidationError) throw invalidationError;
   }
 
   private async accepted(method: string, params?: unknown): Promise<void> {

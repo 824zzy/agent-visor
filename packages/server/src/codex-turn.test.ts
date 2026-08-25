@@ -1,5 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { codexPendingAction, codexResponseFor, sendCodexTurn } from "./codex-turn.js";
@@ -35,10 +34,12 @@ describe("Codex turn delivery", () => {
   });
 
   it("initializes, resumes the exact thread, and starts one text and image turn", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-codex-turn-"));
+    const parent = path.resolve("build/test-codex-turn");
+    await mkdir(parent, { recursive: true });
+    const root = await mkdtemp(path.join(parent, "run-"));
     roots.push(root);
     const log = path.join(root, "requests.jsonl");
-    const executable = path.join(root, "codex");
+    const executable = path.join(root, "codex.cjs");
     await writeFile(executable, `#!/usr/bin/env node
 const fs=require('node:fs'),readline=require('node:readline');
 const log=process.env.AGENT_VISOR_CODEX_TEST_LOG;

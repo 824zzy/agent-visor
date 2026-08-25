@@ -97,6 +97,8 @@ Closing the Sessions window hides it while the daemon and helper continue runnin
 
 A real Quit closes the window and stops owned processes.
 
+The daemon opens the Pi hook socket before starting the helper. Native session reconciliation sends accepted Pi restoration evidence to the helper. Clean helper closure invalidates active authority, while the helper's native power-off observer freezes it.
+
 Electron owns only the daemon it starts. The daemon owns only its helper, hook socket, timers, and temporary Codex usage process.
 
 Shutdown does not scan for or terminate provider processes. Independently started Pi, Claude Code, Codex, Cursor, Ghostty, Zed, and Auggie processes remain running.

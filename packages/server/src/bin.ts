@@ -44,6 +44,7 @@ let nativeHelper: NativeHelperProcess | undefined;
 let nativeServices: NativeServicesRepository | undefined;
 let unsubscribeMenu: (() => void) | undefined;
 let unsubscribeNotifications: (() => void) | undefined;
+let unsubscribePiRestoration: (() => void) | undefined;
 let unsubscribeSettings: (() => void) | undefined;
 let usageTimer: NodeJS.Timeout | undefined;
 let permissionTimer: NodeJS.Timeout | undefined;
@@ -53,6 +54,14 @@ let usageRefreshing = false;
 let presentNativeMenu = () => {};
 let refreshUsage = async () => {};
 let refreshing = false;
+
+const hookPath = process.env.AGENT_VISOR_HOOK_SOCKET ?? "/tmp/agent-visor.sock";
+try {
+  hookSocket = await startHookSocket({ socketPath: hookPath, repository });
+  console.log(`Agent Visor hook socket listening at ${hookPath}`);
+} catch (error) {
+  console.warn(`Agent Visor hook socket unavailable: ${String(error)}`);
+}
 
 const nativeHelperExecutable = process.env.AGENT_VISOR_NATIVE_HELPER;
 if (nativeHelperExecutable) {
@@ -162,6 +171,7 @@ nativeServices = new NativeServicesRepository({
   currentVersion,
   checkUpdates: () => checkForUpdates(currentVersion),
   pendingAction: (sessionId) => repository.pendingAction(sessionId),
+  piRestorationUpdate: () => repository.piRestorationUpdate(),
   emitDesktop: (effect) => process.send?.({ type: "native_effect", ...effect }),
 });
 await nativeServices.start();
@@ -172,6 +182,9 @@ updateTimer = setInterval(() => void nativeServices?.checkForUpdates(), 6 * 60 *
 updateTimer.unref();
 unsubscribeNotifications = repository.subscribe((snapshot) => {
   nativeServices?.reconcileSessions(snapshot);
+});
+unsubscribePiRestoration = repository.subscribePiRestoration(() => {
+  nativeServices?.reconcilePiRestoration();
 });
 nativeServices.reconcileSessions(repository.current());
 
@@ -187,14 +200,6 @@ console.log(`Agent Visor daemon listening at ${new URL(running.url).origin}`);
 void refresh();
 const refreshTimer = setInterval(() => void refresh(), 3_000);
 refreshTimer.unref();
-
-const hookPath = process.env.AGENT_VISOR_HOOK_SOCKET ?? "/tmp/agent-visor.sock";
-try {
-  hookSocket = await startHookSocket({ socketPath: hookPath, repository });
-  console.log(`Agent Visor hook socket listening at ${hookPath}`);
-} catch (error) {
-  console.warn(`Agent Visor hook socket unavailable: ${String(error)}`);
-}
 
 async function refresh(): Promise<void> {
   if (refreshing) return;
@@ -213,11 +218,14 @@ async function stop(): Promise<void> {
   if (updateTimer) clearInterval(updateTimer);
   unsubscribeMenu?.();
   unsubscribeNotifications?.();
+  unsubscribePiRestoration?.();
   unsubscribeSettings?.();
   stopCodexTurns();
   await sessionControls.close();
-  await nativeHelper?.close();
   await hookSocket?.close();
+  await nativeHelper?.close().catch((error: unknown) => {
+    console.warn(`Agent Visor Pi restoration invalidation failed: ${String(error)}`);
+  });
   await running.close();
   process.exit(0);
 }

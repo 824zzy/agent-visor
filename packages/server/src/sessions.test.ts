@@ -108,6 +108,183 @@ describe("SessionRepository", () => {
     });
   });
 
+  it("returns only accepted exact Ghostty Pi restoration candidates", async () => {
+    const transcript = temporaryTranscript("2026-08-22T08:00:00.000Z");
+    const cwd = path.dirname(transcript.path);
+    try {
+      const provider = new FakeProvider();
+      provider.sessions = [{
+        ...live,
+        cwd,
+        chatPath: transcript.path,
+        controlTarget: {
+          kind: "terminal",
+          target: { application: "Ghostty", tty: "ttys001", cwd },
+        },
+      }];
+      const repository = new SessionRepository([provider]);
+      await repository.refresh();
+
+      repository.applyHook({
+        sessionId: "pi-1",
+        cwd,
+        provider: "pi",
+        event: "SessionHeartbeat",
+        status: "alive",
+        receivedAt: "2026-08-22T08:01:00.000Z",
+        pid: 43,
+        tty: "ttys001",
+        sessionFile: transcript.path,
+      });
+
+      expect(repository.piRestorationUpdate()).toEqual({
+        candidates: [{
+          sessionId: "pi-1",
+          sessionFile: transcript.path,
+          cwd,
+          sessionName: "Migration",
+          pid: 43,
+          tty: "ttys001",
+        }],
+        liveSessionIds: ["pi-1"],
+        removeCandidateSessionIds: [],
+        cleanTermination: false,
+      });
+
+      provider.sessions = [{
+        ...live,
+        cwd,
+        owner: "iTerm2",
+        chatPath: transcript.path,
+        controlTarget: {
+          kind: "terminal",
+          target: { application: "iTerm2", tty: "ttys001", cwd },
+        },
+      }];
+      await repository.refresh();
+      expect(repository.piRestorationUpdate()).toEqual({
+        candidates: [],
+        liveSessionIds: ["pi-1"],
+        removeCandidateSessionIds: ["pi-1"],
+        cleanTermination: false,
+      });
+
+      repository.applyHook({
+        sessionId: "pi-1",
+        cwd,
+        provider: "pi",
+        event: "SessionEnd",
+        status: "ended",
+        receivedAt: "2026-08-22T08:02:00.000Z",
+      });
+      expect(repository.piRestorationUpdate()).toEqual({
+        candidates: [],
+        liveSessionIds: [],
+        removeCandidateSessionIds: ["pi-1"],
+        cleanTermination: false,
+      });
+    } finally {
+      transcript.remove();
+    }
+  });
+
+  it("removes restoration authority when the exact session file disappears", async () => {
+    const transcript = temporaryTranscript("2026-08-22T08:00:00.000Z");
+    const cwd = path.dirname(transcript.path);
+    const provider = new FakeProvider();
+    provider.sessions = [{
+      ...live,
+      cwd,
+      chatPath: transcript.path,
+      controlTarget: {
+        kind: "terminal",
+        target: { application: "Ghostty", tty: "ttys001", cwd },
+      },
+    }];
+    const repository = new SessionRepository([provider]);
+    await repository.refresh();
+    repository.applyHook(heartbeat({ cwd, sessionFile: transcript.path }));
+
+    transcript.remove();
+
+    expect(repository.piRestorationUpdate()).toMatchObject({
+      candidates: [],
+      liveSessionIds: ["pi-1"],
+      removeCandidateSessionIds: ["pi-1"],
+    });
+  });
+
+  it("publishes phase-neutral Pi restoration changes", async () => {
+    const transcript = temporaryTranscript("2026-08-22T08:00:00.000Z");
+    const cwd = path.dirname(transcript.path);
+    try {
+      const provider = new FakeProvider();
+      provider.sessions = [{
+        ...live,
+        cwd,
+        chatPath: transcript.path,
+        controlTarget: {
+          kind: "terminal",
+          target: { application: "Ghostty", tty: "ttys001", cwd },
+        },
+      }];
+      const repository = new SessionRepository([provider]);
+      await repository.refresh();
+      const updates: ReturnType<SessionRepository["piRestorationUpdate"]>[] = [];
+      repository.subscribePiRestoration((update) => updates.push(update));
+
+      repository.applyHook({
+        ...heartbeat({ cwd, sessionFile: transcript.path }),
+        receivedAt: "2026-08-22T08:02:00.000Z",
+      });
+
+      expect(repository.current().revision).toBe(1);
+      expect(updates.at(-1)?.candidates).toMatchObject([{ sessionId: "pi-1" }]);
+    } finally {
+      transcript.remove();
+    }
+  });
+
+  it("replaces an old Pi restoration identity on exact same-process SessionStart", async () => {
+    const transcript = temporaryTranscript("2026-08-22T08:00:00.000Z");
+    const cwd = path.dirname(transcript.path);
+    const replacementFile = path.join(cwd, "replacement.jsonl");
+    writeFileSync(replacementFile, "{}\n");
+    try {
+      const provider = new FakeProvider();
+      provider.sessions = [{
+        ...live,
+        id: "pi-old",
+        cwd,
+        chatPath: transcript.path,
+        controlTarget: {
+          kind: "terminal",
+          target: { application: "Ghostty", tty: "ttys001", cwd },
+        },
+      }];
+      const repository = new SessionRepository([provider]);
+      await repository.refresh();
+      repository.applyHook({
+        ...heartbeat({ sessionId: "pi-old", cwd, sessionFile: transcript.path }),
+        event: "SessionStart",
+      });
+
+      repository.applyHook({
+        ...heartbeat({ sessionId: "pi-new", cwd, sessionFile: replacementFile }),
+        event: "SessionStart",
+        receivedAt: "2026-08-22T08:02:00.000Z",
+      });
+
+      expect(repository.piRestorationUpdate()).toMatchObject({
+        candidates: [],
+        liveSessionIds: ["pi-new"],
+        removeCandidateSessionIds: ["pi-old"],
+      });
+    } finally {
+      transcript.remove();
+    }
+  });
+
   it("maps Pi's settled Stop event to Ready", () => {
     const repository = new SessionRepository([]);
 

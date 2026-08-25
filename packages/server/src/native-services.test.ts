@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ChatPendingAction } from "@agent-visor/protocol";
+import type { ChatPendingAction, NativeHelperPiRestorationUpdate } from "@agent-visor/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentConnectionsRepository } from "./agent-connections.js";
 import { FakeNativeHelper } from "./native-helper.js";
@@ -21,6 +21,7 @@ const session = {
 
 async function notificationFixture(
   pendingAction?: () => ChatPendingAction | undefined,
+  piRestorationUpdate?: () => NativeHelperPiRestorationUpdate,
 ): Promise<{
   services: NativeServicesRepository;
   effects: DesktopNativeEffect[];
@@ -40,6 +41,7 @@ async function notificationFixture(
     currentVersion: "2.7.0",
     checkUpdates: async () => ({ status: "up_to_date", currentVersion: "2.7.0" }),
     pendingAction,
+    piRestorationUpdate,
     emitDesktop: (effect) => effects.push(effect),
   });
   await services.start();
@@ -51,6 +53,30 @@ describe("native services", () => {
     const { helper } = await notificationFixture();
 
     expect(helper.requestedNotifications).toBe(true);
+  });
+
+  it("reconciles exact Pi restoration candidates with the signed helper", async () => {
+    const candidate = {
+      sessionId: "pi-1",
+      sessionFile: "/Users/me/.pi/agent/sessions/pi-1.jsonl",
+      cwd: "/Users/me/Codes/agent-visor",
+      sessionName: "Restore Pi sessions",
+      pid: 43,
+      tty: "ttys001",
+    };
+    const { services, helper } = await notificationFixture(undefined, () => ({
+      candidates: [candidate],
+      liveSessionIds: ["pi-1"],
+      removeCandidateSessionIds: [],
+      cleanTermination: false,
+    }));
+
+    services.reconcileSessions({ type: "session_snapshot", revision: 1, sessions: [] });
+
+    expect(helper.piRestorationCandidates).toEqual([candidate]);
+    expect(helper.piRestorationLiveSessionIds).toEqual(["pi-1"]);
+    expect(helper.piRestorationRemovedSessionIds).toEqual([]);
+    expect(helper.invalidatedPiRestoration).toBe(false);
   });
 
   it("publishes and changes agent connections", async () => {

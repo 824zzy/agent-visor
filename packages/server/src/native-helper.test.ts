@@ -58,6 +58,15 @@ const focus = {
   windowId: 7,
 };
 
+const piRestorationCandidate = {
+  sessionId: "pi-1",
+  sessionFile: "/Users/me/.pi/agent/sessions/pi-1.jsonl",
+  cwd: "/Users/me/Codes/agent-visor",
+  sessionName: "Restore Pi sessions",
+  pid: 43,
+  tty: "ttys001",
+};
+
 describe("FakeNativeHelper", () => {
   it("supports daemon tests without a native process", async () => {
     const helper = new FakeNativeHelper({
@@ -69,6 +78,12 @@ describe("FakeNativeHelper", () => {
     expect(await helper.notificationStatus()).toBe("authorized");
     await helper.requestNotifications();
     await helper.reconcileNotifications([notification], true);
+    await helper.reconcilePiRestoration({
+      candidates: [piRestorationCandidate],
+      liveSessionIds: ["pi-1"],
+      removeCandidateSessionIds: [],
+      cleanTermination: false,
+    });
     await helper.requestAccessibility();
     await helper.openAccessibilitySettings();
     await helper.presentPills(
@@ -83,6 +98,10 @@ describe("FakeNativeHelper", () => {
     expect(helper.requestedNotifications).toBe(true);
     expect(helper.presentedNotifications).toEqual([notification]);
     expect(helper.presentedNewNotifications).toBe(true);
+    expect(helper.piRestorationCandidates).toEqual([piRestorationCandidate]);
+    expect(helper.piRestorationLiveSessionIds).toEqual(["pi-1"]);
+    expect(helper.piRestorationRemovedSessionIds).toEqual([]);
+    expect(helper.invalidatedPiRestoration).toBe(false);
     expect(helper.requestedAccessibility).toBe(true);
     expect(helper.openedAccessibilitySettings).toBe(true);
     expect(helper.presentedPills).toEqual([pill]);

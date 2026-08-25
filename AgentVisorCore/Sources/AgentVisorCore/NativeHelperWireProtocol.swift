@@ -240,6 +240,22 @@ public struct NativeHelperNotification: Codable, Equatable {
     public let sound: NativeHelperNotificationSound
 }
 
+public struct NativeHelperPiRestorationCandidate: Codable, Equatable {
+    public let sessionId: String
+    public let sessionFile: String
+    public let cwd: String
+    public let sessionName: String?
+    public let pid: Int32
+    public let tty: String
+}
+
+public struct NativeHelperPiRestorationUpdate: Codable, Equatable {
+    public let candidates: [NativeHelperPiRestorationCandidate]
+    public let liveSessionIds: [String]
+    public let removeCandidateSessionIds: [String]
+    public let cleanTermination: Bool
+}
+
 public enum NativeHelperRequest: Equatable {
     case screenTopology(id: String)
     case accessibilityStatus(id: String)
@@ -250,6 +266,7 @@ public enum NativeHelperRequest: Equatable {
         notifications: [NativeHelperNotification],
         presentNew: Bool
     )
+    case reconcilePiRestoration(id: String, update: NativeHelperPiRestorationUpdate)
     case requestAccessibility(id: String)
     case openAccessibilitySettings(id: String)
     case presentPills(
@@ -271,7 +288,8 @@ public enum NativeHelperRequest: Equatable {
         switch self {
         case .screenTopology(let id), .accessibilityStatus(let id),
              .notificationStatus(let id), .requestNotifications(let id),
-             .reconcileNotifications(let id, _, _), .requestAccessibility(let id),
+             .reconcileNotifications(let id, _, _),
+             .reconcilePiRestoration(let id, _), .requestAccessibility(let id),
              .openAccessibilitySettings(let id),
              .presentPills(let id, _, _, _, _, _, _, _, _), .focus(let id, _),
              .focusTerminal(let id, _), .sendTerminal(let id, _, _, _):
@@ -287,8 +305,8 @@ public enum NativeHelperRequest: Equatable {
         }
 
         let requiredKeys: Set<String> = [
-            "present_pills", "reconcile_notifications", "focus", "focus_terminal",
-            "send_terminal",
+            "present_pills", "reconcile_notifications", "reconcile_pi_restoration",
+            "focus", "focus_terminal", "send_terminal",
         ].contains(method)
             ? ["version", "id", "method", "params"]
             : ["version", "id", "method"]
@@ -327,6 +345,33 @@ public enum NativeHelperRequest: Equatable {
                 id: wire.id,
                 notifications: notifications,
                 presentNew: presentNew
+            )
+        case "reconcile_pi_restoration":
+            guard let params = wire.params,
+                  Set(params.keys) == [
+                    "candidates", "liveSessionIds", "removeCandidateSessionIds",
+                    "cleanTermination",
+                  ],
+                  let candidates = params.piRestorationCandidates,
+                  candidates.count <= 64,
+                  candidates.allSatisfy(\.isValid),
+                  let liveSessionIds = params.liveSessionIds,
+                  let removeCandidateSessionIds = params.removeCandidateSessionIds,
+                  liveSessionIds.count <= 64,
+                  removeCandidateSessionIds.count <= 64,
+                  (liveSessionIds + removeCandidateSessionIds)
+                    .allSatisfy(\.isValidRestorationSessionID),
+                  let cleanTermination = params.cleanTermination else {
+                throw NativeHelperWireError.invalidRequest
+            }
+            return .reconcilePiRestoration(
+                id: wire.id,
+                update: NativeHelperPiRestorationUpdate(
+                    candidates: candidates,
+                    liveSessionIds: liveSessionIds,
+                    removeCandidateSessionIds: removeCandidateSessionIds,
+                    cleanTermination: cleanTermination
+                )
             )
         case "open_accessibility_settings":
             return .openAccessibilitySettings(id: wire.id)
@@ -677,6 +722,18 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         return notifications.allSatisfy {
             Set($0.keys).isSuperset(of: required) && Set($0.keys).isSubset(of: allowed)
         }
+    case "reconcile_pi_restoration":
+        guard let params = object["params"] as? [String: Any],
+              Set(params.keys) == [
+                "candidates", "liveSessionIds", "removeCandidateSessionIds",
+                "cleanTermination",
+              ],
+              let candidates = params["candidates"] as? [[String: Any]] else { return false }
+        let required: Set<String> = ["sessionId", "sessionFile", "cwd", "pid", "tty"]
+        let allowed = required.union(["sessionName"])
+        return candidates.allSatisfy {
+            Set($0.keys).isSuperset(of: required) && Set($0.keys).isSubset(of: allowed)
+        }
     case "focus":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys) == ["target"],
@@ -711,6 +768,10 @@ private struct WireParameters: Decodable {
     let usageGlances: [NativeHelperUsageGlance]?
     let notifications: [NativeHelperNotification]?
     let presentNew: Bool?
+    let piRestorationCandidates: [NativeHelperPiRestorationCandidate]?
+    let liveSessionIds: [String]?
+    let removeCandidateSessionIds: [String]?
+    let cleanTermination: Bool?
     let shortcutModifierFamily: String?
     let pillScreen: NativeHelperPillScreen?
     let fullScreenPolicy: String?
@@ -739,6 +800,22 @@ private struct WireParameters: Decodable {
             forKey: .init("notifications")
         )
         presentNew = try container.decodeIfPresent(Bool.self, forKey: .init("presentNew"))
+        piRestorationCandidates = try container.decodeIfPresent(
+            [NativeHelperPiRestorationCandidate].self,
+            forKey: .init("candidates")
+        )
+        liveSessionIds = try container.decodeIfPresent(
+            [String].self,
+            forKey: .init("liveSessionIds")
+        )
+        removeCandidateSessionIds = try container.decodeIfPresent(
+            [String].self,
+            forKey: .init("removeCandidateSessionIds")
+        )
+        cleanTermination = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .init("cleanTermination")
+        )
         shortcutModifierFamily = try container.decodeIfPresent(
             String.self,
             forKey: .init("shortcutModifierFamily")
@@ -795,6 +872,27 @@ private extension NativeHelperPillScreen {
             return displayId != nil
                 && (name.map { !$0.isEmpty && $0.count <= 128 } ?? false)
         }
+    }
+}
+
+private extension String {
+    var isValidRestorationSessionID: Bool {
+        !isEmpty && count <= 512 && !contains("\0")
+    }
+}
+
+private extension NativeHelperPiRestorationCandidate {
+    var isValid: Bool {
+        let name = tty.hasPrefix("/dev/") ? String(tty.dropFirst(5)) : tty
+        let suffix = name.hasPrefix("ttys") ? name.dropFirst(4) : ""
+        return !sessionId.isEmpty && sessionId.count <= 512 && !sessionId.contains("\0")
+            && sessionFile.hasPrefix("/") && sessionFile.count <= 4_096
+            && !sessionFile.contains("\0")
+            && cwd.hasPrefix("/") && cwd.count <= 4_096 && !cwd.contains("\0")
+            && (sessionName.map { !$0.isEmpty && $0.count <= 256 && !$0.contains("\0") } ?? true)
+            && pid > 0
+            && !suffix.isEmpty && suffix.allSatisfy { $0.isASCII && $0.isNumber }
+            && tty.count <= 32
     }
 }
 

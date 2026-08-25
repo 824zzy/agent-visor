@@ -30,6 +30,24 @@ const requests = [
   },
   {
     version: 1,
+    id: "pi-restoration",
+    method: "reconcile_pi_restoration",
+    params: {
+      candidates: [{
+        sessionId: "pi-1",
+        sessionFile: "/Users/me/.pi/agent/sessions/pi-1.jsonl",
+        cwd: "/Users/me/Codes/agent-visor",
+        sessionName: "Restore Pi sessions",
+        pid: 43,
+        tty: "ttys001",
+      }],
+      liveSessionIds: ["pi-1"],
+      removeCandidateSessionIds: [],
+      cleanTermination: false,
+    },
+  },
+  {
+    version: 1,
     id: "pills",
     method: "present_pills",
     params: {
@@ -207,6 +225,24 @@ describe("native helper protocol", () => {
       id: "unsafe-screen",
       method: "present_pills",
       params: { pills: [], pillScreen: { mode: "automatic", name: "Injected" } },
+    }).success).toBe(false);
+    expect(nativeHelperRequestSchema.safeParse({
+      version: 1,
+      id: "unsafe-restoration",
+      method: "reconcile_pi_restoration",
+      params: {
+        candidates: [{
+          sessionId: "pi-1",
+          sessionFile: "relative.jsonl",
+          cwd: "/project",
+          pid: 43,
+          tty: "ttys001",
+          provider: "Pi",
+        }],
+        liveSessionIds: ["pi-1"],
+        removeCandidateSessionIds: [],
+        cleanTermination: false,
+      },
     }).success).toBe(false);
     expect(nativeHelperRequestSchema.safeParse({
       version: 1,

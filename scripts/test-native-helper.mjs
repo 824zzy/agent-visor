@@ -1,18 +1,25 @@
 import { spawn, spawnSync } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { nativeHelperResponseSchema } from "../packages/protocol/dist/index.js";
 
 const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-helper-"));
+const helperRoot = path.resolve("build/native-helper-tests", String(process.pid));
+await rm(helperRoot, { recursive: true, force: true });
 const socketPath = path.join(root, "helper.sock");
+const dataRoot = path.join(root, "data");
+const project = path.join(root, "project");
+const sessionFile = path.join(root, "pi-1.jsonl");
+await mkdir(project, { recursive: true });
+await writeFile(sessionFile, "{}\n");
 const bin = spawnSync(
   "swift",
   ["build", "--package-path", "AgentVisorCore", "--show-bin-path"],
   { encoding: "utf8" },
 ).stdout.trim();
-const helperApp = path.join(root, "Helper Host.app");
+const helperApp = path.join(helperRoot, "Helper Host.app");
 const helperExecutable = path.join(helperApp, "Contents/MacOS/AgentVisorNativeHelper");
 await mkdir(path.dirname(helperExecutable), { recursive: true });
 await copyFile(path.join(bin, "AgentVisorNativeHelper"), helperExecutable);
@@ -26,6 +33,7 @@ await writeFile(path.join(helperApp, "Contents/Info.plist"), `<?xml version="1.0
 const signed = spawnSync("codesign", ["--force", "--sign", "-", helperApp], { encoding: "utf8" });
 if (signed.status !== 0) throw new Error(signed.stderr);
 const helper = spawn(helperExecutable, ["--socket", socketPath], {
+  env: { ...process.env, AGENT_VISOR_DATA_DIR: dataRoot },
   stdio: ["ignore", "ignore", "pipe"],
 });
 let stderr = "";
@@ -45,6 +53,24 @@ try {
       id: "notice",
       method: "reconcile_notifications",
       params: { notifications: [], presentNew: false },
+    },
+    {
+      version: 1,
+      id: "pi-restoration",
+      method: "reconcile_pi_restoration",
+      params: {
+        candidates: [{
+          sessionId: "pi-1",
+          sessionFile,
+          cwd: project,
+          sessionName: "Restore Pi sessions",
+          pid: process.pid,
+          tty: "ttys001",
+        }],
+        liveSessionIds: ["pi-1"],
+        removeCandidateSessionIds: [],
+        cleanTermination: false,
+      },
     },
     {
       version: 1,
@@ -101,13 +127,23 @@ try {
     throw new Error("notification reconciliation was not accepted");
   }
   if (responses[4]?.ok !== true || responses[4].result.type !== "accepted") {
+    throw new Error("Pi restoration reconciliation was not accepted");
+  }
+  if (responses[5]?.ok !== true || responses[5].result.type !== "accepted") {
     throw new Error("pill presentation was not accepted");
   }
-  if (responses[5]?.ok !== false || responses[5].error.code !== "invalid_request") {
+  if (responses[6]?.ok !== false || responses[6].error.code !== "invalid_request") {
     throw new Error("invalid helper request was accepted");
   }
+  const restoration = JSON.parse(await readFile(
+    path.join(dataRoot, "pi-reboot-restoration.json"),
+    "utf8",
+  ));
+  if (restoration.state !== "active" || restoration.sessionsByID?.["pi-1"]?.cwd !== project) {
+    throw new Error("Pi restoration candidate was not persisted");
+  }
 
-  console.log("Native helper wire PASS: secure socket, framing, topology, Accessibility, menu pills, and validation.");
+  console.log("Native helper wire PASS: secure socket, framing, topology, Accessibility, Pi restoration, menu pills, and validation.");
 } finally {
   if (helper.exitCode === null && helper.signalCode === null) {
     helper.kill("SIGTERM");
@@ -117,6 +153,7 @@ try {
 }
 
 const { NativeHelperProcess } = await import("../packages/server/dist/native-helper.js");
+process.env.AGENT_VISOR_DATA_DIR = dataRoot;
 const adapter = await NativeHelperProcess.start(helperExecutable, () => undefined);
 try {
   if ((await adapter.screenTopology()).length === 0) {
@@ -137,9 +174,17 @@ try {
   }], [], "controlCommand", "shift", null);
 } finally {
   await adapter.close();
-  await rm(root, { recursive: true, force: true });
 }
-console.log("Native helper adapter PASS: lifecycle, framed requests, menu updates, and cleanup.");
+const invalidatedRestoration = JSON.parse(await readFile(
+  path.join(dataRoot, "pi-reboot-restoration.json"),
+  "utf8",
+));
+if (invalidatedRestoration.state !== "invalidated") {
+  throw new Error("clean helper shutdown did not invalidate Pi restoration");
+}
+await rm(root, { recursive: true, force: true });
+await rm(helperRoot, { recursive: true, force: true });
+console.log("Native helper adapter PASS: lifecycle, framed requests, Pi invalidation, menu updates, and cleanup.");
 
 async function waitForSocket(socket) {
   for (let attempt = 0; attempt < 100; attempt += 1) {

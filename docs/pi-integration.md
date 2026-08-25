@@ -127,6 +127,14 @@ Ghostty's own AppKit restoration then receives a bounded settle window. Agent Vi
 
 The bundled Pi extension remains socket-only and metadata-only. It writes no restoration registry. Therefore exactness is guaranteed only while Agent Visor was actively tracking the relevant lifecycle; sessions that start or end while Agent Visor is unavailable are not guessed later.
 
+### Electron adapter
+
+The Electron daemon derives bounded restoration updates from accepted Pi lifecycle events and current exact Ghostty ownership. Each eligible candidate contains only the durable session ID, persisted session-file path, working directory, display name, PID, and TTY. The update also carries exact live session IDs and explicit candidate-removal IDs, so any live host blocks a duplicate launch while absence alone never erases prior authority. Historical discovery and inferred process matches never authorize restoration.
+
+A dedicated restoration subscription sends accepted Pi identity changes even when phase-neutral heartbeats do not change the visible Sessions snapshot. Each update uses one additive `reconcile_pi_restoration` helper request. The signed helper reuses the existing Swift boot identity, snapshot store, restoration coordinator, topology capture, and Ghostty scripts. TypeScript does not duplicate the restoration state machine, and the helper does not parse provider transcripts or hook payloads.
+
+The helper observes the native system power-off notification and freezes the active generation. A clean daemon termination invalidates the generation before the helper socket closes. An unexpected termination leaves the latest atomic active snapshot intact. No new setting or product surface controls this behavior.
+
 ## Bundled Extension
 
 Agent Visor owns exactly one file:

@@ -6,6 +6,7 @@ import {
   type ChatImage,
   type ChatPendingAction,
   type NativeHelperFocusTarget,
+  type NativeHelperPiRestorationUpdate,
   type NativeHelperTerminalTarget,
   type SessionSnapshot,
   type SessionSummary,
@@ -107,6 +108,14 @@ export class SessionRepository {
   private readonly lastByProvider = new Map<ProviderID, DiscoveredProviderSession[]>();
   private readonly latestHookAtBySession = new Map<string, string>();
   private readonly hookBySession = new Map<string, HookSessionEvent>();
+  private readonly piRuntimeBySession = new Map<string, HookSessionEvent>();
+  private readonly piRuntimeDiscoveryGeneration = new Map<string, number>();
+  private readonly piRemovedRestorationSessionIds = new Set<string>();
+  private piDiscoveryGeneration = 0;
+  private piRestorationFingerprint: string | undefined;
+  private readonly piRestorationListeners = new Set<(
+    update: NativeHelperPiRestorationUpdate,
+  ) => void>();
   private readonly chatBySession = new Map<string, DiscoveredProviderSession>();
   private readonly listeners = new Set<(snapshot: SessionSnapshot) => void>();
   private readonly controlBySession = new Map<string, DiscoveredProviderSession>();
@@ -136,6 +145,13 @@ export class SessionRepository {
     return () => this.listeners.delete(listener);
   }
 
+  subscribePiRestoration(
+    listener: (update: NativeHelperPiRestorationUpdate) => void,
+  ): () => void {
+    this.piRestorationListeners.add(listener);
+    return () => this.piRestorationListeners.delete(listener);
+  }
+
   chatRecord(sessionId: string): DiscoveredProviderSession | undefined {
     const record = this.chatBySession.get(sessionId);
     return record ? structuredClone(record) : undefined;
@@ -144,6 +160,51 @@ export class SessionRepository {
   hookRecord(sessionId: string): HookSessionEvent | undefined {
     const record = this.hookBySession.get(sessionId);
     return record ? structuredClone(record) : undefined;
+  }
+
+  piRestorationUpdate(): NativeHelperPiRestorationUpdate {
+    const piSessions = new Map(
+      (this.lastByProvider.get("pi") ?? []).map((session) => [session.id, session]),
+    );
+    const candidates = [...this.piRuntimeBySession.values()].flatMap((hook) => {
+      const session = piSessions.get(hook.sessionId);
+      const target = session?.controlTarget;
+      if (hook.provider !== "pi" || hook.event === "SessionEnd"
+        || hook.pid === undefined || !hook.tty || !hook.sessionFile
+        || !isPersistedRegularFile(hook.sessionFile) || !isExistingDirectory(hook.cwd)
+        || session?.provider !== "pi" || session.owner !== "Ghostty"
+        || !session.chatPath
+        || path.resolve(session.chatPath) !== path.resolve(hook.sessionFile)
+        || session.cwd !== hook.cwd
+        || target?.kind !== "terminal" || target.target.application !== "Ghostty"
+        || target.target.cwd !== hook.cwd
+        || normalizedTTY(target.target.tty) !== normalizedTTY(hook.tty)) return [];
+      return [{
+        sessionId: hook.sessionId,
+        sessionFile: hook.sessionFile,
+        cwd: hook.cwd,
+        ...(session.title ? { sessionName: session.title } : {}),
+        pid: hook.pid,
+        tty: hook.tty,
+      }];
+    }).sort((left, right) => left.sessionId.localeCompare(right.sessionId));
+    const removeCandidateSessionIds = new Set(this.piRemovedRestorationSessionIds);
+    for (const [sessionId, hook] of this.piRuntimeBySession) {
+      const session = piSessions.get(sessionId);
+      const hasFreshDiscovery = (this.piRuntimeDiscoveryGeneration.get(sessionId) ?? Infinity)
+        < this.piDiscoveryGeneration;
+      if ((hook.sessionFile && !isPersistedRegularFile(hook.sessionFile))
+        || !isExistingDirectory(hook.cwd)
+        || (hasFreshDiscovery && session?.owner !== "Ghostty")) {
+        removeCandidateSessionIds.add(sessionId);
+      }
+    }
+    return {
+      candidates,
+      liveSessionIds: [...this.piRuntimeBySession.keys()].sort(),
+      removeCandidateSessionIds: [...removeCandidateSessionIds].sort(),
+      cleanTermination: false,
+    };
   }
 
   pendingAction(sessionId: string): ChatPendingAction | undefined {
@@ -257,12 +318,16 @@ export class SessionRepository {
       try {
         const sessions = await provider.discover();
         this.lastByProvider.set(provider.id, structuredClone(sessions));
+        if (provider.id === "pi") this.piDiscoveryGeneration += 1;
         return sessions;
       } catch {
         return this.lastByProvider.get(provider.id) ?? [];
       }
     }));
-    return this.publish(discovered.flat());
+    this.removeConcludedPiRuntimes();
+    const snapshot = this.publish(discovered.flat());
+    this.publishPiRestoration();
+    return snapshot;
   }
 
   applyHook(event: HookSessionEvent): SessionSnapshot {
@@ -272,6 +337,26 @@ export class SessionRepository {
       const previous = this.hookBySession.get(event.sessionId);
       if (!shouldIgnorePiHeartbeat(event, previous)) {
         this.providers.find((provider) => provider.id === event.provider)?.noteHook?.(event);
+        if (event.provider === "pi") {
+          if (event.event === "SessionEnd") {
+            this.piRuntimeBySession.delete(event.sessionId);
+            this.piRuntimeDiscoveryGeneration.delete(event.sessionId);
+            this.rememberPiRestorationRemoval(event.sessionId);
+          } else if (event.pid !== undefined && event.sessionFile) {
+            if (event.event === "SessionStart") {
+              for (const [sessionId, runtime] of this.piRuntimeBySession) {
+                if (sessionId !== event.sessionId && runtime.pid === event.pid) {
+                  this.piRuntimeBySession.delete(sessionId);
+                  this.piRuntimeDiscoveryGeneration.delete(sessionId);
+                  this.rememberPiRestorationRemoval(sessionId);
+                }
+              }
+            }
+            this.piRuntimeBySession.set(event.sessionId, structuredClone(event));
+            this.piRuntimeDiscoveryGeneration.set(event.sessionId, this.piDiscoveryGeneration);
+            this.piRemovedRestorationSessionIds.delete(event.sessionId);
+          }
+        }
         if (isPiHeartbeat(event)) {
           const current = this.snapshotValue.sessions.find((session) => session.id === event.sessionId);
           const recovered = piHeartbeatPresentation(event, current, previous);
@@ -281,7 +366,42 @@ export class SessionRepository {
         }
       }
     }
-    return this.publish([...this.lastByProvider.values()].flat());
+    const snapshot = this.publish([...this.lastByProvider.values()].flat());
+    if (event.provider === "pi") this.publishPiRestoration();
+    return snapshot;
+  }
+
+  private publishPiRestoration(): void {
+    const update = this.piRestorationUpdate();
+    const fingerprint = JSON.stringify(update);
+    if (fingerprint === this.piRestorationFingerprint) return;
+    this.piRestorationFingerprint = fingerprint;
+    for (const listener of this.piRestorationListeners) listener(structuredClone(update));
+  }
+
+  private rememberPiRestorationRemoval(sessionId: string): void {
+    this.piRemovedRestorationSessionIds.delete(sessionId);
+    this.piRemovedRestorationSessionIds.add(sessionId);
+    // ponytail: the helper accepts 64 IDs; add acknowledged batches if that ceiling is reached.
+    while (this.piRemovedRestorationSessionIds.size > 64) {
+      this.piRemovedRestorationSessionIds.delete(
+        this.piRemovedRestorationSessionIds.values().next().value!,
+      );
+    }
+  }
+
+  private removeConcludedPiRuntimes(): void {
+    const sessions = new Map(
+      (this.lastByProvider.get("pi") ?? []).map((session) => [session.id, session]),
+    );
+    for (const sessionId of this.piRuntimeBySession.keys()) {
+      const hasFreshDiscovery = (this.piRuntimeDiscoveryGeneration.get(sessionId) ?? Infinity)
+        < this.piDiscoveryGeneration;
+      if (!hasFreshDiscovery || sessions.get(sessionId)?.canOpenOwner) continue;
+      this.piRuntimeBySession.delete(sessionId);
+      this.piRuntimeDiscoveryGeneration.delete(sessionId);
+      this.rememberPiRestorationRemoval(sessionId);
+    }
   }
 
   private publish(discovered: DiscoveredProviderSession[]): SessionSnapshot {
@@ -366,6 +486,26 @@ function applyHooks(
     });
   }
   return sessions;
+}
+
+function normalizedTTY(value: string): string {
+  return value.replace(/^\/dev\//, "");
+}
+
+function isPersistedRegularFile(value: string): boolean {
+  try {
+    return statSync(value).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isExistingDirectory(value: string): boolean {
+  try {
+    return statSync(value).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function isPiHeartbeat(event: HookSessionEvent): boolean {

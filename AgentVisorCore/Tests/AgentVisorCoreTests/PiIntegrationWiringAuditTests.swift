@@ -514,6 +514,21 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
         )
     }
 
+    func testElectronDaemonPublishesPhaseNeutralPiRestorationChanges() throws {
+        let root = repoRoot(from: URL(fileURLWithPath: #filePath))
+        let sessions = try String(contentsOf: root.appendingPathComponent(
+            "packages/server/src/sessions.ts"
+        ))
+        let daemon = try String(contentsOf: root.appendingPathComponent(
+            "packages/server/src/bin.ts"
+        ))
+
+        XCTAssertTrue(sessions.contains("subscribePiRestoration("))
+        XCTAssertTrue(sessions.contains("if (event.provider === \"pi\") this.publishPiRestoration()"))
+        XCTAssertTrue(daemon.contains("repository.subscribePiRestoration"))
+        XCTAssertTrue(daemon.contains("nativeServices?.reconcilePiRestoration()"))
+    }
+
     private func repoRoot(from fileURL: URL) -> URL {
         fileURL
             .deletingLastPathComponent() // AgentVisorCoreTests

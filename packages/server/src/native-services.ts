@@ -3,6 +3,7 @@ import type {
   AppSettings,
   ChatPendingAction,
   ClientMessage,
+  NativeHelperPiRestorationUpdate,
   NativeServicesState,
   SessionSnapshot,
 } from "@agent-visor/protocol";
@@ -31,6 +32,7 @@ export class NativeServicesRepository implements NativeServicesSource {
     currentVersion: string;
     checkUpdates: () => Promise<UpdateState>;
     pendingAction?: (sessionId: string) => ChatPendingAction | undefined;
+    piRestorationUpdate?: () => NativeHelperPiRestorationUpdate;
     emitDesktop: (effect: DesktopNativeEffect) => void;
   }) {
     this.state = {
@@ -119,7 +121,18 @@ export class NativeServicesRepository implements NativeServicesSource {
     this.publish({ update: await this.options.checkUpdates() });
   }
 
+  reconcilePiRestoration(): void {
+    void this.options.helper.reconcilePiRestoration(
+      this.options.piRestorationUpdate?.() ?? {
+        candidates: [], liveSessionIds: [], removeCandidateSessionIds: [], cleanTermination: false,
+      },
+    ).catch((error: unknown) => {
+      console.warn(`Agent Visor Pi restoration update failed: ${String(error)}`);
+    });
+  }
+
   reconcileSessions(snapshot: SessionSnapshot): void {
+    this.reconcilePiRestoration();
     const notifications = snapshot.sessions.flatMap((session) => {
       if (session.section !== "needs_you" && session.section !== "ready") return [];
       const pending = this.options.pendingAction?.(session.id);

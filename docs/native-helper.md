@@ -29,6 +29,7 @@ Every request contains protocol `version: 1`, a non-empty `id`, and one method:
 - `notification_status` returns the modern notification permission state.
 - `request_notifications` asks macOS for notification access.
 - `reconcile_notifications` accepts bounded notices and removes resolved notices.
+- `reconcile_pi_restoration` accepts bounded exact candidates, current live session IDs, candidate-removal IDs, and the clean-termination signal.
 - `present_pills` accepts at most 64 active or recent pill descriptions, bounded optional inspector content, eight usage glances, session shortcuts, the window hotkey, pill-screen selection, and full-screen policy.
 - Each usage glance may include two bounded limit windows, fixed capsule width, per-window tone, reset times, reset-credit count, sync time, and stale state.
 - `focus_terminal` selects one allowlisted terminal through its exact TTY.
@@ -45,7 +46,7 @@ The helper detects native full-screen windows on the selected display through `A
 
 Optional inspector content is already display-safe. It can include runtime items, bounded detail rows, project path, activity time, and context usage. The helper never parses provider records.
 
-Ghostty focus uses an OSC 7 marker written only to a validated `ttys` device. iTerm2 and Terminal use their native TTY properties.
+Ghostty focus uses an OSC 7 marker written only to a validated `ttys` device. iTerm2 and Terminal use their native TTY properties. Restoration AppleScript calls use the shared bounded app-command deadline.
 
 Application focus still validates the process identifier against the expected bundle identifier.
 
@@ -73,11 +74,11 @@ The script never creates or rotates a certificate.
 
 It packages the executable as a background helper application. This preserves its signed identity and gives modern notifications a valid bundle identity.
 
-The daemon starts that application through Launch Services. Closing the daemon socket exits the helper and its Launch Services waiter.
+The daemon starts that application through Launch Services. A clean close first invalidates Pi restoration authority. An unexpected socket close preserves the latest atomic active snapshot. The helper freezes that snapshot when macOS announces system power-off.
 
 ## Test seams
 
-`FakeNativeHelper` implements the daemon adapter without starting native code. It records pill, usage, notification, and focus calls.
+`FakeNativeHelper` implements the daemon adapter without starting native code. It records pill, usage, notification, Pi restoration, and focus calls.
 
 `NativeHelperProcess` owns the signed helper lifecycle, framed requests, event delivery, deadlines, and temporary socket cleanup.
 

@@ -16,12 +16,14 @@ do {
         return controller
     }
     let notifications = NativeNotificationController { writer.send(event: $0) }
+    let piRestoration = MainActor.assumeIsolated { NativePiRestorationController() }
     DispatchQueue.global(qos: .userInitiated).async {
         do {
             try serve(
                 socketPath: socketPath,
                 menu: menu,
                 notifications: notifications,
+                piRestoration: piRestoration,
                 writer: writer
             )
             DispatchQueue.main.async { NSApplication.shared.terminate(nil) }
@@ -82,6 +84,7 @@ private func serve(
     socketPath: String,
     menu: NativeMenuController,
     notifications: NativeNotificationController,
+    piRestoration: NativePiRestorationController,
     writer: ConnectionWriter
 ) throws {
     let listener = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -116,7 +119,13 @@ private func serve(
     } while client < 0 && errno == EINTR
     guard client >= 0 else { throw systemFailure("accept") }
     writer.connect(client)
-    handle(client: client, menu: menu, notifications: notifications, writer: writer)
+    handle(
+        client: client,
+        menu: menu,
+        notifications: notifications,
+        piRestoration: piRestoration,
+        writer: writer
+    )
     writer.disconnect(client)
     close(client)
 }
@@ -125,6 +134,7 @@ private func handle(
     client: Int32,
     menu: NativeMenuController,
     notifications: NativeNotificationController,
+    piRestoration: NativePiRestorationController,
     writer: ConnectionWriter
 ) {
     var peerUID = uid_t.max
@@ -147,7 +157,8 @@ private func handle(
                 let response = response(
                     for: payload,
                     menu: menu,
-                    notifications: notifications
+                    notifications: notifications,
+                    piRestoration: piRestoration
                 )
                 try writer.write(try NativeHelperFrameCodec.frame(response.encoded()), to: client)
             }
@@ -166,7 +177,8 @@ private func handle(
 private func response(
     for data: Data,
     menu: NativeMenuController,
-    notifications: NativeNotificationController
+    notifications: NativeNotificationController,
+    piRestoration: NativePiRestorationController
 ) -> NativeHelperResponse {
     do {
         switch try NativeHelperRequest.decode(data) {
@@ -181,6 +193,9 @@ private func response(
             return .accepted(id: id)
         case .reconcileNotifications(let id, let values, let presentNew):
             notifications.reconcile(values, presentNew: presentNew)
+            return .accepted(id: id)
+        case .reconcilePiRestoration(let id, let update):
+            DispatchQueue.main.sync { piRestoration.reconcile(update) }
             return .accepted(id: id)
         case .requestAccessibility(let id):
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]

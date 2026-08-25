@@ -378,6 +378,23 @@ export const nativeHelperNotificationSchema = z.object({
   sound: appSettingsSchema.shape.notificationSound,
 }).strict();
 
+export const nativeHelperPiRestorationCandidateSchema = z.object({
+  sessionId: z.string().min(1).max(512),
+  sessionFile: z.string().startsWith("/").max(4_096),
+  cwd: z.string().startsWith("/").max(4_096),
+  sessionName: z.string().min(1).max(256).optional(),
+  pid: z.number().int().positive().max(2_147_483_647),
+  tty: z.string().regex(/^(?:\/dev\/)?ttys\d+$/).max(32),
+}).strict();
+
+const piRestorationSessionIdSchema = z.string().min(1).max(512);
+export const nativeHelperPiRestorationUpdateSchema = z.object({
+  candidates: z.array(nativeHelperPiRestorationCandidateSchema).max(64),
+  liveSessionIds: z.array(piRestorationSessionIdSchema).max(64),
+  removeCandidateSessionIds: z.array(piRestorationSessionIdSchema).max(64),
+  cleanTermination: z.boolean(),
+}).strict();
+
 export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
   z.object({
     ...helperEnvelope,
@@ -397,6 +414,11 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
       notifications: z.array(nativeHelperNotificationSchema).max(128),
       presentNew: z.boolean(),
     }).strict(),
+  }).strict(),
+  z.object({
+    ...helperEnvelope,
+    method: z.literal("reconcile_pi_restoration"),
+    params: nativeHelperPiRestorationUpdateSchema,
   }).strict(),
   z.object({ ...helperEnvelope, method: z.literal("open_accessibility_settings") }).strict(),
   z.object({
@@ -532,6 +554,12 @@ export type NativeHelperNotificationPermission = z.infer<
   typeof nativeHelperNotificationPermissionSchema
 >;
 export type NativeHelperNotification = z.infer<typeof nativeHelperNotificationSchema>;
+export type NativeHelperPiRestorationCandidate = z.infer<
+  typeof nativeHelperPiRestorationCandidateSchema
+>;
+export type NativeHelperPiRestorationUpdate = z.infer<
+  typeof nativeHelperPiRestorationUpdateSchema
+>;
 export type NativeHelperTerminalTarget = z.infer<typeof nativeHelperTerminalTargetSchema>;
 export type NativeServicesState = z.infer<typeof nativeServicesStateSchema>;
 export type NativeHelperPill = z.infer<typeof nativeHelperPillSchema>;

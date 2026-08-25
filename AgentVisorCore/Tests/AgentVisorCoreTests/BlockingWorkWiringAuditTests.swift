@@ -34,6 +34,17 @@ final class BlockingWorkWiringAuditTests: XCTestCase {
         XCTAssertTrue(executor.contains("stderrPipe.fileHandleForReading.closeFile()"))
     }
 
+    func testNativeRestorationAppleScriptHasADeadline() throws {
+        let controller = try source(
+            "AgentVisorCore/Sources/AgentVisorNativeHelper/NativePiRestorationController.swift"
+        )
+        XCTAssertTrue(controller.contains("SubprocessDeadlinePolicy.appCommand"))
+        XCTAssertFalse(
+            controller.contains("waitUntilExit"),
+            "Ghostty automation must not hold the helper forever when AppleScript stops responding."
+        )
+    }
+
     func testProcessOutputReadersRemainSafeWhenDeadlinesCloseTheirPipes() throws {
         let executor = try source("AgentVisor/Services/Shared/ProcessExecutor.swift")
 

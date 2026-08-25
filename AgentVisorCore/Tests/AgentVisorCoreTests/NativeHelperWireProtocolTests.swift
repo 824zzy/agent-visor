@@ -10,6 +10,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
             #"{"version":1,"id":"request-notifications","method":"request_notifications"}"#,
             #"{"version":1,"id":"request-access","method":"request_accessibility"}"#,
             #"{"version":1,"id":"open-access","method":"open_accessibility_settings"}"#,
+            #"{"version":1,"id":"pi-restoration","method":"reconcile_pi_restoration","params":{"candidates":[],"liveSessionIds":[],"removeCandidateSessionIds":[],"cleanTermination":false}}"#,
             #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","subtitle":"Ready to continue","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready"},{"id":"session-2","title":"Recent migration","phase":"history","priority":2,"accessibilityLabel":"Recent migration, recent session"}],"shortcutModifierFamily":"controlCommand","hotkeyTrigger":"custom","customHotkeyCombo":"49:8","usageGlances":[{"id":"codex","label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage"}]}}"#,
             #"{"version":1,"id":"legacy-pills","method":"present_pills","params":{"pills":[{"id":"legacy","title":"Legacy","phase":"working","priority":2,"accessibilityLabel":"Legacy, in progress"}]}}"#,
             #"{"version":1,"id":"focus","method":"focus","params":{"target":{"pid":42,"bundleIdentifier":"com.mitchellh.ghostty","windowId":7}}}"#,
@@ -21,7 +22,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
             try requests.map { try NativeHelperRequest.decode(Data($0.utf8)).id },
             [
                 "screens", "access", "notifications", "request-notifications",
-                "request-access", "open-access",
+                "request-access", "open-access", "pi-restoration",
                 "pills", "legacy-pills", "focus", "focus-terminal", "send-terminal",
             ]
         )
@@ -38,6 +39,21 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(notifications.first?.sessionId, "session-1")
         XCTAssertEqual(notifications.first?.toolUseId, "tool-7")
         XCTAssertEqual(notifications.first?.sound, .pop)
+    }
+
+    func testDecodesBoundedPiRestorationCandidates() throws {
+        let json = #"{"version":1,"id":"pi-restoration","method":"reconcile_pi_restoration","params":{"candidates":[{"sessionId":"pi-1","sessionFile":"/Users/me/.pi/agent/sessions/pi-1.jsonl","cwd":"/Users/me/Codes/agent-visor","sessionName":"Restore Pi sessions","pid":43,"tty":"ttys001"}],"liveSessionIds":["pi-1"],"removeCandidateSessionIds":[],"cleanTermination":false}}"#
+
+        let request = try NativeHelperRequest.decode(Data(json.utf8))
+        guard case .reconcilePiRestoration(_, let update) = request else {
+            return XCTFail("Expected Pi restoration candidates")
+        }
+        XCTAssertFalse(update.cleanTermination)
+        XCTAssertEqual(update.liveSessionIds, ["pi-1"])
+        XCTAssertEqual(update.removeCandidateSessionIds, [])
+        XCTAssertEqual(update.candidates.first?.sessionId, "pi-1")
+        XCTAssertEqual(update.candidates.first?.pid, 43)
+        XCTAssertEqual(update.candidates.first?.tty, "ttys001")
     }
 
     func testDecodesSeparateNavigatorCatalog() throws {
@@ -110,6 +126,8 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[],"usageGlances":[{"id":"codex","label":"5h 0%","detail":"Codex usage","tone":"critical","priority":100,"accessibilityLabel":"Codex usage","windows":[{"title":"5 hour limit","remainingPercent":101}]}]}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[],"usageGlances":[{"id":"codex","label":"5h 82%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage","windows":[{"remainingPercent":82}]}]}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[],"pillScreen":{"mode":"automatic","name":"Injected"}}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"reconcile_pi_restoration","params":{"candidates":[{"sessionId":"pi-1","sessionFile":"/session.jsonl","cwd":"/project","pid":43,"tty":"ttys001","provider":"Pi"}],"liveSessionIds":["pi-1"],"removeCandidateSessionIds":[],"cleanTermination":false}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"reconcile_pi_restoration","params":{"candidates":[{"sessionId":"pi-1","sessionFile":"relative.jsonl","cwd":"/project","pid":43,"tty":"ttys001"}],"liveSessionIds":["pi-1"],"removeCandidateSessionIds":[],"cleanTermination":false}}"#)
     }
 
     func testEncodesTypedResponseEnvelope() throws {
