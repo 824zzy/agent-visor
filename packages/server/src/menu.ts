@@ -62,9 +62,12 @@ function presentationPill(
   session: SessionSnapshot["sessions"][number],
   priority: number,
 ) {
+  const title = session.source === "Codex" && session.title === "Codex session"
+    ? `Codex · ${session.project}`
+    : session.title;
   return {
     id: session.id,
-    title: session.title,
+    title,
     subtitle: session.subtitle,
     source: session.source,
     project: session.project,
@@ -79,7 +82,7 @@ function presentationPill(
     phase: session.section,
     priority,
     accessibilityLabel: [
-      session.title,
+      title,
       phaseLabel[session.section],
       session.source,
       session.project,

@@ -48,7 +48,7 @@ The inspector retains Swift’s layout, typography, native arrow, and shadow. Se
 
 Chat-only transcript history remains in Sessions and does not crowd the menu bar.
 
-Visible items retain their normal labels, up to 20 characters plus an ellipsis. The helper uses `+N` instead of compact or tight labels.
+Visible items retain their normal labels, up to 20 characters plus an ellipsis. Untitled Codex rows use `Codex · <project>` so distinct sessions do not share one fallback label. The helper uses `+N` instead of compact or tight labels.
 
 Clicking `+N` opens a nonactivating More Sessions popover. Its initial rows are the exact sessions omitted by the current pill layout.
 

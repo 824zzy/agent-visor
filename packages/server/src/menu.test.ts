@@ -131,6 +131,41 @@ describe("menu presentation", () => {
     });
   });
 
+  it("uses the project to distinguish untitled Codex pills", () => {
+    const codexSessions: SessionSnapshot = {
+      type: "session_snapshot",
+      revision: 1,
+      sessions: [
+        {
+          ...snapshot.sessions[1]!,
+          id: "codex-root",
+          title: "Codex session",
+          project: "/",
+          cwd: "/",
+          section: "ready",
+          updatedAt: "2026-08-25T16:19:50.877Z",
+        },
+        {
+          ...snapshot.sessions[1]!,
+          id: "codex-codes",
+          title: "Codex session",
+          project: "Codes",
+          cwd: "/Users/me/Codes",
+          section: "ready",
+          updatedAt: "2026-08-25T16:19:45.919Z",
+        },
+      ],
+    };
+
+    const pills = menuPresentation(codexSessions, []).pills;
+
+    expect(pills.map(({ title }) => title)).toEqual(["Codex · /", "Codex · Codes"]);
+    expect(pills.map(({ accessibilityLabel }) => accessibilityLabel)).toEqual([
+      "Codex · /, ready to continue, Codex, /",
+      "Codex · Codes, ready to continue, Codex, Codes",
+    ]);
+  });
+
   it("keeps Chat-only history searchable without packing it into the menu", () => {
     const presentation = menuPresentation(snapshot, []);
 
