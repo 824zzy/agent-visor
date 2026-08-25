@@ -315,11 +315,22 @@ export const nativeHelperPillSchema = z.object({
 
 export const nativeHelperUsageGlanceSchema = z.object({
   id: z.enum(["codex", "claude"]),
+  heading: z.string().min(1).max(64).optional(),
+  width: z.number().finite().min(28).max(200).optional(),
   label: z.string().min(1).max(128),
   detail: z.string().min(1).max(512),
   tone: z.enum(["normal", "warning", "critical"]),
   priority: z.number().int(),
   accessibilityLabel: z.string().min(1).max(512),
+  observedAt: z.iso.datetime().optional(),
+  windows: z.array(z.object({
+    title: z.string().min(1).max(64),
+    remainingPercent: z.number().int().min(0).max(100),
+    tone: z.enum(["normal", "warning", "critical"]).optional(),
+    resetsAt: z.iso.datetime().optional(),
+  }).strict()).max(2).optional(),
+  resetCreditsAvailable: z.number().int().nonnegative().max(1_000_000).optional(),
+  stale: z.boolean().optional(),
 }).strict();
 
 export const nativeHelperFocusTargetSchema = z.object({
@@ -429,7 +440,7 @@ export const nativeHelperResponseSchema = z.union([
     z.object({
       version: z.literal(PROTOCOL_VERSION),
       type: z.literal("event"),
-      event: z.enum(["open_sessions", "toggle_sessions", "open_settings"]),
+      event: z.enum(["open_sessions", "toggle_sessions", "open_settings", "refresh_usage"]),
     }).strict(),
   ]),
 ]);

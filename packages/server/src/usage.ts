@@ -4,7 +4,10 @@ import { constants } from "node:fs";
 import os from "node:os";
 import type { NativeHelperUsageGlance } from "@agent-visor/protocol";
 
-export function codexUsageGlance(value: unknown): NativeHelperUsageGlance | undefined {
+export function codexUsageGlance(
+  value: unknown,
+  observedAt = new Date(),
+): NativeHelperUsageGlance | undefined {
   const root = record(value);
   const limits = record(root?.rateLimits);
   if (!limits) return undefined;
@@ -17,20 +20,39 @@ export function codexUsageGlance(value: unknown): NativeHelperUsageGlance | unde
     ?? (primary?.minutes === undefined ? primary : undefined);
   const weekly = windows.find((window) => window.minutes === 10_080)
     ?? (secondary?.minutes === undefined ? secondary : undefined);
-  const values = [fiveHour && { label: "5h", detail: "5 hour", value: fiveHour.remaining }];
-  if (weekly) values.push({ label: "7d", detail: "weekly", value: weekly.remaining });
-  const available = values.filter((item): item is NonNullable<typeof item> => Boolean(item));
-  const label = available.map((item) => `${item.label} ${item.value}%`).join(" | ");
-  const detail = `Codex usage, ${available.map((item) =>
+  const windowPresentations = [fiveHour && {
+    label: "5h", detail: "5 hour", title: "5 hour limit",
+    value: fiveHour.remaining, window: fiveHour,
+  }];
+  if (weekly) windowPresentations.push({
+    label: "7d", detail: "weekly", title: "Weekly limit",
+    value: weekly.remaining, window: weekly,
+  });
+  const recognizedWindows = windowPresentations.filter(
+    (item): item is NonNullable<typeof item> => Boolean(item),
+  );
+  if (!recognizedWindows.length) return undefined;
+  const label = recognizedWindows.map((item) => `${item.label} ${item.value}%`).join(" | ");
+  const detail = `Codex usage, ${recognizedWindows.map((item) =>
     `${item.detail} ${item.value} percent remaining`).join(", ")}`;
-  const lowest = Math.min(...available.map((item) => item.value));
+  const lowest = Math.min(...recognizedWindows.map((item) => item.value));
   return {
     id: "codex",
+    heading: "Codex Usage",
+    width: recognizedWindows.length === 1 ? 64 : 114,
     label,
     detail,
-    tone: lowest <= 10 ? "critical" : lowest <= 25 ? "warning" : "normal",
+    tone: usageTone(lowest),
     priority: 100,
     accessibilityLabel: detail,
+    observedAt: observedAt.toISOString(),
+    windows: recognizedWindows.map(({ title, window }) => ({
+      title,
+      remainingPercent: window.remaining,
+      tone: usageTone(window.remaining),
+      ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
+    })),
+    ...resetCredits(root),
   };
 }
 
@@ -91,7 +113,7 @@ export async function readCodexUsage(): Promise<NativeHelperUsageGlance | undefi
   });
 }
 
-type UsageWindow = { remaining: number; minutes?: number };
+type UsageWindow = { remaining: number; minutes?: number; resetsAt?: string };
 
 function usageWindow(value: unknown): UsageWindow | undefined {
   const item = record(value);
@@ -99,11 +121,30 @@ function usageWindow(value: unknown): UsageWindow | undefined {
     return undefined;
   }
   const used = Math.min(100, Math.max(0, Math.round(item.usedPercent)));
+  const resetsAt = resetTime(item.resetsAt);
   return {
     remaining: 100 - used,
     ...(typeof item.windowDurationMins === "number"
       ? { minutes: Math.round(item.windowDurationMins) } : {}),
+    ...(resetsAt ? { resetsAt } : {}),
   };
+}
+
+function usageTone(remaining: number): "normal" | "warning" | "critical" {
+  return remaining <= 10 ? "critical" : remaining <= 25 ? "warning" : "normal";
+}
+
+function resetTime(value: unknown): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const date = new Date(value * 1_000);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function resetCredits(root: Record<string, unknown> | undefined): { resetCreditsAvailable?: number } {
+  const count = record(root?.rateLimitResetCredits)?.availableCount;
+  return typeof count === "number" && Number.isInteger(count)
+    && count >= 0 && count <= 1_000_000
+    ? { resetCreditsAvailable: count } : {};
 }
 
 async function codexExecutable(): Promise<string | undefined> {

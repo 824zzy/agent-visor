@@ -75,17 +75,21 @@ Terminal sessions use exact TTY focus. Codex application sessions use their vali
 
 One stable square status item remains present when no sessions exist. It is named `Agent Visor sessions` and opens the Sessions browser.
 
-Presentation-only session and usage items are hidden from accessibility. Their information remains available through the stable item and Sessions browser.
+Presentation-only session items remain hidden from accessibility. Usage capsules expose their detail action, while the stable item and Sessions browser retain session access.
 
 The open More Sessions popover gives its search field, session rows, Sessions action, and Settings action explicit accessibility labels.
 
+The Usage popover labels each provider, limit window, remaining percentage, reset time, and available reset-credit count.
+
 ## Usage
 
-The daemon reads Codex rate limits through Codex’s documented local app-server protocol every five minutes.
+The daemon reads Codex rate limits through Codex’s documented local app-server protocol at startup, when details open, and every five minutes.
 
-The helper receives only display text, detail text, and severity. It never receives account tokens or raw provider responses.
+The helper receives only bounded display values, limit windows, reset times, reset-credit counts, and sync time. It never receives account tokens or raw provider responses.
 
-A previous valid usage value remains visible after a temporary refresh failure.
+Clicking any usage capsule toggles one shared, nonactivating detail popover. Hover keeps the standard delayed text tooltip.
+
+A previous valid usage value remains visible after a temporary refresh failure, and the open detail popover marks it stale.
 
 Claude usage remains disabled until the paused credential work has a documented supported route.
 
@@ -93,10 +97,11 @@ Claude usage remains disabled until the paused credential work has a documented 
 
 `present_pills` accepts detailed menu pills, an optional bounded navigator catalog, and optional usage glances. Older version-one pill requests remain valid.
 
-The helper emits `activate_pill`, `open_sessions`, and `open_settings` events over the same framed Unix connection. `activate_pill` has an additive optional `chat` intent; standard version-one events remain unchanged.
+The helper emits `activate_pill`, `open_sessions`, `open_settings`, and `refresh_usage` events over the same framed Unix connection. `activate_pill` has an additive optional `chat` intent; standard version-one events remain unchanged.
 
 Run the native checks with:
 
 ```sh
 npm run test:native-helper
+npm run test:native-helper-usage
 ```

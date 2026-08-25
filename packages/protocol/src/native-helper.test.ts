@@ -55,11 +55,29 @@ const requests = [
       usageGlances: [
         {
           id: "codex",
+          heading: "Codex Usage",
+          width: 114,
           label: "5h 82% | 7d 61%",
           detail: "Codex usage, 5 hour 82 percent remaining, weekly 61 percent remaining",
           tone: "normal",
           priority: 100,
           accessibilityLabel: "Codex usage, 5 hour 82 percent remaining, weekly 61 percent remaining",
+          observedAt: "2026-08-24T12:00:00.000Z",
+          windows: [
+            {
+              title: "5 hour limit",
+              remainingPercent: 82,
+              tone: "normal",
+              resetsAt: "2026-08-24T13:00:00.000Z",
+            },
+            {
+              title: "Weekly limit",
+              remainingPercent: 61,
+              tone: "normal",
+            },
+          ],
+          resetCreditsAvailable: 3,
+          stale: true,
         },
       ],
     },
@@ -146,6 +164,40 @@ describe("native helper protocol", () => {
       method: "present_pills",
       params: { pills: [], hotkeyTrigger: "custom", customHotkeyCombo: "99999:99" },
     }).success).toBe(false);
+    expect(nativeHelperRequestSchema.safeParse({
+      version: 1,
+      id: "unsafe-usage",
+      method: "present_pills",
+      params: {
+        pills: [],
+        usageGlances: [{
+          id: "codex",
+          label: "5h 0%",
+          detail: "Codex usage",
+          tone: "critical",
+          priority: 100,
+          accessibilityLabel: "Codex usage",
+          windows: [{ title: "5 hour limit", remainingPercent: 101 }],
+        }],
+      },
+    }).success).toBe(false);
+    expect(nativeHelperRequestSchema.safeParse({
+      version: 1,
+      id: "untitled-usage",
+      method: "present_pills",
+      params: {
+        pills: [],
+        usageGlances: [{
+          id: "codex",
+          label: "5h 82%",
+          detail: "Codex usage",
+          tone: "normal",
+          priority: 100,
+          accessibilityLabel: "Codex usage",
+          windows: [{ remainingPercent: 82 }],
+        }],
+      },
+    }).success).toBe(false);
   });
 
   it("validates helper activation events", () => {
@@ -183,6 +235,11 @@ describe("native helper protocol", () => {
       version: 1,
       type: "event",
       event: "open_settings",
+    }).success).toBe(true);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1,
+      type: "event",
+      event: "refresh_usage",
     }).success).toBe(true);
   });
 

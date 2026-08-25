@@ -7,10 +7,17 @@ import SwiftUI
 private final class NativePillButton: NSButton {
     var normalBackgroundColor = NSColor.black.withAlphaComponent(0.35)
     var onActivate: ((NSEvent.ModifierFlags) -> Void)?
+    var onAccessibilityActivate: (() -> Void)?
     var onHoverChange: ((Bool) -> Void)?
     private var hoverTrackingArea: NSTrackingArea?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let onAccessibilityActivate else { return super.accessibilityPerformPress() }
+        onAccessibilityActivate()
+        return true
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -232,6 +239,114 @@ private struct NativeMenuSessionDetailView: View {
     }
 }
 
+private struct NativeMenuUsageView: View {
+    let glances: [NativeHelperUsageGlance]
+
+    var body: some View {
+        TimelineView(.periodic(from: Date(), by: 30)) { context in
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Array(glances.enumerated()), id: \.element.id) { index, glance in
+                    if index > 0 { Divider().opacity(0.4) }
+                    provider(glance, now: context.date)
+                }
+            }
+            .padding(14)
+            .frame(width: 300)
+            .background(Color(nsColor: .windowBackgroundColor))
+        }
+    }
+
+    private func provider(_ glance: NativeHelperUsageGlance, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(glance.heading ?? "Usage")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: .labelColor))
+                Spacer()
+                if let observedAt = date(glance.observedAt) {
+                    Text("\(glance.stale == true ? "Refresh failed; updated" : "Updated") \(relative(observedAt, now: now))")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                }
+            }
+            let windows = glance.windows ?? []
+            if windows.isEmpty {
+                Text(glance.detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+            } else {
+                ForEach(Array(windows.enumerated()), id: \.offset) { index, window in
+                    if index > 0 { Divider().opacity(0.4) }
+                    windowRow(window, now: now)
+                }
+            }
+            if let credits = glance.resetCreditsAvailable, credits > 0 {
+                Divider().opacity(0.4)
+                Text("\(credits) usage reset \(credits == 1 ? "credit" : "credits") available")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+            }
+        }
+    }
+
+    private func windowRow(
+        _ window: NativeHelperUsageWindow,
+        now: Date
+    ) -> some View {
+        let title = window.title
+        let resetText = date(window.resetsAt).map {
+            "Resets \(relative($0, now: now))"
+        }
+        let resetLabel = resetText.map { ", \($0.lowercased())" } ?? ""
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                Spacer()
+                Text("\(window.remainingPercent)% left")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(tone(window.tone ?? .normal))
+            }
+            ProgressView(value: Double(window.remainingPercent), total: 100)
+                .tint(tone(window.tone ?? .normal))
+            if let resetText {
+                Text(resetText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "\(title), \(window.remainingPercent) percent remaining\(resetLabel)"
+        )
+    }
+
+    private func tone(_ tone: NativeHelperUsageTone) -> Color {
+        switch tone {
+        case .critical: return Color(nsColor: .systemRed)
+        case .warning: return Color(nsColor: .systemYellow)
+        case .normal: return Color(nsColor: .secondaryLabelColor)
+        }
+    }
+
+    private func date(_ value: String?) -> Date? {
+        value.flatMap { try? Date($0, strategy: .iso8601) }
+    }
+
+    private func relative(_ date: Date, now: Date) -> String {
+        RelativeDateTimeFormatter().localizedString(for: date, relativeTo: now)
+    }
+}
+
+private struct NativeMenuPanelHitSnapshot {
+    let orderedSessionIDs: [String]
+    let sessionFrames: [String: CGRect]
+    let overflowFrame: CGRect?
+    let orderedUsageIDs: [String]
+    let usageFrames: [String: CGRect]
+}
+
 @MainActor
 final class NativeMenuController: NSObject {
     var emit: (NativeHelperEvent) -> Void = { _ in }
@@ -246,6 +361,7 @@ final class NativeMenuController: NSObject {
     private var usagePanels: [String: NativePillPanel] = [:]
     private var usagePresentations: [String: NativeHelperUsageGlance] = [:]
     private var displayedUsageIDs: [String] = []
+    private var usagePopover: NSPopover?
     private var overflowPanel: NativePillPanel?
     private var overflowPopover: NSPopover?
     private var currentOverflowCount = 0
@@ -260,6 +376,9 @@ final class NativeMenuController: NSObject {
     private var readyPulseTimer: Timer?
     private var layoutTimer: Timer?
     private var layoutObservers: [NSObjectProtocol] = []
+    private var renderedDisplayID: CGDirectDisplayID?
+    private var renderedScreenFrame: CGRect?
+    private var panelHitSnapshot: NativeMenuPanelHitSnapshot?
     private var localClickMonitor: Any?
     private var globalClickMonitor: Any?
     private var localFlagsMonitor: Any?
@@ -356,6 +475,16 @@ final class NativeMenuController: NSObject {
             usagePanels[id] = NativePillPanel()
         }
         usagePresentations = usageByID
+        if usageByID.isEmpty {
+            dismissUsagePopover()
+        } else if usagePopover?.isShown == true,
+                  let content = usagePopover?.contentViewController
+                    as? NSHostingController<NativeMenuUsageView> {
+            content.rootView = NativeMenuUsageView(
+                glances: displayedUsageIDs.compactMap { usagePresentations[$0] }
+            )
+            usagePopover?.contentSize = content.view.fittingSize
+        }
 
         layoutPresentation()
         refreshReadyPulse()
@@ -418,23 +547,53 @@ final class NativeMenuController: NSObject {
     }
 
     private func handleClick(at point: CGPoint, modifiers: NSEvent.ModifierFlags) {
+        let isInsidePopover = popover(overflowPopover, contains: point)
+            || popover(usagePopover, contains: point)
+        guard renderedGeometryIsFresh() else {
+            if !isInsidePopover {
+                dismissOverflowPopover()
+                dismissUsagePopover()
+            }
+            return
+        }
+        guard let panelHitSnapshot else { return }
+        switch NativeMenuPanelHitTest.resolve(
+            point: point,
+            orderedSessionIDs: panelHitSnapshot.orderedSessionIDs,
+            sessionFrames: panelHitSnapshot.sessionFrames,
+            overflowFrame: panelHitSnapshot.overflowFrame,
+            orderedUsageIDs: panelHitSnapshot.orderedUsageIDs,
+            usageFrames: panelHitSnapshot.usageFrames
+        ) {
+        case .session(let id): activateSession(id, intent: activationIntent(for: modifiers))
+        case .overflow: activateOverflow()
+        case .usage(let id): activateUsage(id)
+        case .none:
+            if !isInsidePopover {
+                dismissOverflowPopover()
+                dismissUsagePopover()
+            }
+        }
+    }
+
+    private func capturePanelHitSnapshot() {
         let sessionFrames = Dictionary(
             uniqueKeysWithValues: sessionPanels.compactMap { id, panel in
                 panel.isVisible ? (id, panel.frame) : nil
             }
         )
-        let overflowFrame = overflowPanel.flatMap { $0.isVisible ? $0.frame : nil }
-        switch NativeMenuPanelHitTest.resolve(
-            point: point,
+        let usageFrames = Dictionary(
+            uniqueKeysWithValues: usagePanels.compactMap { id, panel in
+                panel.isVisible ? (id, panel.frame) : nil
+            }
+        )
+        panelHitSnapshot = NativeMenuPanelHitSnapshot(
             orderedSessionIDs: displayedSessionIDs,
             sessionFrames: sessionFrames,
-            overflowFrame: overflowFrame
-        ) {
-        case .session(let id): activateSession(id, intent: activationIntent(for: modifiers))
-        case .overflow: activateOverflow()
-        case .none:
-            if !overflowPopoverContains(point) { dismissOverflowPopover() }
-        }
+            overflowFrame: overflowPanel.flatMap { $0.isVisible ? $0.frame : nil },
+            orderedUsageIDs: displayedUsageIDs,
+            usageFrames: usageFrames
+        )
     }
 
     private func handleSessionHover(_ id: String, hovering: Bool) {
@@ -505,6 +664,7 @@ final class NativeMenuController: NSObject {
         sessionHoverState.pointerExited(id)
         dismissSessionPopover()
         dismissOverflowPopover()
+        dismissUsagePopover()
         let now = ProcessInfo.processInfo.systemUptime
         if let lastActivation,
            lastActivation.id == id,
@@ -525,6 +685,7 @@ final class NativeMenuController: NSObject {
     }
 
     private func activateOverflow() {
+        dismissUsagePopover()
         let now = ProcessInfo.processInfo.systemUptime
         if let lastOverflowActivation, now - lastOverflowActivation < 0.2 { return }
         lastOverflowActivation = now
@@ -583,8 +744,39 @@ final class NativeMenuController: NSObject {
         overflowPopover = nil
     }
 
-    private func overflowPopoverContains(_ point: CGPoint) -> Bool {
-        guard let popover = overflowPopover, popover.isShown,
+    private func activateUsage(_ id: String) {
+        usagePanels[id]?.pillButton.flash()
+        if usagePopover?.isShown == true {
+            dismissUsagePopover()
+            return
+        }
+        guard let panel = usagePanels[id], panel.isVisible else { return }
+        let glances = displayedUsageIDs.compactMap { usagePresentations[$0] }
+        guard !glances.isEmpty else { return }
+        dismissSessionPopover()
+        dismissOverflowPopover()
+        let popover = NSPopover()
+        popover.behavior = .applicationDefined
+        popover.animates = false
+        let content = NSHostingController(rootView: NativeMenuUsageView(glances: glances))
+        popover.contentViewController = content
+        popover.contentSize = content.view.fittingSize
+        popover.show(
+            relativeTo: panel.pillButton.bounds,
+            of: panel.pillButton,
+            preferredEdge: .minY
+        )
+        usagePopover = popover
+        emit(.refreshUsage)
+    }
+
+    private func dismissUsagePopover() {
+        usagePopover?.close()
+        usagePopover = nil
+    }
+
+    private func popover(_ popover: NSPopover?, contains point: CGPoint) -> Bool {
+        guard let popover, popover.isShown,
               let window = popover.contentViewController?.view.window else { return false }
         return window.frame.contains(point)
     }
@@ -730,6 +922,14 @@ final class NativeMenuController: NSObject {
             hidePresentation()
             return
         }
+        guard let displayID = (screen.deviceDescription[
+            NSDeviceDescriptionKey("NSScreenNumber")
+        ] as? NSNumber)?.uint32Value else {
+            hidePresentation()
+            return
+        }
+        renderedDisplayID = displayID
+        renderedScreenFrame = screen.frame
 
         let orderedPills = displayedSessionIDs.compactMap { sessionPresentations[$0] }
         let labels = Dictionary(uniqueKeysWithValues: orderedPills.map {
@@ -745,7 +945,8 @@ final class NativeMenuController: NSObject {
 
         let usage = displayedUsageIDs.compactMap { usagePresentations[$0] }
         let usageWidths = usage.map {
-            capsuleWidth($0.label, includesDot: false, padding: standardPadding)
+            $0.width.map { CGFloat($0) }
+                ?? capsuleWidth($0.label, includesDot: false, padding: standardPadding)
         }
         let usageWidth = totalWidth(usageWidths, spacing: standardSpacing)
         let showsUsage = !usage.isEmpty && usageWidth <= bounds.rightWidth
@@ -790,6 +991,7 @@ final class NativeMenuController: NSObject {
         for (id, panel) in usagePanels where !showsUsage || !displayedUsageIDs.contains(id) {
             panel.orderOut(nil)
         }
+        if !showsUsage { dismissUsagePopover() }
 
         let leftElements = pillElements(
             ids: result.leftVisibleIds,
@@ -839,6 +1041,7 @@ final class NativeMenuController: NSObject {
             overflowPanel?.orderOut(nil)
             dismissOverflowPopover()
         }
+        capturePanelHitSnapshot()
     }
 
     private enum LayoutElement {
@@ -945,7 +1148,9 @@ final class NativeMenuController: NSObject {
             image: nil,
             tooltip: glance.detail,
             identifier: glance.id,
-            onActivate: nil
+            onActivate: nil,
+            accessibilityLabel: glance.accessibilityLabel,
+            accessibilityAction: { [weak self] in self?.activateUsage(glance.id) }
         )
     }
 
@@ -978,6 +1183,8 @@ final class NativeMenuController: NSObject {
         backgroundAlpha: CGFloat = 0.35,
         borderAlpha: CGFloat = 0,
         onActivate: ((NSEvent.ModifierFlags) -> Void)?,
+        accessibilityLabel: String? = nil,
+        accessibilityAction: (() -> Void)? = nil,
         onHoverChange: ((Bool) -> Void)? = nil
     ) {
         let font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
@@ -989,6 +1196,12 @@ final class NativeMenuController: NSObject {
         panel.pillButton.image = image
         panel.pillButton.toolTip = tooltip
         panel.pillButton.identifier = NSUserInterfaceItemIdentifier(identifier)
+        panel.pillButton.setAccessibilityElement(accessibilityLabel != nil)
+        panel.pillButton.setAccessibilityLabel(accessibilityLabel)
+        panel.pillButton.setAccessibilityHelp(
+            accessibilityLabel == nil ? nil : "Open usage details"
+        )
+        panel.pillButton.onAccessibilityActivate = accessibilityAction
         panel.pillButton.normalBackgroundColor = .black.withAlphaComponent(backgroundAlpha)
         panel.pillButton.layer?.backgroundColor = panel.pillButton.normalBackgroundColor.cgColor
         panel.pillButton.layer?.borderColor = NSColor.white.withAlphaComponent(borderAlpha).cgColor
@@ -1094,11 +1307,27 @@ final class NativeMenuController: NSObject {
         return NSScreen.main ?? NSScreen.screens.first
     }
 
+    private func renderedGeometryIsFresh() -> Bool {
+        guard let renderedDisplayID, let renderedScreenFrame else { return false }
+        let liveFrame = NSScreen.screens.first {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+                .uint32Value == renderedDisplayID
+        }?.frame
+        return MenuBarGeometryFreshness.isFresh(
+            captured: renderedScreenFrame,
+            live: liveFrame
+        )
+    }
+
     private func hidePresentation() {
+        renderedDisplayID = nil
+        renderedScreenFrame = nil
+        panelHitSnapshot = nil
         sessionPanels.values.forEach { $0.orderOut(nil) }
         usagePanels.values.forEach { $0.orderOut(nil) }
         overflowPanel?.orderOut(nil)
         dismissOverflowPopover()
+        dismissUsagePopover()
     }
 
     private func capsuleWidth(

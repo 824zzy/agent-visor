@@ -78,28 +78,65 @@ public enum NativeHelperUsageTone: String, Codable, Equatable {
     case critical
 }
 
+public struct NativeHelperUsageWindow: Codable, Equatable {
+    public let title: String
+    public let remainingPercent: Int
+    public let tone: NativeHelperUsageTone?
+    public let resetsAt: String?
+
+    public init(
+        title: String,
+        remainingPercent: Int,
+        tone: NativeHelperUsageTone? = nil,
+        resetsAt: String? = nil
+    ) {
+        self.title = title
+        self.remainingPercent = remainingPercent
+        self.tone = tone
+        self.resetsAt = resetsAt
+    }
+}
+
 public struct NativeHelperUsageGlance: Codable, Equatable {
     public let id: String
+    public let heading: String?
+    public let width: Double?
     public let label: String
     public let detail: String
     public let tone: NativeHelperUsageTone
     public let priority: Int
     public let accessibilityLabel: String
+    public let observedAt: String?
+    public let windows: [NativeHelperUsageWindow]?
+    public let resetCreditsAvailable: Int?
+    public let stale: Bool?
 
     public init(
         id: String,
+        heading: String? = nil,
+        width: Double? = nil,
         label: String,
         detail: String,
         tone: NativeHelperUsageTone,
         priority: Int,
-        accessibilityLabel: String
+        accessibilityLabel: String,
+        observedAt: String? = nil,
+        windows: [NativeHelperUsageWindow]? = nil,
+        resetCreditsAvailable: Int? = nil,
+        stale: Bool? = nil
     ) {
         self.id = id
+        self.heading = heading
+        self.width = width
         self.label = label
         self.detail = detail
         self.tone = tone
         self.priority = priority
         self.accessibilityLabel = accessibilityLabel
+        self.observedAt = observedAt
+        self.windows = windows
+        self.resetCreditsAvailable = resetCreditsAvailable
+        self.stale = stale
     }
 }
 
@@ -369,6 +406,7 @@ public enum NativeHelperEvent {
     case openSessions
     case toggleSessions
     case openSettings
+    case refreshUsage
 
     public func encoded() throws -> Data {
         let envelope: EventEnvelope
@@ -385,6 +423,8 @@ public enum NativeHelperEvent {
             envelope = EventEnvelope(event: "toggle_sessions", sessionId: nil, intent: nil)
         case .openSettings:
             envelope = EventEnvelope(event: "open_settings", sessionId: nil, intent: nil)
+        case .refreshUsage:
+            envelope = EventEnvelope(event: "refresh_usage", sessionId: nil, intent: nil)
         }
         return try JSONEncoder().encode(envelope)
     }
@@ -466,16 +506,13 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         let detailedPillKeys = legacyPillKeys.union([
             "subtitle", "source", "project", "owner", "inspector",
         ])
-        let usageKeys: Set<String> = [
-            "id", "label", "detail", "tone", "priority", "accessibilityLabel",
-        ]
         return (pills + navigatorPills).allSatisfy {
             let keys = Set($0.keys)
             return keys.isSuperset(of: legacyPillKeys)
                 && keys.isSubset(of: detailedPillKeys)
                 && ($0["inspector"].map(hasStrictInspectorFields) ?? true)
         }
-            && usageGlances.allSatisfy { Set($0.keys) == usageKeys }
+            && usageGlances.allSatisfy(hasStrictUsageFields)
     case "focus":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys) == ["target"],
@@ -571,6 +608,23 @@ private extension NativeHelperTerminalTarget {
     }
 }
 
+private func hasStrictUsageFields(_ object: [String: Any]) -> Bool {
+    let required: Set<String> = [
+        "id", "label", "detail", "tone", "priority", "accessibilityLabel",
+    ]
+    let allowed = required.union([
+        "heading", "width", "observedAt", "windows", "resetCreditsAvailable", "stale",
+    ])
+    guard Set(object.keys).isSuperset(of: required),
+          Set(object.keys).isSubset(of: allowed) else { return false }
+    let windows = object["windows"] as? [[String: Any]] ?? []
+    return windows.allSatisfy {
+        let keys = Set($0.keys)
+        return keys.isSuperset(of: ["title", "remainingPercent"])
+            && keys.isSubset(of: ["title", "remainingPercent", "tone", "resetsAt"])
+    }
+}
+
 private func hasStrictInspectorFields(_ value: Any) -> Bool {
     guard let inspector = value as? [String: Any] else { return false }
     let required: Set<String> = [
@@ -624,12 +678,30 @@ private extension NativeHelperSessionInspectorContext {
     }
 }
 
+private extension NativeHelperUsageWindow {
+    var isValid: Bool {
+        !title.isEmpty && title.count <= 64
+            && (0...100).contains(remainingPercent)
+            && (resetsAt.map {
+                $0.count <= 64 && (try? Date($0, strategy: .iso8601)) != nil
+            } ?? true)
+    }
+}
+
 private extension NativeHelperUsageGlance {
     var isValid: Bool {
         ["codex", "claude"].contains(id)
+            && (heading.map { !$0.isEmpty && $0.count <= 64 } ?? true)
+            && (width.map { $0.isFinite && (28...200).contains($0) } ?? true)
             && !label.isEmpty && label.count <= 128
             && !detail.isEmpty && detail.count <= 512
             && !accessibilityLabel.isEmpty && accessibilityLabel.count <= 512
+            && (observedAt.map {
+                $0.count <= 64 && (try? Date($0, strategy: .iso8601)) != nil
+            } ?? true)
+            && (windows?.count ?? 0) <= 2
+            && (windows ?? []).allSatisfy(\.isValid)
+            && (resetCreditsAvailable.map { (0...1_000_000).contains($0) } ?? true)
     }
 }
 

@@ -3,6 +3,38 @@ import SwiftUI
 import XCTest
 
 final class TransientPopoverActivationWiringAuditTests: XCTestCase {
+    func testNativeUsageRefreshStalenessAndGeometryWiring() throws {
+        let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
+        let helper = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisorCore/Sources/AgentVisorNativeHelper/NativeMenuController.swift"
+        ))
+        let daemon = try String(contentsOf: root.appendingPathComponent(
+            "packages/server/src/bin.ts"
+        ))
+
+        XCTAssertTrue(
+            helper.contains("guard renderedGeometryIsFresh() else {")
+                && helper.contains("MenuBarGeometryFreshness.isFresh")
+                && helper.contains("capturePanelHitSnapshot()")
+                && helper.contains("guard let panelHitSnapshot else { return }")
+                && helper.contains("emit(.refreshUsage)"),
+            "Usage clicks must require fresh rendered geometry and request a daemon refresh."
+        )
+        XCTAssertTrue(
+            helper.contains("as? NSHostingController<NativeMenuUsageView>")
+                && helper.contains("content.rootView = NativeMenuUsageView")
+                && helper.contains("if !showsUsage { dismissUsagePopover() }"),
+            "Open usage details must update in place and close when their anchor disappears."
+        )
+        XCTAssertTrue(
+            daemon.contains("event.event === \"refresh_usage\"")
+                && daemon.contains("usageRefreshing")
+                && daemon.contains("stale: true")
+                && daemon.contains("presentNativeMenu()"),
+            "The daemon must serialize refreshes and republish retained values as stale."
+        )
+    }
+
     func testSessionNavigatorControlsAcceptTheFirstClickWithoutActivatingAgentVisor() throws {
         let root = repositoryRoot(from: URL(fileURLWithPath: #filePath))
         let sideContent = try String(contentsOf: root.appendingPathComponent(

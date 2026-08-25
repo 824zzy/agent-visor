@@ -27,6 +27,7 @@ Every request contains protocol `version: 1`, a non-empty `id`, and one method:
 - `request_accessibility` asks macOS for Accessibility access.
 - `open_accessibility_settings` opens the macOS repair destination.
 - `present_pills` accepts at most 64 active or recent pill descriptions, bounded optional inspector content, eight usage glances, session shortcuts, and the window hotkey.
+- Each usage glance may include two bounded limit windows, fixed capsule width, per-window tone, reset times, reset-credit count, sync time, and stale state.
 - `focus_terminal` selects one allowlisted terminal through its exact TTY.
 - `send_terminal` sends bounded text to that exact terminal and optionally submits it.
 - `focus` requires an exact process identifier and bundle identifier. A window identifier is optional.
@@ -41,7 +42,7 @@ Ghostty focus uses an OSC 7 marker written only to a validated `ttys` device. iT
 
 Application focus still validates the process identifier against the expected bundle identifier.
 
-The helper can emit `activate_pill`, `open_sessions`, `toggle_sessions`, and `open_settings` events on the same framed connection. Option-click adds the optional `chat` activation intent.
+The helper can emit `activate_pill`, `open_sessions`, `toggle_sessions`, `open_settings`, and `refresh_usage` events on the same framed connection. Option-click adds the optional `chat` activation intent.
 
 Modifier double taps reuse `HotkeyDoubleTapDetector`. A separate key-down monitor cancels chords and supports a migrated custom shortcut.
 

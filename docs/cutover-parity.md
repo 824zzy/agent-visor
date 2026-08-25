@@ -28,7 +28,7 @@ The 2026-08-24 source audit corrected earlier broad Pass claims. `Partial` names
 | Menu packing | App-menu, tray, display, notch, usage, and overflow constraints | Shared packer and click-sized AppKit panels | Pass |
 | Display policy | User-selected pill display and released full-screen visibility policy | Helper follows the status-item screen and always joins full-screen spaces | Partial |
 | Global shortcuts | Configurable visible-session and Sessions shortcuts with modifier reveal | Signed helper registration, frozen snapshots, keycap screenshot, and footer checks | Pass |
-| Usage | Codex and Claude limits with retained last valid values and click detail | Codex reading works; Claude usage and the click detail popover remain absent | Partial |
+| Usage | Codex and Claude limits with retained last valid values and click detail | Codex reading and the shared click detail popover work; Claude usage remains absent | Partial |
 | Settings | Native category layout, controls, shortcuts, integrations, and preservation | Core settings and agent connections persist; display, full-screen, hidden sessions, Chat visibility, and custom recording remain absent | Partial |
 | Accessibility repair | Stable signed identity and macOS repair destination | Release-signed helper and live trusted state | Pass |
 | Notifications | Native status transitions, exact session action, approval actions, and Dock badge | Phase notices work; clicks open only the owner application and interactive actions remain absent | Partial |

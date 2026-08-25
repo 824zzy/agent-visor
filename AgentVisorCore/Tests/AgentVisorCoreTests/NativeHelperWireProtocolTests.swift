@@ -35,6 +35,25 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(navigatorPills.map(\.id), ["visible", "chat-history"])
     }
 
+    func testDecodesAuthoritativeUsagePopoverDetails() throws {
+        let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[],"usageGlances":[{"id":"codex","heading":"Codex Usage","width":114,"label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage","observedAt":"2026-08-24T12:00:00.000Z","windows":[{"title":"5 hour limit","remainingPercent":82,"tone":"normal","resetsAt":"2026-08-24T13:00:00.000Z"},{"title":"Weekly limit","remainingPercent":61,"tone":"normal"}],"resetCreditsAvailable":3,"stale":true}]}}"#
+
+        let request = try NativeHelperRequest.decode(Data(json.utf8))
+        guard case .presentPills(_, _, _, let glances, _, _, _) = request else {
+            return XCTFail("Expected pills")
+        }
+        let glance = try XCTUnwrap(glances.first)
+        XCTAssertEqual(glance.heading, "Codex Usage")
+        XCTAssertEqual(glance.width, 114)
+        XCTAssertEqual(glance.observedAt, "2026-08-24T12:00:00.000Z")
+        XCTAssertEqual(glance.windows?.map(\.title), ["5 hour limit", "Weekly limit"])
+        XCTAssertEqual(glance.windows?.map(\.remainingPercent), [82, 61])
+        XCTAssertEqual(glance.windows?.map(\.tone), [.normal, .normal])
+        XCTAssertEqual(glance.windows?.first?.resetsAt, "2026-08-24T13:00:00.000Z")
+        XCTAssertEqual(glance.resetCreditsAvailable, 3)
+        XCTAssertEqual(glance.stale, true)
+    }
+
     func testDecodesBoundedSessionInspector() throws {
         let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready","inspector":{"status":"Ready","runtimeItems":["Pi · Ghostty","Claude Sonnet 4"],"detailRows":[{"label":"Reasoning","value":"High"}],"projectPath":"~/Codes/agent-visor","activityAt":"2026-08-22T21:02:18.000Z","context":{"usedLabel":"84k","windowLabel":"200k","percentage":42}}}],"hotkeyTrigger":"custom","customHotkeyCombo":"49:8"}}"#
 
@@ -61,6 +80,8 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         assertInvalid(#"{"version":1,"id":"bad","method":"focus_terminal","params":{"target":{"application":"Ghostty","tty":"/dev/null","cwd":"/"}}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[{"id":"1","title":"A","subtitle":"Ready","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"A","provider":"Pi"}],"usageGlances":[]}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[{"id":"1","title":"A","phase":"ready","priority":1,"accessibilityLabel":"A","inspector":{"status":"Ready","runtimeItems":["Pi"],"detailRows":[],"projectPath":"/tmp","activityAt":"2026-08-22T21:02:18.000Z","provider":"Pi"}}]}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[],"usageGlances":[{"id":"codex","label":"5h 0%","detail":"Codex usage","tone":"critical","priority":100,"accessibilityLabel":"Codex usage","windows":[{"title":"5 hour limit","remainingPercent":101}]}]}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[],"usageGlances":[{"id":"codex","label":"5h 82%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage","windows":[{"remainingPercent":82}]}]}}"#)
     }
 
     func testEncodesTypedResponseEnvelope() throws {
@@ -88,10 +109,12 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         let open = try NativeHelperEvent.openSessions.encoded()
         let toggle = try NativeHelperEvent.toggleSessions.encoded()
         let settings = try NativeHelperEvent.openSettings.encoded()
+        let refresh = try NativeHelperEvent.refreshUsage.encoded()
         let first = try XCTUnwrap(JSONSerialization.jsonObject(with: activation) as? [String: Any])
         let second = try XCTUnwrap(JSONSerialization.jsonObject(with: open) as? [String: Any])
         let third = try XCTUnwrap(JSONSerialization.jsonObject(with: toggle) as? [String: Any])
         let fourth = try XCTUnwrap(JSONSerialization.jsonObject(with: settings) as? [String: Any])
+        let fifth = try XCTUnwrap(JSONSerialization.jsonObject(with: refresh) as? [String: Any])
 
         XCTAssertEqual(first["type"] as? String, "event")
         XCTAssertEqual(first["event"] as? String, "activate_pill")
@@ -100,6 +123,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(second["event"] as? String, "open_sessions")
         XCTAssertEqual(third["event"] as? String, "toggle_sessions")
         XCTAssertEqual(fourth["event"] as? String, "open_settings")
+        XCTAssertEqual(fifth["event"] as? String, "refresh_usage")
     }
 
     func testFramesFragmentedAndAdjacentMessages() throws {

@@ -48,12 +48,19 @@ let usageTimer: NodeJS.Timeout | undefined;
 let permissionTimer: NodeJS.Timeout | undefined;
 let updateTimer: NodeJS.Timeout | undefined;
 let usageGlances: NativeHelperUsageGlance[] = [];
+let usageRefreshing = false;
+let presentNativeMenu = () => {};
+let refreshUsage = async () => {};
 let refreshing = false;
 
 const nativeHelperExecutable = process.env.AGENT_VISOR_NATIVE_HELPER;
 if (nativeHelperExecutable) {
   try {
     nativeHelper = await NativeHelperProcess.start(nativeHelperExecutable, (event) => {
+      if (event.event === "refresh_usage") {
+        void refreshUsage();
+        return;
+      }
       if (event.event === "activate_pill") {
         const action = nativeActionFor(event, repository.current());
         if (action?.action === "open_chat") {
@@ -68,7 +75,7 @@ if (nativeHelperExecutable) {
       const action = nativeActionFor(event, repository.current());
       if (action) process.send?.(action);
     });
-    const present = () => {
+    presentNativeMenu = () => {
       const preferences = settings.current();
       const presentation = preferences.pillsEnabled
         ? menuPresentation(
@@ -86,16 +93,23 @@ if (nativeHelperExecutable) {
       )
         .catch((error: unknown) => console.warn(`Agent Visor menu update failed: ${String(error)}`));
     };
-    unsubscribeMenu = repository.subscribe(present);
-    unsubscribeSettings = settings.subscribe(present);
-    present();
+    unsubscribeMenu = repository.subscribe(presentNativeMenu);
+    unsubscribeSettings = settings.subscribe(presentNativeMenu);
+    presentNativeMenu();
 
-    const refreshUsage = async () => {
-      if (!settings.current().codexUsageGlanceEnabled) return;
-      const codex = await readCodexUsage();
-      if (!codex) return;
+    refreshUsage = async () => {
+      if (!settings.current().codexUsageGlanceEnabled || usageRefreshing) return;
+      usageRefreshing = true;
+      const codex = await readCodexUsage().finally(() => { usageRefreshing = false; });
+      if (!codex) {
+        if (usageGlances.some((glance) => glance.stale !== true)) {
+          usageGlances = usageGlances.map((glance) => ({ ...glance, stale: true }));
+          presentNativeMenu();
+        }
+        return;
+      }
       usageGlances = [codex];
-      present();
+      presentNativeMenu();
     };
     void refreshUsage();
     usageTimer = setInterval(() => void refreshUsage(), 300_000);
