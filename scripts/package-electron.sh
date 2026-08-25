@@ -61,7 +61,12 @@ ditto "$ROOT/packages/protocol/dist" "$RESOURCES/app/node_modules/@agent-visor/p
 cp "$ROOT/packages/protocol/package.json" "$RESOURCES/app/node_modules/@agent-visor/protocol/package.json"
 ditto "$ROOT/node_modules/ws" "$RESOURCES/app/node_modules/ws"
 ditto "$ROOT/node_modules/zod" "$RESOURCES/app/node_modules/zod"
-cp "$OUTPUT/native-helper/AgentVisorNativeHelper" "$RESOURCES/AgentVisorNativeHelper"
+mkdir -p "$APP/Contents/Helpers"
+HELPER_APP="$APP/Contents/Helpers/Agent Visor Native Helper.app"
+ditto "$OUTPUT/native-helper/Agent Visor Native Helper.app" "$HELPER_APP"
+mkdir -p "$HELPER_APP/Contents/Resources"
+cp "$RESOURCES/AgentVisor.icns" "$HELPER_APP/Contents/Resources/AgentVisor.icns"
+plutil -replace CFBundleIconFile -string AgentVisor.icns "$HELPER_APP/Contents/Info.plist"
 mkdir -p "$RESOURCES/AgentIntegrations"
 for integration in \
   agent-visor-state.py \

@@ -364,6 +364,20 @@ export const nativeHelperTerminalTargetSchema = z.object({
   cwd: z.string().startsWith("/").max(4_096),
 }).strict();
 
+export const nativeHelperNotificationPermissionSchema = z.enum([
+  "not_determined", "denied", "authorized",
+]);
+
+export const nativeHelperNotificationSchema = z.object({
+  id: z.string().min(1).max(128),
+  sessionId: z.string().min(1).max(512),
+  title: z.string().min(1).max(256),
+  subtitle: z.string().min(1).max(512).optional(),
+  body: z.string().max(4_096),
+  toolUseId: z.string().min(1).max(512).optional(),
+  sound: appSettingsSchema.shape.notificationSound,
+}).strict();
+
 export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
   z.object({
     ...helperEnvelope,
@@ -374,6 +388,16 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
     method: z.literal("accessibility_status"),
   }).strict(),
   z.object({ ...helperEnvelope, method: z.literal("request_accessibility") }).strict(),
+  z.object({ ...helperEnvelope, method: z.literal("notification_status") }).strict(),
+  z.object({ ...helperEnvelope, method: z.literal("request_notifications") }).strict(),
+  z.object({
+    ...helperEnvelope,
+    method: z.literal("reconcile_notifications"),
+    params: z.object({
+      notifications: z.array(nativeHelperNotificationSchema).max(128),
+      presentNew: z.boolean(),
+    }).strict(),
+  }).strict(),
   z.object({ ...helperEnvelope, method: z.literal("open_accessibility_settings") }).strict(),
   z.object({
     ...helperEnvelope,
@@ -430,6 +454,10 @@ const nativeHelperResultSchema = z.discriminatedUnion("type", [
     trusted: z.boolean(),
   }).strict(),
   z.object({
+    type: z.literal("notification_status"),
+    status: nativeHelperNotificationPermissionSchema,
+  }).strict(),
+  z.object({
     type: z.literal("accepted"),
   }).strict(),
 ]);
@@ -452,7 +480,7 @@ const nativeHelperResponseEnvelopeSchema = z.discriminatedUnion("ok", [
 
 export const nativeHelperResponseSchema = z.union([
   nativeHelperResponseEnvelopeSchema,
-  z.discriminatedUnion("event", [
+  z.union([
     z.object({
       version: z.literal(PROTOCOL_VERSION),
       type: z.literal("event"),
@@ -464,6 +492,27 @@ export const nativeHelperResponseSchema = z.union([
       version: z.literal(PROTOCOL_VERSION),
       type: z.literal("event"),
       event: z.enum(["open_sessions", "toggle_sessions", "open_settings", "refresh_usage"]),
+    }).strict(),
+    z.object({
+      version: z.literal(PROTOCOL_VERSION),
+      type: z.literal("event"),
+      event: z.literal("notification_permission"),
+      status: nativeHelperNotificationPermissionSchema,
+    }).strict(),
+    z.object({
+      version: z.literal(PROTOCOL_VERSION),
+      type: z.literal("event"),
+      event: z.literal("notification_action"),
+      action: z.literal("activate"),
+      sessionId: z.string().min(1).max(512),
+    }).strict(),
+    z.object({
+      version: z.literal(PROTOCOL_VERSION),
+      type: z.literal("event"),
+      event: z.literal("notification_action"),
+      action: z.enum(["approve", "deny"]),
+      sessionId: z.string().min(1).max(512),
+      toolUseId: z.string().min(1).max(512),
     }).strict(),
   ]),
 ]);
@@ -479,6 +528,10 @@ export type ChatPendingAction = z.infer<typeof chatPendingActionSchema>;
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 export type HookEvent = z.infer<typeof hookEventSchema>;
 export type NativeHelperFocusTarget = z.infer<typeof nativeHelperFocusTargetSchema>;
+export type NativeHelperNotificationPermission = z.infer<
+  typeof nativeHelperNotificationPermissionSchema
+>;
+export type NativeHelperNotification = z.infer<typeof nativeHelperNotificationSchema>;
 export type NativeHelperTerminalTarget = z.infer<typeof nativeHelperTerminalTargetSchema>;
 export type NativeServicesState = z.infer<typeof nativeServicesStateSchema>;
 export type NativeHelperPill = z.infer<typeof nativeHelperPillSchema>;

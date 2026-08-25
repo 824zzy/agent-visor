@@ -15,9 +15,16 @@ do {
         controller.emit = { writer.send(event: $0) }
         return controller
     }
+    let notifications = NativeNotificationController { writer.send(event: $0) }
     DispatchQueue.global(qos: .userInitiated).async {
         do {
-            try serve(socketPath: socketPath, menu: menu, writer: writer)
+            try serve(
+                socketPath: socketPath,
+                menu: menu,
+                notifications: notifications,
+                writer: writer
+            )
+            DispatchQueue.main.async { NSApplication.shared.terminate(nil) }
         } catch {
             FileHandle.standardError.write(Data("AgentVisorNativeHelper: \(error)\n".utf8))
             DispatchQueue.main.async { NSApplication.shared.terminate(nil) }
@@ -74,8 +81,9 @@ private func prepareSocketPath(_ path: String) throws {
 private func serve(
     socketPath: String,
     menu: NativeMenuController,
+    notifications: NativeNotificationController,
     writer: ConnectionWriter
-) throws -> Never {
+) throws {
     let listener = socket(AF_UNIX, SOCK_STREAM, 0)
     guard listener >= 0 else { throw systemFailure("socket") }
     defer {
@@ -102,22 +110,21 @@ private func serve(
     guard chmod(socketPath, 0o600) == 0 else { throw systemFailure("chmod") }
     guard listen(listener, 4) == 0 else { throw systemFailure("listen") }
 
-    while true {
-        let client = accept(listener, nil, nil)
-        if client < 0 {
-            if errno == EINTR { continue }
-            throw systemFailure("accept")
-        }
-        writer.connect(client)
-        handle(client: client, menu: menu, writer: writer)
-        writer.disconnect(client)
-        close(client)
-    }
+    var client: Int32
+    repeat {
+        client = accept(listener, nil, nil)
+    } while client < 0 && errno == EINTR
+    guard client >= 0 else { throw systemFailure("accept") }
+    writer.connect(client)
+    handle(client: client, menu: menu, notifications: notifications, writer: writer)
+    writer.disconnect(client)
+    close(client)
 }
 
 private func handle(
     client: Int32,
     menu: NativeMenuController,
+    notifications: NativeNotificationController,
     writer: ConnectionWriter
 ) {
     var peerUID = uid_t.max
@@ -137,7 +144,11 @@ private func handle(
 
         do {
             for payload in try decoder.append(bytes.prefix(count)) {
-                let response = response(for: payload, menu: menu)
+                let response = response(
+                    for: payload,
+                    menu: menu,
+                    notifications: notifications
+                )
                 try writer.write(try NativeHelperFrameCodec.frame(response.encoded()), to: client)
             }
         } catch {
@@ -154,7 +165,8 @@ private func handle(
 
 private func response(
     for data: Data,
-    menu: NativeMenuController
+    menu: NativeMenuController,
+    notifications: NativeNotificationController
 ) -> NativeHelperResponse {
     do {
         switch try NativeHelperRequest.decode(data) {
@@ -162,6 +174,14 @@ private func response(
             return .screenTopology(id: id, screens: screenTopology())
         case .accessibilityStatus(let id):
             return .accessibilityStatus(id: id, trusted: AXIsProcessTrusted())
+        case .notificationStatus(let id):
+            return .notificationStatus(id: id, status: notifications.status())
+        case .requestNotifications(let id):
+            notifications.requestAuthorization()
+            return .accepted(id: id)
+        case .reconcileNotifications(let id, let values, let presentNew):
+            notifications.reconcile(values, presentNew: presentNew)
+            return .accepted(id: id)
         case .requestAccessibility(let id):
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
             _ = AXIsProcessTrustedWithOptions(options as CFDictionary)

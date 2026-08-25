@@ -80,6 +80,28 @@ describe("hook socket", () => {
     });
   });
 
+  it("removes a Claude approval when its response socket disconnects", async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-hooks-"));
+    const socketPath = path.join(root, "hooks.sock");
+    const repository = new SessionRepository([]);
+    running = await startHookSocket({ socketPath, repository });
+    const socket = net.createConnection(socketPath, () => socket.write(JSON.stringify({
+      session_id: "claude-disconnected",
+      cwd: "/Users/me/Codes/agent-visor",
+      event: "PermissionRequest",
+      status: "waiting_for_approval",
+      agent: "claude",
+      tool: "Bash",
+      tool_use_id: "tool-disconnected",
+      tool_input: { command: "npm test" },
+    })));
+
+    await expect.poll(() => repository.current().sessions[0]?.section).toBe("needs_you");
+    socket.destroy();
+
+    await expect.poll(() => repository.current().sessions).toEqual([]);
+  });
+
   it("does not unlink an active hook owner", async () => {
     root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-hooks-"));
     const socketPath = path.join(root, "hooks.sock");

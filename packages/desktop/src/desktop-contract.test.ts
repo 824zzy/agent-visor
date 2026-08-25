@@ -119,13 +119,11 @@ describe("desktop launch contract", () => {
       type: "native_effect", action: "request_notifications",
     })).toEqual({ action: "request_notifications" });
     expect(nativeEffectFromDaemonMessage({
-      type: "native_effect",
-      action: "notify",
-      notification: {
-        id: "ready-session-1", sessionId: "session-1", title: "Review migration",
-        body: "Pi is ready to continue", owner: "Ghostty", sound: "Pop",
-      },
-    })).toMatchObject({ action: "notify", notification: { sessionId: "session-1" } });
+      type: "native_effect", action: "notify", notification: {},
+    })).toBeUndefined();
+    expect(nativeEffectFromDaemonMessage({
+      type: "native_effect", action: "set_badge", count: 2,
+    })).toEqual({ action: "set_badge", count: 2 });
     expect(nativeEffectFromDaemonMessage({
       type: "native_effect", action: "set_login_item", enabled: true,
     })).toEqual({ action: "set_login_item", enabled: true });

@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import type {
   AppSettings,
+  ChatPendingAction,
   ClientMessage,
   NativeServicesState,
   SessionSnapshot,
@@ -14,23 +16,13 @@ export type DesktopNativeEffect =
   | { action: "set_login_item"; enabled: boolean }
   | { action: "open_update"; url: string }
   | { action: "request_notifications" }
-  | {
-    action: "notify";
-    notification: {
-      id: string;
-      sessionId: string;
-      title: string;
-      body: string;
-      owner: string;
-      sound: AppSettings["notificationSound"];
-    };
-  };
+  | { action: "set_badge"; count: number };
 
 export class NativeServicesRepository implements NativeServicesSource {
   private revision = 0;
   private state: NativeServicesState;
   private readonly listeners = new Set<(state: NativeServicesState) => void>();
-  private previousSections: Map<string, string> | undefined;
+  private previousAttentionKeys: Set<string> | undefined;
 
   constructor(private readonly options: {
     settings: SettingsRepository;
@@ -38,6 +30,7 @@ export class NativeServicesRepository implements NativeServicesSource {
     connections: AgentConnectionsRepository;
     currentVersion: string;
     checkUpdates: () => Promise<UpdateState>;
+    pendingAction?: (sessionId: string) => ChatPendingAction | undefined;
     emitDesktop: (effect: DesktopNativeEffect) => void;
   }) {
     this.state = {
@@ -54,6 +47,9 @@ export class NativeServicesRepository implements NativeServicesSource {
   async start(): Promise<void> {
     this.options.settings.subscribe((settings) => this.publish({ settings }));
     await this.refresh();
+    if (this.state.permissions.notifications === "not_determined") {
+      await this.options.helper.requestNotifications().catch(() => undefined);
+    }
   }
 
   current(): NativeServicesState {
@@ -92,6 +88,7 @@ export class NativeServicesRepository implements NativeServicesSource {
         await this.options.helper.openAccessibilitySettings();
         break;
       case "request_notifications":
+        await this.options.helper.requestNotifications();
         this.options.emitDesktop({ action: "request_notifications" });
         return undefined;
       case "check_updates":
@@ -111,44 +108,64 @@ export class NativeServicesRepository implements NativeServicesSource {
     }
   }
 
+  setNotificationPermission(
+    notifications: NativeServicesState["permissions"]["notifications"],
+  ): void {
+    this.publish({ permissions: { ...this.state.permissions, notifications } });
+  }
+
   async checkForUpdates(): Promise<void> {
     this.publish({ update: { status: "checking", currentVersion: this.options.currentVersion } });
     this.publish({ update: await this.options.checkUpdates() });
   }
 
   reconcileSessions(snapshot: SessionSnapshot): void {
-    const next = new Map(snapshot.sessions.map((session) => [session.id, session.section]));
-    if (this.previousSections) {
-      for (const session of snapshot.sessions) {
-        const previous = this.previousSections.get(session.id);
-        if (previous === session.section
-          || (session.section !== "needs_you" && session.section !== "ready")) continue;
-        this.options.emitDesktop({
-          action: "notify",
-          notification: {
-            id: `${session.section}-${session.id}-${snapshot.revision}`,
-            sessionId: session.id,
-            title: session.title,
-            body: session.section === "needs_you"
-              ? `${session.source} needs you`
-              : `${session.source} is ready to continue`,
-            owner: session.owner,
-            sound: this.state.settings.notificationSound,
-          },
-        });
-      }
+    const notifications = snapshot.sessions.flatMap((session) => {
+      if (session.section !== "needs_you" && session.section !== "ready") return [];
+      const pending = this.options.pendingAction?.(session.id);
+      const approval = session.section === "needs_you" && pending?.type === "approval"
+        ? pending
+        : undefined;
+      const key = approval
+        ? `${session.id}|approval|${approval.toolUseId}`
+        : `${session.id}|turn`;
+      return [{
+        id: notificationId(key),
+        sessionId: session.id,
+        title: approval ? `${approval.toolName} needs approval` : session.title,
+        ...(approval ? {
+          subtitle: session.title,
+          body: boundedJSON(approval.input),
+          toolUseId: approval.toolUseId,
+        } : {
+          body: session.section === "needs_you"
+            ? `${session.source} needs you`
+            : `${session.source} is ready to continue`,
+        }),
+        sound: this.state.settings.notificationSound,
+      }];
+    });
+    const currentKeys = new Set(notifications.map(({ id }) => id));
+    const previousKeys = this.previousAttentionKeys;
+    this.previousAttentionKeys = currentKeys;
+    void this.options.helper.reconcileNotifications(notifications, previousKeys !== undefined)
+      .catch((error: unknown) => {
+        console.warn(`Agent Visor notification update failed: ${String(error)}`);
+      });
+    if (!previousKeys ? currentKeys.size > 0 : currentKeys.size !== previousKeys.size) {
+      this.options.emitDesktop({ action: "set_badge", count: currentKeys.size });
     }
-    this.previousSections = next;
   }
 
   async refresh(): Promise<void> {
     const accessibility = await this.options.helper.accessibilityStatus();
+    const notifications = await this.options.helper.notificationStatus();
     const screens = await this.options.helper.screenTopology();
     await this.options.connections.refresh();
     this.publish({
       permissions: {
-        ...this.state.permissions,
         accessibility: accessibility ? "granted" : "needed",
+        notifications,
       },
       agents: this.options.connections.current(),
       pillScreens: screens.map(({ displayId, name, isBuiltIn, isMain }) => ({
@@ -166,4 +183,13 @@ export class NativeServicesRepository implements NativeServicesSource {
     this.state = { ...next, revision: this.revision };
     for (const listener of this.listeners) listener(this.current());
   }
+}
+
+function notificationId(key: string): string {
+  return `attention-${createHash("sha256").update(key).digest("hex")}`;
+}
+
+function boundedJSON(value: unknown): string {
+  const text = JSON.stringify(value) ?? "";
+  return text.length > 240 ? text.slice(0, 240) : text;
 }

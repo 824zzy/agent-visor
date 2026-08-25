@@ -15,9 +15,29 @@ fi
 
 swift build --package-path "$PACKAGE_PATH" -c release --product AgentVisorNativeHelper
 BIN_DIR="$(swift build --package-path "$PACKAGE_PATH" -c release --show-bin-path)"
-mkdir -p "$OUTPUT_DIR"
+HELPER_APP="$OUTPUT_DIR/Agent Visor Native Helper.app"
+HELPER_EXECUTABLE="$HELPER_APP/Contents/MacOS/AgentVisorNativeHelper"
+rm -rf "$HELPER_APP"
+mkdir -p "$OUTPUT_DIR" "$(dirname "$HELPER_EXECUTABLE")"
 cp "$BIN_DIR/AgentVisorNativeHelper" "$OUTPUT_DIR/AgentVisorNativeHelper"
 codesign --force --sign "$IDENTITY" "$OUTPUT_DIR/AgentVisorNativeHelper"
 codesign --verify --strict "$OUTPUT_DIR/AgentVisorNativeHelper"
+cp "$OUTPUT_DIR/AgentVisorNativeHelper" "$HELPER_EXECUTABLE"
+cat > "$HELPER_APP/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleDisplayName</key><string>Agent Visor</string>
+<key>CFBundleExecutable</key><string>AgentVisorNativeHelper</string>
+<key>CFBundleIdentifier</key><string>AgentVisorNativeHelper</string>
+<key>CFBundleName</key><string>Agent Visor</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>LSUIElement</key><true/>
+<key>NSUserNotificationAlertStyle</key><string>alert</string>
+</dict></plist>
+PLIST
+codesign --force --options runtime --sign "$IDENTITY" "$HELPER_APP"
+codesign --verify --deep --strict "$HELPER_APP"
 
-echo "Signed native helper: $OUTPUT_DIR/AgentVisorNativeHelper"
+echo "Signed native helper: $HELPER_APP"

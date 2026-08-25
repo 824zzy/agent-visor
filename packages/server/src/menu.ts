@@ -12,6 +12,14 @@ const phaseLabel = {
 } as const;
 
 export function nativeActionFor(event: NativeHelperEvent, snapshot: SessionSnapshot) {
+  if (event.event === "notification_permission") return undefined;
+  if (event.event === "notification_action") {
+    if (event.action !== "activate") return undefined;
+    const session = snapshot.sessions.find((candidate) => candidate.id === event.sessionId);
+    return session?.canEnterChat
+      ? { type: "native_action", action: "open_chat", sessionId: session.id } as const
+      : undefined;
+  }
   if (!("sessionId" in event)) {
     return { type: "native_action", action: event.event } as const;
   }

@@ -7,8 +7,27 @@ import {
 const requests = [
   { version: 1, id: "screens", method: "screen_topology" },
   { version: 1, id: "access", method: "accessibility_status" },
+  { version: 1, id: "notifications", method: "notification_status" },
+  { version: 1, id: "request-notifications", method: "request_notifications" },
   { version: 1, id: "request-access", method: "request_accessibility" },
   { version: 1, id: "open-access", method: "open_accessibility_settings" },
+  {
+    version: 1,
+    id: "notifications",
+    method: "reconcile_notifications",
+    params: {
+      presentNew: true,
+      notifications: [{
+        id: "attention-1",
+        sessionId: "session-1",
+        title: "Bash needs approval",
+        subtitle: "Review migration",
+        body: "{\"command\":\"npm test\"}",
+        toolUseId: "tool-7",
+        sound: "Pop",
+      }],
+    },
+  },
   {
     version: 1,
     id: "pills",
@@ -249,6 +268,42 @@ describe("native helper protocol", () => {
       type: "event",
       event: "refresh_usage",
     }).success).toBe(true);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1,
+      type: "event",
+      event: "notification_permission",
+      status: "authorized",
+    }).success).toBe(true);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1,
+      type: "event",
+      event: "notification_action",
+      action: "activate",
+      sessionId: "session-1",
+    }).success).toBe(true);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1,
+      type: "event",
+      event: "notification_action",
+      action: "approve",
+      sessionId: "session-1",
+      toolUseId: "tool-7",
+    }).success).toBe(true);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1,
+      type: "event",
+      event: "notification_action",
+      action: "deny",
+      sessionId: "session-1",
+      toolUseId: "tool-7",
+    }).success).toBe(true);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1,
+      type: "event",
+      event: "notification_action",
+      action: "approve",
+      sessionId: "session-1",
+    }).success).toBe(false);
   });
 
   it("validates typed results and structured errors", () => {
@@ -273,6 +328,13 @@ describe("native helper protocol", () => {
         },
       }).success,
     ).toBe(true);
+
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1,
+      id: "notifications",
+      ok: true,
+      result: { type: "notification_status", status: "authorized" },
+    }).success).toBe(true);
 
     expect(
       nativeHelperResponseSchema.safeParse({

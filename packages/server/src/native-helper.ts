@@ -8,6 +8,8 @@ import {
   nativeHelperResponseSchema,
   type AppSettings,
   type NativeHelperFocusTarget,
+  type NativeHelperNotification,
+  type NativeHelperNotificationPermission,
   type NativeHelperPill,
   type NativeHelperTerminalTarget,
   type NativeHelperResponse,
@@ -18,6 +20,12 @@ import {
 export interface NativeHelperAdapter {
   screenTopology(): Promise<NativeHelperScreen[]>;
   accessibilityStatus(): Promise<boolean>;
+  notificationStatus(): Promise<NativeHelperNotificationPermission>;
+  requestNotifications(): Promise<void>;
+  reconcileNotifications(
+    notifications: NativeHelperNotification[],
+    presentNew: boolean,
+  ): Promise<void>;
   requestAccessibility(): Promise<void>;
   openAccessibilitySettings(): Promise<void>;
   presentPills(
@@ -42,6 +50,12 @@ export class FakeNativeHelper implements NativeHelperAdapter {
   readonly terminalFocusRequests: NativeHelperTerminalTarget[] = [];
   readonly terminalSendRequests: Array<{ target: NativeHelperTerminalTarget; text: string; submit: boolean }> = [];
   presentedPills: NativeHelperPill[] = [];
+  presentedNotifications: NativeHelperNotification[] = [];
+  presentedNewNotifications = false;
+  readonly notificationPresentations: Array<{
+    notifications: NativeHelperNotification[];
+    presentNew: boolean;
+  }> = [];
   presentedNavigatorPills: NativeHelperPill[] = [];
   presentedUsageGlances: NativeHelperUsageGlance[] = [];
   shortcutModifierFamily: AppSettings["sessionShortcutModifierFamily"] = "optionCommand";
@@ -50,17 +64,21 @@ export class FakeNativeHelper implements NativeHelperAdapter {
   pillScreen: AppSettings["pillScreen"] = { mode: "automatic" };
   fullScreenPolicy: AppSettings["fullScreenPolicy"] = "onDemand";
   requestedAccessibility = false;
+  requestedNotifications = false;
   openedAccessibilitySettings = false;
 
   private readonly screens: NativeHelperScreen[];
   private readonly trusted: boolean;
+  private readonly notificationPermission: NativeHelperNotificationPermission;
 
   constructor(options: {
     screens?: NativeHelperScreen[];
     trusted?: boolean;
+    notifications?: NativeHelperNotificationPermission;
   } = {}) {
     this.screens = structuredClone(options.screens ?? []);
     this.trusted = options.trusted ?? false;
+    this.notificationPermission = options.notifications ?? "not_determined";
   }
 
   async screenTopology(): Promise<NativeHelperScreen[]> {
@@ -69,6 +87,26 @@ export class FakeNativeHelper implements NativeHelperAdapter {
 
   async accessibilityStatus(): Promise<boolean> {
     return this.trusted;
+  }
+
+  async notificationStatus(): Promise<NativeHelperNotificationPermission> {
+    return this.notificationPermission;
+  }
+
+  async requestNotifications(): Promise<void> {
+    this.requestedNotifications = true;
+  }
+
+  async reconcileNotifications(
+    notifications: NativeHelperNotification[],
+    presentNew: boolean,
+  ): Promise<void> {
+    this.presentedNotifications = structuredClone(notifications);
+    this.presentedNewNotifications = presentNew;
+    this.notificationPresentations.push({
+      notifications: structuredClone(notifications),
+      presentNew,
+    });
   }
 
   async requestAccessibility(): Promise<void> {
@@ -115,6 +153,9 @@ export class FakeNativeHelper implements NativeHelperAdapter {
 export class UnavailableNativeHelper implements NativeHelperAdapter {
   async screenTopology(): Promise<NativeHelperScreen[]> { return []; }
   async accessibilityStatus(): Promise<boolean> { return false; }
+  async notificationStatus(): Promise<NativeHelperNotificationPermission> { return "not_determined"; }
+  async requestNotifications(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
+  async reconcileNotifications(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async requestAccessibility(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async openAccessibilitySettings(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async presentPills(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
@@ -151,9 +192,14 @@ export class NativeHelperProcess implements NativeHelperAdapter {
   ): Promise<NativeHelperProcess> {
     const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-native-"));
     const socketPath = path.join(root, "helper.sock");
-    const child = spawn(executable, ["--socket", socketPath], {
-      stdio: ["ignore", "ignore", "pipe"],
-    });
+    const child = spawn("/usr/bin/open", [
+      "-n",
+      "-W",
+      path.resolve(executable, "../../.."),
+      "--args",
+      "--socket",
+      socketPath,
+    ], { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     let spawnError: Error | undefined;
     child.once("error", (error) => { spawnError = error; });
@@ -190,6 +236,25 @@ export class NativeHelperProcess implements NativeHelperAdapter {
 
   async requestAccessibility(): Promise<void> {
     await this.accepted("request_accessibility");
+  }
+
+  async notificationStatus(): Promise<NativeHelperNotificationPermission> {
+    const response = await this.request("notification_status");
+    if (response.result.type !== "notification_status") {
+      throw new Error("Unexpected helper response.");
+    }
+    return response.result.status;
+  }
+
+  async requestNotifications(): Promise<void> {
+    await this.accepted("request_notifications");
+  }
+
+  async reconcileNotifications(
+    notifications: NativeHelperNotification[],
+    presentNew: boolean,
+  ): Promise<void> {
+    await this.accepted("reconcile_notifications", { notifications, presentNew });
   }
 
   async openAccessibilitySettings(): Promise<void> {
@@ -234,8 +299,15 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     this.closed = true;
     this.socket.end();
     if (this.child.exitCode === null && this.child.signalCode === null) {
-      this.child.kill("SIGTERM");
-      await new Promise<void>((resolve) => this.child.once("exit", () => resolve()));
+      const exited = new Promise<void>((resolve) => this.child.once("exit", () => resolve()));
+      const graceful = await Promise.race([
+        exited.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
+      ]);
+      if (!graceful) {
+        this.child.kill("SIGTERM");
+        await exited;
+      }
     }
     await rm(this.root, { recursive: true, force: true });
   }

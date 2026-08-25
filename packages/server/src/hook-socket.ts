@@ -35,7 +35,10 @@ export async function startHookSocket(options: {
       chunks.push(chunk);
       tryHandle(false);
     });
-    socket.once("end", () => tryHandle(true));
+    socket.once("end", () => {
+      tryHandle(true);
+      if (unregisterResponder) socket.destroy();
+    });
     socket.once("close", () => {
       clearTimeout(deadline);
       unregisterResponder?.();

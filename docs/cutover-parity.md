@@ -31,7 +31,7 @@ The 2026-08-24 source audit corrected earlier broad Pass claims. `Partial` names
 | Usage | Codex and Claude limits with retained last valid values and click detail | Codex reading and the shared click detail popover work; Claude usage remains absent | Partial |
 | Settings | Native category layout, controls, shortcuts, integrations, and preservation | Core settings, display and full-screen controls, and agent connections persist; hidden sessions, Chat visibility, and custom recording remain absent | Partial |
 | Accessibility repair | Stable signed identity and macOS repair destination | Release-signed helper and live trusted state | Pass |
-| Notifications | Native status transitions, exact session action, approval actions, and Dock badge | Phase notices work; clicks open only the owner application and interactive actions remain absent | Partial |
+| Notifications | Native status transitions, exact session action, approval actions, and Dock badge | Modern helper notices, exact Chat clicks, exact Approve and Deny responses, resolved removal, and live badge counts | Pass |
 | Updates | Signed public release with downgrade prevention | Validated appcast and manual verified release link; automatic installation remains intentionally disabled | Partial |
 | Lifecycle | Close-to-hide, Dock reopen, launch at login, and quit owned processes only | Window lifecycle and owned-process shutdown checks | Pass |
 | Agent integrations | Detect and install or remove hook-based integrations | Fresh profiles connect Claude Code, Auggie, and Codex; Pi connects automatically; Cursor remains read-only | Pass |

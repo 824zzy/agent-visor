@@ -146,6 +146,12 @@ export class SessionRepository {
     return record ? structuredClone(record) : undefined;
   }
 
+  pendingAction(sessionId: string): ChatPendingAction | undefined {
+    const pending = this.externalActions.get(sessionId)?.pending
+      ?? pendingChatAction(this.hookBySession.get(sessionId));
+    return pending ? structuredClone(pending) : undefined;
+  }
+
   registerExternalAction(
     sessionId: string,
     pending: ChatPendingAction,
@@ -171,7 +177,13 @@ export class SessionRepository {
     this.hookResponders.set(toolUseId, { sessionId, respond });
     return () => {
       const current = this.hookResponders.get(toolUseId);
-      if (current?.respond === respond) this.hookResponders.delete(toolUseId);
+      if (current?.respond !== respond) return;
+      this.hookResponders.delete(toolUseId);
+      const hook = this.hookBySession.get(sessionId);
+      if (hook?.expectsResponse && hook.toolUseId === toolUseId) {
+        this.hookBySession.delete(sessionId);
+        this.publish([...this.lastByProvider.values()].flat());
+      }
     };
   }
 
@@ -181,7 +193,7 @@ export class SessionRepository {
     const record = discovered ?? (hook ? hookSession(hook) : undefined);
     if (!record) return unavailableChatPage(sessionId, "This session is no longer available.");
     const page = await readChatPage(record, before, limit);
-    const pendingAction = this.externalActions.get(sessionId)?.pending ?? pendingChatAction(hook);
+    const pendingAction = this.pendingAction(sessionId);
     if (pendingAction) {
       page.pendingAction = pendingAction;
       page.capabilities.canApprove = pendingAction.type === "approval";

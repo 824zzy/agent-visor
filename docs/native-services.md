@@ -61,11 +61,21 @@ Development helper builds use the existing `AgentVisor Dev` identity. Release bu
 
 The daemon detects transitions into Needs you and Ready to continue.
 
-It sends bounded notification content and the allowlisted owner to Electron. Electron uses the native macOS notification API.
+It identifies approvals by the exact session and tool request. Questions and Ready notices do not receive approval actions.
 
-Clicking a notification uses the same serialized, allowlisted owner-activation path as menu items.
+The signed Swift helper requests modern macOS notification permission at startup and reports the result to Settings.
 
-The Notifications settings action creates the application notification entry and opens macOS Notification settings for repair.
+The helper receives bounded display content and exact action identifiers. It does not parse provider data.
+
+The release package gives the helper a stable application identity and enables native alert actions.
+
+Clicking a notice opens the exact Agent Visor Chat. Approve and Deny use the existing provider response path for that exact request.
+
+Repeated snapshots do not create duplicate notices. Replaced or resolved attention removes its old notice.
+
+The Dock badge shows the current attention count. A focused Sessions window suppresses the notice without delaying it.
+
+The Notifications settings action requests access and opens macOS Notification settings for repair.
 
 ## Updates
 

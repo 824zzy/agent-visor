@@ -8,7 +8,6 @@ import {
   BrowserWindow,
   ipcMain,
   Menu,
-  Notification,
   shell,
   type MenuItemConstructorOptions,
 } from "electron";
@@ -102,7 +101,10 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
       AGENT_VISOR_TOKEN: randomBytes(32).toString("base64url"),
       ELECTRON_RUN_AS_NODE: "1",
       AGENT_VISOR_NATIVE_HELPER: process.env.AGENT_VISOR_NATIVE_HELPER
-        ?? path.join(process.resourcesPath, "AgentVisorNativeHelper"),
+        ?? path.join(
+          path.dirname(process.resourcesPath),
+          "Helpers/Agent Visor Native Helper.app/Contents/MacOS/AgentVisorNativeHelper",
+        ),
       AGENT_VISOR_DATA_DIR: app.getPath("userData"),
       AGENT_VISOR_INTEGRATIONS_DIR: process.env.AGENT_VISOR_INTEGRATIONS_DIR
         ?? integrationResourcesPath(
@@ -129,21 +131,11 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
       } else if (effect.action === "open_update") {
         void shell.openExternal(effect.url);
       } else if (effect.action === "request_notifications") {
-        if (Notification.isSupported()) {
-          new Notification({ title: productName, body: "Notifications are ready." }).show();
-        }
         void shell.openExternal(
           "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
         );
-      } else if (Notification.isSupported()) {
-        const notification = new Notification({
-          title: effect.notification.title,
-          body: effect.notification.body,
-          silent: effect.notification.sound === "None",
-          ...(effect.notification.sound === "None" ? {} : { sound: effect.notification.sound }),
-        });
-        notification.once("click", () => queueOwnerActivation(effect.notification.owner));
-        notification.show();
+      } else if (effect.action === "set_badge") {
+        app.dock?.setBadge(effect.count ? String(effect.count) : "");
       }
       return;
     }
@@ -254,14 +246,6 @@ function configureApplicationMenu(): void {
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
-}
-
-function queueOwnerActivation(owner: string): void {
-  const application = ownerApplication(owner);
-  if (!application) return;
-  nativeActionQueue = nativeActionQueue
-    .then(() => openApplication(application))
-    .catch((error: unknown) => console.error(error));
 }
 
 function productVersion(): string {

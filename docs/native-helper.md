@@ -26,6 +26,9 @@ Every request contains protocol `version: 1`, a non-empty `id`, and one method:
 - `accessibility_status` returns the current Accessibility trust state.
 - `request_accessibility` asks macOS for Accessibility access.
 - `open_accessibility_settings` opens the macOS repair destination.
+- `notification_status` returns the modern notification permission state.
+- `request_notifications` asks macOS for notification access.
+- `reconcile_notifications` accepts bounded notices and removes resolved notices.
 - `present_pills` accepts at most 64 active or recent pill descriptions, bounded optional inspector content, eight usage glances, session shortcuts, the window hotkey, pill-screen selection, and full-screen policy.
 - Each usage glance may include two bounded limit windows, fixed capsule width, per-window tone, reset times, reset-credit count, sync time, and stale state.
 - `focus_terminal` selects one allowlisted terminal through its exact TTY.
@@ -46,7 +49,9 @@ Ghostty focus uses an OSC 7 marker written only to a validated `ttys` device. iT
 
 Application focus still validates the process identifier against the expected bundle identifier.
 
-The helper can emit `activate_pill`, `open_sessions`, `toggle_sessions`, `open_settings`, and `refresh_usage` events on the same framed connection. Option-click adds the optional `chat` activation intent.
+The helper can emit pill, window, usage, notification-permission, and exact notification-action events on the same framed connection.
+
+Option-click adds the optional `chat` activation intent. Notification actions include the exact session and tool request identities.
 
 Modifier double taps reuse `HotkeyDoubleTapDetector`. A separate key-down monitor cancels chords and supports a migrated custom shortcut.
 
@@ -66,9 +71,13 @@ AV_NATIVE_HELPER_SIGN_IDENTITY='AgentVisor Release' scripts/build-native-helper.
 
 The script never creates or rotates a certificate.
 
+It packages the executable as a background helper application. This preserves its signed identity and gives modern notifications a valid bundle identity.
+
+The daemon starts that application through Launch Services. Closing the daemon socket exits the helper and its Launch Services waiter.
+
 ## Test seams
 
-`FakeNativeHelper` implements the daemon adapter without starting native code. It records pill, usage, and focus calls.
+`FakeNativeHelper` implements the daemon adapter without starting native code. It records pill, usage, notification, and focus calls.
 
 `NativeHelperProcess` owns the signed helper lifecycle, framed requests, event delivery, deadlines, and temporary socket cleanup.
 

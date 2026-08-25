@@ -11,7 +11,10 @@ const helperBuild = spawnSync("./scripts/build-native-helper.sh", [], {
   stdio: "inherit",
 });
 if (helperBuild.status !== 0) process.exit(helperBuild.status ?? 1);
-const helperExecutable = path.join(root, "build/native-helper/AgentVisorNativeHelper");
+const helperExecutable = path.join(
+  root,
+  "build/native-helper/Agent Visor Native Helper.app/Contents/MacOS/AgentVisorNativeHelper",
+);
 
 for (const workspace of ["@agent-visor/protocol", "@agent-visor/server", "@agent-visor/desktop"]) {
   const result = spawnSync("npm", ["run", "build", `--workspace=${workspace}`], {

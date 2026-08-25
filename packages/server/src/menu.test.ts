@@ -173,6 +173,17 @@ describe("menu presentation", () => {
       action: "open_chat",
       sessionId: "approval",
     });
+    expect(nativeActionFor({
+      version: 1,
+      type: "event",
+      event: "notification_action",
+      action: "activate",
+      sessionId: "approval",
+    }, snapshot)).toEqual({
+      type: "native_action",
+      action: "open_chat",
+      sessionId: "approval",
+    });
     const chatOnly = {
       ...snapshot,
       sessions: [{ ...snapshot.sessions[0], id: "chat-only", canOpenOwner: false }],

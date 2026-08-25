@@ -314,6 +314,31 @@ describe("SessionRepository", () => {
     });
   });
 
+  it("removes an abandoned Claude approval when its responder disconnects", async () => {
+    const repository = new SessionRepository([]);
+    repository.applyHook({
+      sessionId: "claude-abandoned",
+      cwd: live.cwd,
+      provider: "claude_code",
+      event: "PermissionRequest",
+      status: "waiting_for_approval",
+      receivedAt: "2026-08-22T08:01:00.000Z",
+      expectsResponse: true,
+      tool: "Bash",
+      toolUseId: "tool-abandoned",
+      toolInput: { command: "echo stale" },
+    });
+    const unregister = repository.registerHookResponder(
+      "claude-abandoned",
+      "tool-abandoned",
+      () => undefined,
+    );
+
+    unregister();
+
+    expect((await repository.refresh()).sessions).toEqual([]);
+  });
+
   it("routes external Codex approvals through the shared Chat action", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{ ...live, provider: "codex", chatPath: "/tmp/codex.jsonl" }];
@@ -325,6 +350,9 @@ describe("SessionRepository", () => {
       input: { command: "npm test" }, canPersist: true,
     }, async (message) => { decision = message.decision; });
 
+    expect(repository.pendingAction("pi-1")).toMatchObject({
+      type: "approval", toolUseId: "codex-command-1",
+    });
     expect((await repository.chatPage("pi-1")).pendingAction).toMatchObject({
       type: "approval", toolUseId: "codex-command-1",
     });

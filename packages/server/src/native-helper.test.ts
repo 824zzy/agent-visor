@@ -42,6 +42,16 @@ const usage = {
   accessibilityLabel: "Codex usage",
 };
 
+const notification = {
+  id: "attention-1",
+  sessionId: "session-1",
+  title: "Bash needs approval",
+  subtitle: "Review migration",
+  body: "{\"command\":\"npm test\"}",
+  toolUseId: "tool-7",
+  sound: "Pop" as const,
+};
+
 const focus = {
   pid: 42,
   bundleIdentifier: "com.mitchellh.ghostty",
@@ -50,10 +60,15 @@ const focus = {
 
 describe("FakeNativeHelper", () => {
   it("supports daemon tests without a native process", async () => {
-    const helper = new FakeNativeHelper({ screens: [screen], trusted: true });
+    const helper = new FakeNativeHelper({
+      screens: [screen], trusted: true, notifications: "authorized",
+    });
 
     expect(await helper.screenTopology()).toEqual([screen]);
     expect(await helper.accessibilityStatus()).toBe(true);
+    expect(await helper.notificationStatus()).toBe("authorized");
+    await helper.requestNotifications();
+    await helper.reconcileNotifications([notification], true);
     await helper.requestAccessibility();
     await helper.openAccessibilitySettings();
     await helper.presentPills(
@@ -65,6 +80,9 @@ describe("FakeNativeHelper", () => {
     await helper.focusTerminal(terminal);
     await helper.sendTerminal(terminal, "Continue", true);
 
+    expect(helper.requestedNotifications).toBe(true);
+    expect(helper.presentedNotifications).toEqual([notification]);
+    expect(helper.presentedNewNotifications).toBe(true);
     expect(helper.requestedAccessibility).toBe(true);
     expect(helper.openedAccessibilitySettings).toBe(true);
     expect(helper.presentedPills).toEqual([pill]);

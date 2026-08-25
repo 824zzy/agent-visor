@@ -6,6 +6,8 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         let requests = [
             #"{"version":1,"id":"screens","method":"screen_topology"}"#,
             #"{"version":1,"id":"access","method":"accessibility_status"}"#,
+            #"{"version":1,"id":"notifications","method":"notification_status"}"#,
+            #"{"version":1,"id":"request-notifications","method":"request_notifications"}"#,
             #"{"version":1,"id":"request-access","method":"request_accessibility"}"#,
             #"{"version":1,"id":"open-access","method":"open_accessibility_settings"}"#,
             #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","subtitle":"Ready to continue","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready"},{"id":"session-2","title":"Recent migration","phase":"history","priority":2,"accessibilityLabel":"Recent migration, recent session"}],"shortcutModifierFamily":"controlCommand","hotkeyTrigger":"custom","customHotkeyCombo":"49:8","usageGlances":[{"id":"codex","label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage"}]}}"#,
@@ -18,10 +20,24 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(
             try requests.map { try NativeHelperRequest.decode(Data($0.utf8)).id },
             [
-                "screens", "access", "request-access", "open-access",
+                "screens", "access", "notifications", "request-notifications",
+                "request-access", "open-access",
                 "pills", "legacy-pills", "focus", "focus-terminal", "send-terminal",
             ]
         )
+    }
+
+    func testDecodesBoundedNotifications() throws {
+        let json = #"{"version":1,"id":"notifications","method":"reconcile_notifications","params":{"presentNew":true,"notifications":[{"id":"attention-1","sessionId":"session-1","title":"Bash needs approval","subtitle":"Review migration","body":"{\"command\":\"npm test\"}","toolUseId":"tool-7","sound":"Pop"}]}}"#
+
+        let request = try NativeHelperRequest.decode(Data(json.utf8))
+        guard case .reconcileNotifications(_, let notifications, let presentNew) = request else {
+            return XCTFail("Expected notifications")
+        }
+        XCTAssertTrue(presentNew)
+        XCTAssertEqual(notifications.first?.sessionId, "session-1")
+        XCTAssertEqual(notifications.first?.toolUseId, "tool-7")
+        XCTAssertEqual(notifications.first?.sound, .pop)
     }
 
     func testDecodesSeparateNavigatorCatalog() throws {
@@ -111,6 +127,19 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(object["ok"] as? Bool, true)
         XCTAssertEqual(result["type"] as? String, "accessibility_status")
         XCTAssertEqual(result["trusted"] as? Bool, true)
+
+        let notificationData = try NativeHelperResponse.notificationStatus(
+            id: "notifications",
+            status: .authorized
+        ).encoded()
+        let notificationObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: notificationData) as? [String: Any]
+        )
+        let notificationResult = try XCTUnwrap(
+            notificationObject["result"] as? [String: Any]
+        )
+        XCTAssertEqual(notificationResult["type"] as? String, "notification_status")
+        XCTAssertEqual(notificationResult["status"] as? String, "authorized")
     }
 
     func testEncodesActivationEvents() throws {
@@ -122,11 +151,19 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         let toggle = try NativeHelperEvent.toggleSessions.encoded()
         let settings = try NativeHelperEvent.openSettings.encoded()
         let refresh = try NativeHelperEvent.refreshUsage.encoded()
+        let permission = try NativeHelperEvent.notificationPermission(.authorized).encoded()
+        let approve = try NativeHelperEvent.notificationAction(
+            sessionId: "session-1",
+            toolUseId: "tool-7",
+            action: .approve
+        ).encoded()
         let first = try XCTUnwrap(JSONSerialization.jsonObject(with: activation) as? [String: Any])
         let second = try XCTUnwrap(JSONSerialization.jsonObject(with: open) as? [String: Any])
         let third = try XCTUnwrap(JSONSerialization.jsonObject(with: toggle) as? [String: Any])
         let fourth = try XCTUnwrap(JSONSerialization.jsonObject(with: settings) as? [String: Any])
         let fifth = try XCTUnwrap(JSONSerialization.jsonObject(with: refresh) as? [String: Any])
+        let sixth = try XCTUnwrap(JSONSerialization.jsonObject(with: permission) as? [String: Any])
+        let seventh = try XCTUnwrap(JSONSerialization.jsonObject(with: approve) as? [String: Any])
 
         XCTAssertEqual(first["type"] as? String, "event")
         XCTAssertEqual(first["event"] as? String, "activate_pill")
@@ -136,6 +173,12 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(third["event"] as? String, "toggle_sessions")
         XCTAssertEqual(fourth["event"] as? String, "open_settings")
         XCTAssertEqual(fifth["event"] as? String, "refresh_usage")
+        XCTAssertEqual(sixth["event"] as? String, "notification_permission")
+        XCTAssertEqual(sixth["status"] as? String, "authorized")
+        XCTAssertEqual(seventh["event"] as? String, "notification_action")
+        XCTAssertEqual(seventh["sessionId"] as? String, "session-1")
+        XCTAssertEqual(seventh["toolUseId"] as? String, "tool-7")
+        XCTAssertEqual(seventh["action"] as? String, "approve")
     }
 
     func testFramesFragmentedAndAdjacentMessages() throws {

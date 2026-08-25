@@ -9,6 +9,7 @@ import { menuPresentation, nativeActionFor } from "./menu.js";
 import { NativeHelperProcess, UnavailableNativeHelper } from "./native-helper.js";
 import { AgentConnectionsRepository } from "./agent-connections.js";
 import { NativeServicesRepository } from "./native-services.js";
+import { handleNotificationAction } from "./notification-actions.js";
 import { liveProviders } from "./providers/index.js";
 import { startServer } from "./server.js";
 import { SessionRepository } from "./sessions.js";
@@ -57,6 +58,26 @@ const nativeHelperExecutable = process.env.AGENT_VISOR_NATIVE_HELPER;
 if (nativeHelperExecutable) {
   try {
     nativeHelper = await NativeHelperProcess.start(nativeHelperExecutable, (event) => {
+      if (event.event === "notification_permission") {
+        nativeServices?.setNotificationPermission(event.status);
+        return;
+      }
+      if (event.event === "notification_action") {
+        if (event.action === "activate") {
+          const action = nativeActionFor(event, repository.current());
+          if (action) process.send?.(action);
+          return;
+        }
+        void handleNotificationAction({
+          type: "notification_action",
+          action: event.action === "approve" ? "allow" : "deny",
+          sessionId: event.sessionId,
+          toolUseId: event.toolUseId,
+        }, repository).then((error) => {
+          if (error) console.warn(`Agent Visor notification action failed: ${error}`);
+        });
+        return;
+      }
       if (event.event === "refresh_usage") {
         void refreshUsage();
         return;
@@ -140,6 +161,7 @@ nativeServices = new NativeServicesRepository({
   }),
   currentVersion,
   checkUpdates: () => checkForUpdates(currentVersion),
+  pendingAction: (sessionId) => repository.pendingAction(sessionId),
   emitDesktop: (effect) => process.send?.({ type: "native_effect", ...effect }),
 });
 await nativeServices.start();

@@ -1,17 +1,58 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { ChatPendingAction } from "@agent-visor/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentConnectionsRepository } from "./agent-connections.js";
 import { FakeNativeHelper } from "./native-helper.js";
-import { NativeServicesRepository } from "./native-services.js";
+import { NativeServicesRepository, type DesktopNativeEffect } from "./native-services.js";
 import { SettingsRepository } from "./settings.js";
 
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) =>
   rm(root, { recursive: true, force: true }))));
 
+const session = {
+  id: "session-1", title: "Review migration", subtitle: "Agent is working",
+  source: "Claude Code", project: "agent-visor", owner: "Ghostty", cwd: "/repo",
+  section: "working" as const, updatedAt: "2026-08-22T10:00:00.000Z",
+  canOpenOwner: true, canEnterChat: true,
+};
+
+async function notificationFixture(
+  pendingAction?: () => ChatPendingAction | undefined,
+): Promise<{
+  services: NativeServicesRepository;
+  effects: DesktopNativeEffect[];
+  helper: FakeNativeHelper;
+}> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-native-services-"));
+  roots.push(root);
+  const settings = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
+  const effects: DesktopNativeEffect[] = [];
+  const helper = new FakeNativeHelper({ trusted: true });
+  const services = new NativeServicesRepository({
+    settings,
+    helper,
+    connections: new AgentConnectionsRepository({
+      home: path.join(root, "home"), resources: path.join(root, "resources"),
+    }),
+    currentVersion: "2.7.0",
+    checkUpdates: async () => ({ status: "up_to_date", currentVersion: "2.7.0" }),
+    pendingAction,
+    emitDesktop: (effect) => effects.push(effect),
+  });
+  await services.start();
+  return { services, effects, helper };
+}
+
 describe("native services", () => {
+  it("requests notification permission when its status is undecided", async () => {
+    const { helper } = await notificationFixture();
+
+    expect(helper.requestedNotifications).toBe(true);
+  });
+
   it("publishes and changes agent connections", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-native-services-"));
     roots.push(root);
@@ -78,7 +119,7 @@ describe("native services", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-native-services-"));
     roots.push(root);
     const settings = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
-    const helper = new FakeNativeHelper({ trusted: false });
+    const helper = new FakeNativeHelper({ trusted: false, notifications: "authorized" });
     const effects: unknown[] = [];
     const services = new NativeServicesRepository({
       settings,
@@ -99,7 +140,7 @@ describe("native services", () => {
 
     expect(services.current().permissions).toEqual({
       accessibility: "needed",
-      notifications: "not_determined",
+      notifications: "authorized",
     });
     expect(await services.action({
       type: "update_settings",
@@ -121,6 +162,7 @@ describe("native services", () => {
       id: "notifications-1",
       action: "request_notifications",
     });
+    expect(helper.requestedNotifications).toBe(true);
     expect(effects).toContainEqual({ action: "request_notifications" });
 
     await services.action({
@@ -139,51 +181,107 @@ describe("native services", () => {
     });
   });
 
-  it("notifies only when a session enters an attention state", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-native-services-"));
-    roots.push(root);
-    const settings = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
-    const helper = new FakeNativeHelper({ trusted: true });
-    const effects: unknown[] = [];
-    const services = new NativeServicesRepository({
-      settings,
-      helper,
-      connections: new AgentConnectionsRepository({
-        home: path.join(root, "home"), resources: path.join(root, "resources"),
-      }),
-      currentVersion: "2.6.2",
-      checkUpdates: async () => ({ status: "up_to_date", currentVersion: "2.6.2" }),
-      emitDesktop: (effect) => effects.push(effect),
-    });
-    await services.start();
-    const session = {
-      id: "session-1", title: "Review migration", subtitle: "Agent is working",
-      source: "Pi", project: "agent-visor", owner: "Ghostty", cwd: "/repo",
-      section: "working" as const, updatedAt: "2026-08-22T10:00:00.000Z",
-      canOpenOwner: true, canEnterChat: true,
-    };
+  it("includes the exact pending approval in a Needs you notice", async () => {
+    const { services, helper } = await notificationFixture(() => ({
+      type: "approval", toolUseId: "tool-7", toolName: "Bash",
+      input: { command: "npm test" }, canPersist: false,
+    }));
+
     services.reconcileSessions({ type: "session_snapshot", revision: 1, sessions: [session] });
     services.reconcileSessions({
       type: "session_snapshot",
       revision: 2,
       sessions: [{ ...session, section: "needs_you", subtitle: "Approval required" }],
     });
+
+    expect(helper.presentedNotifications).toEqual([{
+      id: expect.stringMatching(/^attention-[0-9a-f]{64}$/),
+      sessionId: "session-1",
+      title: "Bash needs approval",
+      subtitle: "Review migration",
+      body: "{\"command\":\"npm test\"}",
+      toolUseId: "tool-7",
+      sound: "Pop",
+    }]);
+    expect(helper.presentedNewNotifications).toBe(true);
+  });
+
+  it("replaces stale approvals, removes resolved notices, and updates the Dock badge", async () => {
+    let toolUseId = "tool-1";
+    const { services, effects, helper } = await notificationFixture(() => ({
+      type: "approval", toolUseId, toolName: "Bash", input: {}, canPersist: false,
+    }));
+
+    services.reconcileSessions({ type: "session_snapshot", revision: 1, sessions: [session] });
+    services.reconcileSessions({
+      type: "session_snapshot", revision: 2,
+      sessions: [{ ...session, section: "needs_you", subtitle: "Approval required" }],
+    });
+    const firstId = helper.presentedNotifications[0]?.id;
+    toolUseId = "tool-2";
+    services.reconcileSessions({
+      type: "session_snapshot", revision: 3,
+      sessions: [{ ...session, section: "needs_you", subtitle: "Another approval" }],
+    });
+    services.reconcileSessions({ type: "session_snapshot", revision: 4, sessions: [session] });
+
+    expect(helper.notificationPresentations.map(({ notifications, presentNew }) => ({
+      ids: notifications.map(({ id }) => id), presentNew,
+    }))).toEqual([
+      { ids: [], presentNew: false },
+      { ids: [firstId], presentNew: true },
+      { ids: [expect.not.stringMatching(firstId ?? "")], presentNew: true },
+      { ids: [], presentNew: true },
+    ]);
+    expect(effects).toContainEqual({ action: "set_badge", count: 1 });
+    expect(effects).toContainEqual({ action: "set_badge", count: 0 });
+  });
+
+  it("does not add approval actions to a question", async () => {
+    const { services, helper } = await notificationFixture(() => ({
+      type: "question", toolUseId: "question-1",
+      questions: [{ id: "q1", question: "Continue?", choices: ["Yes"], multiple: false }],
+    }));
+
+    services.reconcileSessions({ type: "session_snapshot", revision: 1, sessions: [session] });
+    services.reconcileSessions({
+      type: "session_snapshot", revision: 2,
+      sessions: [{ ...session, section: "needs_you", subtitle: "Question" }],
+    });
+
+    expect(helper.presentedNotifications[0]?.toolUseId).toBeUndefined();
+  });
+
+  it("restores the Dock badge without replaying an initial Ready notice", async () => {
+    const { services, effects, helper } = await notificationFixture();
+
+    services.reconcileSessions({
+      type: "session_snapshot", revision: 1,
+      sessions: [{ ...session, source: "Pi", section: "ready", subtitle: "Ready" }],
+    });
+
+    expect(helper.presentedNotifications).toHaveLength(1);
+    expect(helper.presentedNewNotifications).toBe(false);
+    expect(effects).toEqual([{ action: "set_badge", count: 1 }]);
+  });
+
+  it("notifies only when a session enters an attention state", async () => {
+    const { services, helper } = await notificationFixture();
+    const piSession = { ...session, source: "Pi" };
+    services.reconcileSessions({ type: "session_snapshot", revision: 1, sessions: [piSession] });
+    services.reconcileSessions({
+      type: "session_snapshot",
+      revision: 2,
+      sessions: [{ ...piSession, section: "needs_you", subtitle: "Approval required" }],
+    });
     services.reconcileSessions({
       type: "session_snapshot",
       revision: 3,
-      sessions: [{ ...session, section: "needs_you", subtitle: "Approval required" }],
+      sessions: [{ ...piSession, section: "needs_you", subtitle: "Approval required" }],
     });
 
-    expect(effects).toEqual([{
-      action: "notify",
-      notification: {
-        id: "needs_you-session-1-2",
-        sessionId: "session-1",
-        title: "Review migration",
-        body: "Pi needs you",
-        owner: "Ghostty",
-        sound: "Pop",
-      },
-    }]);
+    const attention = helper.notificationPresentations.flatMap(({ notifications }) =>
+      notifications).filter(({ body }) => body === "Pi needs you");
+    expect(new Set(attention.map(({ id }) => id)).size).toBe(1);
   });
 });

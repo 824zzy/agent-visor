@@ -206,9 +206,50 @@ public struct NativeHelperPillScreen: Codable, Equatable {
     }
 }
 
+public enum NativeHelperNotificationPermission: String, Codable, Equatable {
+    case notDetermined = "not_determined"
+    case denied
+    case authorized
+}
+
+public enum NativeHelperNotificationSound: String, Codable, Equatable {
+    case none = "None"
+    case pop = "Pop"
+    case ping = "Ping"
+    case tink = "Tink"
+    case glass = "Glass"
+    case blow = "Blow"
+    case bottle = "Bottle"
+    case frog = "Frog"
+    case funk = "Funk"
+    case hero = "Hero"
+    case morse = "Morse"
+    case purr = "Purr"
+    case sosumi = "Sosumi"
+    case submarine = "Submarine"
+    case basso = "Basso"
+}
+
+public struct NativeHelperNotification: Codable, Equatable {
+    public let id: String
+    public let sessionId: String
+    public let title: String
+    public let subtitle: String?
+    public let body: String
+    public let toolUseId: String?
+    public let sound: NativeHelperNotificationSound
+}
+
 public enum NativeHelperRequest: Equatable {
     case screenTopology(id: String)
     case accessibilityStatus(id: String)
+    case notificationStatus(id: String)
+    case requestNotifications(id: String)
+    case reconcileNotifications(
+        id: String,
+        notifications: [NativeHelperNotification],
+        presentNew: Bool
+    )
     case requestAccessibility(id: String)
     case openAccessibilitySettings(id: String)
     case presentPills(
@@ -229,7 +270,9 @@ public enum NativeHelperRequest: Equatable {
     public var id: String {
         switch self {
         case .screenTopology(let id), .accessibilityStatus(let id),
-             .requestAccessibility(let id), .openAccessibilitySettings(let id),
+             .notificationStatus(let id), .requestNotifications(let id),
+             .reconcileNotifications(let id, _, _), .requestAccessibility(let id),
+             .openAccessibilitySettings(let id),
              .presentPills(let id, _, _, _, _, _, _, _, _), .focus(let id, _),
              .focusTerminal(let id, _), .sendTerminal(let id, _, _, _):
             id
@@ -244,7 +287,8 @@ public enum NativeHelperRequest: Equatable {
         }
 
         let requiredKeys: Set<String> = [
-            "present_pills", "focus", "focus_terminal", "send_terminal",
+            "present_pills", "reconcile_notifications", "focus", "focus_terminal",
+            "send_terminal",
         ].contains(method)
             ? ["version", "id", "method", "params"]
             : ["version", "id", "method"]
@@ -266,6 +310,24 @@ public enum NativeHelperRequest: Equatable {
             return .accessibilityStatus(id: wire.id)
         case "request_accessibility":
             return .requestAccessibility(id: wire.id)
+        case "notification_status":
+            return .notificationStatus(id: wire.id)
+        case "request_notifications":
+            return .requestNotifications(id: wire.id)
+        case "reconcile_notifications":
+            guard let params = wire.params,
+                  Set(params.keys) == ["notifications", "presentNew"],
+                  let notifications = params.notifications,
+                  notifications.count <= 128,
+                  notifications.allSatisfy(\.isValid),
+                  let presentNew = params.presentNew else {
+                throw NativeHelperWireError.invalidRequest
+            }
+            return .reconcileNotifications(
+                id: wire.id,
+                notifications: notifications,
+                presentNew: presentNew
+            )
         case "open_accessibility_settings":
             return .openAccessibilitySettings(id: wire.id)
         case "present_pills":
@@ -397,6 +459,7 @@ public enum NativeHelperErrorCode: String, Codable {
 public enum NativeHelperResponse {
     case screenTopology(id: String, screens: [NativeHelperScreen])
     case accessibilityStatus(id: String, trusted: Bool)
+    case notificationStatus(id: String, status: NativeHelperNotificationPermission)
     case accepted(id: String)
     case error(id: String, code: NativeHelperErrorCode, message: String)
 
@@ -416,6 +479,13 @@ public enum NativeHelperResponse {
                 id: id,
                 ok: true,
                 result: .accessibilityStatus(trusted)
+            ))
+        case .notificationStatus(let id, let status):
+            return try encoder.encode(SuccessEnvelope(
+                version: nativeHelperProtocolVersion,
+                id: id,
+                ok: true,
+                result: .notificationStatus(status)
             ))
         case .accepted(let id):
             return try encoder.encode(SuccessEnvelope(
@@ -440,6 +510,12 @@ public enum NativeHelperPillActivationIntent: String, Encodable, Equatable {
     case chat
 }
 
+public enum NativeHelperNotificationAction: String, Encodable, Equatable {
+    case activate
+    case approve
+    case deny
+}
+
 public enum NativeHelperEvent {
     case activatePill(
         sessionId: String,
@@ -449,6 +525,12 @@ public enum NativeHelperEvent {
     case toggleSessions
     case openSettings
     case refreshUsage
+    case notificationPermission(NativeHelperNotificationPermission)
+    case notificationAction(
+        sessionId: String,
+        toolUseId: String?,
+        action: NativeHelperNotificationAction
+    )
 
     public func encoded() throws -> Data {
         let envelope: EventEnvelope
@@ -466,7 +548,16 @@ public enum NativeHelperEvent {
         case .openSettings:
             envelope = EventEnvelope(event: "open_settings", sessionId: nil, intent: nil)
         case .refreshUsage:
-            envelope = EventEnvelope(event: "refresh_usage", sessionId: nil, intent: nil)
+            envelope = EventEnvelope(event: "refresh_usage")
+        case .notificationPermission(let status):
+            envelope = EventEnvelope(event: "notification_permission", status: status)
+        case .notificationAction(let sessionId, let toolUseId, let action):
+            envelope = EventEnvelope(
+                event: "notification_action",
+                sessionId: sessionId,
+                toolUseId: toolUseId,
+                action: action
+            )
         }
         return try JSONEncoder().encode(envelope)
     }
@@ -478,6 +569,25 @@ private struct EventEnvelope: Encodable {
     let event: String
     let sessionId: String?
     let intent: NativeHelperPillActivationIntent?
+    let status: NativeHelperNotificationPermission?
+    let toolUseId: String?
+    let action: NativeHelperNotificationAction?
+
+    init(
+        event: String,
+        sessionId: String? = nil,
+        intent: NativeHelperPillActivationIntent? = nil,
+        status: NativeHelperNotificationPermission? = nil,
+        toolUseId: String? = nil,
+        action: NativeHelperNotificationAction? = nil
+    ) {
+        self.event = event
+        self.sessionId = sessionId
+        self.intent = intent
+        self.status = status
+        self.toolUseId = toolUseId
+        self.action = action
+    }
 }
 
 public enum NativeHelperFrameCodec {
@@ -556,6 +666,17 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         }
             && usageGlances.allSatisfy(hasStrictUsageFields)
             && (params["pillScreen"].map(hasStrictPillScreenFields) ?? true)
+    case "reconcile_notifications":
+        guard let params = object["params"] as? [String: Any],
+              Set(params.keys) == ["notifications", "presentNew"],
+              let notifications = params["notifications"] as? [[String: Any]] else {
+            return false
+        }
+        let required: Set<String> = ["id", "sessionId", "title", "body", "sound"]
+        let allowed = required.union(["subtitle", "toolUseId"])
+        return notifications.allSatisfy {
+            Set($0.keys).isSuperset(of: required) && Set($0.keys).isSubset(of: allowed)
+        }
     case "focus":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys) == ["target"],
@@ -588,6 +709,8 @@ private struct WireParameters: Decodable {
     let pills: [NativeHelperPill]?
     let navigatorPills: [NativeHelperPill]?
     let usageGlances: [NativeHelperUsageGlance]?
+    let notifications: [NativeHelperNotification]?
+    let presentNew: Bool?
     let shortcutModifierFamily: String?
     let pillScreen: NativeHelperPillScreen?
     let fullScreenPolicy: String?
@@ -611,6 +734,11 @@ private struct WireParameters: Decodable {
             [NativeHelperUsageGlance].self,
             forKey: .init("usageGlances")
         )
+        notifications = try container.decodeIfPresent(
+            [NativeHelperNotification].self,
+            forKey: .init("notifications")
+        )
+        presentNew = try container.decodeIfPresent(Bool.self, forKey: .init("presentNew"))
         shortcutModifierFamily = try container.decodeIfPresent(
             String.self,
             forKey: .init("shortcutModifierFamily")
@@ -713,6 +841,17 @@ private func hasStrictInspectorFields(_ value: Any) -> Bool {
         } ?? true)
 }
 
+private extension NativeHelperNotification {
+    var isValid: Bool {
+        !id.isEmpty && id.count <= 128
+            && !sessionId.isEmpty && sessionId.count <= 512
+            && !title.isEmpty && title.count <= 256
+            && (subtitle.map { !$0.isEmpty && $0.count <= 512 } ?? true)
+            && body.count <= 4_096
+            && (toolUseId.map { !$0.isEmpty && $0.count <= 512 } ?? true)
+    }
+}
+
 private extension NativeHelperPill {
     var isValid: Bool {
         !id.isEmpty && id.count <= 128
@@ -788,6 +927,7 @@ private struct SuccessEnvelope: Encodable {
 private enum ResultBody: Encodable {
     case screenTopology([NativeHelperScreen])
     case accessibilityStatus(Bool)
+    case notificationStatus(NativeHelperNotificationPermission)
     case accepted
 
     func encode(to encoder: Encoder) throws {
@@ -799,6 +939,9 @@ private enum ResultBody: Encodable {
         case .accessibilityStatus(let trusted):
             try container.encode("accessibility_status", forKey: .init("type"))
             try container.encode(trusted, forKey: .init("trusted"))
+        case .notificationStatus(let status):
+            try container.encode("notification_status", forKey: .init("type"))
+            try container.encode(status, forKey: .init("status"))
         case .accepted:
             try container.encode("accepted", forKey: .init("type"))
         }
