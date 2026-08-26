@@ -79,6 +79,52 @@ describe("SessionRepository", () => {
     expect(await repository.refresh()).toEqual(first);
   });
 
+  it("opens hook-only Codex jobs through their exact thread URL", async () => {
+    const repository = new SessionRepository([]);
+    const focused: DiscoveredProviderSession[] = [];
+    repository.setControls({
+      focus: async (session) => { focused.push(session); },
+      send: async () => undefined,
+    });
+    const sessionId = "01a03c62-72e0-78b0-8768-7d7d13167e6c";
+
+    const snapshot = repository.applyHook({
+      sessionId,
+      cwd: "/Users/me/Codes",
+      provider: "codex",
+      event: "SessionStart",
+      status: "working",
+      receivedAt: "2026-08-25T21:44:38.000Z",
+      pid: 40758,
+    });
+
+    expect(snapshot.sessions[0]?.canOpenOwner).toBe(true);
+    expect(await repository.focusSession(sessionId)).toBeUndefined();
+    expect(focused[0]?.controlTarget).toEqual({
+      kind: "url",
+      url: `codex://threads/${sessionId}`,
+    });
+  });
+
+  it("does not advertise an invalid Codex hook as source-openable", async () => {
+    const repository = new SessionRepository([]);
+
+    const snapshot = repository.applyHook({
+      sessionId: "not-a-codex-thread",
+      cwd: "/Users/me/Codes",
+      provider: "codex",
+      event: "SessionStart",
+      status: "working",
+      receivedAt: "2026-08-25T21:44:38.000Z",
+      pid: 40758,
+    });
+
+    expect(snapshot.sessions[0]?.canOpenOwner).toBe(false);
+    expect(await repository.focusSession("not-a-codex-thread")).toBe(
+      "Exact session focus is unavailable.",
+    );
+  });
+
   it("applies hook phases without replacing provider-specific names", async () => {
     const provider = new FakeProvider();
     const repository = new SessionRepository([provider]);

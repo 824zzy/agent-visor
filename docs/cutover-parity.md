@@ -47,6 +47,7 @@ The 2026-08-24 source audit corrected earlier broad Pass claims. `Partial` names
 | Claude Code in Cursor | Claude metadata remains authoritative | Signed Cursor application focus | Read-only history and hook responses | Pass |
 | Codex CLI | SQLite and rollout history | Exact terminal focus | App-server text and local images | Pass |
 | Codex application | SQLite and recent rollout history | `codex://threads/<id>` | App-server text and local images | Pass |
+| Headless Codex job | Hook and rollout history | `codex://threads/<id>` | Read-only history | Pass |
 | Pi in supported terminals | Incremental transcript scan and validated runtime hook link | Exact TTY focus | Text and ordered local-image paths | Pass |
 | Historical Pi | Bounded history | No invented active target | Read-only history | Pass |
 | Cursor CLI in a terminal | Cursor-owned transcript parser | Exact TTY focus | Read-only history | Pass |

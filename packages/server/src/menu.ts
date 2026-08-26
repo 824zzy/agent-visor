@@ -50,6 +50,7 @@ export function menuPresentation(
       || left.id.localeCompare(right.id));
   const navigatorPills = ordered.slice(0, 512).map(presentationPill);
   const pills = ordered
+    .filter((session) => session.source !== "Codex" || session.section !== "history")
     .filter((session) => session.canOpenOwner
       || (session.section !== "history" && session.canEnterChat))
     .slice(0, 64)

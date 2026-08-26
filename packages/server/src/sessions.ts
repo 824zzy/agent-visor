@@ -613,6 +613,7 @@ function applyHooks(
       existing.updatedAt = hook.activityAt ?? hook.receivedAt;
       continue;
     }
+    const controlTarget = hookControlTarget(hook);
     sessions.push({
       id: hook.sessionId,
       provider: hook.provider,
@@ -621,9 +622,10 @@ function applyHooks(
       section: phase.section,
       subtitle: phase.subtitle,
       updatedAt: hook.activityAt ?? hook.receivedAt,
-      canOpenOwner: Boolean(hook.pid || hook.tty),
+      canOpenOwner: hookCanOpenOwner(hook, controlTarget),
       canEnterChat: hook.provider !== "auggie",
       chatPath: hook.sessionFile,
+      ...(controlTarget ? { controlTarget } : {}),
     });
   }
   return sessions;
@@ -733,7 +735,24 @@ function hookOwner(event: HookSessionEvent): string {
   return providerNames[event.provider];
 }
 
+function hookControlTarget(hook: HookSessionEvent): SessionControlTarget | undefined {
+  return hook.provider === "codex"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(hook.sessionId)
+    ? { kind: "url", url: `codex://threads/${hook.sessionId}` }
+    : undefined;
+}
+
+function hookCanOpenOwner(
+  hook: HookSessionEvent,
+  controlTarget: SessionControlTarget | undefined,
+): boolean {
+  return hook.provider === "codex"
+    ? controlTarget !== undefined
+    : Boolean(hook.pid || hook.tty);
+}
+
 function hookSession(hook: HookSessionEvent): DiscoveredProviderSession {
+  const controlTarget = hookControlTarget(hook);
   return {
     id: hook.sessionId,
     provider: hook.provider,
@@ -741,9 +760,10 @@ function hookSession(hook: HookSessionEvent): DiscoveredProviderSession {
     owner: hookOwner(hook),
     section: hookPhase(hook).section,
     updatedAt: hook.activityAt ?? hook.receivedAt,
-    canOpenOwner: Boolean(hook.pid || hook.tty),
+    canOpenOwner: hookCanOpenOwner(hook, controlTarget),
     canEnterChat: hook.provider !== "auggie",
     chatPath: hook.sessionFile,
+    ...(controlTarget ? { controlTarget } : {}),
   };
 }
 

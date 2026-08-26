@@ -75,7 +75,7 @@ const snapshot: SessionSnapshot = {
 };
 
 describe("menu presentation", () => {
-  it("orders active pills by attention and keeps recent history after them", () => {
+  it("orders active pills by attention", () => {
     const { navigatorPills: _, ...presentation } = menuPresentation(snapshot, []);
     expect({
       ...presentation,
@@ -115,20 +115,16 @@ describe("menu presentation", () => {
           priority: 2,
           accessibilityLabel: "Build menu, in progress, Pi, agent-visor",
         },
-        {
-          id: "history",
-          title: "Old session",
-          subtitle: "Session ended",
-          source: "Codex",
-          project: "agent-visor",
-          owner: "Codex",
-          phase: "history",
-          priority: 3,
-          accessibilityLabel: "Old session, recent session, Codex, agent-visor",
-        },
       ],
       usageGlances: [],
     });
+  });
+
+  it("keeps completed Codex history in Sessions without a physical pill", () => {
+    const presentation = menuPresentation(snapshot, []);
+
+    expect(presentation.pills.map(({ id }) => id)).not.toContain("history");
+    expect(presentation.navigatorPills.map(({ id }) => id)).toContain("history");
   });
 
   it("uses the project to distinguish untitled Codex pills", () => {
