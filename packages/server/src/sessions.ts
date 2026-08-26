@@ -613,7 +613,7 @@ function applyHooks(
       existing.updatedAt = hook.activityAt ?? hook.receivedAt;
       continue;
     }
-    const controlTarget = hookControlTarget(hook);
+    if (hook.provider === "codex") continue;
     sessions.push({
       id: hook.sessionId,
       provider: hook.provider,
@@ -622,10 +622,9 @@ function applyHooks(
       section: phase.section,
       subtitle: phase.subtitle,
       updatedAt: hook.activityAt ?? hook.receivedAt,
-      canOpenOwner: hookCanOpenOwner(hook, controlTarget),
+      canOpenOwner: Boolean(hook.pid || hook.tty),
       canEnterChat: hookCanEnterChat(hook),
       chatPath: hook.sessionFile,
-      ...(controlTarget ? { controlTarget } : {}),
     });
   }
   return sessions;
@@ -735,29 +734,12 @@ function hookOwner(event: HookSessionEvent): string {
   return providerNames[event.provider];
 }
 
-function hookControlTarget(hook: HookSessionEvent): SessionControlTarget | undefined {
-  return hook.provider === "codex"
-    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(hook.sessionId)
-    ? { kind: "url", url: `codex://threads/${hook.sessionId}` }
-    : undefined;
-}
-
-function hookCanOpenOwner(
-  hook: HookSessionEvent,
-  controlTarget: SessionControlTarget | undefined,
-): boolean {
-  return hook.provider === "codex"
-    ? controlTarget !== undefined
-    : Boolean(hook.pid || hook.tty);
-}
-
 function hookCanEnterChat(hook: HookSessionEvent): boolean {
   return hook.provider !== "auggie"
     && (hook.provider !== "codex" || hook.sessionFile !== undefined);
 }
 
 function hookSession(hook: HookSessionEvent): DiscoveredProviderSession {
-  const controlTarget = hookControlTarget(hook);
   return {
     id: hook.sessionId,
     provider: hook.provider,
@@ -765,10 +747,9 @@ function hookSession(hook: HookSessionEvent): DiscoveredProviderSession {
     owner: hookOwner(hook),
     section: hookPhase(hook).section,
     updatedAt: hook.activityAt ?? hook.receivedAt,
-    canOpenOwner: hookCanOpenOwner(hook, controlTarget),
+    canOpenOwner: hook.provider !== "codex" && Boolean(hook.pid || hook.tty),
     canEnterChat: hookCanEnterChat(hook),
     chatPath: hook.sessionFile,
-    ...(controlTarget ? { controlTarget } : {}),
   };
 }
 

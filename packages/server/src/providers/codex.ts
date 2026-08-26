@@ -69,7 +69,8 @@ export class CodexProvider implements ProviderAdapter {
 
     const cutoff = this.environment.now().valueOf() - this.environment.observedWindowMs;
     for (const thread of candidates) {
-      if (usedThreads.has(thread.id) || thread.source !== "vscode") continue;
+      if (usedThreads.has(thread.id)
+        || (thread.source !== "vscode" && thread.source !== "exec")) continue;
       if (thread.cwd.includes(".claude-mem") || thread.cwd.includes("observer-sessions")) continue;
       if (thread.rolloutPath.includes("/archived_sessions/")) continue;
       const rollout = await this.environment.stamp(thread.rolloutPath);

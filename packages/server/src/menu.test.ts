@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionSnapshot } from "@agent-visor/protocol";
+import { nativeHelperRequestSchema, type SessionSnapshot } from "@agent-visor/protocol";
 import { menuPresentation, nativeActionFor } from "./menu.js";
 
 const snapshot: SessionSnapshot = {
@@ -118,6 +118,21 @@ describe("menu presentation", () => {
       ],
       usageGlances: [],
     });
+  });
+
+  it("bounds titles at the native helper boundary", () => {
+    const presentation = menuPresentation({
+      ...snapshot,
+      sessions: [{ ...snapshot.sessions[0]!, title: "x".repeat(500) }],
+    }, []);
+
+    expect(nativeHelperRequestSchema.safeParse({
+      version: 1,
+      id: "menu",
+      method: "present_pills",
+      params: presentation,
+    }).success).toBe(true);
+    expect(presentation.pills[0]?.title).toHaveLength(256);
   });
 
   it("keeps completed Codex history in Sessions without a physical pill", () => {

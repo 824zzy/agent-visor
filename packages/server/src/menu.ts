@@ -63,9 +63,9 @@ function presentationPill(
   session: SessionSnapshot["sessions"][number],
   priority: number,
 ) {
-  const title = session.source === "Codex" && session.title === "Codex session"
+  const title = (session.source === "Codex" && session.title === "Codex session"
     ? `Codex · ${session.project}`
-    : session.title;
+    : session.title).slice(0, 256);
   return {
     id: session.id,
     title,

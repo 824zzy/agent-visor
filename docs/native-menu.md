@@ -48,9 +48,8 @@ The inspector retains Swift’s layout, typography, native arrow, and shadow. Se
 
 Chat-only transcript history remains in Sessions and does not crowd the menu bar.
 
-Completed Codex history also remains in Sessions and More Sessions without keeping a physical pill. Active hook-backed Codex jobs open their exact registered `codex://threads/<id>` source.
+Completed Codex history also remains in Sessions and More Sessions without keeping a physical pill. Active headless Codex jobs require a thread-catalog record and rollout before opening their exact `codex://threads/<id>` source. Hook-only internal tasks stay hidden.
 
-Hook-backed Codex rows without a transcript remain source-only. They do not offer an empty Chat action.
 
 Visible items retain their normal labels, up to 20 characters plus an ellipsis. Untitled Codex rows use `Codex · <project>` so distinct sessions do not share one fallback label. The helper uses `+N` instead of compact or tight labels.
 

@@ -282,6 +282,32 @@ describe("live provider adapters", () => {
     expect((await new CodexProvider(environment).discover())[0]?.canEnterChat).toBe(false);
   });
 
+  it("discovers authoritative headless Codex jobs", async () => {
+    const environment = new FixtureEnvironment();
+    const database = `${home}/.codex/sqlite/state_5.sqlite`;
+    const rollout = `${home}/.codex/sessions/2026/08/22/rollout-codex-exec.jsonl`;
+    environment.stamps.set(database, { modifiedAt: now, size: 100 });
+    environment.stamps.set(rollout, { modifiedAt: now, size: 100 });
+    environment.sqliteRows.set(database, [{
+      id: "codex-exec",
+      rollout_path: rollout,
+      cwd,
+      title: "Headless job",
+      updated_at: Math.floor(now.valueOf() / 1_000),
+      archived: 0,
+      source: "exec",
+    }]);
+
+    const sessions = await new CodexProvider(environment).discover();
+
+    expect(sessions).toMatchObject([{
+      id: "codex-exec",
+      title: "Headless job",
+      canOpenOwner: true,
+      controlTarget: { kind: "url", url: "codex://threads/codex-exec" },
+    }]);
+  });
+
   it("uses Cursor transcript content without sharing another provider parser", async () => {
     const environment = new FixtureEnvironment();
     const root = `${home}/.cursor/projects`;
