@@ -121,7 +121,7 @@ describe("hook socket", () => {
       agent: "pi",
     });
 
-    await expect.poll(() => repository.current().sessions.length).toBe(1);
+    await expect.poll(() => repository.hookRecord("pi-1")?.event).toBe("Stop");
   });
 
   it("drops malformed and oversized events", async () => {

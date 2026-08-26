@@ -22,6 +22,8 @@ No generic title parser combines provider formats.
 
 `SessionRepository` normalizes provider rows and capabilities, applies hook phases, resolves host authority, and increments its revision only when visible content changes.
 
+Unmatched Pi hooks wait for provider validation. A hook without a durable transcript cannot advertise an exact source action or become a physical pill.
+
 A transient provider failure retains that provider’s last complete rows. Empty Codex and Zed database reads do not replace a previous non-empty read.
 
 Pi heartbeats update exact runtime identity without refreshing phase or activity. An idle heartbeat repairs only a Working row: recent transcript writes become Ready, while older or unreadable writes become History without attention.

@@ -196,18 +196,13 @@ describe("menu presentation", () => {
     });
   });
 
-  it("routes helper actions to the source app or Agent Visor Chat", () => {
+  it("routes helper actions without a standard-click fallback", () => {
     expect(nativeActionFor({
       version: 1,
       type: "event",
       event: "activate_pill",
       sessionId: "approval",
-    }, snapshot)).toEqual({
-      type: "native_action",
-      action: "open_owner",
-      owner: "Ghostty",
-      sessionId: "approval",
-    });
+    }, snapshot)).toBeUndefined();
     expect(nativeActionFor({
       version: 1,
       type: "event",

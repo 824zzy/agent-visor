@@ -25,18 +25,9 @@ export function nativeActionFor(event: NativeHelperEvent, snapshot: SessionSnaps
   }
   const session = snapshot.sessions.find((candidate) => candidate.id === event.sessionId);
   if (!session) return undefined;
-  if (event.intent === "chat") {
-    return session.canEnterChat
-      ? { type: "native_action", action: "open_chat", sessionId: session.id } as const
-      : undefined;
-  }
-  if (!session.canOpenOwner) return undefined;
-  return {
-    type: "native_action",
-    action: "open_owner",
-    owner: session.owner,
-    sessionId: session.id,
-  } as const;
+  return event.intent === "chat" && session.canEnterChat
+    ? { type: "native_action", action: "open_chat", sessionId: session.id } as const
+    : undefined;
 }
 
 export function menuPresentation(

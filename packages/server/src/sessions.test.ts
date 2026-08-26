@@ -123,6 +123,23 @@ describe("SessionRepository", () => {
     }]);
   });
 
+  it("does not publish Pi hooks before provider validation", () => {
+    const repository = new SessionRepository([]);
+
+    const snapshot = repository.applyHook({
+      sessionId: "pi-ephemeral",
+      cwd: "/Users/me/Codes",
+      provider: "pi",
+      event: "Stop",
+      status: "waiting_for_input",
+      receivedAt: "2026-08-26T17:32:00.587Z",
+      pid: 71333,
+      tty: "ttys087",
+    });
+
+    expect(snapshot.sessions).toEqual([]);
+  });
+
   it("applies hook phases without replacing provider-specific names", async () => {
     const provider = new FakeProvider();
     const repository = new SessionRepository([provider]);
@@ -338,8 +355,10 @@ describe("SessionRepository", () => {
     }
   });
 
-  it("maps Pi's settled Stop event to Ready", () => {
-    const repository = new SessionRepository([]);
+  it("maps Pi's settled Stop event to Ready", async () => {
+    const provider = new FakeProvider();
+    const repository = new SessionRepository([provider]);
+    await repository.refresh();
 
     const snapshot = repository.applyHook({
       ...heartbeat(),
@@ -430,15 +449,18 @@ describe("SessionRepository", () => {
     }
   });
 
-  it("reattaches a heartbeat-only Pi session as History", () => {
+  it("reattaches a heartbeat-only Pi session as History", async () => {
     const transcript = temporaryTranscript("2026-08-22T08:00:00.000Z");
     try {
-      const repository = new SessionRepository([]);
-      const snapshot = repository.applyHook(heartbeat({
+      const provider = new FakeProvider();
+      provider.requiresHook = true;
+      const repository = new SessionRepository([provider]);
+      repository.applyHook(heartbeat({
         receivedAt: "2026-08-22T10:00:00.000Z",
         isIdle: true,
         sessionFile: transcript.path,
       }));
+      const snapshot = await repository.refresh();
 
       expect(snapshot.sessions[0]).toMatchObject({
         section: "history",

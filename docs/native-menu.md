@@ -80,7 +80,7 @@ The application shortcut hides an active Sessions window. Otherwise it raises Se
 
 A helper action travels back through the authenticated local helper connection. The daemon resolves current capabilities before acting.
 
-A normal click opens only the source session and never falls back to Agent Visor Chat. Option-click opens Chat when supported. Electron serializes owner activations and rejects owners outside its application allowlist.
+A normal click opens only the exact source session. Failed exact focus does not launch a new owner window or fall back to Agent Visor Chat. Option-click opens Chat when supported. Electron serializes owner activations and rejects owners outside its application allowlist.
 
 Pill actions use the provider-owned exact target when one exists.
 
