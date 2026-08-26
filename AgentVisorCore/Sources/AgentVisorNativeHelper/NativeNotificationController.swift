@@ -5,6 +5,10 @@ import UserNotifications
 
 final class NativeNotificationController: NSObject, UNUserNotificationCenterDelegate {
     private let center = UNUserNotificationCenter.current()
+    private let soundQueue = DispatchQueue(
+        label: "AgentVisorNativeHelper.notification-sound",
+        qos: .userInitiated
+    )
     private let emit: (NativeHelperEvent) -> Void
     private var knownIdentifiers: Set<String> = []
     private let categoryID = "agent-visor.approval"
@@ -88,7 +92,7 @@ final class NativeNotificationController: NSObject, UNUserNotificationCenterDele
                 trigger: nil
             ))
             if notification.sound != .none {
-                DispatchQueue.main.async {
+                soundQueue.async {
                     NSSound(named: NSSound.Name(notification.sound.rawValue))?.play()
                 }
             }

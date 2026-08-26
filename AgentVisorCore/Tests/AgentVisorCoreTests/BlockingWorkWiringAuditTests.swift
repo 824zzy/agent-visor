@@ -45,6 +45,17 @@ final class BlockingWorkWiringAuditTests: XCTestCase {
         )
     }
 
+    func testNativeNotificationSoundsDoNotBlockMenuClicks() throws {
+        let controller = try source(
+            "AgentVisorCore/Sources/AgentVisorNativeHelper/NativeNotificationController.swift"
+        )
+        XCTAssertTrue(controller.contains("soundQueue.async"))
+        XCTAssertFalse(
+            controller.contains("DispatchQueue.main.async {\n                    NSSound"),
+            "A failed audio start can block the helper's menu thread for 15 seconds."
+        )
+    }
+
     func testProcessOutputReadersRemainSafeWhenDeadlinesCloseTheirPipes() throws {
         let executor = try source("AgentVisor/Services/Shared/ProcessExecutor.swift")
 
