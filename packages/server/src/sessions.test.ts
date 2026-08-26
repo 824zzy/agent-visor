@@ -99,6 +99,30 @@ describe("SessionRepository", () => {
     );
   });
 
+  it("does not publish non-terminal Claude hooks without an authoritative session", () => {
+    const repository = new SessionRepository([]);
+    const hook = {
+      sessionId: "claude-sdk",
+      cwd: "/Users/me/Codes",
+      provider: "claude_code" as const,
+      event: "Stop",
+      status: "waiting_for_input",
+      receivedAt: "2026-08-26T16:35:09.008Z",
+      pid: 63462,
+    };
+
+    expect(repository.applyHook(hook).sessions).toEqual([]);
+    expect(repository.applyHook({
+      ...hook,
+      sessionId: "claude-cli",
+      tty: "/dev/ttys001",
+    }).sessions).toMatchObject([{
+      id: "claude-cli",
+      source: "Claude Code",
+      owner: "Terminal",
+    }]);
+  });
+
   it("applies hook phases without replacing provider-specific names", async () => {
     const provider = new FakeProvider();
     const repository = new SessionRepository([provider]);

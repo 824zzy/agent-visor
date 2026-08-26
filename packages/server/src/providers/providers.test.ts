@@ -88,6 +88,27 @@ describe("live provider adapters", () => {
     }]);
   });
 
+  it("excludes Claude SDK sessions", async () => {
+    const environment = new FixtureEnvironment();
+    const metadata = `${home}/.claude/sessions/42.json`;
+    environment.processRows = [{
+      pid: 42,
+      parentPID: 7,
+      command: "/usr/local/bin/claude",
+      arguments: "claude --session-id claude-sdk",
+    }];
+    environment.directories.set(`${home}/.claude/sessions`, ["42.json"]);
+    environment.files.set(metadata, JSON.stringify({
+      sessionId: "claude-sdk",
+      cwd,
+      kind: "interactive",
+      entrypoint: "sdk-ts",
+      name: "internal-job",
+    }));
+
+    expect(await new ClaudeProvider(environment).discover()).toEqual([]);
+  });
+
   it("reads Pi identity and its active transcript name", async () => {
     const environment = new FixtureEnvironment();
     const root = `${home}/.pi/agent/sessions`;

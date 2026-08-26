@@ -8,7 +8,7 @@ The Swift release remains production until the complete parity checklist passes.
 
 Each provider keeps a separate adapter and naming parser:
 
-- Claude Code reads live per-process metadata and Claude JSONL title records.
+- Claude Code reads live per-process metadata and Claude JSONL title records. Non-terminal hooks require a matching provider row; terminal hooks retain immediate TTY identity.
 - Codex reads the active thread database, session index titles, rollouts, CLI processes, and recent Codex app threads.
 - Pi pairs exact transcript headers with live processes and follows Pi’s active record branch for names.
 - Resumed Pi sessions use validated hook session IDs, process IDs, TTYs, working directories, and transcript paths to recover exact terminal targets.

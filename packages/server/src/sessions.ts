@@ -613,7 +613,7 @@ function applyHooks(
       existing.updatedAt = hook.activityAt ?? hook.receivedAt;
       continue;
     }
-    if (hook.provider === "codex") continue;
+    if (hook.provider === "codex" || (hook.provider === "claude_code" && !hook.tty)) continue;
     sessions.push({
       id: hook.sessionId,
       provider: hook.provider,

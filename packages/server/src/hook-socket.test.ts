@@ -91,6 +91,8 @@ describe("hook socket", () => {
       event: "PermissionRequest",
       status: "waiting_for_approval",
       agent: "claude",
+      pid: 42,
+      tty: "/dev/ttys001",
       tool: "Bash",
       tool_use_id: "tool-disconnected",
       tool_input: { command: "npm test" },
