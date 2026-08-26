@@ -52,6 +52,15 @@ const hiddenBrowserStyle = {
   top: 0,
   visibility: "hidden",
 } as unknown as ViewStyle;
+const titleBarDragStyle = {
+  height: 32,
+  left: 0,
+  position: "absolute",
+  right: 0,
+  top: 0,
+  WebkitAppRegion: "drag",
+  zIndex: 1,
+} as unknown as ViewStyle;
 
 export function App() {
   const connection = useSessionSnapshot();
@@ -106,6 +115,7 @@ export function App() {
 
   return (
     <View style={{ backgroundColor: palette.background, flex: 1 }}>
+      <View aria-hidden importantForAccessibility="no-hide-descendants" style={titleBarDragStyle} />
       <View
         aria-hidden={browserHidden}
         accessibilityElementsHidden={browserHidden}

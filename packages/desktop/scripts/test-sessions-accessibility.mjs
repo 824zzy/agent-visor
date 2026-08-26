@@ -47,6 +47,7 @@ async function run() {
     show: false,
     width: 1_040,
     height: 760,
+    titleBarStyle: "hiddenInset",
     webPreferences: {
       additionalArguments: [`--agent-visor-daemon=${server.url}`],
       contextIsolation: true,
@@ -59,6 +60,11 @@ async function run() {
   try {
   await window.loadFile(path.resolve(directory, "../../app/dist/index.html"));
   await waitFor(window, `document.querySelectorAll('[aria-label*="Open in"]').length >= 30`);
+  const titleBarRegion = await window.webContents.executeJavaScript(`(() => {
+    const element = document.elementFromPoint(window.innerWidth / 2, 16);
+    return element ? getComputedStyle(element).getPropertyValue('-webkit-app-region') : '';
+  })()`);
+  assert(titleBarRegion === "drag", "the empty title-bar area drags the window");
 
   const frames = await window.webContents.executeJavaScript(`(() => {
     const primary = [...document.querySelectorAll('[aria-label*="Open in"]')];
