@@ -3,6 +3,8 @@ import path from "node:path";
 import {
   appSettingsPatchSchema,
   appSettingsSchema,
+  chatVisibilitySchema,
+  defaultChatVisibility,
   type AppSettings,
   type AppSettingsPatch,
 } from "@agent-visor/protocol";
@@ -23,6 +25,7 @@ const defaults: AppSettings = {
   editorPreference: "auto",
   observedWindowHours: 42,
   launchAtLogin: false,
+  chatVisibility: { ...defaultChatVisibility },
 };
 
 export class SettingsRepository {
@@ -47,7 +50,7 @@ export class SettingsRepository {
       const storedSettings = record(stored.settings);
       const needsDefaults = storedSettings != null
         && Object.keys(defaults).some((key) => !Object.hasOwn(storedSettings, key));
-      const legacy = await restoreDisplayLegacy(record(stored.legacy) ?? {}, options.root);
+      const legacy = await restorePreservedLegacy(record(stored.legacy) ?? {}, options.root);
       const repository = new SettingsRepository(
         file,
         appSettingsSchema.parse({ ...migrate(legacy), ...storedSettings }),
@@ -106,15 +109,18 @@ export class SettingsRepository {
   }
 }
 
-async function restoreDisplayLegacy(
+async function restorePreservedLegacy(
   legacy: Record<string, unknown>,
   scratchRoot: string,
 ): Promise<Record<string, unknown>> {
   const hasDisplay = Object.hasOwn(legacy, "screenSelectionMode")
     && (legacy.screenSelectionMode !== "specificScreen"
       || Object.hasOwn(legacy, "selectedScreenIdentifier"));
+  const hasChatVisibility = Object.hasOwn(legacy, "chatVisibility");
   if (typeof legacy.__rawPlistBase64 !== "string"
-      || (hasDisplay && Object.hasOwn(legacy, "fullScreenPolicy"))) return legacy;
+      || (hasDisplay && Object.hasOwn(legacy, "fullScreenPolicy") && hasChatVisibility)) {
+    return legacy;
+  }
   const plist = path.join(scratchRoot, "preserved-legacy-settings.plist");
   const restored = { ...legacy };
   try {
@@ -133,6 +139,14 @@ async function restoreDisplayLegacy(
     }
     restored.screenSelectionMode ??= "automatic";
     restored.fullScreenPolicy ??= "onDemand";
+    if (!hasChatVisibility) {
+      const extracted = await runProcess(
+        "/usr/bin/plutil",
+        ["-extract", "chatVisibility", "raw", "-o", "-", plist],
+        { deadlineMs: 1_000, maxOutputBytes: 1_048_576 },
+      );
+      restored.chatVisibility = extracted.status === "success" ? extracted.stdout.trim() : null;
+    }
   } finally {
     await rm(plist, { force: true });
   }
@@ -155,7 +169,7 @@ export async function readLegacyDefaults(
     "appearance", "chatFontScale", "pillsEnabled", "codexUsageGlanceEnabled",
     "claudeUsageGlanceEnabled", "notificationSound", "hotkeyTrigger", "customHotkeyCombo",
     "sessionShortcutModifierFamily", "editorPreference", "observedWindowHours",
-    "screenSelectionMode", "selectedScreenIdentifier", "fullScreenPolicy",
+    "screenSelectionMode", "selectedScreenIdentifier", "fullScreenPolicy", "chatVisibility",
   ];
   for (const key of keys) {
     const extracted = await runProcess(
@@ -204,6 +218,7 @@ function migrate(legacy: Record<string, unknown>): AppSettings {
       168,
     )),
     launchAtLogin: defaults.launchAtLogin,
+    chatVisibility: migratedChatVisibility(legacy.chatVisibility),
   });
 }
 
@@ -228,6 +243,17 @@ function migratedPillScreen(
 
 function migratedFullScreenPolicy(value: unknown): AppSettings["fullScreenPolicy"] {
   return oneOf(value, ["onDemand", "alwaysHide", "alwaysShow"]) ?? "onDemand";
+}
+
+function migratedChatVisibility(value: unknown): AppSettings["chatVisibility"] {
+  try {
+    const decoded = typeof value === "string"
+      ? JSON.parse(Buffer.from(value, "base64").toString("utf8"))
+      : value;
+    return chatVisibilitySchema.parse(record(decoded) ?? {});
+  } catch {
+    return { ...defaultChatVisibility };
+  }
 }
 
 function rawValue(value: string): string | number | boolean {

@@ -73,6 +73,16 @@ async function run() {
         ],
         hasMoreBefore: true,
         nextBefore: 100,
+        metadata: {
+          model: "GPT-5.6 Sol",
+          modelId: "gpt-5.6-sol",
+          modelProvider: "openai-codex",
+          reasoningEffort: "high",
+          sandbox: "workspace-write",
+          approvalPolicy: "on-request",
+          contextTokens: 12_000,
+          contextWindow: 114_688,
+        },
         capabilities: capabilities(),
         pendingAction: mode === "approval" ? {
           type: "approval",
@@ -134,6 +144,14 @@ async function run() {
     await waitUntil(() => ownerActions === 1);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Chat Details"]')?.click()`);
     await waitFor(window, `document.body.textContent.includes('Path: /tmp/agent-visor')`);
+    assert(
+      await window.webContents.executeJavaScript(`document.body.textContent.includes('Model: GPT-5.6 Sol')
+        && document.body.textContent.includes('Model provider: OpenAI Codex')
+        && document.body.textContent.includes('Sandbox: Workspace Write')
+        && document.body.textContent.includes('Approval: On Request')
+        && document.body.textContent.includes('Context: 12,000 / 114,688 tokens (10%)')`),
+      "Chat Details shows authoritative model and context metadata",
+    );
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Chat Details"]')?.click()`);
 
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show 2 work items"]')?.click()`);
@@ -172,7 +190,7 @@ async function run() {
       "Chat scaling does not add horizontal scrolling",
     );
 
-    console.log("Chat accessibility PASS: grouped turns, tools, pagination, images, actions, approvals, questions, and scaling.");
+    console.log("Chat accessibility PASS: metadata, grouped turns, tools, pagination, images, actions, approvals, questions, and scaling.");
   } finally {
     window.destroy();
     await server.close();

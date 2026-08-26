@@ -4,6 +4,11 @@ import type { DiscoveredProviderSession, ProviderAdapter } from "../sessions.js"
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
 import { isRecord, iso, ownerForProcess, terminalTargetForProcess } from "./shared.js";
 
+type ModelCatalogCache = {
+  signature?: string;
+  value?: DiscoveredProviderSession["modelCatalog"];
+};
+
 type CodexRow = {
   id: string;
   rolloutPath: string;
@@ -26,6 +31,7 @@ limit 200`;
 export class CodexProvider implements ProviderAdapter {
   readonly id = "codex" as const;
   private lastRows: CodexRow[] = [];
+  private readonly modelCatalogCache: ModelCatalogCache = {};
 
   constructor(private readonly environment: ProviderEnvironment) {}
 
@@ -36,6 +42,7 @@ export class CodexProvider implements ProviderAdapter {
     if (queried.length > 0) this.lastRows = queried;
     const candidates = queried.length > 0 ? queried : this.lastRows;
     const indexTitles = await codexIndexTitles(this.environment);
+    const modelCatalog = await codexModelCatalog(this.environment, this.modelCatalogCache);
     const processes = await this.environment.processes();
     const cliProcesses = processes.filter((process) =>
       process.tty
@@ -55,6 +62,7 @@ export class CodexProvider implements ProviderAdapter {
         thread,
         indexTitles,
         ownerForProcess(process.pid, processes),
+        modelCatalog,
         terminalTargetForProcess(process, thread.cwd, processes),
       ));
     }
@@ -70,7 +78,7 @@ export class CodexProvider implements ProviderAdapter {
         ? Math.abs(this.environment.now().valueOf() - rollout.modifiedAt.valueOf()) <= 120_000
         : thread.updatedAt * 1_000 >= cutoff;
       if (!active) continue;
-      results.push(await this.session(thread, indexTitles, "Codex"));
+      results.push(await this.session(thread, indexTitles, "Codex", modelCatalog));
     }
 
     return results;
@@ -80,6 +88,7 @@ export class CodexProvider implements ProviderAdapter {
     thread: CodexRow,
     indexTitles: Map<string, string>,
     owner: string,
+    modelCatalog?: DiscoveredProviderSession["modelCatalog"],
     terminalTarget?: NativeHelperTerminalTarget,
   ): Promise<DiscoveredProviderSession> {
     const storedTitle = indexTitles.get(thread.id) || thread.title;
@@ -98,6 +107,7 @@ export class CodexProvider implements ProviderAdapter {
         || this.environment.now().valueOf() - thread.updatedAt * 1_000 <= 120_000,
       chatPath: thread.rolloutPath,
       messageTransport: "codex_app_server",
+      ...(modelCatalog ? { modelCatalog } : {}),
       controlTarget: terminalTarget
         ? { kind: "terminal", target: terminalTarget }
         : { kind: "url", url: `codex://threads/${thread.id}` },
@@ -141,6 +151,41 @@ function rows(values: unknown[]): CodexRow[] {
   });
 }
 
+async function codexModelCatalog(
+  environment: ProviderEnvironment,
+  cache: ModelCatalogCache,
+): Promise<DiscoveredProviderSession["modelCatalog"]> {
+  const file = path.join(environment.home, ".codex", "models_cache.json");
+  const stamp = await environment.stamp(file);
+  if (!stamp) {
+    cache.signature = undefined;
+    return cache.value = undefined;
+  }
+  const signature = `${stamp.modifiedAt.valueOf()}:${stamp.size}`;
+  if (cache.signature === signature) return cache.value;
+  cache.signature = signature;
+  const raw = await environment.read(file, 5 * 1_048_576);
+  if (!raw) return cache.value = undefined;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isRecord(value) || !Array.isArray(value.models)) return cache.value = undefined;
+    const catalog: NonNullable<DiscoveredProviderSession["modelCatalog"]> = {};
+    for (const item of value.models.slice(0, 100)) {
+      if (!isRecord(item)) continue;
+      const id = boundedCatalogString(item.slug);
+      const displayName = boundedCatalogString(item.display_name);
+      const contextWindow = positiveInteger(item.context_window);
+      if (id && displayName) catalog[id] = {
+        displayName,
+        ...(contextWindow ? { contextWindow } : {}),
+      };
+    }
+    return cache.value = Object.keys(catalog).length ? catalog : undefined;
+  } catch {
+    return cache.value = undefined;
+  }
+}
+
 async function codexIndexTitles(environment: ProviderEnvironment): Promise<Map<string, string>> {
   const content = await environment.read(
     path.join(environment.home, ".codex", "session_index.jsonl"),
@@ -182,4 +227,13 @@ function string(value: unknown): string {
 
 function number(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : undefined;
+}
+
+function boundedCatalogString(value: unknown): string {
+  const result = string(value);
+  return result.length <= 256 ? result : "";
 }

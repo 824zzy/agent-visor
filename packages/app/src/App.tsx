@@ -11,7 +11,11 @@ import {
   View,
   type ViewStyle,
 } from "react-native";
-import type { AppSettings, SessionSummary } from "@agent-visor/protocol";
+import {
+  defaultChatVisibility,
+  type AppSettings,
+  type SessionSummary,
+} from "@agent-visor/protocol";
 import {
   browserCommand,
   changeContentScale,
@@ -127,6 +131,7 @@ export function App() {
           onOpenOwner={() => openOwner(chatSession)}
           palette={palette}
           session={chatSession}
+          visibility={nativeServices.state?.settings.chatVisibility ?? defaultChatVisibility}
         />
       ) : null}
       {settingsOpen ? (

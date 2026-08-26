@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow } from "electron";
+import { defaultChatVisibility } from "../../protocol/dist/index.js";
 import { startServer } from "../../server/dist/server.js";
 import { fixtureSnapshot } from "../../server/dist/fixture.js";
 
@@ -31,6 +32,7 @@ async function run() {
       notificationSound: "Pop", hotkeyTrigger: "shift", customHotkeyCombo: null,
       sessionShortcutModifierFamily: "optionCommand", editorPreference: "auto",
       observedWindowHours: 42, launchAtLogin: false,
+      chatVisibility: { ...defaultChatVisibility },
     },
     permissions: { accessibility: "needed", notifications: "not_determined" },
     agents: [
@@ -95,7 +97,7 @@ async function run() {
     const labels = await window.webContents.executeJavaScript(`[
       'Back to Sessions', 'Launch at login, Off', 'Enable for Accessibility',
       'Enable for Notifications', 'Check now for Updates', 'General', 'Appearance',
-      'Pills', 'Notifications', 'Agents'
+      'Chat', 'Pills', 'Notifications', 'Agents'
     ].every((label) => Boolean(document.querySelector('[aria-label="' + label + '"]'))
       || document.body.textContent.includes(label))`);
     assert(labels, "settings expose native categories, permissions, and updates");
@@ -107,6 +109,18 @@ async function run() {
       message.type === "update_settings" && message.patch.appearance === "light"));
     await waitFor(window, `[...document.querySelectorAll('*')].some((item) =>
       getComputedStyle(item).backgroundColor === 'rgb(239, 241, 245)')`);
+
+    await clickButton(window, "Chat");
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Thinking, On"]'))
+      && document.body.textContent.includes('MCP tools')
+      && document.body.textContent.includes('Compact boundaries')`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Thinking, On"]')?.click()`);
+    await waitUntil(() => actions.some((message) => message.type === "update_settings"
+      && message.patch.chatVisibility?.showThinking === false));
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Thinking, Off"]'))`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Reset for Visibility defaults"]')?.click()`);
+    await waitUntil(() => actions.some((message) => message.type === "update_settings"
+      && message.patch.chatVisibility?.showThinking === true));
 
     await clickButton(window, "Pills");
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Show session pills, On"]'))`);
@@ -147,7 +161,7 @@ async function run() {
     window.webContents.send("app:navigate", { page: "settings" });
     await waitFor(window, `document.body.textContent.includes('Launch at login')`);
 
-    console.log("Native services accessibility PASS: settings, agent connections, navigation, permissions, updates, theme, and Back.");
+    console.log("Native services accessibility PASS: Chat visibility, settings, agent connections, navigation, permissions, updates, theme, and Back.");
   } finally {
     window.destroy();
     await server.close();

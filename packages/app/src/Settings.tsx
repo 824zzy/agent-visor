@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import type { AppSettingsPatch, NativeServicesState } from "@agent-visor/protocol";
+import {
+  defaultChatVisibility,
+  type AppSettings,
+  type AppSettingsPatch,
+  type ChatVisibility,
+  type NativeServicesState,
+} from "@agent-visor/protocol";
 import { browserCommand } from "./browser-shortcuts";
 import type { Palette } from "./theme";
 
@@ -37,15 +43,71 @@ const fullScreenPolicyLabels = {
   alwaysHide: "Always hide",
   alwaysShow: "Always show",
 };
-const categories = ["general", "appearance", "pills", "notifications", "agents"] as const;
+const categories = ["general", "appearance", "chat", "pills", "notifications", "agents"] as const;
 type SettingsCategory = typeof categories[number];
 const categoryLabels: Record<SettingsCategory, string> = {
   general: "General",
   appearance: "Appearance",
+  chat: "Chat",
   pills: "Pills",
   notifications: "Notifications",
   agents: "Agents",
 };
+
+const chatVisibilitySections: Array<{
+  title: string;
+  subtitle: string;
+  items: Array<[string, keyof ChatVisibility]>;
+}> = [
+  {
+    title: "Layout",
+    subtitle: "Group each prompt, its work, and its final answer",
+    items: [
+      ["Group Claude Code turns", "collapseClaudeTurns"],
+      ["Group Codex turns", "collapseCodexTurns"],
+      ["Group Pi turns", "collapsePiTurns"],
+    ],
+  },
+  {
+    title: "Messages",
+    subtitle: "Choose which conversation content remains visible",
+    items: [
+      ["User messages", "showUserMessage"],
+      ["Assistant messages", "showAssistantMessage"],
+      ["Thinking", "showThinking"],
+    ],
+  },
+  {
+    title: "File tools",
+    subtitle: "File reads, searches, and changes",
+    items: [
+      ["Read", "showRead"], ["Edit", "showEdit"], ["Write", "showWrite"],
+      ["Grep", "showGrep"], ["Glob", "showGlob"],
+    ],
+  },
+  {
+    title: "Shell, web, and other tools",
+    subtitle: "Commands, web access, subagents, questions, and extensions",
+    items: [
+      ["Bash", "showBash"], ["Bash output", "showBashOutput"],
+      ["Kill shell", "showKillShell"], ["Web fetch", "showWebFetch"],
+      ["Web search", "showWebSearch"], ["Tasks and subagents", "showTask"],
+      ["Todo write", "showTodoWrite"], ["Ask user question", "showAskUserQuestion"],
+      ["Plan mode", "showPlanMode"], ["MCP tools", "showMCP"],
+      ["Other tools", "showOtherTools"],
+    ],
+  },
+  {
+    title: "Session metadata",
+    subtitle: "Lifecycle and context markers in the timeline",
+    items: [
+      ["Turn duration", "showTurnDuration"], ["Recap rows", "showRecap"],
+      ["Compact boundaries", "showCompactBoundary"],
+      ["Local command output", "showLocalCommandOutput"],
+      ["Interrupted", "showInterrupted"],
+    ],
+  },
+];
 
 export function Settings({
   state,
@@ -176,6 +238,10 @@ export function Settings({
           />
         </Section> : null}
 
+        {category === "chat" ? (
+          <ChatSettings settings={settings} styles={styles} update={update} />
+        ) : null}
+
         {category === "pills" ? <Section title="Pills" subtitle="Menu-bar shortcuts for active and recent sessions" styles={styles}>
           <ToggleRow label="Show session pills" value={settings.pillsEnabled} onPress={() => update({ pillsEnabled: !settings.pillsEnabled })} styles={styles} />
           <ChoiceRow
@@ -260,6 +326,46 @@ export function Settings({
       </View>
     </View>
   );
+}
+
+function ChatSettings({
+  settings,
+  styles,
+  update,
+}: {
+  settings: AppSettings;
+  styles: ReturnType<typeof createStyles>;
+  update(patch: AppSettingsPatch): void;
+}) {
+  return <View>
+    {chatVisibilitySections.map((section, index) => (
+      <Section key={section.title} title={section.title} subtitle={section.subtitle} styles={styles}>
+        {index === 0 ? (
+          <ActionRow
+            action="Reset"
+            detail="Show all content and group supported provider turns"
+            label="Visibility defaults"
+            onPress={() => update({ chatVisibility: { ...defaultChatVisibility } })}
+            styles={styles}
+          />
+        ) : null}
+        {section.items.map(([label, key]) => (
+          <ToggleRow
+            key={key}
+            label={label}
+            value={settings.chatVisibility[key]}
+            onPress={() => update({
+              chatVisibility: {
+                ...settings.chatVisibility,
+                [key]: !settings.chatVisibility[key],
+              },
+            })}
+            styles={styles}
+          />
+        ))}
+      </Section>
+    ))}
+  </View>;
 }
 
 function Section({ title, subtitle, children, styles }: { title: string; subtitle: string; children: React.ReactNode; styles: ReturnType<typeof createStyles> }) {

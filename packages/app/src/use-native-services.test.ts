@@ -1,3 +1,4 @@
+import { defaultChatVisibility } from "@agent-visor/protocol";
 import { describe, expect, it } from "vitest";
 import {
   agentConnectionRequest,
@@ -30,6 +31,7 @@ describe("native services messages", () => {
         editorPreference: "auto",
         observedWindowHours: 42,
         launchAtLogin: false,
+        chatVisibility: defaultChatVisibility,
       },
       permissions: { accessibility: "needed", notifications: "not_determined" },
       agents: [{

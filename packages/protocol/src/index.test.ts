@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   PROTOCOL_VERSION,
   chatPageSchema,
+  defaultChatVisibility,
   clientMessageSchema,
   nativeServicesStateSchema,
   serverMessageSchema,
@@ -62,6 +63,15 @@ describe("session snapshot protocol", () => {
       ],
       hasMoreBefore: true,
       nextBefore: 2048,
+      metadata: {
+        model: "GPT-5.6-Sol",
+        modelId: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        sandbox: "workspace-write",
+        approvalPolicy: "on-request",
+        contextTokens: 12_000,
+        contextWindow: 258_400,
+      },
       capabilities: {
         canSendText: true,
         canSendImages: false,
@@ -93,6 +103,7 @@ describe("session snapshot protocol", () => {
         editorPreference: "auto",
         observedWindowHours: 42,
         launchAtLogin: false,
+        chatVisibility: defaultChatVisibility,
       },
       permissions: { accessibility: "granted", notifications: "authorized" },
       agents: [
@@ -110,7 +121,10 @@ describe("session snapshot protocol", () => {
       type: "focus_session", id: "focus-1", sessionId: "pi-123",
     }).success).toBe(true);
     expect(clientMessageSchema.safeParse({
-      type: "update_settings", id: "settings-1", patch: { appearance: "system" },
+      type: "update_settings", id: "settings-1", patch: {
+        appearance: "system",
+        chatVisibility: { ...defaultChatVisibility, showThinking: false },
+      },
     }).success).toBe(true);
     expect(clientMessageSchema.safeParse({
       type: "native_service_action", id: "native-1", action: "request_accessibility",

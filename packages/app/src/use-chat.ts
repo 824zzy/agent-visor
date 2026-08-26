@@ -5,7 +5,7 @@ import {
   type ChatPage,
   type ClientMessage,
 } from "@agent-visor/protocol";
-import { mergeChatLatest, mergeChatPages } from "./chat-presentation";
+import { mergeChatPage } from "./chat-presentation";
 import { daemonUrl } from "./use-session-snapshot";
 
 type ChatState = {
@@ -38,18 +38,7 @@ export function useChat(sessionId: string) {
         const mode = nextPageMode.current;
         setState((current) => ({
           status: "loaded",
-          page: {
-            ...message,
-            items: current.page
-              ? mode === "earlier"
-                ? mergeChatPages(current.page.items, message.items)
-                : mergeChatLatest(current.page.items, message.items)
-              : message.items,
-            hasMoreBefore: mode === "earlier"
-              ? message.hasMoreBefore : (current.page?.hasMoreBefore ?? message.hasMoreBefore),
-            nextBefore: mode === "earlier"
-              ? message.nextBefore : (current.page?.nextBefore ?? message.nextBefore),
-          },
+          page: mergeChatPage(current.page, message, mode),
         }));
         nextPageMode.current = "latest";
       }

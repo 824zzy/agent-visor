@@ -65,7 +65,8 @@ export async function startServer(options: {
       nativeSubscribers.delete(socket);
     });
 
-    socket.on("message", async (data) => {
+    socket.on("message", (data) => {
+      void (async () => {
       let value: unknown;
       try {
         value = JSON.parse(data.toString());
@@ -110,11 +111,16 @@ export async function startServer(options: {
         });
       } else if (parsed.data.type === "open_chat") {
         if (source.chatPage) {
-          send(socket, await source.chatPage(
-            parsed.data.sessionId,
-            parsed.data.before,
-            parsed.data.limit,
-          ));
+          try {
+            send(socket, await source.chatPage(
+              parsed.data.sessionId,
+              parsed.data.before,
+              parsed.data.limit,
+            ));
+          } catch (error) {
+            reportRequestFailure(error);
+            send(socket, failedChatPage(parsed.data.sessionId));
+          }
         }
       } else if (parsed.data.type === "send_chat" || parsed.data.type === "respond_chat") {
         const error = source.chatAction
@@ -127,6 +133,7 @@ export async function startServer(options: {
           ...(error ? { error } : {}),
         });
       }
+      })().catch(reportRequestFailure);
     });
   });
 
@@ -156,6 +163,34 @@ function fixedSource(snapshot: SessionSnapshot): SessionSnapshotSource {
     current: () => structuredClone(snapshot),
     subscribe: () => () => undefined,
   };
+}
+
+function failedChatPage(sessionId: string): ServerMessage {
+  const readOnlyReason = "Unable to load this conversation record.";
+  return {
+    type: "chat_page",
+    sessionId,
+    items: [{
+      id: "chat-load-error",
+      kind: "system",
+      text: readOnlyReason,
+      tone: "error",
+      category: "other",
+    }],
+    hasMoreBefore: false,
+    capabilities: {
+      canSendText: false,
+      canSendImages: false,
+      canApprove: false,
+      canAnswer: false,
+      readOnlyReason,
+    },
+    pendingAction: null,
+  };
+}
+
+function reportRequestFailure(error: unknown): void {
+  console.error(`Agent Visor request failed: ${String(error)}`);
 }
 
 function send(socket: { send(data: string): void }, message: ServerMessage): void {

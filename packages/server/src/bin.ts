@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { NativeHelperUsageGlance } from "@agent-visor/protocol";
+import { runBackground } from "./background-task.js";
 import { stopCodexTurns } from "./codex-turn.js";
 import { startHookSocket, type RunningHookSocket } from "./hook-socket.js";
 import { menuPresentation, nativeActionFor } from "./menu.js";
@@ -88,18 +89,18 @@ if (nativeHelperExecutable) {
           if (action) process.send?.(action);
           return;
         }
-        void handleNotificationAction({
+        runBackground("notification action", () => handleNotificationAction({
           type: "notification_action",
           action: event.action === "approve" ? "allow" : "deny",
           sessionId: event.sessionId,
           toolUseId: event.toolUseId,
         }, repository).then((error) => {
           if (error) console.warn(`Agent Visor notification action failed: ${error}`);
-        });
+        }));
         return;
       }
       if (event.event === "refresh_usage") {
-        void refreshUsage();
+        runBackground("usage refresh", refreshUsage);
         return;
       }
       if (event.event === "activate_pill") {
@@ -108,9 +109,9 @@ if (nativeHelperExecutable) {
           process.send?.(action);
           return;
         }
-        void repository.focusSession(event.sessionId).then((error) => {
+        runBackground("session focus", () => repository.focusSession(event.sessionId).then((error) => {
           if (error && action) process.send?.(action);
-        });
+        }));
         return;
       }
       const action = nativeActionFor(event, repository.current());
@@ -154,8 +155,8 @@ if (nativeHelperExecutable) {
       usageGlances = [codex];
       presentNativeMenu();
     };
-    void refreshUsage();
-    usageTimer = setInterval(() => void refreshUsage(), 300_000);
+    runBackground("usage refresh", refreshUsage);
+    usageTimer = setInterval(() => runBackground("usage refresh", refreshUsage), 300_000);
     usageTimer.unref();
   } catch (error) {
     console.warn(`Agent Visor native helper unavailable: ${String(error)}`);
@@ -186,10 +187,14 @@ nativeServices = new NativeServicesRepository({
   emitDesktop: (effect) => process.send?.({ type: "native_effect", ...effect }),
 });
 await nativeServices.start();
-permissionTimer = setInterval(() => void nativeServices?.refresh(), 15_000);
+permissionTimer = setInterval(() => runBackground(
+  "native services refresh", () => nativeServices?.refresh() ?? Promise.resolve(),
+), 15_000);
 permissionTimer.unref();
-void nativeServices.checkForUpdates();
-updateTimer = setInterval(() => void nativeServices?.checkForUpdates(), 6 * 60 * 60_000);
+runBackground("update check", () => nativeServices?.checkForUpdates() ?? Promise.resolve());
+updateTimer = setInterval(() => runBackground(
+  "update check", () => nativeServices?.checkForUpdates() ?? Promise.resolve(),
+), 6 * 60 * 60_000);
 updateTimer.unref();
 unsubscribeNotifications = repository.subscribe((snapshot) => {
   nativeServices?.reconcileSessions(snapshot);
@@ -208,8 +213,8 @@ const running = await startServer({
 process.send?.({ type: "ready", url: running.url });
 console.log(`Agent Visor daemon listening at ${new URL(running.url).origin}`);
 
-void refresh();
-const refreshTimer = setInterval(() => void refresh(), 3_000);
+runBackground("session refresh", refresh);
+const refreshTimer = setInterval(() => runBackground("session refresh", refresh), 3_000);
 refreshTimer.unref();
 
 async function refresh(): Promise<void> {
@@ -254,5 +259,5 @@ async function macBootSessionUUID(): Promise<string | undefined> {
     : undefined;
 }
 
-process.once("SIGINT", () => void stop());
-process.once("SIGTERM", () => void stop());
+process.once("SIGINT", () => runBackground("shutdown", stop));
+process.once("SIGTERM", () => runBackground("shutdown", stop));

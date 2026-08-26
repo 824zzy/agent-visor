@@ -38,6 +38,8 @@ Every short-lived child process has a deadline, an output limit, and process-gro
 
 The live refresh interval is three seconds. Overlapping refreshes are skipped.
 
+Scheduled work reports rejected operations without terminating the daemon or its signed helper.
+
 ## Hook socket
 
 The daemon can own `/tmp/agent-visor.sock`, which preserves the released hook path.

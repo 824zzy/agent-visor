@@ -15,6 +15,17 @@ Each provider keeps its own transcript path and parser.
 
 Historical Codex rows older than the active window remain source-only. Historical Pi records with valid conversation content remain readable.
 
+## Authoritative metadata
+
+The newest Chat page reads latest-turn metadata from the same bounded provider transcript. Earlier pages cannot replace newer metadata.
+
+- Claude Code supplies model, reasoning effort, permission mode, and current input-context tokens.
+- Codex supplies model, model provider, reasoning effort, sandbox policy, approval policy, context tokens, and context window.
+- Pi supplies model, model provider, thinking level, and current input-context tokens.
+- Cursor exposes no metadata fields because its transcript does not provide them.
+
+Codex `models_cache.json` and Pi `models-store.json` supply read-only display names and context windows. Missing, synthetic, malformed, or contradictory values are omitted instead of inferred.
+
 ## Pagination
 
 The daemon reads transcript suffixes through the bounded summary-work limit.
@@ -23,6 +34,12 @@ A page targets 500 items and starts at a user prompt when one exists. Pages cont
 
 The renderer groups reasoning and tool work under each prompt. Final assistant prose remains visible outside the disclosure.
 
+## Visibility
+
+Chat settings filter only rendered rows. Canonical transcript items remain unchanged.
+
+All categories are visible by default. Users can independently control provider turn grouping, user and assistant messages, thinking, known tool families, MCP tools, unknown tools, interruptions, durations, recaps, compact boundaries, and local command output.
+
 ## Actions
 
 Claude Code permission hooks keep their Unix connection open while the user decides.
@@ -30,6 +47,8 @@ Claude Code permission hooks keep their Unix connection open while the user deci
 The authenticated WebSocket client can allow, always allow, deny, or answer a question. The daemon returns the existing snake-case hook response.
 
 Question answers use the question text as the dictionary key, matching Claude Code’s hook contract.
+
+A failed client request is logged and isolated. A failed Chat read returns a bounded error page without stopping the daemon or native helper.
 
 Verified active Claude Code and Pi terminal sessions accept text through the signed helper’s exact TTY route.
 

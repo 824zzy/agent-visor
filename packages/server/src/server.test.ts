@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { serverMessageSchema } from "@agent-visor/protocol";
+import { defaultChatVisibility, serverMessageSchema } from "@agent-visor/protocol";
 import { fixtureSnapshot } from "./fixture.js";
 import { startServer, type RunningServer } from "./server.js";
 import { SessionRepository, type ProviderAdapter } from "./sessions.js";
@@ -158,6 +158,44 @@ describe("Agent Visor daemon", () => {
     socket.close();
   });
 
+  it("stays available when a client request fails", async () => {
+    const failed = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const source = {
+      current: () => fixtureSnapshot,
+      subscribe: () => () => undefined,
+      chatPage: async () => { throw new Error("conversation file changed"); },
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+
+    socket.send(JSON.stringify({ type: "open_chat", sessionId: "pi-ready" }));
+    await expect.poll(() => failed.mock.calls.length).toBe(1);
+    await expect.poll(() => messages.some((message) => (
+      typeof message === "object" && message !== null && "type" in message
+      && message.type === "chat_page"
+    ))).toBe(true);
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: "chat_page",
+      sessionId: "pi-ready",
+      items: [expect.objectContaining({ kind: "system", tone: "error" })],
+    }));
+    socket.send(JSON.stringify({ type: "health" }));
+    await expect.poll(() => messages.some((message) => (
+      typeof message === "object" && message !== null && "type" in message
+      && message.type === "health"
+    ))).toBe(true);
+
+    expect(failed).toHaveBeenCalledWith("Agent Visor request failed: Error: conversation file changed");
+    failed.mockRestore();
+    socket.close();
+  });
+
   it("delivers native settings and action results", async () => {
     const state = {
       type: "native_services_state" as const,
@@ -169,6 +207,7 @@ describe("Agent Visor daemon", () => {
         notificationSound: "Pop" as const, hotkeyTrigger: "shift" as const,
         customHotkeyCombo: null, sessionShortcutModifierFamily: "optionCommand" as const,
         editorPreference: "auto" as const, observedWindowHours: 42, launchAtLogin: false,
+        chatVisibility: defaultChatVisibility,
       },
       permissions: { accessibility: "granted" as const, notifications: "authorized" as const },
       agents: [{

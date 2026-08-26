@@ -60,6 +60,11 @@ export const chatItemSchema = z.discriminatedUnion("kind", [
     id: z.string().min(1).max(512),
     kind: z.literal("tool"),
     name: z.string().min(1).max(512),
+    family: z.enum([
+      "bash", "read", "write", "edit", "grep", "glob", "web_fetch", "web_search",
+      "todo_write", "task", "ask_user_question", "bash_output", "kill_shell",
+      "plan_mode", "mcp", "other",
+    ]).optional(),
     input: z.record(z.string(), z.unknown()),
     status: z.enum(["running", "waiting", "success", "error", "interrupted"]),
     result: z.string().max(20_000_000).optional(),
@@ -70,6 +75,10 @@ export const chatItemSchema = z.discriminatedUnion("kind", [
     kind: z.literal("system"),
     text: z.string().min(1).max(20_000_000),
     tone: z.enum(["neutral", "error", "compact"]),
+    category: z.enum([
+      "interrupted", "turn_duration", "recap", "compact_boundary",
+      "local_command_output", "other",
+    ]).optional(),
     timestamp: chatTimestamp,
   }).strict(),
 ]);
@@ -99,6 +108,43 @@ export const pillScreenSchema = z.discriminatedUnion("mode", [
   }).strict(),
 ]);
 
+export const defaultChatVisibility = {
+  showUserMessage: true,
+  showAssistantMessage: true,
+  showThinking: true,
+  showInterrupted: true,
+  showTurnDuration: true,
+  showRecap: true,
+  showCompactBoundary: true,
+  showLocalCommandOutput: true,
+  showBash: true,
+  showRead: true,
+  showWrite: true,
+  showEdit: true,
+  showGrep: true,
+  showGlob: true,
+  showWebFetch: true,
+  showWebSearch: true,
+  showTodoWrite: true,
+  showTask: true,
+  showAskUserQuestion: true,
+  showBashOutput: true,
+  showKillShell: true,
+  showPlanMode: true,
+  showMCP: true,
+  showOtherTools: true,
+  collapseClaudeTurns: true,
+  collapseCodexTurns: true,
+  collapsePiTurns: true,
+} as const;
+
+export const chatVisibilitySchema = z.object(
+  Object.fromEntries(Object.entries(defaultChatVisibility).map(([key, value]) => [
+    key,
+    z.boolean().default(value),
+  ])) as { [K in keyof typeof defaultChatVisibility]: z.ZodDefault<z.ZodBoolean> },
+).strict();
+
 export const appSettingsSchema = z.object({
   appearance: z.enum(["system", "dark", "light"]),
   contentScale: z.number().min(0.8).max(2.5),
@@ -121,6 +167,7 @@ export const appSettingsSchema = z.object({
   ]),
   observedWindowHours: z.number().int().min(1).max(168),
   launchAtLogin: z.boolean(),
+  chatVisibility: chatVisibilitySchema.default(defaultChatVisibility),
 }).strict();
 
 export const appSettingsPatchSchema = appSettingsSchema.partial().strict();
@@ -187,12 +234,25 @@ export const chatPendingActionSchema = z.discriminatedUnion("type", [
   }).strict(),
 ]);
 
+export const chatMetadataSchema = z.object({
+  model: z.string().min(1).max(256).optional(),
+  modelId: z.string().min(1).max(256).optional(),
+  modelProvider: z.string().min(1).max(256).optional(),
+  reasoningEffort: z.string().min(1).max(256).optional(),
+  permissionMode: z.string().min(1).max(256).optional(),
+  sandbox: z.string().min(1).max(256).optional(),
+  approvalPolicy: z.string().min(1).max(256).optional(),
+  contextTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  contextWindow: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+}).strict();
+
 export const chatPageSchema = z.object({
   type: z.literal("chat_page"),
   sessionId: z.string().min(1).max(512),
   items: z.array(chatItemSchema).max(1_000),
   hasMoreBefore: z.boolean(),
   nextBefore: z.number().int().nonnegative().optional(),
+  metadata: chatMetadataSchema.optional(),
   capabilities: chatCapabilitiesSchema,
   pendingAction: chatPendingActionSchema.nullable(),
 }).strict();
@@ -545,8 +605,10 @@ export type AppSettingsPatch = z.infer<typeof appSettingsPatchSchema>;
 export type ChatCapabilities = z.infer<typeof chatCapabilitiesSchema>;
 export type ChatImage = z.infer<typeof chatImageSchema>;
 export type ChatItem = z.infer<typeof chatItemSchema>;
+export type ChatMetadata = z.infer<typeof chatMetadataSchema>;
 export type ChatPage = z.infer<typeof chatPageSchema>;
 export type ChatPendingAction = z.infer<typeof chatPendingActionSchema>;
+export type ChatVisibility = z.infer<typeof chatVisibilitySchema>;
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 export type HookEvent = z.infer<typeof hookEventSchema>;
 export type NativeHelperFocusTarget = z.infer<typeof nativeHelperFocusTargetSchema>;

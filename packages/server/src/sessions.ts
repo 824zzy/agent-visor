@@ -48,6 +48,7 @@ export type DiscoveredProviderSession = {
   chatPath?: string;
   controlTarget?: SessionControlTarget;
   messageTransport?: "terminal" | "codex_app_server";
+  modelCatalog?: Record<string, { displayName: string; contextWindow?: number }>;
 };
 
 export interface SessionControls {

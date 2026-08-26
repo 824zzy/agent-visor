@@ -7,6 +7,11 @@ import type {
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
 import { isRecord, iso, ownerForProcess, terminalTargetForProcess } from "./shared.js";
 
+type ModelCatalogCache = {
+  signature?: string;
+  value?: DiscoveredProviderSession["modelCatalog"];
+};
+
 type PiNameState = {
   completeThrough: number;
   parents: Map<string, string>;
@@ -32,6 +37,7 @@ export class PiProvider implements ProviderAdapter {
   private readonly nameCache = new Map<string, PiNameState>();
   private readonly headerCache = new Map<string, PiHeader>();
   private readonly runtimeBySession = new Map<string, HookSessionEvent>();
+  private readonly modelCatalogCache: ModelCatalogCache = {};
 
   constructor(private readonly environment: ProviderEnvironment) {}
 
@@ -46,6 +52,7 @@ export class PiProvider implements ProviderAdapter {
   async discover(): Promise<DiscoveredProviderSession[]> {
     const root = path.join(this.environment.home, ".pi", "agent", "sessions");
     const files = await piFiles(this.environment, root, this.headerCache);
+    const modelCatalog = await piModelCatalog(this.environment, this.modelCatalogCache);
     const processes = await this.environment.processes();
     const piProcesses = processes.filter((process) =>
       process.tty && path.basename(process.command) === "pi");
@@ -108,12 +115,52 @@ export class PiProvider implements ProviderAdapter {
         canOpenOwner: process !== undefined,
         canEnterChat: true,
         chatPath: file.path,
+        ...(modelCatalog ? { modelCatalog } : {}),
         ...(terminalTarget ? {
           controlTarget: { kind: "terminal" as const, target: terminalTarget },
           messageTransport: "terminal" as const,
         } : {}),
       };
     }));
+  }
+}
+
+async function piModelCatalog(
+  environment: ProviderEnvironment,
+  cache: ModelCatalogCache,
+): Promise<DiscoveredProviderSession["modelCatalog"]> {
+  const file = path.join(environment.home, ".pi", "agent", "models-store.json");
+  const stamp = await environment.stamp(file);
+  if (!stamp) {
+    cache.signature = undefined;
+    return cache.value = undefined;
+  }
+  const signature = `${stamp.modifiedAt.valueOf()}:${stamp.size}`;
+  if (cache.signature === signature) return cache.value;
+  cache.signature = signature;
+  const raw = await environment.read(file, 5 * 1_048_576);
+  if (!raw) return cache.value = undefined;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isRecord(value)) return cache.value = undefined;
+    const catalog: NonNullable<DiscoveredProviderSession["modelCatalog"]> = {};
+    for (const [providerID, provider] of Object.entries(value)) {
+      if (!isRecord(provider) || !Array.isArray(provider.models)) continue;
+      for (const item of provider.models.slice(0, 200)) {
+        if (!isRecord(item)) continue;
+        const id = boundedCatalogString(item.id);
+        const displayName = boundedCatalogString(item.name);
+        const contextWindow = positiveInteger(item.contextWindow);
+        if (id && displayName) {
+          const entry = { displayName, ...(contextWindow ? { contextWindow } : {}) };
+          catalog[`${providerID}:${id}`] = entry;
+          catalog[id] ??= entry;
+        }
+      }
+    }
+    return cache.value = Object.keys(catalog).length ? catalog : undefined;
+  } catch {
+    return cache.value = undefined;
   }
 }
 
@@ -239,4 +286,13 @@ function stringField(line: string, key: string, backwards = false): string | und
 
 function string(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : undefined;
+}
+
+function boundedCatalogString(value: unknown): string {
+  const result = string(value);
+  return result.length <= 256 ? result : "";
 }

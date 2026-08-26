@@ -11,11 +11,20 @@ import {
 import type {
   ChatImage,
   ChatItem,
+  ChatMetadata,
   ChatPendingAction,
+  ChatVisibility,
   SessionSummary,
 } from "@agent-visor/protocol";
 import { browserCommand } from "./browser-shortcuts";
-import { groupChatTurns, type ChatTurn } from "./chat-presentation";
+import {
+  chatMetadataRows,
+  filterChatItems,
+  filterChatTurns,
+  groupChatTurns,
+  shouldGroupChatTurns,
+  type ChatTurn,
+} from "./chat-presentation";
 import type { Palette } from "./theme";
 import { useChat } from "./use-chat";
 
@@ -26,6 +35,7 @@ export function Chat({
   onOpenOwner,
   palette,
   session,
+  visibility,
 }: {
   contentScale: number;
   onBack(): void;
@@ -33,11 +43,21 @@ export function Chat({
   onOpenOwner(): void;
   palette: Palette;
   session: SessionSummary;
+  visibility: ChatVisibility;
 }) {
   const chat = useChat(session.id);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const styles = useMemo(() => createStyles(palette, contentScale), [contentScale, palette]);
-  const turns = useMemo(() => groupChatTurns(chat.page?.items ?? []), [chat.page?.items]);
+  const canonicalItems = chat.page?.items ?? [];
+  const items = useMemo(
+    () => filterChatItems(canonicalItems, visibility),
+    [canonicalItems, visibility],
+  );
+  const grouped = shouldGroupChatTurns(session.source, visibility);
+  const turns = useMemo(
+    () => grouped ? filterChatTurns(groupChatTurns(canonicalItems), visibility) : [],
+    [canonicalItems, grouped, visibility],
+  );
   const scroll = useRef<ScrollView>(null);
   const didInitialScroll = useRef(false);
 
@@ -77,7 +97,7 @@ export function Chat({
         </Pressable>
       </View>
 
-      {detailsOpen ? <Details session={session} styles={styles} /> : null}
+      {detailsOpen ? <Details metadata={chat.page?.metadata} session={session} styles={styles} /> : null}
 
       {chat.status === "loading" ? (
         <Centered text="Loading Chat history…" styles={styles} />
@@ -101,8 +121,10 @@ export function Chat({
                 <Text style={styles.link}>Load earlier messages</Text>
               </Pressable>
             ) : null}
-            {turns.map((turn) => <Turn key={turn.id} styles={styles} turn={turn} />)}
-            {!turns.length ? <Centered text="No Chat history yet" styles={styles} /> : null}
+            {grouped
+              ? turns.map((turn) => <Turn key={turn.id} styles={styles} turn={turn} />)
+              : items.map((item) => <Message item={item} key={item.id} styles={styles} />)}
+            {!items.length ? <Centered text="No visible Chat history" styles={styles} /> : null}
           </View>
         </ScrollView>
       )}
@@ -343,10 +365,22 @@ function Composer({
   );
 }
 
-function Details({ session, styles }: { session: SessionSummary; styles: ChatStyles }) {
+function Details({
+  metadata,
+  session,
+  styles,
+}: {
+  metadata?: ChatMetadata;
+  session: SessionSummary;
+  styles: ChatStyles;
+}) {
+  const rows = metadata ? chatMetadataRows(metadata) : [];
   return (
     <View accessibilityLabel="Chat technical details" style={styles.details}>
       <Text style={styles.actionTitle}>Details</Text>
+      {rows.map((row) => (
+        <Text key={row.label} selectable style={styles.muted}>{row.label}: {row.value}</Text>
+      ))}
       <Text style={styles.muted}>Source: {session.source}</Text>
       <Text style={styles.muted}>Owner: {session.owner}</Text>
       <Text style={styles.muted}>Project: {session.project}</Text>

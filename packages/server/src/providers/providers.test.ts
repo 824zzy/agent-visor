@@ -103,6 +103,13 @@ describe("live provider adapters", () => {
     environment.directories.set(root, ["--Users-me-Codes-agent-visor--"]);
     environment.directories.set(project, ["pi-1.jsonl"]);
     environment.files.set(transcript, body);
+    const models = `${home}/.pi/agent/models-store.json`;
+    environment.files.set(models, JSON.stringify({
+      "openai-codex": { models: [{
+        id: "gpt-5.6-sol", name: "GPT-5.6 Sol", contextWindow: 114_688,
+      }] },
+    }));
+    environment.stamps.set(models, { modifiedAt: now, size: environment.files.get(models)!.length });
     environment.headTails.set(transcript, { head: body, tail: body });
     environment.stamps.set(transcript, { modifiedAt: now, size: Buffer.byteLength(body) });
     environment.processRows = [
@@ -120,6 +127,9 @@ describe("live provider adapters", () => {
       title: "Active Pi name",
       provider: "pi",
       owner: "Ghostty",
+      modelCatalog: {
+        "gpt-5.6-sol": { displayName: "GPT-5.6 Sol", contextWindow: 114_688 },
+      },
       messageTransport: "terminal",
       controlTarget: { kind: "terminal", target: { application: "Ghostty", tty: "ttys001", cwd } },
     });
@@ -135,6 +145,8 @@ describe("live provider adapters", () => {
     });
 
     expect((await provider.discover())[0]?.title).toBe("Renamed Pi branch");
+    environment.stamps.delete(models);
+    expect((await provider.discover())[0]?.modelCatalog).toBeUndefined();
   });
 
   it("uses Pi hook identity for a resumed session in its exact terminal", async () => {
@@ -216,6 +228,11 @@ describe("live provider adapters", () => {
       archived: 0,
       source: "vscode",
     }]);
+    const models = `${home}/.codex/models_cache.json`;
+    environment.files.set(models, JSON.stringify({
+      models: [{ slug: "gpt-5.6-sol", display_name: "GPT-5.6-Sol", context_window: 258_400 }],
+    }));
+    environment.stamps.set(models, { modifiedAt: now, size: environment.files.get(models)!.length });
     environment.processRows = [{
       pid: 50,
       parentPID: 1,
@@ -223,7 +240,8 @@ describe("live provider adapters", () => {
       arguments: "/Applications/Codex.app/Contents/MacOS/Codex",
     }];
 
-    const sessions = await new CodexProvider(environment).discover();
+    const provider = new CodexProvider(environment);
+    const sessions = await provider.discover();
 
     expect(sessions[0]).toMatchObject({
       id: "codex-1",
@@ -231,9 +249,22 @@ describe("live provider adapters", () => {
       provider: "codex",
       owner: "Codex",
       canEnterChat: true,
+      modelCatalog: {
+        "gpt-5.6-sol": { displayName: "GPT-5.6-Sol", contextWindow: 258_400 },
+      },
       messageTransport: "codex_app_server",
       controlTarget: { kind: "url", url: "codex://threads/codex-1" },
     });
+
+    environment.files.set(models, JSON.stringify({
+      models: [{
+        slug: "gpt-oversized", display_name: "x".repeat(300), context_window: 100_000,
+      }],
+    }));
+    environment.stamps.set(models, {
+      modifiedAt: new Date(now.valueOf() + 1_000), size: environment.files.get(models)!.length,
+    });
+    expect((await provider.discover())[0]?.modelCatalog).toBeUndefined();
 
     environment.sqliteRows.set(database, [{
       id: "codex-1",

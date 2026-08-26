@@ -32,6 +32,10 @@ describe("settings repository", () => {
         localizedName: "XZ322QU V3",
       })).toString("base64"),
       fullScreenPolicy: "alwaysHide",
+      chatVisibility: Buffer.from(JSON.stringify({
+        showThinking: false,
+        collapsePiTurns: false,
+      })).toString("base64"),
       futureReleasedSetting: { nested: true },
     };
     const repository = await SettingsRepository.open({
@@ -53,6 +57,13 @@ describe("settings repository", () => {
       observedWindowHours: 72,
       pillScreen: { mode: "specific", displayId: 5, name: "XZ322QU V3" },
       fullScreenPolicy: "alwaysHide",
+      chatVisibility: {
+        showUserMessage: true,
+        showThinking: false,
+        collapseClaudeTurns: true,
+        collapseCodexTurns: true,
+        collapsePiTurns: false,
+      },
     });
     expect(JSON.parse(await readFile(path.join(root, "settings.json"), "utf8")))
       .toMatchObject({ legacy });
@@ -93,12 +104,14 @@ describe("settings repository", () => {
       displayID: 9,
       localizedName: "Studio Display",
     })).toString("base64");
+    const visibility = Buffer.from(JSON.stringify({ showThinking: false })).toString("base64");
     const plist = `<?xml version="1.0" encoding="UTF-8"?>
       <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
       <plist version="1.0"><dict>
         <key>screenSelectionMode</key><string>specificScreen</string>
         <key>selectedScreenIdentifier</key><data>${identifier}</data>
         <key>fullScreenPolicy</key><string>alwaysShow</string>
+        <key>chatVisibility</key><data>${visibility}</data>
       </dict></plist>`;
     await writeFile(file, JSON.stringify({
       version: 1,
@@ -117,6 +130,7 @@ describe("settings repository", () => {
     expect(repository.current()).toMatchObject({
       pillScreen: { mode: "specific", displayId: 9, name: "Studio Display" },
       fullScreenPolicy: "alwaysShow",
+      chatVisibility: { showUserMessage: true, showThinking: false },
     });
   });
 

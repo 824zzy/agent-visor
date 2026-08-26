@@ -1,5 +1,11 @@
 import { open, stat } from "node:fs/promises";
-import type { ChatCapabilities, ChatImage, ChatItem, ChatPage } from "@agent-visor/protocol";
+import type {
+  ChatCapabilities,
+  ChatImage,
+  ChatItem,
+  ChatMetadata,
+  ChatPage,
+} from "@agent-visor/protocol";
 import { summaryWork } from "./machine.js";
 import type { DiscoveredProviderSession, ProviderID } from "./sessions.js";
 
@@ -18,13 +24,22 @@ export async function readChatPage(
   });
   if (!fileSize) return emptyPage(session, "No conversation content is available.");
   const end = Math.min(before ?? fileSize, fileSize);
-  const page = await readLinesBackward(path, end, fileSize, session.provider, limit);
+  const page = await readLinesBackward(
+    path,
+    end,
+    fileSize,
+    session.provider,
+    limit,
+    before === undefined,
+    session.modelCatalog,
+  );
   return {
     type: "chat_page",
     sessionId: session.id,
     items: page.items,
     hasMoreBefore: page.start > 0,
     nextBefore: page.start > 0 ? page.start : undefined,
+    ...(page.metadata ? { metadata: page.metadata } : {}),
     capabilities: chatCapabilities(session),
     pendingAction: null,
   };
@@ -65,7 +80,9 @@ async function readLinesBackward(
   fileSize: number,
   provider: ProviderID,
   limit: number,
-): Promise<{ items: ChatItem[]; start: number }> {
+  includeMetadata: boolean,
+  modelCatalog?: ChatModelCatalog,
+): Promise<{ items: ChatItem[]; start: number; metadata?: ChatMetadata }> {
   return summaryWork.run(async () => {
     const file = await open(path, "r");
     try {
@@ -94,8 +111,15 @@ async function readLinesBackward(
         && !parseChatLines(provider, [lines[selectedLine]!.text]).some((item) => item.kind === "user")) {
         selectedLine -= 1;
       }
+      const metadata = includeMetadata
+        ? parseChatMetadata(provider, lines.map((line) => line.text), modelCatalog)
+        : undefined;
       items = parseChatLines(provider, lines.slice(selectedLine).map((line) => line.text)).slice(-1_000);
-      return { items, start: lines[selectedLine]?.start ?? 0 };
+      return {
+        items,
+        start: lines[selectedLine]?.start ?? 0,
+        ...(metadata && Object.keys(metadata).length ? { metadata } : {}),
+      };
     } finally {
       await file.close();
     }
@@ -144,12 +168,148 @@ export function parseChatLines(provider: ProviderID, lines: string[]): ChatItem[
   return items.filter((item) => item.kind !== "user" || item.text.length > 0 || item.images.length > 0);
 }
 
+export type ChatModelCatalog = Record<string, {
+  displayName: string;
+  contextWindow?: number;
+}>;
+
+export function parseChatMetadata(
+  provider: ProviderID,
+  lines: string[],
+  catalog: ChatModelCatalog = {},
+) {
+  let modelId: string | undefined;
+  let modelProvider: string | undefined;
+  let reasoningEffort: string | undefined;
+  let permissionMode: string | undefined;
+  let sandbox: string | undefined;
+  let approvalPolicy: string | undefined;
+  let contextTokens: number | undefined;
+  let contextWindow: number | undefined;
+  const setModel = (value: unknown, providerValue?: unknown) => {
+    const next = boundedModel(value);
+    if (next && next !== modelId) {
+      modelId = next;
+      contextTokens = undefined;
+      contextWindow = undefined;
+    }
+    modelProvider = boundedText(providerValue) ?? modelProvider;
+  };
+
+  for (const line of lines) {
+    let value: unknown;
+    try { value = JSON.parse(line); } catch { continue; }
+    if (!record(value)) continue;
+
+    if (provider === "claude_code") {
+      permissionMode = boundedText(value.permissionMode) ?? permissionMode;
+      reasoningEffort = boundedText(value.effort) ?? reasoningEffort;
+      const message = record(value.message) ? value.message : undefined;
+      setModel(message?.model);
+      const usage = record(message?.usage) ? message.usage : undefined;
+      const context = sumNumbers(
+        usage?.input_tokens,
+        usage?.cache_read_input_tokens,
+        usage?.cache_creation_input_tokens,
+      );
+      if (context > 0) contextTokens = context;
+    }
+
+    if (provider === "codex") {
+      const payload = record(value.payload) ? value.payload : undefined;
+      if (value.type === "session_meta" && payload) {
+        modelProvider = boundedText(payload.model_provider) ?? modelProvider;
+      }
+      if (value.type === "turn_context" && payload) {
+        setModel(payload.model);
+        reasoningEffort = boundedText(payload.effort) ?? reasoningEffort;
+        approvalPolicy = boundedText(payload.approval_policy) ?? approvalPolicy;
+        const sandboxPolicy = record(payload.sandbox_policy) ? payload.sandbox_policy : undefined;
+        sandbox = boundedText(sandboxPolicy?.type) ?? sandbox;
+      }
+      if (value.type === "event_msg" && payload?.type === "thread_settings_applied") {
+        const applied = record(payload.thread_settings) ? payload.thread_settings : undefined;
+        setModel(applied?.model);
+        reasoningEffort = boundedText(applied?.reasoning_effort) ?? reasoningEffort;
+        approvalPolicy = boundedText(applied?.approval_policy) ?? approvalPolicy;
+        const profile = record(applied?.active_permission_profile)
+          ? applied.active_permission_profile : record(applied?.permission_profile)
+            ? applied.permission_profile : undefined;
+        sandbox = boundedText(profile?.type) ?? sandbox;
+      }
+      if (value.type === "event_msg" && payload?.type === "token_count") {
+        const info = record(payload.info) ? payload.info : undefined;
+        const last = record(info?.last_token_usage) ? info.last_token_usage : undefined;
+        contextTokens = positiveInteger(last?.total_tokens) ?? contextTokens;
+        contextWindow = positiveInteger(info?.model_context_window) ?? contextWindow;
+      }
+      if (value.type === "event_msg" && payload?.type === "task_started") {
+        contextWindow = positiveInteger(payload.model_context_window) ?? contextWindow;
+      }
+    }
+
+    if (provider === "pi") {
+      if (value.type === "model_change") {
+        setModel(value.modelId, value.provider);
+      }
+      if (value.type === "thinking_level_change") {
+        reasoningEffort = boundedText(value.thinkingLevel) ?? reasoningEffort;
+      }
+      const message = record(value.message) ? value.message : undefined;
+      if (value.type === "message" && message?.role === "assistant") {
+        setModel(message.model, message.provider);
+        const usage = record(message.usage) ? message.usage : undefined;
+        const context = sumNumbers(usage?.input, usage?.cacheRead, usage?.cacheWrite);
+        if (context > 0) contextTokens = context;
+      }
+    }
+  }
+
+  const catalogModel = modelId
+    ? catalog[modelProvider ? `${modelProvider}:${modelId}` : modelId] ?? catalog[modelId]
+    : undefined;
+  const model = modelId ? modelDisplayName(modelId, catalogModel?.displayName) : undefined;
+  contextWindow ??= catalogModel?.contextWindow;
+  if (contextTokens && contextWindow && contextTokens > contextWindow) contextWindow = undefined;
+  return {
+    ...(model ? { model } : {}),
+    ...(modelId && model !== modelId ? { modelId } : {}),
+    ...(modelProvider ? { modelProvider } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(permissionMode ? { permissionMode } : {}),
+    ...(sandbox ? { sandbox } : {}),
+    ...(approvalPolicy ? { approvalPolicy } : {}),
+    ...(contextTokens ? { contextTokens } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+  };
+}
+
 function parseClaude(
   value: Record<string, unknown>,
   lineIndex: number,
   items: ChatItem[],
   tools: Map<string, number>,
 ): void {
+  if (value.type === "system") {
+    const id = text(value.uuid) || `claude-system-${lineIndex}`;
+    const timestamp = iso(value.timestamp);
+    const subtype = text(value.subtype);
+    if (subtype === "turn_duration") {
+      const duration = positiveInteger(value.durationMs);
+      if (duration) addSystem(items, id, "turn_duration", `Turn duration: ${formatDuration(duration)}`, timestamp);
+    } else if (subtype === "away_summary" && text(value.content)) {
+      addSystem(items, id, "recap", text(value.content), timestamp);
+    } else if (subtype === "compact_boundary") {
+      addSystem(items, id, "compact_boundary", "Context compacted", timestamp, "compact");
+    } else if (subtype === "local_command") {
+      const output = text(value.content)
+        .replace(/^<local-command-(?:stdout|stderr)>/, "")
+        .replace(/<\/local-command-(?:stdout|stderr)>$/, "")
+        .trim();
+      if (output) addSystem(items, id, "local_command_output", output, timestamp);
+    }
+    return;
+  }
   const message = record(value.message) ? value.message : undefined;
   if (!message) return;
   const role = text(message.role);
@@ -158,7 +318,11 @@ function parseClaude(
   const timestamp = iso(value.timestamp);
   if (role === "user") {
     if (typeof content === "string") {
-      if (content.trim()) items.push(user(id, content, [], timestamp));
+      if (content.trim().startsWith("[Request interrupted by user")) {
+        addSystem(items, id, "interrupted", content.trim(), timestamp, "error");
+      } else if (content.trim()) {
+        items.push(user(id, content, [], timestamp));
+      }
       return;
     }
     if (!Array.isArray(content)) return;
@@ -176,7 +340,11 @@ function parseClaude(
         if (mimeType && data) images.push({ name: `image-${images.length + 1}`, mimeType, data });
       }
     }
-    if (userText.trim() || images.length) items.push(user(id, userText, images, timestamp));
+    if (userText.trim().startsWith("[Request interrupted by user")) {
+      addSystem(items, id, "interrupted", userText.trim(), timestamp, "error");
+    } else if (userText.trim() || images.length) {
+      items.push(user(id, userText, images, timestamp));
+    }
     return;
   }
   if (role !== "assistant" || !Array.isArray(content)) return;
@@ -204,8 +372,18 @@ function parseCodex(
   if (!payload) return;
   const timestamp = iso(value.timestamp);
   const type = text(payload.type);
-  const id = text(payload.id) || `codex-${lineIndex}`;
-  if (value.type === "event_msg") return;
+  const id = text(payload.id) || text(payload.turn_id) || `codex-${lineIndex}`;
+  if (value.type === "event_msg") {
+    if (type === "task_complete") {
+      const duration = positiveInteger(payload.duration_ms);
+      if (duration) addSystem(items, `${id}-duration`, "turn_duration", `Turn duration: ${formatDuration(duration)}`, timestamp);
+    } else if (type === "context_compacted") {
+      addSystem(items, `${id}-compact`, "compact_boundary", "Context compacted", timestamp, "compact");
+    } else if (type === "turn_aborted") {
+      addSystem(items, `${id}-interrupted`, "interrupted", "Request interrupted", timestamp, "error");
+    }
+    return;
+  }
   if (value.type !== "response_item") return;
   if (type === "message") {
     const role = text(payload.role);
@@ -250,6 +428,17 @@ function parsePi(
   items: ChatItem[],
   tools: Map<string, number>,
 ): void {
+  if (value.type === "compaction") {
+    addSystem(
+      items,
+      text(value.id) || `pi-compact-${lineIndex}`,
+      "compact_boundary",
+      text(value.summary) || "Context compacted",
+      iso(value.timestamp),
+      "compact",
+    );
+    return;
+  }
   if (value.type !== "message" || !record(value.message)) return;
   const message = value.message;
   const role = text(message.role);
@@ -312,6 +501,23 @@ function parseCursor(
   }
 }
 
+function addSystem(
+  items: ChatItem[],
+  id: string,
+  category: NonNullable<Extract<ChatItem, { kind: "system" }>["category"]>,
+  body: string,
+  timestamp?: string,
+  tone: Extract<ChatItem, { kind: "system" }>["tone"] = "neutral",
+): void {
+  items.push({ id, kind: "system", text: body, tone, category, timestamp });
+}
+
+function formatDuration(milliseconds: number): string {
+  return milliseconds < 1_000
+    ? `${milliseconds}ms`
+    : `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
+}
+
 function addTool(
   items: ChatItem[],
   tools: Map<string, number>,
@@ -321,7 +527,15 @@ function addTool(
   timestamp: string | undefined,
 ): void {
   tools.set(id, items.length);
-  items.push({ id, kind: "tool", name: displayToolName(name), input: toolInput, status: "running", timestamp });
+  items.push({
+    id,
+    kind: "tool",
+    name: displayToolName(name),
+    family: toolFamily(name),
+    input: toolInput,
+    status: "running",
+    timestamp,
+  });
 }
 
 function finishTool(
@@ -384,10 +598,69 @@ function imageMime(value: unknown): ChatImage["mimeType"] | undefined {
     : undefined;
 }
 
+function toolFamily(name: string): NonNullable<Extract<ChatItem, { kind: "tool" }>["family"]> {
+  const normalized = name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (normalized === "mcp" || normalized.startsWith("mcp ")) return "mcp";
+  if (["bash", "shell", "command", "exec", "execute", "exec command"].includes(normalized)
+    || normalized.endsWith(" shell")) return "bash";
+  if (normalized === "read" || normalized.startsWith("read ")) return "read";
+  if (normalized === "write" || normalized.startsWith("write ")) return "write";
+  if (normalized === "edit" || normalized.startsWith("edit ")
+    || normalized === "apply patch") return "edit";
+  if (normalized === "grep" || normalized.startsWith("grep ")) return "grep";
+  if (normalized === "glob" || normalized.startsWith("glob ")) return "glob";
+  if (normalized === "web fetch") return "web_fetch";
+  if (normalized === "web search") return "web_search";
+  if (normalized === "todo write") return "todo_write";
+  if (["task", "agent", "subagent"].includes(normalized)) return "task";
+  if (normalized === "ask user question") return "ask_user_question";
+  if (normalized === "bash output") return "bash_output";
+  if (normalized === "kill shell") return "kill_shell";
+  if (["enter plan mode", "exit plan mode"].includes(normalized)) return "plan_mode";
+  return "other";
+}
+
 function displayToolName(name: string): string {
   return name.split(/[_-]/).filter(Boolean)
     .map((part) => part[0]!.toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function modelDisplayName(modelId: string, catalogName?: string): string {
+  if (catalogName?.trim()) return catalogName.trim();
+  if (modelId.startsWith("gpt-")) {
+    const [version, ...variants] = modelId.slice(4).split("-");
+    return variants.length
+      ? `GPT-${version} ${variants.map(capitalize).join(" ")}`
+      : `GPT-${version}`;
+  }
+  const claude = /^(?:claude-)?(opus|sonnet|haiku)-(\d+)-(\d+)(?:\[.*)?$/i.exec(modelId);
+  return claude ? `${capitalize(claude[1]!)} ${claude[2]}.${claude[3]}` : modelId;
+}
+
+function capitalize(value: string): string {
+  return value ? value[0]!.toUpperCase() + value.slice(1) : value;
+}
+
+function boundedModel(value: unknown): string | undefined {
+  const model = boundedText(value);
+  return model?.startsWith("<") ? undefined : model;
+}
+
+function boundedText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= 256 ? trimmed : undefined;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value : undefined;
+}
+
+function sumNumbers(...values: unknown[]): number {
+  return values.reduce<number>((sum, value) =>
+    sum + (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0), 0);
 }
 
 function text(value: unknown): string {
