@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 
@@ -17,12 +17,28 @@ const bin = spawnSync(
 ).stdout.trim();
 execFileSync("swiftc", ["scripts/native-helper-ui-input.swift", "-o", input]);
 execFileSync("swiftc", ["scripts/native-helper-full-screen-host.swift", "-o", fullScreenHostPath]);
-const helperExecutable = process.argv[2] ?? path.join(bin, "AgentVisorNativeHelper");
+let helperExecutable = process.argv[2];
+if (!helperExecutable) {
+  const helperApp = path.join(helperRoot, "Helper Host.app");
+  helperExecutable = path.join(helperApp, "Contents/MacOS/AgentVisorNativeHelper");
+  await mkdir(path.dirname(helperExecutable), { recursive: true });
+  await copyFile(path.join(bin, "AgentVisorNativeHelper"), helperExecutable);
+  await writeFile(path.join(helperApp, "Contents/Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>AgentVisorNativeHelper</string>
+<key>CFBundleIdentifier</key><string>com.824zzy.AgentVisor.UsageHelperTests</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+</dict></plist>`);
+  const signed = spawnSync("codesign", ["--force", "--sign", "-", helperApp], { encoding: "utf8" });
+  if (signed.status !== 0) throw new Error(signed.stderr);
+}
 const helper = spawn(helperExecutable, ["--socket", socketPath], {
   stdio: ["ignore", "ignore", "pipe"],
 });
 let stderr = "";
 let fullScreenHost;
+let helperReady = false;
 helper.stderr.on("data", (data) => { stderr += data.toString(); });
 const messages = [];
 const codexGlance = {
@@ -67,6 +83,7 @@ const claudeGlance = {
 
 try {
   await waitForSocket();
+  helperReady = true;
   const socket = net.createConnection(socketPath);
   let buffer = Buffer.alloc(0);
   socket.on("data", (data) => {
@@ -258,7 +275,7 @@ try {
   }
   socket.end();
 } finally {
-  try {
+  if (helperReady) try {
     run("shortcut-up");
     run("move-away");
   } catch { /* helper may not have presented panels */ }

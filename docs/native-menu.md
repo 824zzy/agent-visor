@@ -50,6 +50,8 @@ Chat-only transcript history remains in Sessions and does not crowd the menu bar
 
 Completed Codex history also remains in Sessions and More Sessions without keeping a physical pill. Active hook-backed Codex jobs open their exact registered `codex://threads/<id>` source.
 
+Hook-backed Codex rows without a transcript remain source-only. They do not offer an empty Chat action.
+
 Visible items retain their normal labels, up to 20 characters plus an ellipsis. Untitled Codex rows use `Codex · <project>` so distinct sessions do not share one fallback label. The helper uses `+N` instead of compact or tight labels.
 
 Clicking `+N` opens a nonactivating More Sessions popover. Its initial rows are the exact sessions omitted by the current pill layout.

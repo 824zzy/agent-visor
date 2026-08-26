@@ -623,7 +623,7 @@ function applyHooks(
       subtitle: phase.subtitle,
       updatedAt: hook.activityAt ?? hook.receivedAt,
       canOpenOwner: hookCanOpenOwner(hook, controlTarget),
-      canEnterChat: hook.provider !== "auggie",
+      canEnterChat: hookCanEnterChat(hook),
       chatPath: hook.sessionFile,
       ...(controlTarget ? { controlTarget } : {}),
     });
@@ -751,6 +751,11 @@ function hookCanOpenOwner(
     : Boolean(hook.pid || hook.tty);
 }
 
+function hookCanEnterChat(hook: HookSessionEvent): boolean {
+  return hook.provider !== "auggie"
+    && (hook.provider !== "codex" || hook.sessionFile !== undefined);
+}
+
 function hookSession(hook: HookSessionEvent): DiscoveredProviderSession {
   const controlTarget = hookControlTarget(hook);
   return {
@@ -761,7 +766,7 @@ function hookSession(hook: HookSessionEvent): DiscoveredProviderSession {
     section: hookPhase(hook).section,
     updatedAt: hook.activityAt ?? hook.receivedAt,
     canOpenOwner: hookCanOpenOwner(hook, controlTarget),
-    canEnterChat: hook.provider !== "auggie",
+    canEnterChat: hookCanEnterChat(hook),
     chatPath: hook.sessionFile,
     ...(controlTarget ? { controlTarget } : {}),
   };

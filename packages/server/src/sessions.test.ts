@@ -96,14 +96,31 @@ describe("SessionRepository", () => {
       status: "working",
       receivedAt: "2026-08-25T21:44:38.000Z",
       pid: 40758,
+      sessionFile: "/Users/me/.codex/sessions/codex.jsonl",
     });
 
-    expect(snapshot.sessions[0]?.canOpenOwner).toBe(true);
+    expect(snapshot.sessions[0]).toMatchObject({ canOpenOwner: true, canEnterChat: true });
     expect(await repository.focusSession(sessionId)).toBeUndefined();
     expect(focused[0]?.controlTarget).toEqual({
       kind: "url",
       url: `codex://threads/${sessionId}`,
     });
+  });
+
+  it("does not offer Chat for a hook-only Codex job without a transcript", () => {
+    const repository = new SessionRepository([]);
+
+    const snapshot = repository.applyHook({
+      sessionId: "01a03c62-72e0-78b0-8768-7d7d13167e6c",
+      cwd: "/Users/me/Codes",
+      provider: "codex",
+      event: "SessionEnd",
+      status: "ended",
+      receivedAt: "2026-08-25T21:46:38.000Z",
+      pid: 40758,
+    });
+
+    expect(snapshot.sessions[0]?.canEnterChat).toBe(false);
   });
 
   it("does not advertise an invalid Codex hook as source-openable", async () => {
