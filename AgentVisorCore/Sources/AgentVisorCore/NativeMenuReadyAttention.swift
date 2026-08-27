@@ -15,6 +15,14 @@ public struct NativeMenuReadyAttention {
         acknowledgedReadyIDs = Set(acknowledgedReadyIDs.filter { readyIDs.contains($0) })
         phaseChangedAtByID = phaseChangedAtByID.filter { readyIDs.contains($0.key) }
 
+        for pill in pills where pill.phase == .ready && pill.attentionTier != nil {
+            if pill.attentionTier == .acknowledgedReady {
+                acknowledgedReadyIDs.insert(pill.id)
+            } else {
+                acknowledgedReadyIDs.remove(pill.id)
+            }
+        }
+
         for pill in pills where pill.phase == .ready {
             guard let previousPhase = previousPhases[pill.id], previousPhase != .ready else {
                 continue

@@ -19,12 +19,15 @@ The `+N` popover is not a compact copy of this browser. It shows only sessions o
 
 ## Data And Ordering
 
-With an empty query, rows are grouped by the same internal states in this order, using action-oriented browser labels:
+With an empty query, rows use the same attention order as the menu-bar pills:
 
 1. `Needs you` (`needsAttention`)
-2. `Ready to continue` (`ready`)
+2. Unacknowledged `Ready to continue` (`ready`)
 3. `In progress` (`working`)
-4. `History` (`recent`)
+4. Acknowledged `Ready to continue` (`acknowledgedReady`)
+5. `History` (`recent`)
+
+When both Ready tiers are present, they render as separate `Ready to continue` groups on either side of `In progress`. Opening a Ready row acknowledges only that completion and moves it to the lower Ready group without changing its lifecycle state.
 
 Rows sort by activity date descending within each group, then by stable session ID. A newer lower-priority row never jumps above a higher-priority group.
 

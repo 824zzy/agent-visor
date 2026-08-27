@@ -85,6 +85,7 @@ if (nativeHelperExecutable) {
       }
       if (event.event === "notification_action") {
         if (event.action === "activate") {
+          repository.acknowledgeReady(event.sessionId);
           const action = nativeActionFor(event, repository.current());
           if (action) process.send?.(action);
           return;
@@ -104,6 +105,7 @@ if (nativeHelperExecutable) {
         return;
       }
       if (event.event === "activate_pill") {
+        repository.acknowledgeReady(event.sessionId);
         const action = nativeActionFor(event, repository.current());
         if (action?.action === "open_chat") {
           process.send?.(action);

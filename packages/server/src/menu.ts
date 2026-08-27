@@ -3,6 +3,13 @@ import type { NativeHelperUsageGlance, SessionSnapshot } from "@agent-visor/prot
 import type { NativeHelperEvent } from "./native-helper.js";
 
 const phaseOrder = { needs_you: 0, ready: 1, working: 2, history: 3 } as const;
+const attentionOrder = {
+  needs_you: 0,
+  ready: 1,
+  working: 2,
+  acknowledged_ready: 3,
+  history: 4,
+} as const;
 
 const phaseLabel = {
   needs_you: "needs you",
@@ -36,7 +43,8 @@ export function menuPresentation(
 ) {
   const ordered = snapshot.sessions
     .filter((session) => session.canOpenOwner || session.canEnterChat)
-    .sort((left, right) => phaseOrder[left.section] - phaseOrder[right.section]
+    .sort((left, right) => attentionOrder[left.attentionTier ?? left.section]
+      - attentionOrder[right.attentionTier ?? right.section]
       || right.updatedAt.localeCompare(left.updatedAt)
       || left.id.localeCompare(right.id));
   const navigatorPills = ordered.slice(0, 512).map(presentationPill);
@@ -64,6 +72,7 @@ function presentationPill(
     source: session.source,
     project: session.project,
     ...(session.canOpenOwner ? { owner: session.owner } : {}),
+    ...(session.attentionTier ? { attentionTier: session.attentionTier } : {}),
     inspector: {
       status: inspectorStatus(session.section, session.subtitle),
       runtimeItems: [runtimeSource(session.source, session.owner)],

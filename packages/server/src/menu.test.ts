@@ -120,6 +120,27 @@ describe("menu presentation", () => {
     });
   });
 
+  it("keeps acknowledged Ready behind Working in the shared attention order", () => {
+    const presentation = menuPresentation({
+      ...snapshot,
+      sessions: [
+        { ...snapshot.sessions[4]!, attentionTier: "acknowledged_ready" },
+        { ...snapshot.sessions[0]!, attentionTier: "working" },
+      ],
+    }, []);
+
+    expect(presentation.pills.map(({ id, attentionTier }) => ({ id, attentionTier }))).toEqual([
+      { id: "work", attentionTier: "working" },
+      { id: "ready", attentionTier: "acknowledged_ready" },
+    ]);
+    expect(nativeHelperRequestSchema.safeParse({
+      version: 1,
+      id: "shared-attention",
+      method: "present_pills",
+      params: presentation,
+    }).success).toBe(true);
+  });
+
   it("bounds titles at the native helper boundary", () => {
     const presentation = menuPresentation({
       ...snapshot,

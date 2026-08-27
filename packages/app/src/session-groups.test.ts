@@ -57,6 +57,32 @@ describe("groupSessions", () => {
     ).toEqual(["In progress"]);
   });
 
+  it("matches the pill attention order for acknowledged Ready completions", () => {
+    const freshReady = {
+      ...session("fresh-ready", "ready", "2026-08-22T10:00:00.000Z"),
+      attentionTier: "ready" as const,
+    };
+    const acknowledgedReady = {
+      ...session("acknowledged-ready", "ready", "2026-08-22T09:00:00.000Z"),
+      attentionTier: "acknowledged_ready" as const,
+    };
+
+    const groups = groupSessions([
+      acknowledgedReady,
+      session("working", "working", "2026-08-22T08:00:00.000Z"),
+      freshReady,
+    ]);
+
+    expect(groups.map(({ id, sessions: rows }) => ({
+      id,
+      sessions: rows.map(({ id }) => id),
+    }))).toEqual([
+      { id: "ready", sessions: ["fresh-ready"] },
+      { id: "working", sessions: ["working"] },
+      { id: "acknowledged_ready", sessions: ["acknowledged-ready"] },
+    ]);
+  });
+
   it("uses source-first actions with capability-safe fallbacks", () => {
     const both = session("both", "working", "2026-08-22T10:00:00.000Z");
     const chatOnly = { ...both, canOpenOwner: false };

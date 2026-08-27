@@ -15,6 +15,14 @@ public enum NativeHelperPillPhase: String, Codable, Equatable {
     case history
 }
 
+public enum NativeHelperSessionAttentionTier: String, Codable, Equatable {
+    case needsYou = "needs_you"
+    case ready
+    case working
+    case acknowledgedReady = "acknowledged_ready"
+    case history
+}
+
 public struct NativeHelperSessionInspectorRow: Codable, Equatable, Sendable {
     public let label: String
     public let value: String
@@ -44,6 +52,7 @@ public struct NativeHelperPill: Codable, Equatable {
     public let owner: String?
     public let inspector: NativeHelperSessionInspector?
     public let phase: NativeHelperPillPhase
+    public let attentionTier: NativeHelperSessionAttentionTier?
     public let priority: Int
     public let accessibilityLabel: String
 
@@ -56,6 +65,7 @@ public struct NativeHelperPill: Codable, Equatable {
         owner: String? = nil,
         inspector: NativeHelperSessionInspector? = nil,
         phase: NativeHelperPillPhase,
+        attentionTier: NativeHelperSessionAttentionTier? = nil,
         priority: Int,
         accessibilityLabel: String
     ) {
@@ -67,6 +77,7 @@ public struct NativeHelperPill: Codable, Equatable {
         self.owner = owner
         self.inspector = inspector
         self.phase = phase
+        self.attentionTier = attentionTier
         self.priority = priority
         self.accessibilityLabel = accessibilityLabel
     }
@@ -701,7 +712,7 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
             "id", "title", "phase", "priority", "accessibilityLabel",
         ]
         let detailedPillKeys = legacyPillKeys.union([
-            "subtitle", "source", "project", "owner", "inspector",
+            "subtitle", "source", "project", "owner", "inspector", "attentionTier",
         ])
         return (pills + navigatorPills).allSatisfy {
             let keys = Set($0.keys)

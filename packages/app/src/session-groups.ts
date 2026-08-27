@@ -1,17 +1,18 @@
-import type { SessionSection, SessionSummary } from "@agent-visor/protocol";
+import type { SessionAttentionTier, SessionSummary } from "@agent-visor/protocol";
 
 const sections: ReadonlyArray<{
-  id: SessionSection;
+  id: SessionAttentionTier;
   title: string;
 }> = [
   { id: "needs_you", title: "Needs you" },
   { id: "ready", title: "Ready to continue" },
   { id: "working", title: "In progress" },
+  { id: "acknowledged_ready", title: "Ready to continue" },
   { id: "history", title: "History" },
 ];
 
 export type SessionGroup = {
-  id: SessionSection | "results";
+  id: SessionAttentionTier | "results";
   title: string;
   sessions: SessionSummary[];
 };
@@ -24,7 +25,7 @@ export type SessionSelection = {
 export function groupSessions(sessions: SessionSummary[]): SessionGroup[] {
   return sections.flatMap((section) => {
     const matching = sessions
-      .filter((session) => session.section === section.id)
+      .filter((session) => (session.attentionTier ?? session.section) === section.id)
       .sort(compareSessions);
 
     return matching.length === 0 ? [] : [{ ...section, sessions: matching }];

@@ -192,7 +192,7 @@ Every surface uses the same phase meanings:
   orange pill alive indefinitely.
 - Agent Visor does not scrape Claude Desktop UI to recover phase.
 
-State-grouped browser surfaces keep that literal order. The menu-bar strip additionally accounts for whether a Ready completion has been seen:
+The menu-bar strip and state-grouped browser surfaces use the same attention order, including whether a Ready completion has been seen:
 
 1. `Needs attention`
 2. Unacknowledged `Ready`
@@ -208,7 +208,7 @@ Within an attention tier, newer phase-entry evidence sorts first and session ID 
 - Opening the session through an Agent Visor navigation surface acknowledges that specific completion. Its indicator becomes static immediately while the session remains `Ready`. In the menu bar, a separate activity-age fade continues from fresh green toward muted gray over 42 minutes.
 - In the menu-bar strip, the first acknowledgment of a Ready transition holds the pill in its current Ready priority tier for two seconds so the clicked target does not appear to vanish. After that spatial grace period, it moves below Working pills. Reopening the same acknowledged completion does not restart the hold or promote the pill again. It may enter `+N` overflow when space is constrained, but it does not become `Recent`.
 - A genuine phase change takes precedence over the spatial grace period. The hold never delays new status evidence or mutates session phase.
-- State-grouped browser surfaces keep the row in `Ready` and preserve their keyboard cursor and viewport.
+- State-grouped browser surfaces keep the row in `Ready`, move it between the two Ready attention groups, and preserve their keyboard cursor and viewport.
 - Acknowledgment is scoped to the current Ready transition. A later completion has a newer phase-entry date and pulses again.
 - A later Ready transition also returns the pill above Working until that completion is acknowledged.
 - Navigation recency is recorded independently for `Recent` ordering and must not replace the Ready acknowledgment timestamp.

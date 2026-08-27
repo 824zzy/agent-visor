@@ -117,9 +117,11 @@ describe("Agent Visor daemon", () => {
   });
 
   it("delivers Chat pages and capability action results", async () => {
+    const acknowledged: string[] = [];
     const source = {
       current: () => fixtureSnapshot,
       subscribe: () => () => undefined,
+      acknowledgeReady: (sessionId: string) => { acknowledged.push(sessionId); },
       chatPage: async (sessionId: string) => ({
         type: "chat_page" as const,
         sessionId,
@@ -152,6 +154,7 @@ describe("Agent Visor daemon", () => {
     await expect.poll(() => messages.length).toBe(4);
     expect(messages[1]).toMatchObject({ type: "chat_page", sessionId: "pi-ready" });
     expect(messages).toContainEqual({ type: "native_action_result", id: "focus-1", ok: true });
+    expect(acknowledged).toEqual(["pi-ready"]);
     expect(messages).toContainEqual({
       type: "chat_action_result", id: "send-1", ok: false, error: "Read only.",
     });

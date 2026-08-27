@@ -59,6 +59,7 @@ export interface SessionControls {
 export interface SessionSnapshotSource {
   current(): SessionSnapshot;
   subscribe(listener: (snapshot: SessionSnapshot) => void): () => void;
+  acknowledgeReady?(sessionId: string): void;
   chatPage?(sessionId: string, before?: number, limit?: number): Promise<ChatPage>;
   chatAction?(message: Extract<ClientMessage, { type: "send_chat" | "respond_chat" }>): Promise<string | undefined>;
   focusSession?(sessionId: string): Promise<string | undefined>;
@@ -144,6 +145,7 @@ export class SessionRepository {
   private readonly latestHookAtBySession = new Map<string, string>();
   private readonly hookBySession = new Map<string, HookSessionEvent>();
   private readonly piRuntimeBySession = new Map<string, HookSessionEvent>();
+  private readonly acknowledgedReadyIDs = new Set<string>();
   private readonly piRuntimeDiscoveryGeneration = new Map<string, number>();
   private readonly piRemovedRestorationSessionIds = new Set<string>();
   private piDiscoveryGeneration = 0;
@@ -322,12 +324,20 @@ export class SessionRepository {
   async focusSession(sessionId: string): Promise<string | undefined> {
     const session = this.controlBySession.get(sessionId);
     if (!session?.controlTarget || !this.controls) return "Exact session focus is unavailable.";
+    this.acknowledgeReady(sessionId);
     try {
       await this.controls.focus(structuredClone(session));
       return undefined;
     } catch (error) {
       return error instanceof Error ? error.message : "Exact session focus failed.";
     }
+  }
+
+  acknowledgeReady(sessionId: string): void {
+    const session = this.snapshotValue.sessions.find(({ id }) => id === sessionId);
+    if (session?.section !== "ready" || this.acknowledgedReadyIDs.has(sessionId)) return;
+    this.acknowledgedReadyIDs.add(sessionId);
+    this.publish([...this.lastByProvider.values()].flat());
   }
 
   async chatAction(
@@ -533,6 +543,21 @@ export class SessionRepository {
       }
     }
     const sessions = normalize(merged);
+    const previousSections = new Map(
+      this.snapshotValue.sessions.map(({ id, section }) => [id, section]),
+    );
+    const sessionIDs = new Set(sessions.map(({ id }) => id));
+    for (const sessionId of this.acknowledgedReadyIDs) {
+      if (!sessionIDs.has(sessionId)) this.acknowledgedReadyIDs.delete(sessionId);
+    }
+    for (const session of sessions) {
+      if (session.section !== "ready" || previousSections.get(session.id) !== "ready") {
+        this.acknowledgedReadyIDs.delete(session.id);
+      }
+      session.attentionTier = session.section === "ready" && this.acknowledgedReadyIDs.has(session.id)
+        ? "acknowledged_ready"
+        : session.section;
+    }
     const fingerprint = JSON.stringify(sessions);
     if (fingerprint !== this.fingerprint) {
       this.fingerprint = fingerprint;

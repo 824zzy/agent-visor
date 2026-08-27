@@ -66,6 +66,25 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
         XCTAssertEqual(attention.opacity(id: "session", phase: .ready, now: changedAt), 1)
     }
 
+    func testPresentedSharedAttentionSynchronizesAcknowledgment() {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000)
+        var attention = NativeMenuReadyAttention()
+
+        attention.present(
+            previousPhases: ["session": .ready],
+            pills: [pill(.ready, attentionTier: .acknowledgedReady)],
+            now: now
+        )
+        XCTAssertEqual(attention.acknowledgedReadyIDs, ["session"])
+
+        attention.present(
+            previousPhases: ["session": .ready],
+            pills: [pill(.ready, attentionTier: .ready)],
+            now: now
+        )
+        XCTAssertEqual(attention.acknowledgedReadyIDs, [])
+    }
+
     func testAcknowledgedReadyStillReachesStaleColor() {
         let activityAt = Date(timeIntervalSinceReferenceDate: 1_000)
         let readyPill = pill(.ready, activityAt: activityAt)
@@ -88,6 +107,7 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
 
     private func pill(
         _ phase: NativeHelperPillPhase,
+        attentionTier: NativeHelperSessionAttentionTier? = nil,
         activityAt: Date? = nil
     ) -> NativeHelperPill {
         NativeHelperPill(
@@ -104,6 +124,7 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
                 )
             },
             phase: phase,
+            attentionTier: attentionTier,
             priority: 0,
             accessibilityLabel: "Session"
         )

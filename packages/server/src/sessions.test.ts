@@ -790,6 +790,31 @@ describe("SessionRepository", () => {
     expect(calls).toEqual(["focus:pi-1", "send:pi-1:Continue"]);
   });
 
+  it("demotes an opened Ready completion until the next Ready episode", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{
+      ...live,
+      section: "ready",
+      subtitle: "Ready to continue",
+      controlTarget: {
+        kind: "terminal",
+        target: { application: "Ghostty", tty: "ttys012", cwd: live.cwd },
+      },
+    }];
+    const repository = new SessionRepository([provider]);
+    repository.setControls({ focus: async () => undefined, send: async () => undefined });
+
+    expect((await repository.refresh()).sessions[0]?.attentionTier).toBe("ready");
+
+    expect(await repository.focusSession("pi-1")).toBeUndefined();
+    expect(repository.current().sessions[0]?.attentionTier).toBe("acknowledged_ready");
+
+    provider.sessions[0] = { ...provider.sessions[0]!, section: "working" };
+    expect((await repository.refresh()).sessions[0]?.attentionTier).toBe("working");
+    provider.sessions[0] = { ...provider.sessions[0]!, section: "ready" };
+    expect((await repository.refresh()).sessions[0]?.attentionTier).toBe("ready");
+  });
+
   it("lets an authoritative host replace a duplicate provider row", async () => {
     const pi = new FakeProvider();
     pi.sessions = [{

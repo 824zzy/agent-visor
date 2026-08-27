@@ -112,6 +112,7 @@ export async function startServer(options: {
       } else if (parsed.data.type === "open_chat") {
         if (source.chatPage) {
           try {
+            source.acknowledgeReady?.(parsed.data.sessionId);
             send(socket, await source.chatPage(
               parsed.data.sessionId,
               parsed.data.before,

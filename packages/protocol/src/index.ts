@@ -9,6 +9,14 @@ export const sessionSectionSchema = z.enum([
   "history",
 ]);
 
+export const sessionAttentionTierSchema = z.enum([
+  "needs_you",
+  "ready",
+  "working",
+  "acknowledged_ready",
+  "history",
+]);
+
 export const sessionSummarySchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -18,6 +26,7 @@ export const sessionSummarySchema = z.object({
   owner: z.string().min(1),
   cwd: z.string().min(1),
   section: sessionSectionSchema,
+  attentionTier: sessionAttentionTierSchema.optional(),
   updatedAt: z.iso.datetime(),
   canOpenOwner: z.boolean(),
   canEnterChat: z.boolean(),
@@ -388,6 +397,7 @@ export const nativeHelperPillSchema = z.object({
   owner: z.string().min(1).max(128).optional(),
   inspector: nativeHelperSessionInspectorSchema.optional(),
   phase: sessionSectionSchema,
+  attentionTier: sessionAttentionTierSchema.optional(),
   priority: z.number().int(),
   accessibilityLabel: z.string().min(1).max(512),
 }).strict();
@@ -633,3 +643,4 @@ export type ServerMessage = z.infer<typeof serverMessageSchema>;
 export type SessionSection = z.infer<typeof sessionSectionSchema>;
 export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
 export type SessionSummary = z.infer<typeof sessionSummarySchema>;
+export type SessionAttentionTier = z.infer<typeof sessionAttentionTierSchema>;
