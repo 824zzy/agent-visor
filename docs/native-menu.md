@@ -36,6 +36,8 @@ A normal click acknowledges a Ready item and moves it behind In progress. Activi
 
 An observed transition into Ready pulses its status dot for up to seven minutes. Initial snapshots do not invent completions, and acknowledgment stops the pulse.
 
+Ready status color fades linearly from fresh green to muted gray over 42 minutes from the authoritative activity date. Acknowledgment does not reset this age. The helper updates the color every 30 seconds while pulse animation changes only opacity.
+
 Each item matches the released 24-point dark capsule, six-point status dot, seven-point outer padding, and three-point dot-to-title spacing.
 
 Hovering for 0.35 seconds opens a compact session inspector. Leaving the item dismisses it, while clicking keeps the normal source action.
@@ -64,7 +66,7 @@ Phase and membership changes adopt the new priority order. Existing panels move 
 The status colors match the released sRGB roles:
 
 - `#f4c114` means Needs you.
-- `#a6e3a1` means Ready to continue.
+- `#a6e3a1` means fresh Ready to continue and fades toward `#7f849c` as activity ages.
 - `#d97857` means In progress.
 - Recent History uses the muted `#7f849c` role and lighter capsule treatment.
 

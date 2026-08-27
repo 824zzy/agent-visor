@@ -5,6 +5,7 @@ public enum ReadyAttentionPolicy {
     public static let defaultPulsePeriod: TimeInterval = 1.5
     public static let defaultPulseMinimumOpacity = 0.35
     public static let defaultPositionHold: TimeInterval = 2
+    public static let defaultStatusFadeWindow: TimeInterval = 42 * 60
 
     public static func isAcknowledged(
         phaseChangedAt: Date,
@@ -70,6 +71,15 @@ public enum ReadyAttentionPolicy {
         let wave = 0.5 + 0.5 * cos(phase * 2 * .pi)
         let floor = min(1, max(0, minimumOpacity))
         return floor + (1 - floor) * wave
+    }
+
+    public static func statusStaleness(
+        isReady: Bool,
+        activityAt: Date?,
+        now: Date
+    ) -> Double {
+        guard isReady, let activityAt else { return 0 }
+        return min(1, max(0, now.timeIntervalSince(activityAt) / defaultStatusFadeWindow))
     }
 
     public static func shouldRemainProminent(

@@ -205,7 +205,7 @@ Within an attention tier, newer phase-entry evidence sorts first and session ID 
 ## Ready Completion Attention
 
 - A pulsing `Ready` indicator means the current completed turn is recent and has not yet been acknowledged.
-- Opening the session through an Agent Visor navigation surface acknowledges that specific completion. Its indicator becomes static immediately while the session remains `Ready`, green, and active.
+- Opening the session through an Agent Visor navigation surface acknowledges that specific completion. Its indicator becomes static immediately while the session remains `Ready`. In the menu bar, a separate activity-age fade continues from fresh green toward muted gray over 42 minutes.
 - In the menu-bar strip, the first acknowledgment of a Ready transition holds the pill in its current Ready priority tier for two seconds so the clicked target does not appear to vanish. After that spatial grace period, it moves below Working pills. Reopening the same acknowledged completion does not restart the hold or promote the pill again. It may enter `+N` overflow when space is constrained, but it does not become `Recent`.
 - A genuine phase change takes precedence over the spatial grace period. The hold never delays new status evidence or mutates session phase.
 - State-grouped browser surfaces keep the row in `Ready` and preserve their keyboard cursor and viewport.
@@ -213,7 +213,7 @@ Within an attention tier, newer phase-entry evidence sorts first and session ID 
 - A later Ready transition also returns the pill above Working until that completion is acknowledged.
 - Navigation recency is recorded independently for `Recent` ordering and must not replace the Ready acknowledgment timestamp.
 - The attention pulse expires after seven minutes even when it is not acknowledged.
-- The Ready pulse must not saturate the compositor. Its status color is resolved once per state change, never inside the per-frame animation closure, and only opacity animates on a throttled schedule rather than the raw display refresh. This keeps per-frame cost near zero even when several indicators pulse simultaneously on a high-refresh display.
+- The Ready pulse must not saturate the compositor. Color-age updates run every 30 seconds, never inside the per-frame animation closure. Only opacity uses the throttled pulse schedule. This keeps per-frame cost near zero even when several indicators pulse simultaneously on a high-refresh display.
 - The brief capsule press response remains separate click feedback and is not an attention signal.
 
 ### Ready Completion Notifications

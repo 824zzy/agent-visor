@@ -179,6 +179,31 @@ final class ReadyAttentionPolicyTests: XCTestCase {
         ))
     }
 
+    func testReadyStatusUsesReleasedFortyTwoMinuteFade() {
+        let activityAt = Date(timeIntervalSinceReferenceDate: 1_000)
+
+        XCTAssertEqual(ReadyAttentionPolicy.statusStaleness(
+            isReady: true,
+            activityAt: activityAt,
+            now: activityAt
+        ), 0)
+        XCTAssertEqual(ReadyAttentionPolicy.statusStaleness(
+            isReady: true,
+            activityAt: activityAt,
+            now: activityAt.addingTimeInterval(21 * 60)
+        ), 0.5)
+        XCTAssertEqual(ReadyAttentionPolicy.statusStaleness(
+            isReady: true,
+            activityAt: activityAt,
+            now: activityAt.addingTimeInterval(42 * 60)
+        ), 1)
+        XCTAssertEqual(ReadyAttentionPolicy.statusStaleness(
+            isReady: false,
+            activityAt: activityAt,
+            now: activityAt.addingTimeInterval(42 * 60)
+        ), 0)
+    }
+
     private func candidate(
         id: String,
         phase: PillSurfacePhase = .ready,

@@ -66,10 +66,43 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
         XCTAssertEqual(attention.opacity(id: "session", phase: .ready, now: changedAt), 1)
     }
 
-    private func pill(_ phase: NativeHelperPillPhase) -> NativeHelperPill {
+    func testAcknowledgedReadyStillReachesStaleColor() {
+        let activityAt = Date(timeIntervalSinceReferenceDate: 1_000)
+        let readyPill = pill(.ready, activityAt: activityAt)
+        var attention = NativeMenuReadyAttention()
+        attention.present(
+            previousPhases: ["session": .working],
+            pills: [readyPill],
+            now: activityAt
+        )
+        attention.acknowledgeReady(id: "session")
+
+        XCTAssertEqual(
+            attention.statusStaleness(
+                pill: readyPill,
+                now: activityAt.addingTimeInterval(ReadyAttentionPolicy.defaultStatusFadeWindow)
+            ),
+            1
+        )
+    }
+
+    private func pill(
+        _ phase: NativeHelperPillPhase,
+        activityAt: Date? = nil
+    ) -> NativeHelperPill {
         NativeHelperPill(
             id: "session",
             title: "Session",
+            inspector: activityAt.map {
+                NativeHelperSessionInspector(
+                    status: "Ready",
+                    runtimeItems: ["Pi · Ghostty"],
+                    detailRows: [],
+                    projectPath: "~/Codes/agent-visor",
+                    activityAt: $0.formatted(.iso8601),
+                    context: nil
+                )
+            },
             phase: phase,
             priority: 0,
             accessibilityLabel: "Session"
