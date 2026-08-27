@@ -372,6 +372,67 @@ describe("SessionRepository", () => {
     });
   });
 
+  it("expires stale Pi Ready hook evidence through provider rediscovery", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{
+      ...live,
+      owner: "Pi",
+      section: "history",
+      subtitle: "From Pi history",
+      canOpenOwner: false,
+    }];
+    let now = new Date("2026-08-22T08:01:00.000Z");
+    const repository = new SessionRepository([provider], { now: () => now });
+    await repository.refresh();
+    const ready = repository.applyHook({
+      ...heartbeat(),
+      event: "Stop",
+      status: "waiting_for_input",
+      receivedAt: now.toISOString(),
+    });
+    expect(ready.sessions[0]).toMatchObject({
+      section: "ready",
+      subtitle: "Ready to continue",
+    });
+
+    now = new Date("2026-08-22T08:31:01.000Z");
+    const expired = await repository.refresh();
+
+    expect(expired.sessions[0]).toMatchObject({
+      section: "history",
+      subtitle: "From Pi history",
+      canOpenOwner: false,
+    });
+  });
+
+  it("expires stale Pi Ready while preserving live owner navigation", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{
+      ...live,
+      section: "history",
+      subtitle: "Pi session",
+    }];
+    let now = new Date("2026-08-22T08:01:00.000Z");
+    const repository = new SessionRepository([provider], { now: () => now });
+    await repository.refresh();
+    repository.applyHook({
+      ...heartbeat(),
+      event: "Stop",
+      status: "waiting_for_input",
+      receivedAt: now.toISOString(),
+    });
+
+    now = new Date("2026-08-22T08:31:01.000Z");
+    const expired = await repository.refresh();
+
+    expect(expired.sessions[0]).toMatchObject({
+      section: "history",
+      subtitle: "Pi session",
+      owner: "Ghostty",
+      canOpenOwner: true,
+    });
+  });
+
   it("keeps repeated idle heartbeats phase-neutral for an already Ready Pi session", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{ ...live, section: "ready", updatedAt: "2026-08-22T08:00:00.000Z" }];

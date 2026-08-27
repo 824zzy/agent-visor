@@ -28,9 +28,13 @@ A transient provider failure retains that provider’s last complete rows. Empty
 
 Pi heartbeats update exact runtime identity without refreshing phase or activity. An idle heartbeat repairs only a Working row: recent transcript writes become Ready, while older or unreadable writes become History without attention.
 
+Pi Ready hook evidence expires after the shared 30-minute stale ceiling. Rediscovery then supplies the History presentation while preserving any live owner navigation.
+
 A bounded, boot-scoped Pi runtime-link file preserves exact focus across daemon restarts. Fresh provider discovery must validate each link before use.
 
 Connected clients receive later revisions automatically. A reconnect receives the current revision without rebuilding session identity.
+
+Renderer clients treat both clean closes and socket errors as disconnected. They stop presenting the cached snapshot as live, retry the local daemon with capped backoff, and repeat each subscription after reconnecting.
 
 ## Machine work
 

@@ -3,31 +3,43 @@ import {
   serverMessageSchema,
   type SessionSnapshot,
 } from "@agent-visor/protocol";
+import {
+  connectDaemon,
+  type DaemonConnection,
+  type DaemonConnectionHandlers,
+} from "./daemon-connection";
 
-type ConnectionState =
+export type ConnectionState =
   | { status: "connecting"; snapshot?: undefined }
   | { status: "connected"; snapshot: SessionSnapshot }
   | { status: "failed"; snapshot?: undefined };
 
+type DaemonConnector = (handlers: DaemonConnectionHandlers) => DaemonConnection;
+
 export function useSessionSnapshot(): ConnectionState {
   const [state, setState] = useState<ConnectionState>({ status: "connecting" });
 
-  useEffect(() => {
-    const socket = new WebSocket(daemonUrl());
-
-    socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({ type: "subscribe_sessions" }));
-    });
-    socket.addEventListener("message", (event) => {
-      const snapshot = sessionSnapshotFromServerData(String(event.data));
-      if (snapshot) setState({ status: "connected", snapshot });
-    });
-    socket.addEventListener("error", () => setState({ status: "failed" }));
-
-    return () => socket.close();
-  }, []);
+  useEffect(() => observeSessionSnapshots(setState), []);
 
   return state;
+}
+
+export function observeSessionSnapshots(
+  onState: (state: ConnectionState) => void,
+  connect: DaemonConnector = connectDaemon,
+): () => void {
+  const connection = connect({
+    url: daemonUrl(),
+    onDisconnect: () => onState({ status: "connecting" }),
+    onMessage: (data) => {
+      const snapshot = sessionSnapshotFromServerData(data);
+      if (snapshot) onState({ status: "connected", snapshot });
+    },
+    onOpen: (opened) => {
+      opened.send(JSON.stringify({ type: "subscribe_sessions" }));
+    },
+  });
+  return () => connection.close();
 }
 
 export async function focusSession(sessionId: string): Promise<boolean> {

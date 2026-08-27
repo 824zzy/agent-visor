@@ -97,6 +97,9 @@ export type HookResponse = {
 };
 
 const piReadyRecoveryWindowMs = 90_000;
+// ponytail: keep this aligned with Swift's TranscriptPhaseInferrer.defaultStaleCeiling;
+// move the value into the shared protocol if another runtime needs to enforce the policy.
+const piHookReadyStaleCeilingMs = 30 * 60 * 1_000;
 const distantPast = "1970-01-01T00:00:00.000Z";
 const maxPiRuntimeLinks = 64;
 const maxPiRuntimeStateBytes = 1_048_576;
@@ -104,6 +107,7 @@ const maxPiRuntimeStateBytes = 1_048_576;
 type SessionRepositoryOptions = {
   piRuntimeStatePath?: string;
   bootSessionUUID?: string;
+  now?: () => Date;
 };
 
 type PiRuntimeState = {
@@ -158,6 +162,7 @@ export class SessionRepository {
     respond(message: Extract<ClientMessage, { type: "respond_chat" }>): Promise<void>;
   }>();
   private controls: SessionControls | undefined;
+  private readonly now: () => Date;
   private readonly hookResponders = new Map<string, {
     sessionId: string;
     respond(response: HookResponse): void;
@@ -167,6 +172,7 @@ export class SessionRepository {
     private readonly providers: ProviderAdapter[],
     options: SessionRepositoryOptions = {},
   ) {
+    this.now = options.now ?? (() => new Date());
     const bootSessionUUID = canonicalBootSessionUUID(options.bootSessionUUID);
     if (!options.piRuntimeStatePath || !bootSessionUUID) return;
     this.piRuntimeState = { path: options.piRuntimeStatePath, bootSessionUUID };
@@ -375,6 +381,7 @@ export class SessionRepository {
       }
     }));
     this.removeConcludedPiRuntimes();
+    this.expireStalePiReadyHooks();
     const snapshot = this.publish(discovered.flat());
     this.publishPiRestoration();
     return snapshot;
@@ -475,6 +482,16 @@ export class SessionRepository {
       this.rememberPiRestorationRemoval(sessionId);
     }
     this.persistPiRuntimeLinks();
+  }
+
+  private expireStalePiReadyHooks(): void {
+    const now = this.now().valueOf();
+    for (const [sessionId, hook] of this.hookBySession) {
+      if (hook.provider !== "pi" || hookPhase(hook).section !== "ready") continue;
+      const observedAt = Date.parse(hook.receivedAt);
+      if (!Number.isFinite(observedAt) || now - observedAt <= piHookReadyStaleCeilingMs) continue;
+      this.hookBySession.delete(sessionId);
+    }
   }
 
   private publish(discovered: DiscoveredProviderSession[]): SessionSnapshot {

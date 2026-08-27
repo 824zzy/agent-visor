@@ -5,48 +5,48 @@ import {
   type AppSettingsPatch,
   type NativeServicesState,
 } from "@agent-visor/protocol";
+import { connectDaemon, type DaemonConnection } from "./daemon-connection";
 import { daemonUrl } from "./use-session-snapshot";
 
 export function useNativeServices() {
   const [state, setState] = useState<NativeServicesState>();
   const [error, setError] = useState<string>();
-  const socketRef = useRef<WebSocket | undefined>(undefined);
+  const connectionRef = useRef<DaemonConnection | undefined>(undefined);
 
   useEffect(() => {
-    const socket = new WebSocket(daemonUrl());
-    socketRef.current = socket;
-    socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({ type: "get_native_services" }));
-    });
-    socket.addEventListener("message", (event) => {
-      const raw = String(event.data);
-      const next = nativeServicesFromServerData(raw);
-      if (next) {
-        setState(next);
-        setError(undefined);
-        return;
-      }
-      try {
-        const parsed = serverMessageSchema.safeParse(JSON.parse(raw));
-        if (parsed.success && parsed.data.type === "native_action_result" && !parsed.data.ok) {
-          setError(parsed.data.error ?? "The native action failed.");
+    const connection = connectDaemon({
+      url: daemonUrl(),
+      onDisconnect: () => setError("Native services are reconnecting."),
+      onOpen: (opened) => {
+        opened.send(JSON.stringify({ type: "get_native_services" }));
+      },
+      onMessage: (raw) => {
+        const next = nativeServicesFromServerData(raw);
+        if (next) {
+          setState(next);
+          setError(undefined);
+          return;
         }
-      } catch { /* ignore unrelated daemon messages */ }
+        try {
+          const parsed = serverMessageSchema.safeParse(JSON.parse(raw));
+          if (parsed.success && parsed.data.type === "native_action_result" && !parsed.data.ok) {
+            setError(parsed.data.error ?? "The native action failed.");
+          }
+        } catch { /* ignore unrelated daemon messages */ }
+      },
     });
-    socket.addEventListener("error", () => setError("Native services are unavailable."));
+    connectionRef.current = connection;
     return () => {
-      socketRef.current = undefined;
-      socket.close();
+      connectionRef.current = undefined;
+      connection.close();
     };
   }, []);
 
   const send = useCallback((message: object) => {
-    const socket = socketRef.current;
-    if (socket?.readyState !== WebSocket.OPEN) {
+    const connection = connectionRef.current;
+    if (!connection?.send(JSON.stringify(message))) {
       setError("Native services are still connecting.");
-      return;
     }
-    socket.send(JSON.stringify(message));
   }, []);
 
   const update = useCallback((patch: AppSettingsPatch) => send({
