@@ -13,7 +13,9 @@ Each provider keeps its own transcript path and parser.
 - Zed-hosted records reuse the authoritative provider transcript and remain read-only.
 - Auggie remains source-only because it has no verified transcript format.
 
-Historical Codex rows older than the active window remain source-only. Historical Pi records with valid conversation content remain readable.
+Codex Desktop discovery defaults to source-only entry after two minutes without a database update. After status reconciliation, a tracked **In progress**, **Ready to continue**, or **Needs you** session with a canonical transcript still exposes **Open Chat**, regardless of that inactivity age. This restores the Swift tracked-session behavior; it does not grant send, cancel, or approval authority. The provider's separate observed-session window still bounds discovery.
+
+Codex rows that remain **History** keep the existing source-only age rule. Historical Pi records with valid conversation content remain readable. Missing transcripts and unsupported providers or hosts do not gain Chat entry from this rule.
 
 ## Authoritative metadata
 

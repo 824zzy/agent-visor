@@ -10,6 +10,7 @@ import type {
 } from "./environment.js";
 import { PiProvider } from "./pi.js";
 import { ZedProvider } from "./zed.js";
+import { SessionRepository } from "../sessions.js";
 
 const home = "/Users/me";
 const cwd = `${home}/Codes/agent-visor`;
@@ -301,6 +302,53 @@ describe("live provider adapters", () => {
       size: 100,
     });
     expect((await new CodexProvider(environment).discover())[0]?.canEnterChat).toBe(false);
+  });
+
+  it.each([
+    { section: "ready", event: "Stop", status: "waiting_for_input", ageMs: 121_000 },
+    { section: "ready", event: "Stop", status: "waiting_for_input", ageMs: 3_600_000 },
+    { section: "ready", event: "Stop", status: "waiting_for_input", ageMs: 41 * 3_600_000 },
+    { section: "working", event: "UserPromptSubmit", status: "working", ageMs: 3_600_000 },
+    { section: "needs_you", event: "PermissionRequest", status: "approval", ageMs: 3_600_000 },
+  ])("keeps Open Chat available for tracked Codex $section after $ageMs ms idle", async ({
+    section, event, status, ageMs,
+  }) => {
+    const environment = new FixtureEnvironment();
+    const database = `${home}/.codex/sqlite/state_5.sqlite`;
+    const rollout = `${home}/.codex/sessions/ready.jsonl`;
+    const completedAt = new Date(now.valueOf() - ageMs);
+    environment.stamps.set(database, { modifiedAt: now, size: 100 });
+    environment.stamps.set(rollout, { modifiedAt: completedAt, size: 100 });
+    environment.sqliteRows.set(database, [{
+      id: "ready-codex", rollout_path: rollout, cwd, title: "Ready Codex",
+      updated_at: completedAt.valueOf() / 1_000, archived: 0, source: "vscode",
+    }]);
+    const repository = new SessionRepository([new CodexProvider(environment)], {
+      now: () => now,
+    });
+    expect((await repository.refresh()).sessions).toMatchObject([{
+      id: "ready-codex", section: "history", canOpenOwner: true, canEnterChat: false,
+    }]);
+
+    const completed = repository.applyHook({
+      sessionId: "ready-codex", provider: "codex", cwd,
+      event, status, receivedAt: completedAt.toISOString(),
+    });
+
+    expect(completed.sessions).toMatchObject([{
+      id: "ready-codex", section, canOpenOwner: true, canEnterChat: true,
+    }]);
+    expect((await repository.refresh()).sessions).toEqual(completed.sessions);
+
+    expect(repository.applyHook({
+      sessionId: "ready-codex", provider: "codex", cwd,
+      event: "SessionEnd", status: "ended", receivedAt: now.toISOString(),
+    }).sessions).toMatchObject([{
+      id: "ready-codex", section: "history", canOpenOwner: true, canEnterChat: false,
+    }]);
+
+    environment.stamps.delete(rollout);
+    expect((await repository.refresh()).sessions).toEqual([]);
   });
 
   it("discovers authoritative headless Codex jobs", async () => {

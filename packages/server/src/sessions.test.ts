@@ -79,6 +79,51 @@ describe("SessionRepository", () => {
     expect(await repository.refresh()).toEqual(first);
   });
 
+  it("opens idle tracked Codex history without changing control permissions", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "codex-chat-entry-"));
+    const transcript = path.join(directory, "rollout.jsonl");
+    writeFileSync(transcript, `${JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "user-1", role: "user",
+        content: [{ type: "input_text", text: "Existing conversation" }],
+      },
+    })}\n`);
+    try {
+      const provider = new FakeProvider();
+      provider.sessions = [{
+        ...live, provider: "codex", owner: "Codex", section: "history",
+        canEnterChat: false, chatPath: transcript, messageTransport: "codex_app_server",
+      }];
+      const repository = new SessionRepository([provider]);
+      await repository.refresh();
+      const previousCapabilities = (await repository.chatPage(live.id)).capabilities;
+      const snapshot = repository.applyHook({
+        sessionId: live.id, provider: "codex", cwd: live.cwd,
+        event: "Stop", status: "waiting_for_input", receivedAt: live.updatedAt,
+      });
+
+      expect(snapshot.sessions[0]?.canEnterChat).toBe(true);
+      const page = await repository.chatPage(live.id);
+      expect(page.items).toMatchObject([{ kind: "user", text: "Existing conversation" }]);
+      expect(page.capabilities).toEqual(previousCapabilities);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { provider: "codex" as const, owner: "Codex", chatPath: undefined },
+    { provider: "codex" as const, owner: "Zed", chatPath: "/tmp/zed.jsonl" },
+    { provider: "cursor" as const, owner: "Cursor", chatPath: "/tmp/cursor.jsonl" },
+  ])("preserves unsupported Chat entry for $provider owned by $owner", async (record) => {
+    const provider = new FakeProvider();
+    provider.sessions = [{ ...live, ...record, section: "ready", canEnterChat: false }];
+    const repository = new SessionRepository([provider]);
+
+    expect((await repository.refresh()).sessions[0]?.canEnterChat).toBe(false);
+  });
+
   it("does not publish Codex hooks without an authoritative thread", async () => {
     const repository = new SessionRepository([]);
     const sessionId = "01a03c62-72e0-78b0-8768-7d7d13167e6c";

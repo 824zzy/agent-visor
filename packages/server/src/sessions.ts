@@ -534,6 +534,13 @@ export class SessionRepository {
         record.subtitle = "Approval required";
         record.updatedAt = this.externalActions.get(record.id)!.receivedAt;
       }
+      // Codex's discovery age gate applies to source-only history, not a
+      // tracked Ready/working/Needs-you session with a canonical transcript.
+      // Chat send/cancel authority remains separate from this read-only entry.
+      if (record.provider === "codex" && record.owner === "Codex"
+        && record.section !== "history" && record.chatPath) {
+        record.canEnterChat = true;
+      }
     }
     this.controlBySession.clear();
     for (const record of merged) {
