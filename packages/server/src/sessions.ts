@@ -49,6 +49,7 @@ export type DiscoveredProviderSession = {
   controlTarget?: SessionControlTarget;
   messageTransport?: "terminal" | "codex_app_server";
   modelCatalog?: Record<string, { displayName: string; contextWindow?: number }>;
+  codexLifecycle?: import("./providers/codex-lifecycle.js").CodexLifecycle;
 };
 
 export interface SessionControls {
@@ -657,6 +658,14 @@ function applyHooks(
     const phase = hookPhase(hook);
     const existing = sessions.find((session) => session.id === hook.sessionId);
     if (existing) {
+      // ponytail: desktop Codex can omit or deliver stale turn hooks. Never let
+      // those replace the lifecycle boundary read from its own transcript.
+      if (existing.codexLifecycle) {
+        const approvalDuringTurn = existing.codexLifecycle.phase === "working"
+          && phase.section === "needs_you"
+          && hook.receivedAt >= existing.codexLifecycle.observedAt;
+        if (!approvalDuringTurn) continue;
+      }
       existing.section = phase.section;
       existing.subtitle = phase.subtitle;
       existing.updatedAt = hook.activityAt ?? hook.receivedAt;

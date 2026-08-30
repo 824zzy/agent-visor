@@ -2,6 +2,7 @@ import type { NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import path from "node:path";
 import type { DiscoveredProviderSession, ProviderAdapter } from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
+import { CodexLifecycleReader } from "./codex-lifecycle.js";
 import { isRecord, iso, ownerForProcess, terminalTargetForProcess } from "./shared.js";
 
 type ModelCatalogCache = {
@@ -32,6 +33,7 @@ export class CodexProvider implements ProviderAdapter {
   readonly id = "codex" as const;
   private lastRows: CodexRow[] = [];
   private readonly modelCatalogCache: ModelCatalogCache = {};
+  private readonly lifecycleReader = new CodexLifecycleReader();
 
   constructor(private readonly environment: ProviderEnvironment) {}
 
@@ -94,15 +96,26 @@ export class CodexProvider implements ProviderAdapter {
   ): Promise<DiscoveredProviderSession> {
     const storedTitle = indexTitles.get(thread.id) || thread.title;
     const title = storedTitle || await codexRolloutTitle(this.environment, thread.rolloutPath);
+    const codexLifecycle = owner === "Codex" && !terminalTarget
+      ? await this.lifecycleReader.read(this.environment, thread.id, thread.rolloutPath)
+      : undefined;
+    // Ready attention and the recent-session window are separate policies.
+    // A completed task becomes History after 30 minutes, but is still a shortcut.
+    const section = codexLifecycle?.phase === "ready"
+      && this.environment.now().valueOf() - Date.parse(codexLifecycle.observedAt) > 30 * 60_000
+      ? "history" : codexLifecycle?.phase ?? "history";
     return {
       id: thread.id,
       provider: "codex",
       title: title || undefined,
-      subtitle: owner === "Codex" ? "Codex app session" : "Codex CLI session",
+      subtitle: section !== "history"
+        ? (section === "working" ? "Agent is working" : "Ready to continue")
+        : (owner === "Codex" ? "Codex app session" : "Codex CLI session"),
       cwd: thread.cwd,
       owner,
-      section: "history",
-      updatedAt: iso(thread.updatedAt * 1_000),
+      section,
+      updatedAt: codexLifecycle?.observedAt ?? iso(thread.updatedAt * 1_000),
+      ...(codexLifecycle ? { codexLifecycle } : {}),
       canOpenOwner: true,
       canEnterChat: owner !== "Codex"
         || this.environment.now().valueOf() - thread.updatedAt * 1_000 <= 120_000,

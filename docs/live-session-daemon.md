@@ -22,6 +22,35 @@ No generic title parser combines provider formats.
 
 `SessionRepository` normalizes provider rows and capabilities, applies hook phases, resolves host authority, and increments its revision only when visible content changes.
 
+### Codex desktop lifecycle
+
+Codex desktop status comes from its exact rollout's latest turn boundary, not
+the last arriving hook. `task_started` means Working; `task_complete` and
+`turn_aborted` mean Ready. Explicit terminal turn IDs must match the active turn;
+older timestamps and duplicate starts cannot revive or finish a newer turn.
+Legacy records without turn IDs use their ordered transcript boundaries.
+
+This restores Swift's desktop transcript reconciliation. Once a boundary is
+known, delayed Stop, SessionStart, and tool hooks cannot overwrite it. A current
+approval hook still shows Needs you while that turn is open; a terminal marker
+clears it. Registered Chat approvals retain their existing authority. Codex CLI
+and the other providers keep their existing hook policies.
+
+The reader retains at most 200 small checkpoints, reads only bounded line
+prefixes, and resumes at the last complete newline. It recognizes the canonical
+header even when a completion record embeds a large final answer. Unchanged
+files are cached, failed/partial reads retry, and truncation or a replaced path
+resets the checkpoint. The first read streams the existing transcript; later
+refreshes scan only appended bytes. It never retains message or tool bodies.
+
+Updates use the existing three-second discovery cycle, including when Chat is
+closed or the daemon restarts. Recent completed turns show Ready for 30 minutes,
+then History; this does not change the configurable observed-session window,
+source navigation, or Open Chat. An open turn is not declared completed by an
+inactivity timer.
+
+### Provider recovery and clients
+
 Unmatched Pi hooks wait for provider validation. A hook without a durable transcript cannot advertise an exact source action or become a physical pill.
 
 A transient provider failure retains that provider’s last complete rows. Empty Codex and Zed database reads do not replace a previous non-empty read.
