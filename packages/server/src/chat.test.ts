@@ -8,8 +8,79 @@ import {
   parseChatMetadata,
   readChatPage,
 } from "./chat.js";
+import { processInstanceToken } from "./providers/shared.js";
 
 describe("provider Chat parsing", () => {
+  it("preserves explicit delivery identity and does not invent it", () => {
+    const claude = parseChatLines("claude_code", [
+      JSON.stringify({
+        type: "user",
+        uuid: "claude-user",
+        request_id: "request-claude",
+        delivery_id: "delivery-claude",
+        message: { role: "user", content: "Fix Claude" },
+      }),
+    ]);
+    const codex = parseChatLines("codex", [
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message", id: "codex-user", role: "user", request_id: "request-codex",
+          delivery_id: "delivery-codex", content: [{ type: "input_text", text: "Fix Codex" }],
+        },
+      }),
+    ]);
+    const pi = parseChatLines("pi", [
+      JSON.stringify({
+        type: "message",
+        id: "pi-user",
+        message: {
+          role: "user", requestId: "request-pi", deliveryId: "delivery-pi",
+          content: [{ type: "text", text: "Fix Pi" }],
+        },
+      }),
+    ]);
+    const ordinary = parseChatLines("claude_code", [
+      JSON.stringify({ type: "user", uuid: "ordinary", message: { role: "user", content: "No identity" } }),
+    ]);
+
+    expect(claude[0]).toMatchObject({ requestId: "request-claude", deliveryId: "delivery-claude" });
+    expect(codex[0]).toMatchObject({ requestId: "request-codex", deliveryId: "delivery-codex" });
+    expect(pi[0]).toMatchObject({ requestId: "request-pi", deliveryId: "delivery-pi" });
+    expect(ordinary[0]).not.toHaveProperty("requestId");
+    expect(ordinary[0]).not.toHaveProperty("deliveryId");
+  });
+
+  it("normalizes raw and data-URI provider images and infers a missing MIME", () => {
+    const rawPng = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString("base64");
+    const claude = parseChatLines("claude_code", [
+      JSON.stringify({ type: "user", uuid: "u-image", message: { role: "user", content: [
+        { type: "image", source: { type: "base64", data: rawPng } },
+      ] } }),
+    ]);
+    const pi = parseChatLines("pi", [
+      JSON.stringify({ type: "message", id: "p-image", message: { role: "user", content: [
+        { type: "image", data: `data:image/png;base64,${rawPng}` },
+      ] } }),
+    ]);
+    expect(claude[0]).toMatchObject({ images: [{ mimeType: "image/png", data: rawPng }] });
+    expect(pi[0]).toMatchObject({ images: [{ mimeType: "image/png", data: rawPng }] });
+  });
+
+  it("drops malformed, oversized, remote, and explicitly unsupported provider images", () => {
+    const rawPng = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString("base64");
+    const oversized = `${rawPng}${"A".repeat(13_333_336)}`;
+    const items = parseChatLines("claude_code", [
+      JSON.stringify({ type: "user", uuid: "u-invalid-images", message: { role: "user", content: [
+        { type: "image", source: { type: "base64", media_type: "image/bmp", data: rawPng } },
+        { type: "image", source: { type: "base64", data: "not-base64" } },
+        { type: "image", source: { type: "base64", data: oversized } },
+        { type: "image", source: { type: "url", data: "https://example.invalid/image.png" } },
+      ] } }),
+    ]);
+    expect(items).toEqual([]);
+  });
+
   it("parses Claude prose, thinking, tools, results, and images", () => {
     const items = parseChatLines("claude_code", [
       JSON.stringify({ type: "user", uuid: "u1", timestamp: "2026-08-22T10:00:00.000Z", message: { role: "user", content: "Fix it" } }),
@@ -20,7 +91,7 @@ describe("provider Chat parsing", () => {
       ] } }),
       JSON.stringify({ type: "user", uuid: "r1", timestamp: "2026-08-22T10:00:02.000Z", message: { role: "user", content: [
         { type: "tool_result", tool_use_id: "tool-1", content: "45 passed", is_error: false },
-        { type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
       ] } }),
     ]);
 
@@ -28,7 +99,7 @@ describe("provider Chat parsing", () => {
     expect(items[3]).toMatchObject({
       id: "tool-1", family: "bash", status: "success", result: "45 passed",
     });
-    expect(items[4]).toMatchObject({ kind: "user", images: [{ mimeType: "image/png", data: "abc" }] });
+    expect(items[4]).toMatchObject({ kind: "user", images: [{ mimeType: "image/png", data: "iVBORw0KGgo=" }] });
   });
 
   it("preserves provider session metadata rows for visibility controls", () => {
@@ -149,9 +220,19 @@ describe("provider Chat parsing", () => {
       id: "session-1", provider: "pi" as const, cwd: "/tmp/project", owner: "Ghostty",
       section: "working" as const, updatedAt: "2026-08-23T00:00:00.000Z",
       canOpenOwner: true, canEnterChat: true,
+      controlTarget: {
+        kind: "terminal" as const,
+        target: {
+          application: "Ghostty" as const,
+          pid: 42,
+          processStartToken: processInstanceToken(42, "2026-08-23T00:00:00.000Z"),
+          tty: "ttys001",
+          cwd: "/tmp/project",
+        },
+      },
     };
     expect(chatCapabilities({ ...base, messageTransport: "terminal" })).toMatchObject({
-      canSendText: true, canSendImages: true,
+      canSendText: true, canSendImages: true, canCancel: true, maxTextBytes: 65_536,
     });
     expect(chatCapabilities({
       ...base,
@@ -159,11 +240,35 @@ describe("provider Chat parsing", () => {
       messageTransport: "terminal",
       controlTarget: {
         kind: "terminal",
-        target: { application: "Terminal", tty: "ttys001", cwd: "/tmp/project" },
+        target: {
+          application: "Terminal",
+          pid: 42,
+          processStartToken: processInstanceToken(42, "2026-08-23T00:00:00.000Z"),
+          tty: "ttys001",
+          cwd: "/tmp/project",
+        },
       },
-    })).toMatchObject({ canSendText: true, canSendImages: false });
+    })).toMatchObject({ canSendText: true, canSendImages: false, canCancel: true });
+    expect(chatCapabilities({ ...base, provider: "claude_code", messageTransport: "terminal" }))
+      .toMatchObject({ maxTextBytes: 65_536 });
     expect(chatCapabilities({ ...base, provider: "cursor" })).toMatchObject({
       canSendText: false, canSendImages: false,
+    });
+  });
+
+  it("keeps ended sessions read only even when a transport remains present", () => {
+    const ended = {
+      id: "ended-session", provider: "pi" as const, cwd: "/tmp/project", owner: "Ghostty",
+      section: "history" as const, updatedAt: "2026-08-23T00:00:00.000Z",
+      canOpenOwner: true, canEnterChat: true, messageTransport: "terminal" as const,
+    };
+    expect(chatCapabilities(ended)).toEqual({
+      canSendText: false,
+      canSendImages: false,
+      canCancel: false,
+      canApprove: false,
+      canAnswer: false,
+      readOnlyReason: "This session has ended. Chat history is read only.",
     });
   });
 
@@ -203,6 +308,39 @@ describe("provider Chat parsing", () => {
         modelProvider: "openai-codex", contextWindow: 114_688,
       });
       expect(earlier.metadata).toBeUndefined();
+      expect(newest.transcriptEvidence).toEqual({
+        authoritative: false,
+        complete: false,
+        sourceTimestamp: "2026-08-22T10:04:00.000Z",
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("marks empty and malformed transcript probes non-authoritative", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "agent-visor-chat-evidence-"));
+    const transcript = path.join(directory, "session.jsonl");
+    const session = {
+      id: "evidence-session", provider: "pi" as const, cwd: "/tmp", owner: "Pi",
+      section: "working" as const, updatedAt: "2026-08-22T10:04:00.000Z",
+      canOpenOwner: true, canEnterChat: true, chatPath: transcript,
+    };
+    try {
+      await writeFile(transcript, "");
+      expect((await readChatPage(session)).transcriptEvidence).toEqual({
+        authoritative: false, complete: false,
+      });
+
+      await writeFile(transcript, `not-json\n${JSON.stringify({
+        type: "message", id: "user-1", timestamp: "2026-08-22T10:04:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "Old" }] },
+      })}\n`);
+      expect((await readChatPage(session)).transcriptEvidence).toEqual({
+        authoritative: false,
+        complete: true,
+        sourceTimestamp: "2026-08-22T10:04:00.000Z",
+      });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

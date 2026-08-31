@@ -189,12 +189,20 @@ final class SessionStateBehaviourTests: XCTestCase {
     }
 
     func testClaudeWithATerminalTakesTheAttachmentRoute() {
-        let session = SessionStateFixture.make(agentID: .claudeCode, tty: "ttys004")
+        let session = SessionStateFixture.make(
+            agentID: .claudeCode,
+            tty: "ttys004",
+            terminalHost: .ghostty
+        )
         XCTAssertEqual(session.imageSubmissionRoute, .terminalAttachment)
     }
 
     func testPiWithATerminalTakesThePathPromptRoute() {
-        let session = SessionStateFixture.make(agentID: .pi, tty: "ttys004")
+        let session = SessionStateFixture.make(
+            agentID: .pi,
+            tty: "ttys004",
+            terminalHost: .ghostty
+        )
         XCTAssertEqual(
             session.imageSubmissionRoute,
             .terminalPathPrompt,

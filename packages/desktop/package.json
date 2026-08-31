@@ -16,6 +16,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@agent-visor/protocol": "*",
     "@agent-visor/server": "*"
   },
   "devDependencies": {

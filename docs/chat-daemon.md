@@ -2,6 +2,9 @@
 
 The TypeScript daemon owns Chat history reads and interactive hook responses.
 
+The Swift-to-Electron UI behavior contract and public test seams are defined
+in [Chat feature parity](chat-feature-parity.md).
+
 ## Provider records
 
 Each provider keeps its own transcript path and parser.

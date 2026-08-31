@@ -10,12 +10,29 @@ struct GhosttyAdapter: TerminalAdapter {
     nonisolated init() {}
 
     func sendText(_ text: String, toSession session: SessionState) -> Bool {
-        GhosttyScripting.sendInput(text, toSession: session)
+        sendTextOutcome(
+            text,
+            toSession: session,
+            operationID: ProcessExecutor.currentOperationID
+        ).isDelivered
+    }
+
+    func sendTextOutcome(
+        _ text: String,
+        toSession session: SessionState,
+        operationID: String?
+    ) -> TerminalAttachmentDeliveryOutcome {
+        GhosttyScripting.sendInputOutcome(
+            text,
+            toSession: session,
+            operationID: operationID
+        )
     }
 
     func focusSession(_ session: SessionState) -> Bool {
         let sid4 = String(session.sessionId.prefix(4))
-        guard let tty = session.tty, !tty.isEmpty else {
+        guard TerminalProcessIdentityResolver.isVerified(session),
+              let tty = session.tty, !tty.isEmpty else {
             Self.logger.notice("ghostty focus sid=\(sid4, privacy: .public) result=fail reason=noTTY")
             return false
         }
@@ -115,9 +132,15 @@ struct GhosttyAdapter: TerminalAdapter {
     }
 
     private func runAppleScript(_ source: String) -> String {
-        ProcessExecutor.shared.runSyncOrNil(
+        switch ProcessExecutor.shared.runSyncWithResult(
             "/usr/bin/osascript",
-            arguments: ["-e", source]
-        )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            arguments: ["-e", source],
+            timeout: SubprocessDeadlinePolicy.appCommand
+        ) {
+        case .success(let result):
+            return result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .failure:
+            return ""
+        }
     }
 }

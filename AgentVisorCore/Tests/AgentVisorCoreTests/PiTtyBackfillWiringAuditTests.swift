@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+@testable import AgentVisorCore
 
 final class PiTtyBackfillWiringAuditTests: XCTestCase {
     func testHookResolvesAMissingPiTtyFromTheLivePidBeforeOrigin() throws {
@@ -48,17 +49,33 @@ final class PiTtyBackfillWiringAuditTests: XCTestCase {
         XCTAssertTrue(hookPath.contains("ttyBeforeHookMerge != resolvedTTY"))
     }
 
-    func testResolverUsesTheProcessTtyAndNormalizesIt() throws {
-        let source = try String(contentsOf: repoRoot()
-            .appendingPathComponent("AgentVisor/Services/State/SessionStore.swift"))
-        guard let start = source.range(of: "func resolvePiControllingTTY")?.lowerBound else {
-            return XCTFail("resolvePiControllingTTY resolver is missing.")
+    func testBackfillPolicyNormalizesSuccessfulProcessReadAndFailsClosed() {
+        // The app-side resolver deliberately keeps process execution behind
+        // ProcessExecutor. The Core contract is the observable boundary: a
+        // successful bounded local read yields one normalized TTY, while a
+        // timeout, non-zero exit, empty response, or malformed response is
+        // indistinguishable from no identity evidence.
+        XCTAssertEqual(
+            PiTtyBackfillPolicy.tty(from: " ttys012\n", succeeded: true),
+            "ttys012"
+        )
+
+        let failedReads: [(String?, Bool)] = [
+            (" ttys012\n", false),
+            (nil, true),
+            ("", true),
+            ("??\n", true),
+        ]
+        for (output, succeeded) in failedReads {
+            XCTAssertNil(
+                PiTtyBackfillPolicy.tty(from: output, succeeded: succeeded),
+                "A failed or unparseable local process read must fail closed."
+            )
         }
-        let tail = String(source[start...])
-        let resolver = String(tail.prefix(400))
-        XCTAssertTrue(resolver.contains("\"/bin/ps\""))
-        XCTAssertTrue(resolver.contains("\"tty=\""))
-        XCTAssertTrue(resolver.contains("TTYNormalizer.normalize"))
+
+        // Pi backfill is a local identity probe, not an unbounded action.
+        XCTAssertGreaterThan(SubprocessDeadlinePolicy.localRead, 0)
+        XCTAssertLessThanOrEqual(SubprocessDeadlinePolicy.localRead, 10)
     }
 
     private func repoRoot() -> URL {

@@ -246,12 +246,23 @@ actor SessionStore {
     /// Reuses the same `ps`/normalizer pair discovery uses.
     private static func resolvePiControllingTTY(pid: Int?) -> String? {
         guard let pid, pid > 0 else { return nil }
-        return TTYNormalizer.normalize(
-            AgentDiscoveryUtilities.runProcess(
+        // This is a local identity read, not an action. Keep it on the same
+        // bounded ProcessExecutor path as the rest of process discovery so a
+        // wedged ps probe cannot hold the actor forever. An empty, malformed,
+        // or timed-out result fails closed and leaves Pi without a writable TTY.
+        switch ProcessExecutor.shared.runSyncWithResult(
                 "/bin/ps",
-                arguments: ["-p", "\(pid)", "-o", "tty="]
+                arguments: ["-p", "\(pid)", "-o", "tty="],
+                timeout: SubprocessDeadlinePolicy.localRead
+        ) {
+        case .success(let result) where result.isSuccess:
+            return PiTtyBackfillPolicy.tty(
+                from: result.output,
+                succeeded: result.isSuccess
             )
-        )
+        case .success, .failure:
+            return nil
+        }
     }
 
     private func processHookEvent(_ event: HookEvent) async {
@@ -265,6 +276,7 @@ actor SessionStore {
         let isNewSession = existingSessionBeforeHook == nil
         var session = existingSessionBeforeHook ?? createSession(from: event)
         let pidBeforeHookMerge = session.pid
+        let processStartTokenBeforeHookMerge = session.processStartToken
         let ttyBeforeHookMerge = session.tty
         let terminalHostBeforeHookMerge = session.terminalHost
         let originBeforeHookMerge = session.origin
@@ -343,6 +355,7 @@ actor SessionStore {
                 sessions.removeValue(forKey: staleId)
                 hookDidRemoveStaleSession = true
                 cancelPendingSync(sessionId: staleId)
+                await forgetRemovedSessionState(sessionId: staleId)
                 Task { @MainActor in
                     SessionFileWatcherManager.shared.stopWatching(sessionId: staleId)
                 }
@@ -370,6 +383,16 @@ actor SessionStore {
             sharesProcessAcrossSessions: sharesProcessAcrossSessions
         )
         session.pid = processMetadata.pid
+        // Refresh the process-instance token whenever authoritative hook
+        // metadata supplies a live PID. A same-PID restart is a new provider
+        // generation; a transient probe gap keeps the previous token so the
+        // recovery scope remains fail-closed rather than being discarded.
+        if let pid = processMetadata.pid,
+           let liveToken = TerminalProcessIdentityResolver.startToken(pid: pid) {
+            session.processStartToken = liveToken
+        } else if pidBeforeHookMerge != processMetadata.pid {
+            session.processStartToken = nil
+        }
         // Server-side TTY backfill. The bundled extension resolves its
         // controlling TTY once at load with a bounded /usr/bin/tty probe;
         // under load that probe can time out and report no TTY for the whole
@@ -476,6 +499,11 @@ actor SessionStore {
             session.sessionName = name
         }
 
+        // Generation reconciliation happens after PID/token, TTY, host and
+        // origin are merged, so one authoritative hook cannot publish a
+        // partially-updated identity to the mounted composer.
+        await reconcileComposerGeneration(for: session)
+
         if event.isTerminalLifecycleStatus {
             // Keep the ended state in the store for recovery/history
             // paths, but publish immediately so active sidebars can hide
@@ -510,6 +538,7 @@ actor SessionStore {
             let heartbeatDidChange = hookDidRemoveStaleSession
                 || isNewSession
                 || pidBeforeHookMerge != session.pid
+                || processStartTokenBeforeHookMerge != session.processStartToken
                 || ttyBeforeHookMerge != session.tty
                 || terminalHostBeforeHookMerge != session.terminalHost
                 || originBeforeHookMerge != session.origin
@@ -893,6 +922,9 @@ actor SessionStore {
                 terminalHost: host
             ),
             pid: event.pid,
+            processStartToken: event.pid.flatMap {
+                TerminalProcessIdentityResolver.startToken(pid: $0)
+            },
             tty: normalizedTTY,
             isInTmux: false,  // Will be updated
             terminalHost: host,
@@ -3402,6 +3434,9 @@ actor SessionStore {
     /// hidden across relaunch. `title`/`agentRaw` ride along so the settings
     /// "Hidden sessions" list can show a real label.
     func hideSession(id: String, title: String, agentRaw: String) {
+        // This is a reversible archive/hide, not repository removal. Keep the
+        // exact recovery scope and retained attachments available for an
+        // unhide or an A→B→A navigation.
         guard sessions[id] != nil else { return }
         MainWindowSettings.hide(id: id, title: title, agentRaw: agentRaw)
         hiddenSessionIds.insert(id)
@@ -3443,6 +3478,7 @@ actor SessionStore {
         // Teardown — same as the prune path.
         sessions.removeValue(forKey: sessionId)
         cancelPendingSync(sessionId: sessionId)
+        await forgetRemovedSessionState(sessionId: sessionId)
         hiddenSessionIds.remove(sessionId)
         await MainActor.run {
             SessionFileWatcherManager.shared.stopWatching(sessionId: sessionId)
@@ -3466,6 +3502,33 @@ actor SessionStore {
         publishStateWithoutPrune()
     }
 
+    /// Remove all app-owned chat state after the repository has authoritatively
+    /// removed a session. This runs on MainActor because the durable recovery
+    /// service, optimistic echo store, and draft stores are UI-owned. Exact
+    /// attachment IDs remain protected by every other live recovery scope, so
+    /// deleting one session cannot remove another session's image file.
+    private func forgetRemovedSessionState(sessionId: String) async {
+        await MainActor.run {
+            // ComposerRecoveryScopeStore owns snapshot attachment cleanup;
+            // this repository teardown only releases the exact app state.
+            _ = ComposerRecoveryScopeStore.shared.forget(sessionID: sessionId)
+            PendingEchoStore.shared.forget(sessionId: sessionId)
+            DraftStore.shared.clear(sessionId: sessionId)
+            AskUserQuestionDraftStore.shared.clear(sessionId: sessionId)
+            ComposerRecoveryScopeStore.shared.drainAttachmentCleanup()
+        }
+    }
+
+    /// Fold a fully merged authoritative session identity into the app-owned
+    /// recovery service. The service compares PID, process-start token, TTY,
+    /// and known terminal host, and migrates exact recovery content when the
+    /// provider instance changes.
+    private func reconcileComposerGeneration(for session: SessionState) async {
+        await MainActor.run {
+            _ = ComposerRecoveryScopeStore.shared.observeAuthoritativeSession(session)
+        }
+    }
+
     private func setSessionPhase(
         _ sessionId: String,
         _ phase: SessionPhase,
@@ -3480,10 +3543,11 @@ actor SessionStore {
     private func applyClaudeReattachment(
         _ attachment: ClaudeSessionReattachment,
         sessionId: String
-    ) {
+    ) async {
         guard var session = sessions[sessionId] else { return }
 
         session.pid = attachment.pid
+        session.processStartToken = TerminalProcessIdentityResolver.startToken(pid: attachment.pid)
         session.tty = attachment.tty
         session.terminalHost = attachment.terminalHost
         session.isInTmux = attachment.isInTmux
@@ -3498,6 +3562,7 @@ actor SessionStore {
         session.lastActivity = Date()
         session.setPhase(.idle, evidenceSource: .rediscovery)
         sessions[sessionId] = session
+        await reconcileComposerGeneration(for: session)
 
         let cwd = session.cwd
         let agentID = session.agentID
@@ -3626,6 +3691,27 @@ actor SessionStore {
             // app-backed observed sessions whose pid sentinel may flip
             // as the host app starts/stops.
             if let existing = sessions[info.sessionId] {
+                // Discovery is also an authoritative refresh for process
+                // identity. Do not wait for a hook: same-PID reuse must
+                // advance the composer generation before a reattached view
+                // can send into the new process. Sentinel pid=0 and absent
+                // metadata leave the prior identity intact.
+                if var refreshed = sessions[info.sessionId] {
+                    if info.pid > 0 {
+                        refreshed.pid = info.pid
+                        if let liveToken = TerminalProcessIdentityResolver.startToken(pid: info.pid) {
+                            refreshed.processStartToken = liveToken
+                        }
+                    }
+                    if let tty = info.tty {
+                        refreshed.tty = tty.replacingOccurrences(of: "/dev/", with: "")
+                    }
+                    if let host = info.terminalHost, host != .unknown {
+                        refreshed.terminalHost = host
+                    }
+                    sessions[info.sessionId] = refreshed
+                    await reconcileComposerGeneration(for: refreshed)
+                }
                 if Self.hasTerminalBootstrapMetadataStatus(agentID: info.agentID, pid: info.pid),
                    existing.phase != .ended {
                     setSessionPhase(info.sessionId, .ended, evidenceSource: .rediscovery)
@@ -3689,8 +3775,16 @@ actor SessionStore {
                         break
                     case .clear:
                         sessions[info.sessionId]?.pid = nil
+                        sessions[info.sessionId]?.processStartToken = nil
                     case .set(let pid):
                         sessions[info.sessionId]?.pid = pid
+                    }
+                    if case .set(let pid) = attachment.pid {
+                        sessions[info.sessionId]?.processStartToken =
+                            TerminalProcessIdentityResolver.startToken(pid: pid)
+                    }
+                    if let refreshed = sessions[info.sessionId] {
+                        await reconcileComposerGeneration(for: refreshed)
                     }
                     if attachment.refreshesActivityFromTranscript,
                        let path = rediscoveryProvider?
@@ -3792,6 +3886,8 @@ actor SessionStore {
                 // (Codex.app / pooled child); Zed liveness keys on transcript
                 // idleness, and a stale pid would drive the wrong nav/prune.
                 pid: host == .zed ? nil : (hasProcessBackedPid ? info.pid : nil),
+                processStartToken: host == .zed || !hasProcessBackedPid ? nil :
+                    TerminalProcessIdentityResolver.startToken(pid: info.pid),
                 tty: info.tty,
                 isInTmux: hasProcessBackedPid ? ProcessTreeBuilder.shared.isInTmux(pid: info.pid, tree: tree) : false,
                 terminalHost: host,
@@ -3818,6 +3914,7 @@ actor SessionStore {
                 session.sessionName = zedTitle
             }
             sessions[info.sessionId] = session
+            await reconcileComposerGeneration(for: session)
             // Rows inside a shared app process fire no turn hooks of their
             // own, so their transcript is the only live signal and the
             // provider asks for a watcher. Rows with their own process report
@@ -4154,7 +4251,7 @@ actor SessionStore {
                     Self.logger.info(
                         "Rebound \(sessionId.prefix(8), privacy: .public) to live PID \(attachment.pid, privacy: .public) (was \(session.pid ?? -1, privacy: .public))"
                     )
-                    applyClaudeReattachment(attachment, sessionId: sessionId)
+                    await applyClaudeReattachment(attachment, sessionId: sessionId)
                     didMark = true
                     continue
                 }
@@ -4165,6 +4262,7 @@ actor SessionStore {
                 Self.logger.debug("Removing dead session: \(sessionId.prefix(8), privacy: .public)")
                 sessions.removeValue(forKey: sessionId)
                 cancelPendingSync(sessionId: sessionId)
+                await forgetRemovedSessionState(sessionId: sessionId)
                 Task { @MainActor in
                     SessionFileWatcherManager.shared.stopWatching(sessionId: sessionId)
                 }
@@ -4182,6 +4280,7 @@ actor SessionStore {
                     Self.logger.debug("Removing empty dead session: \(sessionId.prefix(8), privacy: .public)")
                     sessions.removeValue(forKey: sessionId)
                     cancelPendingSync(sessionId: sessionId)
+                    await forgetRemovedSessionState(sessionId: sessionId)
                     Task { @MainActor in
                         SessionFileWatcherManager.shared.stopWatching(sessionId: sessionId)
                     }
@@ -4234,7 +4333,7 @@ actor SessionStore {
             Self.logger.info(
                 "Resurrected ended session \(sessionId.prefix(8), privacy: .public) → live PID \(attachment.pid, privacy: .public) (was \(current.pid ?? -1, privacy: .public))"
             )
-            applyClaudeReattachment(attachment, sessionId: sessionId)
+            await applyClaudeReattachment(attachment, sessionId: sessionId)
             didMark = true
         }
 
@@ -4260,6 +4359,7 @@ actor SessionStore {
                 Self.logger.debug("Pruning duplicate PID session: \(staleId.prefix(8), privacy: .public)")
                 sessions.removeValue(forKey: staleId)
                 cancelPendingSync(sessionId: staleId)
+                await forgetRemovedSessionState(sessionId: staleId)
                 Task { @MainActor in
                     SessionFileWatcherManager.shared.stopWatching(sessionId: staleId)
                 }

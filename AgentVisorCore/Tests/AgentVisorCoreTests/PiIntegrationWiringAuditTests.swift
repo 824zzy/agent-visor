@@ -270,6 +270,44 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
         XCTAssertTrue(hookPath.contains("agentID: event.agentID"))
     }
 
+    func testPiTTYBackfillUsesBoundedLocalProcessReadAndFailsClosed() throws {
+        let root = repoRoot(from: URL(fileURLWithPath: #filePath))
+        let store = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/Services/State/SessionStore.swift"
+        ))
+
+        XCTAssertTrue(
+            store.contains("ProcessExecutor.shared.runSyncWithResult"),
+            "Pi TTY backfill must use the shared bounded process seam."
+        )
+        XCTAssertTrue(
+            store.contains("timeout: SubprocessDeadlinePolicy.localRead"),
+            "A local ps probe must have the local-read deadline."
+        )
+        XCTAssertTrue(
+            store.contains("case .success, .failure:\n            return nil"),
+            "Malformed, non-zero, and timed-out ps output must fail closed."
+        )
+        XCTAssertFalse(
+            store.contains("AgentDiscoveryUtilities.runProcess"),
+            "Pi TTY backfill must not use the unbounded legacy runner."
+        )
+    }
+
+    func testApprovalFallbackSharesTheChatTransportLaneAndOperationIdentity() throws {
+        let root = repoRoot(from: URL(fileURLWithPath: #filePath))
+        let monitor = try String(contentsOf: root.appendingPathComponent(
+            "AgentVisor/Services/Session/SessionMonitor.swift"
+        ))
+
+        XCTAssertTrue(monitor.contains("TerminalTransportSerializer.shared.withLane"))
+        XCTAssertTrue(monitor.contains("ownerID: operationID"))
+        XCTAssertTrue(monitor.contains("operationID: operationID"))
+        XCTAssertTrue(monitor.contains("terminateActiveProcesses"))
+        XCTAssertTrue(monitor.contains("TerminalProcessIdentityResolver"))
+        XCTAssertTrue(monitor.contains("await Self.sendTUIKey"))
+    }
+
     func testPiComposerUsesProviderAwareImagePathSubmission() throws {
         let root = repoRoot(from: URL(fileURLWithPath: #filePath))
         let sender = try String(contentsOf: root.appendingPathComponent(
@@ -287,8 +325,8 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
         // and Cursor has no route at all.
 
         for source in [composer] {
-            XCTAssertTrue(source.contains("guard session.imageSubmissionRoute != .unavailable else { return }"))
-            XCTAssertTrue(source.contains("ImageAttachmentRetentionPolicy.cleanupDelay("))
+            XCTAssertTrue(source.contains("session.imageSubmissionRoute != .unavailable"))
+            XCTAssertTrue(source.contains("scheduleAttachmentCleanup("))
             XCTAssertFalse(source.contains("guard session.agentID != .pi else { return }"))
         }
         XCTAssertTrue(sender.contains("case .terminalPathPrompt:"))
@@ -309,7 +347,13 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
         XCTAssertTrue(composer.contains("case .terminalPathPrompt:"))
         XCTAssertTrue(composer.contains("PiImagePromptComposer.compose("))
         XCTAssertTrue(composer.contains("imagePaths: currentAttachments.map { $0.url.path }"))
-        XCTAssertTrue(composer.contains("PendingEchoStore.shared.push(sessionId: session.sessionId, text: pendingEchoText)"))
+        // Keep this wiring audit format-independent: the production call also
+        // carries exact image references for Pi's terminal-path prompt, so
+        // Swift's multiline formatting is intentional.
+        XCTAssertTrue(composer.contains("PendingEchoStore.shared.push("))
+        XCTAssertTrue(composer.contains("sessionId: session.sessionId"))
+        XCTAssertTrue(composer.contains("text: pendingEchoText"))
+        XCTAssertTrue(composer.contains("imageReferences: currentAttachments.map { $0.url.path }"))
     }
 
     func testPiUsesTheSharedWindowChatWithProviderAwareImageInput() throws {
@@ -343,7 +387,7 @@ final class PiIntegrationWiringAuditTests: XCTestCase {
         XCTAssertTrue(workspace.contains("ChatViewHost(sessionId: sessionId)"))
         XCTAssertTrue(windowChat.contains("WindowComposer("))
         XCTAssertFalse(workspace.contains("session.agentID == .claudeCode"))
-        XCTAssertTrue(composer.contains("guard session.imageSubmissionRoute != .unavailable else { return }"))
+        XCTAssertTrue(composer.contains("session.imageSubmissionRoute != .unavailable"))
         XCTAssertTrue(sender.contains("PiImagePromptComposer.compose("))
     }
 

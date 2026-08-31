@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { FakeNativeHelper, retryNativeHelperStart } from "./native-helper.js";
+import {
+  NATIVE_HELPER_MAX_FRAME_BYTES,
+  NATIVE_HELPER_MAX_TEXT_BYTES,
+} from "@agent-visor/protocol";
+import {
+  FakeNativeHelper,
+  NativeHelperRequestTooLargeError,
+  retryNativeHelperStart,
+  serializeNativeHelperRequest,
+} from "./native-helper.js";
 
 const screen = {
   displayId: 1,
@@ -112,6 +121,8 @@ describe("FakeNativeHelper", () => {
     const terminal = { application: "Ghostty" as const, tty: "ttys012", cwd: "/tmp/project" };
     await helper.focusTerminal(terminal);
     await helper.sendTerminal(terminal, "Continue", true);
+    await helper.cancelTerminal(terminal);
+    await helper.cyclePermissionMode(terminal);
 
     expect(helper.requestedNotifications).toBe(true);
     expect(helper.presentedNotifications).toEqual([notification]);
@@ -135,6 +146,8 @@ describe("FakeNativeHelper", () => {
     expect(helper.focusRequests).toEqual([focus]);
     expect(helper.terminalFocusRequests).toEqual([terminal]);
     expect(helper.terminalSendRequests).toEqual([{ target: terminal, text: "Continue", submit: true }]);
+    expect(helper.terminalCancelRequests).toEqual([terminal]);
+    expect(helper.cyclePermissionModeRequests).toEqual([terminal]);
   });
 
   it("copies mutable inputs at the adapter boundary", async () => {
@@ -145,5 +158,46 @@ describe("FakeNativeHelper", () => {
     pills.length = 0;
 
     expect(helper.presentedPills).toEqual([pill]);
+  });
+});
+
+describe("native helper request preflight", () => {
+  const target = { application: "Ghostty" as const, tty: "ttys012", cwd: "/tmp/project" };
+
+  it("accepts the ASCII and multibyte text byte boundaries", () => {
+    const ascii = serializeNativeHelperRequest("send_terminal", {
+      target, text: "x".repeat(NATIVE_HELPER_MAX_TEXT_BYTES), submit: true,
+    }, "ascii-boundary");
+    expect(ascii.frame.readUInt32BE(0)).toBeLessThanOrEqual(NATIVE_HELPER_MAX_FRAME_BYTES);
+
+    const multibyteText = "😀".repeat(NATIVE_HELPER_MAX_TEXT_BYTES / 4);
+    const multibyte = serializeNativeHelperRequest("send_terminal", {
+      target, text: multibyteText, submit: true,
+    }, "multibyte-boundary");
+    expect(multibyte.frame.readUInt32BE(0)).toBeLessThanOrEqual(NATIVE_HELPER_MAX_FRAME_BYTES);
+  });
+
+  it("rejects text overflow before constructing a frame", () => {
+    expect(() => serializeNativeHelperRequest("send_terminal", {
+      target,
+      text: `${"😀".repeat(NATIVE_HELPER_MAX_TEXT_BYTES / 4)}x`,
+      submit: true,
+    }, "text-overflow")).toThrow(NativeHelperRequestTooLargeError);
+  });
+
+  it("rejects an attachment-sized serialized frame before any write", () => {
+    const oversizedAttachmentEnvelope = {
+      images: Array.from({ length: 10 }, (_, index) => ({
+        name: `image-${index}.png`,
+        mimeType: "image/png",
+        data: "x".repeat(Math.ceil(NATIVE_HELPER_MAX_FRAME_BYTES / 10)),
+        byteLength: 10,
+      })),
+    };
+    expect(() => serializeNativeHelperRequest(
+      "reconcile_notifications",
+      oversizedAttachmentEnvelope,
+      "frame-overflow",
+    )).toThrow(NativeHelperRequestTooLargeError);
   });
 });

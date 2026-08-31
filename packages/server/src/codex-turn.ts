@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { access } from "node:fs/promises";
 import { constants } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import type { ChatPendingAction, ClientMessage } from "@agent-visor/protocol";
 
@@ -8,18 +9,62 @@ export type CodexActionRegistrar = (
   sessionId: string,
   pending: ChatPendingAction,
   respond: (message: Extract<ClientMessage, { type: "respond_chat" }>) => Promise<void>,
+  generation?: number,
 ) => () => void;
 
-const activeTurns = new Set<(error?: Error) => void>();
+/**
+ * The provider's JSON-RPC id is only unique within one app-server process.
+ * Keep approval routing tied to every non-sensitive owner coordinate instead
+ * of exposing that id (or any prompt content) to the renderer. The process
+ * instance id is generated once per app-server child and prevents two
+ * concurrent children from colliding when they reuse the same JSON-RPC ids.
+ */
+export type CodexApprovalOwner = {
+  sessionId: string;
+  threadId: string;
+  turnId: string;
+  deliveryId: string;
+  requestId?: string;
+  generation?: number;
+  appServerRequestId: string | number;
+  appServerInstanceId: string;
+};
+
+export function codexApprovalId(owner: CodexApprovalOwner): string {
+  const ownerIdentity = JSON.stringify([
+    ["session", owner.sessionId],
+    ["thread", owner.threadId],
+    ["turn", owner.turnId],
+    ["delivery", owner.deliveryId],
+    ["request", owner.requestId ?? null],
+    ["generation", owner.generation ?? null],
+    ["rpc", owner.appServerRequestId],
+    ["process", owner.appServerInstanceId],
+  ]);
+  return `codex-approval-${createHash("sha256").update(ownerIdentity, "utf8").digest("hex")}`;
+}
+
+type ActiveTurn = {
+  stop(error?: Error): void;
+  interrupt(): boolean;
+};
+
+const activeTurns = new Set<ActiveTurn>();
+const activeTurnsByIdentity = new Map<string, Set<ActiveTurn>>();
+const activeDeliveryIDsByThread = new Map<string, Set<string>>();
 
 export async function sendCodexTurn(
   threadId: string,
   text: string,
   imagePaths: string[],
   registerAction?: CodexActionRegistrar,
+  deliveryId?: string,
+  requestId?: string,
+  generation?: number,
 ): Promise<void> {
   const executable = await codexExecutable();
   if (!executable) throw new Error("Codex message delivery is unavailable.");
+  const appServerInstanceId = randomUUID();
   await new Promise<void>((resolve, reject) => {
     const child = spawn(executable, ["app-server", "--listen", "stdio://"], {
       detached: true,
@@ -29,9 +74,26 @@ export async function sendCodexTurn(
     let outputBytes = 0;
     let accepted = false;
     let closed = false;
-    let unregister: (() => void) | undefined;
+    const unregisters = new Map<string, () => void>();
+    let turnId: string | undefined;
+    let registeredIdentity = false;
+    let cancelRequested = false;
     let deadline = setTimeout(() => cleanup(new Error("Codex message delivery timed out.")), 10_000);
-    activeTurns.add(cleanup);
+    const activeTurn: ActiveTurn = {
+      stop: cleanup,
+      interrupt: () => {
+        if (cancelRequested) return true;
+        if (!turnId || closed) return false;
+        cancelRequested = true;
+        write({
+          id: randomUUID(),
+          method: "turn/interrupt",
+          params: { threadId, expectedTurnId: turnId },
+        });
+        return true;
+      },
+    };
+    activeTurns.add(activeTurn);
 
     child.once("error", cleanup);
     child.once("close", (code) => {
@@ -67,12 +129,19 @@ export async function sendCodexTurn(
             },
           });
         } else if (message.id === 3) {
+          turnId = codexTurnID(message.result);
+          if (!turnId) return cleanup(new Error("Codex did not return a concrete turn ID."));
           accepted = true;
+          registerActiveIdentity();
           clearTimeout(deadline);
           deadline = setTimeout(() => cleanup(), 30 * 60_000);
           deadline.unref();
           resolve();
         } else if (typeof message.method === "string") {
+          if (message.method === "turn/started") {
+            turnId = turnId ?? codexTurnID(message.params);
+            registerActiveIdentity();
+          }
           if (message.method === "turn/completed") {
             cleanup();
           } else if (message.id !== undefined && registerAction) {
@@ -81,15 +150,39 @@ export async function sendCodexTurn(
               write({ id: message.id, error: { code: -32601, message: "Unsupported Codex request." } });
               continue;
             }
-            if (unregister) {
-              write({ id: message.id, error: { code: -32000, message: "Another Codex decision is pending." } });
+            const requestKey = String(message.id);
+            if (unregisters.has(requestKey)) {
+              write({ id: message.id, error: { code: -32000, message: "This Codex approval request is already pending." } });
               continue;
             }
-            unregister = registerAction(threadId, pending, async (response) => {
-              write(codexResponseFor(message.id!, message.method as string, message.params, response));
-              unregister?.();
-              unregister = undefined;
+            // A request is routable only after the provider has supplied a
+            // concrete turn and the renderer has supplied its delivery
+            // identity. Without both, fail closed rather than routing an
+            // approval by a process-local JSON-RPC id.
+            if (!turnId || !deliveryId) {
+              write({
+                id: message.id,
+                error: { code: -32000, message: "This Codex approval has no complete owner identity." },
+              });
+              continue;
+            }
+            const approvalId = codexApprovalId({
+              sessionId: threadId,
+              threadId,
+              turnId,
+              deliveryId,
+              ...(requestId ? { requestId } : {}),
+              ...(generation !== undefined ? { generation } : {}),
+              appServerRequestId: message.id as string | number,
+              appServerInstanceId,
             });
+            const pendingWithIdentity = { ...pending, approvalId };
+            const unregister = registerAction(threadId, pendingWithIdentity, async (response) => {
+              write(codexResponseFor(message.id!, message.method as string, message.params, response));
+              unregisters.get(requestKey)?.();
+              unregisters.delete(requestKey);
+            }, generation);
+            unregisters.set(requestKey, unregister);
           }
         }
       }
@@ -111,12 +204,42 @@ export async function sendCodexTurn(
       if (!closed) child.stdin.write(`${JSON.stringify(message)}\n`);
     }
 
+    function registerActiveIdentity(): void {
+      if (registeredIdentity || !turnId || !deliveryId || closed) return;
+      const key = activeTurnKey(threadId, deliveryId);
+      let turns = activeTurnsByIdentity.get(key);
+      if (!turns) {
+        turns = new Set();
+        activeTurnsByIdentity.set(key, turns);
+      }
+      turns.add(activeTurn);
+      let deliveryIDs = activeDeliveryIDsByThread.get(threadId);
+      if (!deliveryIDs) {
+        deliveryIDs = new Set();
+        activeDeliveryIDsByThread.set(threadId, deliveryIDs);
+      }
+      deliveryIDs.add(deliveryId);
+      registeredIdentity = true;
+    }
+
     function cleanup(error?: Error): void {
       if (closed) return;
       closed = true;
-      activeTurns.delete(cleanup);
+      activeTurns.delete(activeTurn);
+      if (registeredIdentity && deliveryId) {
+        const key = activeTurnKey(threadId, deliveryId);
+        const turns = activeTurnsByIdentity.get(key);
+        turns?.delete(activeTurn);
+        if (turns?.size === 0) {
+          activeTurnsByIdentity.delete(key);
+          const deliveryIDs = activeDeliveryIDsByThread.get(threadId);
+          deliveryIDs?.delete(deliveryId);
+          if (deliveryIDs?.size === 0) activeDeliveryIDsByThread.delete(threadId);
+        }
+      }
       clearTimeout(deadline);
-      unregister?.();
+      for (const unregister of unregisters.values()) unregister();
+      unregisters.clear();
       child.stdin.destroy();
       child.stdout.destroy();
       stop(child);
@@ -126,7 +249,38 @@ export async function sendCodexTurn(
 }
 
 export function stopCodexTurns(): void {
-  for (const stop of [...activeTurns]) stop(new Error("Codex message delivery stopped."));
+  for (const turn of [...activeTurns]) turn.stop(new Error("Codex message delivery stopped."));
+}
+
+/** Interrupt one daemon-owned Codex turn. Returns false when no live turn is known. */
+export function stopCodexTurn(threadId: string, deliveryId?: string): boolean {
+  if (!deliveryId) return false;
+  const turns = activeTurnsByIdentity.get(activeTurnKey(threadId, deliveryId));
+  if (!turns?.size) return false;
+  let interrupted = false;
+  for (const turn of turns) interrupted = turn.interrupt() || interrupted;
+  return interrupted;
+}
+
+export function hasActiveCodexTurn(threadId: string, deliveryId?: string): boolean {
+  if (!deliveryId) return false;
+  return (activeTurnsByIdentity.get(activeTurnKey(threadId, deliveryId))?.size ?? 0) > 0;
+}
+
+/**
+ * Return the newest exact active delivery only after its concrete turn is
+ * registered. Renderer state follows the newest submitted delivery, so the
+ * provider capability must select that same insertion-order policy when more
+ * than one daemon-owned turn is live.
+ */
+export function activeCodexTurnDeliveryId(threadId: string): string | undefined {
+  const deliveryIDs = activeDeliveryIDsByThread.get(threadId);
+  const deliveryId = deliveryIDs ? [...deliveryIDs].at(-1) : undefined;
+  return typeof deliveryId === "string" ? deliveryId : undefined;
+}
+
+function activeTurnKey(threadId: string, deliveryId: string): string {
+  return JSON.stringify([threadId, deliveryId]);
 }
 
 export function codexPendingAction(method: string, value: unknown): ChatPendingAction | undefined {
@@ -218,6 +372,13 @@ function approvalName(method: string): string {
 function codexError(value: unknown): string {
   const message = record(value)?.message;
   return typeof message === "string" && message ? message : "Codex rejected the message.";
+}
+
+function codexTurnID(value: unknown): string | undefined {
+  const recordValue = record(value);
+  const nested = record(recordValue?.turn);
+  const id = nested?.id ?? recordValue?.turnId ?? recordValue?.turn_id ?? recordValue?.id;
+  return typeof id === "string" && id ? id : undefined;
 }
 
 async function codexExecutable(): Promise<string | undefined> {

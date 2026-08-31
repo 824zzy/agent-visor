@@ -16,6 +16,10 @@ public struct WindowChatSessionPresentationFingerprint: Equatable, Sendable {
     public let codexControlCapability: CodexControlCapability
     public let tty: String?
     public let terminalHost: TerminalHost?
+    /// Process identity fields are presentation-relevant: a same-session
+    /// process replacement must reach the mounted composer immediately.
+    public let pid: Int?
+    public let processStartToken: String?
 
     public init(
         displayTitle: String,
@@ -32,7 +36,9 @@ public struct WindowChatSessionPresentationFingerprint: Equatable, Sendable {
         originTag: String,
         codexControlCapability: CodexControlCapability,
         tty: String?,
-        terminalHost: TerminalHost?
+        terminalHost: TerminalHost?,
+        pid: Int? = nil,
+        processStartToken: String? = nil
     ) {
         self.displayTitle = displayTitle
         self.projectName = projectName
@@ -49,5 +55,7 @@ public struct WindowChatSessionPresentationFingerprint: Equatable, Sendable {
         self.codexControlCapability = codexControlCapability
         self.tty = tty
         self.terminalHost = terminalHost
+        self.pid = pid
+        self.processStartToken = processStartToken
     }
 }

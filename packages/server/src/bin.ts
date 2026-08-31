@@ -21,7 +21,7 @@ import { startServer } from "./server.js";
 import { SessionRepository } from "./sessions.js";
 import { NativeSessionControls } from "./session-controls.js";
 import { readLegacyDefaults, SettingsRepository } from "./settings.js";
-import { readCodexUsage } from "./usage.js";
+import { chatUsageGlanceFromNative, readCodexUsage } from "./usage.js";
 import { checkForUpdates } from "./updates.js";
 
 const requestedPort = Number.parseInt(process.env.AGENT_VISOR_PORT ?? "0", 10);
@@ -48,6 +48,14 @@ const repository = new SessionRepository(
   {
     piRuntimeStatePath: path.join(dataRoot, "pi-runtime-links.json"),
     bootSessionUUID: await macBootSessionUUID(),
+    chatUsageGlance: async (session) => {
+      // Claude usage remains absent until a provider-authoritative source is
+      // available. Do not show Codex quota data on another provider's chat.
+      if (session.provider !== "codex" || !settings.current().codexUsageGlanceEnabled) {
+        return undefined;
+      }
+      return chatUsageGlanceFromNative(await readCodexUsage());
+    },
   },
 );
 
@@ -171,8 +179,8 @@ const sessionControls = new NativeSessionControls(
   path.join(dataRoot, "chat-images"),
   undefined,
   async (url) => { process.send?.({ type: "native_action", action: "open_session_url", url }); },
-  (sessionId, pending, respond) => repository.registerExternalAction(
-    sessionId, pending, respond,
+  (sessionId, pending, respond, generation) => repository.registerExternalAction(
+    sessionId, pending, respond, generation,
   ),
 );
 repository.setControls(sessionControls);

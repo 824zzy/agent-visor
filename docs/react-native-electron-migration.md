@@ -38,9 +38,14 @@ Run the Electron accessibility and layout check with:
 npm run test:sessions
 ```
 
-Chat now renders provider-owned history, grouped work, tool details, images, pagination, approvals, questions, and technical Details.
+Chat now renders a bounded baseline of provider-owned history, grouped work,
+tool details, images, pagination, approvals, questions, and technical Details.
+This is not complete Swift feature parity; the contract and remaining phases
+are tracked in [Chat feature parity](chat-feature-parity.md).
 
-The daemon contract is defined in [Chat daemon](chat-daemon.md). Verified Claude Code, Codex, and Pi routes provide native text and image delivery.
+The daemon contract is defined in [Chat daemon](chat-daemon.md). Verified
+Claude Code, Codex, and Pi routes provide native text and image delivery; the
+full user-facing Chat contract remains in progress.
 
 ## Dependency status
 

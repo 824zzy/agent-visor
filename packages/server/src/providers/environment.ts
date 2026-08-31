@@ -5,6 +5,8 @@ import { machineWork, runProcess, summaryWork } from "../machine.js";
 export type ProcessRecord = {
   pid: number;
   parentPID: number;
+  /** Stable helper-derived process instance token, when available. */
+  processStartToken?: string;
   tty?: string;
   command: string;
   arguments: string;

@@ -22,6 +22,7 @@ import {
   sessionShortcutEducation,
 } from "./browser-shortcuts";
 import { Chat } from "./Chat";
+import { CONTENT_RAIL_INSET, contentRailStyle } from "./content-rail";
 import { Settings } from "./Settings";
 import {
   moveSessionCursor,
@@ -533,9 +534,9 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
   const font = (size: number) => size * scale;
   return StyleSheet.create({
     app: { backgroundColor: palette.background, flex: 1 },
-    header: { borderBottomColor: palette.border, borderBottomWidth: 1, paddingBottom: 12, paddingHorizontal: 28, paddingTop: 32 },
-    rail: { alignSelf: "center", maxWidth: 980, width: "100%" },
-    railRow: { alignItems: "center", alignSelf: "center", flexDirection: "row", gap: 10, maxWidth: 980, width: "100%" },
+    header: { borderBottomColor: palette.border, borderBottomWidth: 1, paddingBottom: 12, paddingHorizontal: CONTENT_RAIL_INSET, paddingTop: 32 },
+    rail: contentRailStyle(),
+    railRow: { ...contentRailStyle(), alignItems: "center", flexDirection: "row", gap: 10 },
     searchShell: { alignItems: "center", backgroundColor: palette.card, borderColor: palette.border, borderRadius: 10, borderWidth: 1, flex: 1, flexDirection: "row", minHeight: Math.max(40, 28 + font(12)), paddingHorizontal: 13 },
     searchFocused: { borderColor: palette.accent, borderWidth: 1.2 },
     searchIcon: { color: palette.tertiary, fontSize: font(18), fontWeight: "600" },
@@ -546,7 +547,7 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
     settings: { alignItems: "center", backgroundColor: palette.card, borderRadius: 8, height: 34, justifyContent: "center", width: 34 },
     settingsText: { color: palette.muted, fontSize: font(18) },
     scroller: { flex: 1 },
-    list: { paddingBottom: 24, paddingHorizontal: 28, paddingTop: 10 },
+    list: { paddingBottom: 24, paddingHorizontal: CONTENT_RAIL_INSET, paddingTop: 10 },
     sectionHeader: { alignItems: "center", flexDirection: "row", gap: 7, paddingBottom: 5, paddingHorizontal: 10, paddingTop: 11 },
     sectionTitle: { color: palette.muted, fontSize: font(12), fontWeight: "600" },
     count: { backgroundColor: palette.border, borderRadius: 10, color: palette.tertiary, fontSize: font(10), fontWeight: "600", overflow: "hidden", paddingHorizontal: 6, paddingVertical: 2 },
@@ -578,7 +579,7 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
     emptyIcon: { color: palette.tertiary, fontSize: 30 },
     emptyTitle: { color: palette.foreground, fontSize: font(16), fontWeight: "600", marginTop: 12 },
     emptyDetail: { color: palette.muted, fontSize: font(12), marginTop: 8, textAlign: "center" },
-    footer: { borderTopColor: palette.border, borderTopWidth: 1, minHeight: 42, paddingHorizontal: 28, paddingVertical: 9 },
+    footer: { borderTopColor: palette.border, borderTopWidth: 1, minHeight: 42, paddingHorizontal: CONTENT_RAIL_INSET, paddingVertical: 9 },
     footerRail: { alignItems: scale > 1.6 ? "flex-start" : "center", flexDirection: scale > 1.6 ? "column" : "row" },
     footerGroup: { alignItems: "center", flexDirection: "row", flexWrap: scale > 1.6 ? "wrap" : "nowrap", gap: 16 },
     footerSpacer: { display: scale > 1.6 ? "none" : "flex", flex: 1, minWidth: 8 },

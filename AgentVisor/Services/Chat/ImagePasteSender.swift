@@ -54,7 +54,9 @@ enum ImagePasteSender {
         }
     }
 
-    /// Remove temp files older than 5 minutes. Called on app launch.
+    /// Remove temp files older than the longest supported submission lifetime
+    /// (currently one day for Pi path prompts). Called on app launch; active
+    /// recovery records are checked separately before event-driven cleanup.
     static func cleanupStaleFiles() {
         let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(
@@ -75,11 +77,40 @@ enum ImagePasteSender {
 
     /// Deliver a file path to the session as a bracketed paste, so Claude
     /// Code's paste handler picks it up and reads the image from disk.
-    static func sendPaste(path: String, session: SessionState) async -> Bool {
+    static func sendPaste(
+        path: String,
+        session: SessionState,
+        operationID: String
+    ) async -> Bool {
+        // Terminal.app's AppleScript adapter can send text, but it has no
+        // verified attachment-aware paste contract. Fail closed here instead
+        // of falling through to Ghostty and potentially targeting another
+        // terminal window. SessionState applies the same host gate when it
+        // advertises the Claude attachment route.
+        guard session.agentID == .claudeCode,
+              session.imageSubmissionRoute == .terminalAttachment,
+              session.terminalHost == .ghostty || session.terminalHost == .iterm2,
+              TerminalProcessIdentityResolver.isVerified(session) else {
+            return false
+        }
+        // The path is terminal text on every provider route. Keep the same
+        // UTF-8 preflight as SessionSender so an oversized path fails before
+        // tmux, iTerm, or Ghostty can write any bytes.
+        guard TerminalTextPolicy.canSend(path) else {
+            logger.error(
+                "terminal attachment path rejected before write bytes=\(path.utf8.count, privacy: .public) max=\(TerminalTextPolicy.maximumUTF8Bytes, privacy: .public)"
+            )
+            return false
+        }
         if session.isInTmux, let tty = session.tty,
-           let target = await findTmuxTargetByTTY(tty) {
+           let target = await findTmuxTargetByTTY(tty, operationID: operationID) {
             logger.info("paste via tmux \(target.targetString, privacy: .public)")
-            return await sendViaTmux(path: path, target: target)
+            return await sendViaTmux(
+                path: path,
+                target: target,
+                session: session,
+                operationID: operationID
+            )
         }
         // iTerm2: write the CSI 200~/201~ bracketed-paste envelope through
         // its raw `write text` channel — Claude Code's DECSET 2004 handler
@@ -88,7 +119,11 @@ enum ImagePasteSender {
         if TerminalAdapterRegistry.adapter(for: session) is ITermAdapter {
             let ok = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                 DispatchQueue.global(qos: .userInitiated).async {
-                    let result = ITermAdapter().sendBracketedPaste(path, toSession: session)
+                    let result = ITermAdapter().sendBracketedPaste(
+                        path,
+                        toSession: session,
+                        operationID: operationID
+                    )
                     continuation.resume(returning: result)
                 }
             }
@@ -100,20 +135,36 @@ enum ImagePasteSender {
         // it wraps with bracketed-paste markers itself. Send the raw path;
         // Claude Code sees the bracketed-paste, matches the .png extension,
         // and reads the file from disk.
-        let ok = await sendViaGhosttyInput(text: path, session: session)
+        let ok = await sendViaGhosttyInput(
+            text: path,
+            session: session,
+            operationID: operationID
+        )
         logger.info("paste via Ghostty input text: \(ok, privacy: .public)")
         return ok
     }
 
     /// Send just an Enter keypress (used when an image-only message has no text).
-    static func sendEnter(session: SessionState) async -> Bool {
+    static func sendEnter(
+        session: SessionState,
+        operationID: String
+    ) async -> Bool {
+        guard session.agentID == .claudeCode,
+              session.imageSubmissionRoute == .terminalAttachment,
+              session.terminalHost == .ghostty || session.terminalHost == .iterm2,
+              TerminalProcessIdentityResolver.isVerified(session) else {
+            return false
+        }
         if session.isInTmux, let tty = session.tty,
-           let target = await findTmuxTargetByTTY(tty) {
+           let target = await findTmuxTargetByTTY(tty, operationID: operationID) {
             guard let tmuxPath = await TmuxPathFinder.shared.getTmuxPath() else { return false }
+            guard TerminalProcessIdentityResolver.isVerified(session) else { return false }
             do {
                 _ = try await ProcessExecutor.shared.run(
                     tmuxPath,
-                    arguments: ["send-keys", "-t", target.targetString, "Enter"]
+                    arguments: ["send-keys", "-t", target.targetString, "Enter"],
+                    timeout: SubprocessDeadlinePolicy.appCommand,
+                    operationID: operationID
                 )
                 return true
             } catch {
@@ -123,25 +174,49 @@ enum ImagePasteSender {
         if TerminalAdapterRegistry.adapter(for: session) is ITermAdapter {
             return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                 DispatchQueue.global(qos: .userInitiated).async {
-                    let result = ITermAdapter().sendSteps([.key("enter")], toSession: session)
+                    let result = ITermAdapter().sendSteps(
+                        [.key("enter")],
+                        toSession: session,
+                        operationID: operationID
+                    )
                     continuation.resume(returning: result)
                 }
             }
         }
-        return await sendGhosttyEnter(session: session)
+        return await sendGhosttyEnter(session: session, operationID: operationID)
     }
 
     // MARK: - Tmux
 
-    private static func sendViaTmux(path: String, target: TmuxTarget) async -> Bool {
+    private static func sendViaTmux(
+        path: String,
+        target: TmuxTarget,
+        session: SessionState,
+        operationID: String
+    ) async -> Bool {
         guard let tmuxPath = await TmuxPathFinder.shared.getTmuxPath() else { return false }
+        // Target discovery is asynchronous; revalidate the provider just
+        // before each irreversible tmux operation so a reused TTY cannot
+        // receive an attachment intended for the prior process instance.
+        guard TerminalProcessIdentityResolver.isVerified(session) else { return false }
         let bufferName = "av-img-\(UUID().uuidString.prefix(8))"
         do {
-            try await loadTmuxBuffer(tmuxPath: tmuxPath, bufferName: String(bufferName), data: path)
-            _ = try await ProcessExecutor.shared.run(tmuxPath, arguments: [
-                "paste-buffer", "-p", "-b", String(bufferName),
-                "-t", target.targetString, "-d"
-            ])
+            try await loadTmuxBuffer(
+                tmuxPath: tmuxPath,
+                bufferName: String(bufferName),
+                data: path,
+                operationID: operationID
+            )
+            guard TerminalProcessIdentityResolver.isVerified(session) else { return false }
+            _ = try await ProcessExecutor.shared.run(
+                tmuxPath,
+                arguments: [
+                    "paste-buffer", "-p", "-b", String(bufferName),
+                    "-t", target.targetString, "-d"
+                ],
+                timeout: SubprocessDeadlinePolicy.appCommand,
+                    operationID: operationID
+            )
             return true
         } catch {
             logger.error("tmux paste failed: \(error.localizedDescription, privacy: .public)")
@@ -150,45 +225,52 @@ enum ImagePasteSender {
     }
 
     /// `tmux load-buffer -b <name> -` reads the buffer contents from stdin.
-    /// We can't reuse ProcessExecutor because it doesn't expose stdin.
-    private static func loadTmuxBuffer(tmuxPath: String, bufferName: String, data: String) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let proc = Process()
-            let stdinPipe = Pipe()
-            proc.executableURL = URL(fileURLWithPath: tmuxPath)
-            proc.arguments = ["load-buffer", "-b", bufferName, "-"]
-            proc.standardInput = stdinPipe
-            proc.standardOutput = FileHandle.nullDevice
-            proc.standardError = FileHandle.nullDevice
-            do {
-                try proc.run()
-                if let bytes = data.data(using: .utf8) {
-                    stdinPipe.fileHandleForWriting.write(bytes)
-                }
-                try? stdinPipe.fileHandleForWriting.close()
-                proc.waitUntilExit()
-                if proc.terminationStatus == 0 {
-                    continuation.resume()
-                } else {
-                    continuation.resume(throwing: ProcessExecutorError.executionFailed(
-                        command: "tmux load-buffer",
-                        exitCode: proc.terminationStatus,
-                        stderr: nil
-                    ))
-                }
-            } catch {
-                continuation.resume(throwing: error)
-            }
+    /// ProcessExecutor owns the bounded child lifecycle, including terminating
+    /// and awaiting the process if tmux stops reading its pipe.
+    private static func loadTmuxBuffer(
+        tmuxPath: String,
+        bufferName: String,
+        data: String,
+        operationID: String
+    ) async throws {
+        guard let bytes = data.data(using: .utf8) else {
+            throw ProcessExecutorError.invalidOutput(command: "tmux load-buffer")
+        }
+        let result = await ProcessExecutor.shared.runWithInput(
+            tmuxPath,
+            arguments: ["load-buffer", "-b", bufferName, "-"],
+            input: bytes,
+            timeout: SubprocessDeadlinePolicy.appCommand,
+            operationID: operationID
+        )
+        switch result {
+        case .success(let processResult) where processResult.isSuccess:
+            return
+        case .success(let processResult):
+            throw ProcessExecutorError.executionFailed(
+                command: "tmux load-buffer",
+                exitCode: processResult.exitCode,
+                stderr: processResult.stderr
+            )
+        case .failure(let error):
+            throw error
         }
     }
 
-    private static func findTmuxTargetByTTY(_ tty: String) async -> TmuxTarget? {
+    private static func findTmuxTargetByTTY(
+        _ tty: String,
+        operationID: String
+    ) async -> TmuxTarget? {
         guard let tmuxPath = await TmuxPathFinder.shared.getTmuxPath() else { return nil }
         do {
             let output = try await ProcessExecutor.shared.run(
                 tmuxPath,
-                arguments: ["list-panes", "-a", "-F",
-                            "#{session_name}:#{window_index}.#{pane_index} #{pane_tty}"]
+                arguments: [
+                    "list-panes", "-a", "-F",
+                    "#{session_name}:#{window_index}.#{pane_index} #{pane_tty}"
+                ],
+                timeout: SubprocessDeadlinePolicy.appCommand,
+                operationID: operationID
             )
             for line in output.components(separatedBy: "\n") {
                 let parts = line.components(separatedBy: " ")
@@ -209,41 +291,82 @@ enum ImagePasteSender {
     /// which wraps with bracketed-paste markers automatically (it's documented
     /// as "Input text to a terminal as if it was pasted"). Target the right
     /// pane using the same CWD + OSC 7 marker logic as GhosttyScripting.
-    private static func sendViaGhosttyInput(text: String, session: SessionState) async -> Bool {
+    private static func sendViaGhosttyInput(
+        text: String,
+        session: SessionState,
+        operationID: String
+    ) async -> Bool {
         guard let tty = session.tty else { return false }
         let ttyPath = "/dev/\(tty)"
         let cwd = session.cwd
 
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
-                if pasteViaCWDMatch(text: text, cwd: cwd) {
+                guard TerminalProcessIdentityResolver.isVerified(session) else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                if pasteViaCWDMatch(
+                    text: text,
+                    cwd: cwd,
+                    session: session,
+                    operationID: operationID
+                ) {
                     continuation.resume(returning: true)
                     return
                 }
-                let ok = pasteViaOSC7Marker(text: text, ttyPath: ttyPath, originalCwd: cwd)
+                let ok = pasteViaOSC7Marker(
+                    text: text,
+                    ttyPath: ttyPath,
+                    originalCwd: cwd,
+                    session: session,
+                    operationID: operationID
+                )
                 continuation.resume(returning: ok)
             }
         }
     }
 
-    private static func sendGhosttyEnter(session: SessionState) async -> Bool {
+    private static func sendGhosttyEnter(
+        session: SessionState,
+        operationID: String
+    ) async -> Bool {
         guard let tty = session.tty else { return false }
         let ttyPath = "/dev/\(tty)"
         let cwd = session.cwd
 
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
-                if enterViaCWDMatch(cwd: cwd) {
+                guard TerminalProcessIdentityResolver.isVerified(session) else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                if enterViaCWDMatch(
+                    cwd: cwd,
+                    session: session,
+                    operationID: operationID
+                ) {
                     continuation.resume(returning: true)
                     return
                 }
-                let ok = enterViaOSC7Marker(ttyPath: ttyPath, originalCwd: cwd)
+                let ok = enterViaOSC7Marker(
+                    ttyPath: ttyPath,
+                    originalCwd: cwd,
+                    session: session,
+                    operationID: operationID
+                )
                 continuation.resume(returning: ok)
             }
         }
     }
 
-    private static func pasteViaCWDMatch(text: String, cwd: String) -> Bool {
+    private static func pasteViaCWDMatch(
+        text: String,
+        cwd: String,
+        session: SessionState,
+        operationID: String
+    ) -> Bool {
+        guard TerminalProcessIdentityResolver.isVerified(session) else { return false }
         let escapedCwd = appleScriptEscape(cwd)
         let escapedText = appleScriptEscape(text)
         let script = """
@@ -267,10 +390,17 @@ enum ImagePasteSender {
             end if
         end tell
         """
-        return runAppleScript(script) == "ok"
+        return runAppleScript(script, operationID: operationID) == "ok"
     }
 
-    private static func pasteViaOSC7Marker(text: String, ttyPath: String, originalCwd: String) -> Bool {
+    private static func pasteViaOSC7Marker(
+        text: String,
+        ttyPath: String,
+        originalCwd: String,
+        session: SessionState,
+        operationID: String
+    ) -> Bool {
+        guard TerminalProcessIdentityResolver.isVerified(session) else { return false }
         let marker = "/tmp/av_img_\(UInt32.random(in: 100000...999999))"
         let oscSet = "\u{1b}]7;file://localhost\(marker)\u{07}"
         guard let h = FileHandle(forWritingAtPath: ttyPath),
@@ -280,6 +410,7 @@ enum ImagePasteSender {
         h.write(d)
         h.closeFile()
         usleep(300000)
+        guard TerminalProcessIdentityResolver.isVerified(session) else { return false }
 
         let escapedText = appleScriptEscape(text)
         let script = """
@@ -298,9 +429,10 @@ enum ImagePasteSender {
             return "fail"
         end tell
         """
-        let result = runAppleScript(script)
+        let result = runAppleScript(script, operationID: operationID)
 
         let oscRestore = "\u{1b}]7;file://localhost\(originalCwd)\u{07}"
+        guard TerminalProcessIdentityResolver.isVerified(session) else { return false }
         if let rh = FileHandle(forWritingAtPath: ttyPath),
            let rd = oscRestore.data(using: .utf8) {
             rh.write(rd)
@@ -309,7 +441,12 @@ enum ImagePasteSender {
         return result == "ok"
     }
 
-    private static func enterViaCWDMatch(cwd: String) -> Bool {
+    private static func enterViaCWDMatch(
+        cwd: String,
+        session: SessionState,
+        operationID: String
+    ) -> Bool {
+        guard TerminalProcessIdentityResolver.isVerified(session) else { return false }
         let escapedCwd = appleScriptEscape(cwd)
         let script = """
         tell application "Ghostty"
@@ -332,10 +469,16 @@ enum ImagePasteSender {
             end if
         end tell
         """
-        return runAppleScript(script) == "ok"
+        return runAppleScript(script, operationID: operationID) == "ok"
     }
 
-    private static func enterViaOSC7Marker(ttyPath: String, originalCwd: String) -> Bool {
+    private static func enterViaOSC7Marker(
+        ttyPath: String,
+        originalCwd: String,
+        session: SessionState,
+        operationID: String
+    ) -> Bool {
+        guard TerminalProcessIdentityResolver.isVerified(session) else { return false }
         let marker = "/tmp/av_img_\(UInt32.random(in: 100000...999999))"
         let oscSet = "\u{1b}]7;file://localhost\(marker)\u{07}"
         guard let h = FileHandle(forWritingAtPath: ttyPath),
@@ -345,6 +488,7 @@ enum ImagePasteSender {
         h.write(d)
         h.closeFile()
         usleep(300000)
+        guard TerminalProcessIdentityResolver.isVerified(session) else { return false }
 
         let script = """
         tell application "Ghostty"
@@ -362,9 +506,10 @@ enum ImagePasteSender {
             return "fail"
         end tell
         """
-        let result = runAppleScript(script)
+        let result = runAppleScript(script, operationID: operationID)
 
         let oscRestore = "\u{1b}]7;file://localhost\(originalCwd)\u{07}"
+        guard TerminalProcessIdentityResolver.isVerified(session) else { return false }
         if let rh = FileHandle(forWritingAtPath: ttyPath),
            let rd = oscRestore.data(using: .utf8) {
             rh.write(rd)
@@ -381,19 +526,19 @@ enum ImagePasteSender {
          .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    private static func runAppleScript(_ source: String) -> String {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        proc.arguments = ["-e", source]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
-        do {
-            try proc.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            proc.waitUntilExit()
-            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        } catch {
+    private static func runAppleScript(
+        _ source: String,
+        operationID: String
+    ) -> String {
+        switch ProcessExecutor.shared.runSyncWithResult(
+            "/usr/bin/osascript",
+            arguments: ["-e", source],
+            timeout: SubprocessDeadlinePolicy.appCommand,
+            operationID: operationID
+        ) {
+        case .success(let result):
+            return result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .failure:
             return ""
         }
     }

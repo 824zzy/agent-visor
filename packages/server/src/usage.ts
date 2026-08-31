@@ -2,7 +2,29 @@ import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
 import { constants } from "node:fs";
 import os from "node:os";
-import type { NativeHelperUsageGlance } from "@agent-visor/protocol";
+import type { ChatUsageGlance, NativeHelperUsageGlance } from "@agent-visor/protocol";
+
+/**
+ * Project the existing provider-authoritative native usage record into the
+ * Chat status contract. A missing window or timestamp stays absent: Chat must
+ * never display a guessed quota value.
+ */
+export function chatUsageGlanceFromNative(
+  value: NativeHelperUsageGlance | undefined,
+): ChatUsageGlance | undefined {
+  if (!value || value.id !== "codex" || !value.observedAt || !value.windows?.length) {
+    return undefined;
+  }
+  const percentUsed = Math.max(...value.windows.map((window) => 100 - window.remainingPercent));
+  if (!Number.isFinite(percentUsed) || percentUsed < 0 || percentUsed > 100) return undefined;
+  return {
+    provider: "codex",
+    percentUsed,
+    label: value.label,
+    detail: value.detail,
+    observedAt: value.observedAt,
+  };
+}
 
 export function codexUsageGlance(
   value: unknown,

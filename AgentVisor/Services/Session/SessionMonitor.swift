@@ -403,7 +403,11 @@ class SessionMonitor: ObservableObject {
                 // No live socket → send Enter to confirm the default
                 // "Yes" option in claude-code's native menu, then
                 // delete the sidecar so we don't replay it again.
-                Self.sendTUIKey(named: "enter", session: session)
+                let sent = await Self.sendTUIKey(named: "enter", session: session)
+                guard sent else {
+                    Self.writeLog("[ApprovalFallback] enter failed; retaining sidecar")
+                    return
+                }
                 PendingPermissionStore.delete(
                     sessionId: sessionId,
                     toolUseId: permission.toolUseId
@@ -437,7 +441,11 @@ class SessionMonitor: ObservableObject {
                 // No live socket → send Esc to cancel claude-code's
                 // native approval menu (matches the menu's footer
                 // hint "Esc to cancel"), then delete the sidecar.
-                Self.sendTUIKey(named: "escape", session: session)
+                let sent = await Self.sendTUIKey(named: "escape", session: session)
+                guard sent else {
+                    Self.writeLog("[ApprovalFallback] escape failed; retaining sidecar")
+                    return
+                }
                 PendingPermissionStore.delete(
                     sessionId: sessionId,
                     toolUseId: permission.toolUseId
@@ -451,27 +459,73 @@ class SessionMonitor: ObservableObject {
     }
 
     /// Send a single keystroke to the session's terminal pane. Routes
-    /// through the right adapter for the host (iTerm2 / Ghostty).
-    private static func sendTUIKey(named keyName: String, session: SessionState) {
-        let host: String
-        if TerminalAdapterRegistry.adapter(for: session) is ITermAdapter {
-            host = "iterm2"
-        } else {
-            host = "ghostty"
-        }
+    /// through the exact adapter for the host; unknown/read-only hosts fail
+    /// closed instead of falling through to Ghostty.
+    private static func sendTUIKey(
+        named keyName: String,
+        session: SessionState
+    ) async -> Bool {
+        let host = session.terminalHost?.rawValue ?? "unknown"
         Self.writeLog("[ApprovalFallback] sending key=\(keyName) host=\(host) sid=\(session.sessionId.prefix(8)) tty=\(session.tty ?? "nil") cwd=\(session.cwd)")
-        DispatchQueue.global(qos: .userInitiated).async {
-            let ok: Bool
-            if TerminalAdapterRegistry.adapter(for: session) is ITermAdapter {
-                if keyName == "escape" {
-                    ok = ITermAdapter().sendEscape(toSession: session)
-                } else {
-                    ok = ITermAdapter().sendSteps([.key(keyName)], toSession: session)
+        // This method is called from the MainActor approval surface. Keep the
+        // bounded process/TTY probe off that actor; the adapter still repeats
+        // the synchronous check immediately before its irreversible key post.
+        guard await TerminalProcessIdentityResolver.isVerifiedAsync(session) else {
+            Self.writeLog("[ApprovalFallback] refusing unverified target sid=\(session.sessionId.prefix(8))")
+            return false
+        }
+        let operationID = "approval-key-\(UUID().uuidString)"
+        do {
+            let ok = try await TerminalTransportSerializer.shared.withLane(
+                sessionID: session.sessionId,
+                ownerID: operationID,
+                operation: {
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                        DispatchQueue.global(qos: .userInitiated).async {
+                            let delivered: Bool
+                            switch session.terminalHost {
+                            case .iterm2:
+                                if keyName == "escape" {
+                                    delivered = ITermAdapter().sendEscape(
+                                        toSession: session,
+                                        operationID: operationID
+                                    )
+                                } else {
+                                    delivered = ITermAdapter().sendSteps(
+                                        [.key(keyName)],
+                                        toSession: session,
+                                        operationID: operationID
+                                    )
+                                }
+                            case .ghostty:
+                                delivered = GhosttyScripting.sendKeystroke(
+                                    named: keyName,
+                                    toSession: session,
+                                    operationID: operationID
+                                )
+                            case .terminalApp where keyName == "escape":
+                                delivered = TerminalAppAdapter().sendEscape(
+                                    toSession: session,
+                                    operationID: operationID
+                                )
+                            default:
+                                delivered = false
+                            }
+                            continuation.resume(returning: delivered)
+                        }
+                    }
+                },
+                terminate: {
+                    await ProcessExecutor.shared.terminateActiveProcesses(
+                        operationID: operationID
+                    )
                 }
-            } else {
-                ok = GhosttyScripting.sendKeystroke(named: keyName, toSession: session)
-            }
+            )
             Self.writeLog("[ApprovalFallback] result key=\(keyName) ok=\(ok) sid=\(session.sessionId.prefix(8))")
+            return ok
+        } catch {
+            Self.writeLog("[ApprovalFallback] result key=\(keyName) ok=false reason=\(error.localizedDescription) sid=\(session.sessionId.prefix(8))")
+            return false
         }
     }
 

@@ -1,13 +1,19 @@
 import { open, stat } from "node:fs/promises";
-import type {
-  ChatCapabilities,
-  ChatImage,
-  ChatItem,
-  ChatMetadata,
-  ChatPage,
+import {
+  CHAT_IMAGE_MAX_BASE64_CHARS,
+  CHAT_IMAGE_SUPPORTED_MIME_TYPES,
+  NATIVE_HELPER_MAX_TEXT_BYTES,
+  chatImageBase64Bytes,
+  chatImageMimeForBytes,
+  type ChatCapabilities,
+  type ChatImage,
+  type ChatItem,
+  type ChatMetadata,
+  type ChatPage,
 } from "@agent-visor/protocol";
 import { summaryWork } from "./machine.js";
 import type { DiscoveredProviderSession, ProviderID } from "./sessions.js";
+import { isVerifiableProcessInstanceToken } from "./providers/shared.js";
 
 const pageChunkBytes = 256 * 1_024;
 const maxPageBytes = 16 * 1_024 * 1_024;
@@ -40,13 +46,43 @@ export async function readChatPage(
     hasMoreBefore: page.start > 0,
     nextBefore: page.start > 0 ? page.start : undefined,
     ...(page.metadata ? { metadata: page.metadata } : {}),
+    transcriptEvidence: {
+      // An empty page can be a missing/unloaded or partially written source;
+      // callers must not use it for content-only delivery reconciliation.
+      authoritative: page.items.some((item) => item.kind === "user")
+        && page.parseErrors === 0
+        && page.start === 0,
+      complete: page.start === 0,
+      ...(latestTimestamp(page.items) ? { sourceTimestamp: latestTimestamp(page.items) } : {}),
+    },
     capabilities: chatCapabilities(session),
     pendingAction: null,
   };
 }
 
 export function chatCapabilities(session: DiscoveredProviderSession): ChatCapabilities {
-  if (session.messageTransport) {
+  if (session.section === "history") {
+    return {
+      canSendText: false,
+      canSendImages: false,
+      canCancel: false,
+      canApprove: false,
+      canAnswer: false,
+      readOnlyReason: "This session has ended. Chat history is read only.",
+    };
+  }
+  const terminalTransport = session.messageTransport === "terminal"
+    && (session.provider === "claude_code" || session.provider === "pi")
+    && session.controlTarget?.kind === "terminal";
+  const verifiedTerminalTransport = terminalTransport
+    && session.controlTarget?.kind === "terminal"
+    && isVerifiableProcessInstanceToken(
+      session.controlTarget.target.pid,
+      session.controlTarget.target.processStartToken,
+    );
+  const codexTransport = session.messageTransport === "codex_app_server"
+    && session.provider === "codex";
+  if (session.section === "working" && (verifiedTerminalTransport || codexTransport)) {
     return {
       canSendText: true,
       canSendImages: (session.provider === "claude_code"
@@ -54,20 +90,33 @@ export function chatCapabilities(session: DiscoveredProviderSession): ChatCapabi
         && session.controlTarget.target.application !== "Terminal")
         || session.provider === "pi"
         || session.messageTransport === "codex_app_server",
+      canCancel: session.section === "working"
+        && ((session.messageTransport === "codex_app_server" && session.provider === "codex")
+          || (session.messageTransport === "terminal"
+            && session.controlTarget?.kind === "terminal"
+            && (session.provider === "claude_code" || session.provider === "pi"))),
       canApprove: false,
       canAnswer: false,
+      ...(session.provider === "claude_code" && verifiedTerminalTransport
+        ? { canCyclePermissionMode: true } : {}),
+      ...(verifiedTerminalTransport ? { maxTextBytes: NATIVE_HELPER_MAX_TEXT_BYTES } : {}),
     };
   }
-  const readOnlyReason = session.owner === "Zed"
+  const readOnlyReason = terminalTransport && !verifiedTerminalTransport
+    ? "The terminal process identity is unavailable. Chat is read only until it can be verified."
+    : session.owner === "Zed"
     ? "Continue in Zed. Zed-hosted Chat is read only."
     : session.provider === "cursor"
       ? "Continue in Cursor. Cursor Chat is read only."
       : !session.canOpenOwner
         ? "Chat history is read only."
+        : session.section !== "working"
+          ? "This session is not actively receiving messages."
         : "Continue in the source app while native message transport is unavailable.";
   return {
     canSendText: false,
     canSendImages: false,
+    canCancel: false,
     canApprove: false,
     canAnswer: false,
     readOnlyReason,
@@ -82,7 +131,7 @@ async function readLinesBackward(
   limit: number,
   includeMetadata: boolean,
   modelCatalog?: ChatModelCatalog,
-): Promise<{ items: ChatItem[]; start: number; metadata?: ChatMetadata }> {
+): Promise<{ items: ChatItem[]; start: number; parseErrors: number; metadata?: ChatMetadata }> {
   return summaryWork.run(async () => {
     const file = await open(path, "r");
     try {
@@ -90,6 +139,7 @@ async function readLinesBackward(
       let buffer = Buffer.alloc(0);
       let lines: Array<{ text: string; start: number }> = [];
       let items: ChatItem[] = [];
+      let parseErrors = 0;
       while (start > 0 && end - start < maxPageBytes
         && (items.length < limit || items[0]?.kind !== "user")) {
         const nextStart = Math.max(0, start - pageChunkBytes);
@@ -114,10 +164,13 @@ async function readLinesBackward(
       const metadata = includeMetadata
         ? parseChatMetadata(provider, lines.map((line) => line.text), modelCatalog)
         : undefined;
-      items = parseChatLines(provider, lines.slice(selectedLine).map((line) => line.text)).slice(-1_000);
+      const parsed = parseChatLinesDetailed(provider, lines.slice(selectedLine).map((line) => line.text));
+      items = parsed.items.slice(-1_000);
+      parseErrors = parsed.parseErrors;
       return {
         items,
         start: lines[selectedLine]?.start ?? 0,
+        parseErrors,
         ...(metadata && Object.keys(metadata).length ? { metadata } : {}),
       };
     } finally {
@@ -148,24 +201,44 @@ function emptyPage(session: DiscoveredProviderSession, readOnlyReason: string): 
     sessionId: session.id,
     items: [],
     hasMoreBefore: false,
+    transcriptEvidence: { authoritative: false, complete: false },
     capabilities: { ...chatCapabilities(session), readOnlyReason },
     pendingAction: null,
   };
 }
 
+function latestTimestamp(items: ChatItem[]): string | undefined {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const timestamp = items[index]?.timestamp;
+    if (timestamp) return timestamp;
+  }
+  return undefined;
+}
+
 export function parseChatLines(provider: ProviderID, lines: string[]): ChatItem[] {
+  return parseChatLinesDetailed(provider, lines).items;
+}
+
+export function parseChatLinesDetailed(
+  provider: ProviderID,
+  lines: string[],
+): { items: ChatItem[]; parseErrors: number } {
   const items: ChatItem[] = [];
   const tools = new Map<string, number>();
+  let parseErrors = 0;
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     let value: unknown;
-    try { value = JSON.parse(lines[lineIndex]!); } catch { continue; }
+    try { value = JSON.parse(lines[lineIndex]!); } catch { parseErrors += 1; continue; }
     if (!record(value)) continue;
     if (provider === "claude_code") parseClaude(value, lineIndex, items, tools);
     if (provider === "codex") parseCodex(value, lineIndex, items, tools);
     if (provider === "pi") parsePi(value, lineIndex, items, tools);
     if (provider === "cursor") parseCursor(value, lineIndex, items, tools);
   }
-  return items.filter((item) => item.kind !== "user" || item.text.length > 0 || item.images.length > 0);
+  return {
+    items: items.filter((item) => item.kind !== "user" || item.text.length > 0 || item.images.length > 0),
+    parseErrors,
+  };
 }
 
 export type ChatModelCatalog = Record<string, {
@@ -321,7 +394,7 @@ function parseClaude(
       if (content.trim().startsWith("[Request interrupted by user")) {
         addSystem(items, id, "interrupted", content.trim(), timestamp, "error");
       } else if (content.trim()) {
-        items.push(user(id, content, [], timestamp));
+        items.push(user(id, content, [], timestamp, chatIdentity(value, message)));
       }
       return;
     }
@@ -335,15 +408,14 @@ function parseClaude(
       } else if (block.type === "text") {
         userText += text(block.text);
       } else if (block.type === "image" && record(block.source)) {
-        const mimeType = imageMime(block.source.media_type);
-        const data = text(block.source.data);
-        if (mimeType && data) images.push({ name: `image-${images.length + 1}`, mimeType, data });
+        const image = normalizeImage(block.source.data, block.source.media_type);
+        if (image) images.push({ name: `image-${images.length + 1}`, ...image });
       }
     }
     if (userText.trim().startsWith("[Request interrupted by user")) {
       addSystem(items, id, "interrupted", userText.trim(), timestamp, "error");
     } else if (userText.trim() || images.length) {
-      items.push(user(id, userText, images, timestamp));
+      items.push(user(id, userText, images, timestamp, chatIdentity(value, message)));
     }
     return;
   }
@@ -391,10 +463,12 @@ function parseCodex(
     const body = blocks.filter(record).map((block) => text(block.text)).filter(Boolean).join("\n");
     const images = blocks.filter(record).flatMap((block, index): ChatImage[] => {
       if (block.type !== "input_image") return [];
-      const data = text(block.image_url || block.url);
-      return data ? [{ name: `image-${index + 1}`, mimeType: "image/png", data }] : [];
+      const image = normalizeImage(block.image_url || block.url, undefined);
+      return image ? [{ name: `image-${index + 1}`, ...image }] : [];
     });
-    if (role === "user" && (body.trim() || images.length)) items.push(user(id, body, images, timestamp));
+    if (role === "user" && (body.trim() || images.length)) {
+      items.push(user(id, body, images, timestamp, chatIdentity(value, payload)));
+    }
     if (role === "assistant" && body.trim()) items.push({ id, kind: "assistant", text: body, timestamp });
     return;
   }
@@ -453,11 +527,12 @@ function parsePi(
     const body = content.filter(record).map((part) => text(part.text)).filter(Boolean).join("\n");
     const images = content.filter(record).flatMap((part, index): ChatImage[] => {
       if (part.type !== "image") return [];
-      const mimeType = imageMime(part.mimeType);
-      const data = text(part.data);
-      return mimeType && data ? [{ name: `image-${index + 1}`, mimeType, data }] : [];
+      const image = normalizeImage(part.data, part.mimeType);
+      return image ? [{ name: `image-${index + 1}`, ...image }] : [];
     });
-    if (body.trim() || images.length) items.push(user(id, body, images, timestamp));
+    if (body.trim() || images.length) {
+      items.push(user(id, body, images, timestamp, chatIdentity(value, message)));
+    }
     return;
   }
   if (role !== "assistant") return;
@@ -493,7 +568,7 @@ function parseCursor(
     const id = `cursor-${lineIndex}-${index}`;
     if (block.type === "text" && text(block.text).trim()) {
       items.push(role === "user"
-        ? user(id, text(block.text), [], undefined)
+        ? user(id, text(block.text), [], undefined, chatIdentity(value, value.message))
         : { id, kind: "assistant", text: text(block.text) });
     } else if (role === "assistant" && block.type === "tool_use") {
       addTool(items, tools, id, text(block.name) || "Tool", input(block.input), undefined);
@@ -553,12 +628,62 @@ function finishTool(
   if (result) item.result = result;
 }
 
-function user(id: string, body: string, images: ChatImage[], timestamp?: string): ChatItem {
-  const text = body
+type ChatUserIdentity = Pick<Extract<ChatItem, { kind: "user" }>,
+  "requestId" | "deliveryId" | "providerMessageId">;
+
+function user(
+  id: string,
+  body: string,
+  images: ChatImage[],
+  timestamp?: string,
+  identity: ChatUserIdentity = {},
+): ChatItem {
+  const text = normalizeChatText(body);
+  return {
+    id,
+    kind: "user",
+    text,
+    images,
+    timestamp,
+    ...(identity.requestId ? { requestId: identity.requestId } : {}),
+    ...(identity.deliveryId ? { deliveryId: identity.deliveryId } : {}),
+    ...(identity.providerMessageId ? { providerMessageId: identity.providerMessageId } : {}),
+  };
+}
+
+/** Use the same provider-neutral normalization for canonical and submitted turns. */
+export function normalizeChatText(body: string): string {
+  return body
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
     .replace(/<ide_(?:opened_file|selection)>[\s\S]*?<\/ide_(?:opened_file|selection)>/g, "")
     .trim();
-  return { id, kind: "user", text, images, timestamp };
+}
+
+function chatIdentity(...values: Array<Record<string, unknown> | undefined>): ChatUserIdentity {
+  const requestId = firstIdentityValue(values, ["requestId", "request_id"]);
+  const deliveryId = firstIdentityValue(values, ["deliveryId", "delivery_id"]);
+  const providerMessageId = firstIdentityValue(values, [
+    "providerMessageId", "provider_message_id", "messageId", "message_id",
+  ]);
+  return {
+    ...(requestId ? { requestId } : {}),
+    ...(deliveryId ? { deliveryId } : {}),
+    ...(providerMessageId ? { providerMessageId } : {}),
+  };
+}
+
+function firstIdentityValue(
+  values: Array<Record<string, unknown> | undefined>,
+  keys: string[],
+): string | undefined {
+  for (const value of values) {
+    if (!value) continue;
+    for (const key of keys) {
+      const candidate = text(value[key]).trim();
+      if (candidate) return candidate;
+    }
+  }
+  return undefined;
 }
 
 function contentText(value: unknown): string {
@@ -593,9 +718,39 @@ function iso(value: unknown): string | undefined {
 }
 
 function imageMime(value: unknown): ChatImage["mimeType"] | undefined {
-  return ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(text(value))
+  return (CHAT_IMAGE_SUPPORTED_MIME_TYPES as readonly string[]).includes(text(value))
     ? text(value) as ChatImage["mimeType"]
     : undefined;
+}
+
+function normalizeImage(
+  value: unknown,
+  declaredMime: unknown,
+): Pick<ChatImage, "mimeType" | "data"> | undefined {
+  const input = text(value);
+  if (!input) return undefined;
+  let payload = input;
+  let uriMime: ChatImage["mimeType"] | undefined;
+  if (input.startsWith("data:")) {
+    const comma = input.indexOf(",");
+    if (comma <= 5) return undefined;
+    const metadata = input.slice(5, comma).toLowerCase();
+    if (!metadata.endsWith(";base64")) return undefined;
+    const candidate = metadata.slice(0, -";base64".length);
+    uriMime = imageMime(candidate);
+    if (!uriMime) return undefined;
+    payload = input.slice(comma + 1);
+  }
+  if (payload.length > CHAT_IMAGE_MAX_BASE64_CHARS) return undefined;
+  const declared = imageMime(declaredMime);
+  if (text(declaredMime) && !declared) return undefined;
+  if (declared && uriMime && declared !== uriMime) return undefined;
+  const expected = declared ?? uriMime;
+  const bytes = chatImageBase64Bytes(payload);
+  if (!bytes) return undefined;
+  const detected = chatImageMimeForBytes(bytes);
+  if (!detected || (expected && expected !== detected)) return undefined;
+  return { mimeType: detected, data: payload };
 }
 
 function toolFamily(name: string): NonNullable<Extract<ChatItem, { kind: "tool" }>["family"]> {

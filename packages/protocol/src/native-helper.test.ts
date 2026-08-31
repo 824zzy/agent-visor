@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  NATIVE_HELPER_MAX_TEXT_BYTES,
   nativeHelperRequestSchema,
   nativeHelperResponseSchema,
 } from "./index.js";
@@ -163,9 +164,54 @@ const requests = [
       submit: true,
     },
   },
+  {
+    version: 1,
+    id: "cancel-terminal",
+    method: "cancel_terminal",
+    params: { target: { application: "Ghostty", tty: "/dev/ttys012", cwd: "/tmp/project" } },
+  },
+  {
+    version: 1,
+    id: "cycle-permission",
+    method: "cycle_permission_mode",
+    params: { target: { application: "Ghostty", tty: "/dev/ttys012", cwd: "/tmp/project" } },
+  },
 ] as const;
 
 describe("native helper protocol", () => {
+  it("accepts the terminal text boundary but rejects one more UTF-16 unit", () => {
+    const base = {
+      version: 1 as const,
+      id: "send-boundary",
+      method: "send_terminal" as const,
+      params: {
+        target: { application: "Ghostty" as const, tty: "ttys012", cwd: "/tmp/project" },
+        text: "x".repeat(NATIVE_HELPER_MAX_TEXT_BYTES),
+        submit: true,
+      },
+    };
+    expect(nativeHelperRequestSchema.safeParse(base).success).toBe(true);
+    expect(nativeHelperRequestSchema.safeParse({
+      ...base,
+      params: { ...base.params, text: `${base.params.text}x` },
+    }).success).toBe(false);
+  });
+
+  it("rejects multibyte terminal text when its UTF-8 bytes exceed the limit", () => {
+    const boundary = "😀".repeat(NATIVE_HELPER_MAX_TEXT_BYTES / 4);
+    const result = nativeHelperRequestSchema.safeParse({
+      version: 1,
+      id: "multibyte-overflow",
+      method: "send_terminal",
+      params: {
+        target: { application: "Ghostty", tty: "ttys012", cwd: "/tmp/project" },
+        text: `${boundary}x`,
+        submit: true,
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("validates every supported request", () => {
     for (const request of requests) {
       expect(nativeHelperRequestSchema.parse(request)).toEqual(request);
@@ -197,6 +243,12 @@ describe("native helper protocol", () => {
         params: { target: { application: "Ghostty", tty: "/dev/null", cwd: "/" } },
       }).success,
     ).toBe(false);
+    expect(nativeHelperRequestSchema.safeParse({
+      version: 1,
+      id: "unsafe-cancel-terminal",
+      method: "cancel_terminal",
+      params: { target: { application: "Ghostty", tty: "ttys012", cwd: "/", extra: true } },
+    }).success).toBe(false);
     expect(nativeHelperRequestSchema.safeParse({
       version: 1,
       id: "unsafe-hotkey",

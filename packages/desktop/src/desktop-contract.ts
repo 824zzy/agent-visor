@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const productName = "Agent Visor";
 export const electronDataName = "Agent Visor Next";
@@ -17,11 +18,60 @@ export type RendererLocation =
   | { kind: "url"; value: string }
   | { kind: "file"; path: string };
 
-export function rendererLocation(base: string): RendererLocation {
+export function rendererLocation(base: string): RendererLocation | undefined {
   if (base.startsWith("http://") || base.startsWith("https://")) {
-    return { kind: "url", value: new URL(base).toString() };
+    try {
+      const url = new URL(base);
+      if (!isApprovedDevRendererURL(url)) return undefined;
+      return { kind: "url", value: url.toString() };
+    } catch {
+      return undefined;
+    }
   }
-  return { kind: "file", path: base };
+  return { kind: "file", path: path.resolve(base) };
+}
+
+/**
+ * Check a renderer frame or navigation against the location loaded by the
+ * main window. Dev renderers are limited to the explicit loopback origins;
+ * packaged renderers must stay on their exact entry file.
+ */
+export function rendererURLAllowed(location: RendererLocation, value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (location.kind === "url") {
+      const expected = new URL(location.value);
+      return isApprovedDevRendererURL(url) && url.origin === expected.origin;
+    }
+    if (url.protocol !== "file:" || url.search || url.hash) return false;
+    return path.resolve(fileURLToPath(url)) === path.resolve(location.path);
+  } catch {
+    return false;
+  }
+}
+
+/** Validate renderer-requested links before they cross into the host OS. */
+export function safeExternalURL(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim();
+  // ponytail: keep renderer-controlled external navigation bounded; extending
+  // this cap requires reviewing both IPC and host-app URL handling.
+  if (!raw || raw.length > 4_096 || /[\u0000-\u001f\u007f]/.test(raw)) return undefined;
+  try {
+    const url = new URL(raw);
+    return ["http:", "https:", "mailto:"].includes(url.protocol) ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isApprovedDevRendererURL(url: URL): boolean {
+  return url.protocol === "http:"
+    && (url.hostname === "127.0.0.1" || url.hostname === "localhost")
+    && Boolean(url.port)
+    && !url.username
+    && !url.password
+    && !url.hash;
 }
 
 export function daemonUrlFromReadyMessage(value: unknown): string | undefined {

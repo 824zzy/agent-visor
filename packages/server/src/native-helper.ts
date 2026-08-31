@@ -5,6 +5,8 @@ import net, { type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import {
+  NATIVE_HELPER_MAX_FRAME_BYTES,
+  NATIVE_HELPER_MAX_TEXT_BYTES,
   nativeHelperResponseSchema,
   type AppSettings,
   type NativeHelperFocusTarget,
@@ -20,6 +22,8 @@ import {
 } from "@agent-visor/protocol";
 
 export interface NativeHelperAdapter {
+  /** False when the signed helper process is not available for a real action. */
+  isAvailable?(): boolean;
   screenTopology(): Promise<NativeHelperScreen[]>;
   accessibilityStatus(): Promise<boolean>;
   notificationStatus(): Promise<NativeHelperNotificationPermission>;
@@ -44,14 +48,66 @@ export interface NativeHelperAdapter {
   focus(target: NativeHelperFocusTarget): Promise<void>;
   focusTerminal(target: NativeHelperTerminalTarget): Promise<void>;
   sendTerminal(target: NativeHelperTerminalTarget, text: string, submit: boolean): Promise<void>;
+  cancelTerminal(target: NativeHelperTerminalTarget): Promise<void>;
+  /** Send Claude Code's provider-native Shift+Tab to the exact terminal. */
+  cyclePermissionMode(target: NativeHelperTerminalTarget): Promise<void>;
 }
 
 export type NativeHelperEvent = Extract<NativeHelperResponse, { type: "event" }>;
+
+export class NativeHelperRequestTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NativeHelperRequestTooLargeError";
+  }
+}
+
+/**
+ * Serialize one helper request completely before touching the socket. The
+ * helper protocol uses a four-byte length prefix around a JSON payload; doing
+ * both bounds checks here makes an oversized terminal send fail atomically
+ * instead of writing a partial request. The caller owns the generated id so
+ * it can use the same identity for pending/error handling.
+ */
+export function serializeNativeHelperRequest(
+  method: string,
+  params?: unknown,
+  id = randomUUID(),
+): { id: string; frame: Buffer } {
+  if (method === "send_terminal" && isRecord(params) && typeof params.text === "string") {
+    const textBytes = Buffer.byteLength(params.text, "utf8");
+    if (textBytes > NATIVE_HELPER_MAX_TEXT_BYTES) {
+      throw new NativeHelperRequestTooLargeError(
+        `Terminal text exceeds the ${NATIVE_HELPER_MAX_TEXT_BYTES}-byte helper limit.`,
+      );
+    }
+  }
+  const body = Buffer.from(JSON.stringify({
+    version: 1,
+    id,
+    method,
+    ...(params === undefined ? {} : { params }),
+  }));
+  if (body.byteLength > NATIVE_HELPER_MAX_FRAME_BYTES) {
+    throw new NativeHelperRequestTooLargeError(
+      `The native helper request exceeds the ${NATIVE_HELPER_MAX_FRAME_BYTES}-byte frame limit.`,
+    );
+  }
+  const header = Buffer.alloc(4);
+  header.writeUInt32BE(body.byteLength);
+  return { id, frame: Buffer.concat([header, body]) };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 export class FakeNativeHelper implements NativeHelperAdapter {
   readonly focusRequests: NativeHelperFocusTarget[] = [];
   readonly terminalFocusRequests: NativeHelperTerminalTarget[] = [];
   readonly terminalSendRequests: Array<{ target: NativeHelperTerminalTarget; text: string; submit: boolean }> = [];
+  readonly terminalCancelRequests: NativeHelperTerminalTarget[] = [];
+  readonly cyclePermissionModeRequests: NativeHelperTerminalTarget[] = [];
   presentedPills: NativeHelperPill[] = [];
   presentedNotifications: NativeHelperNotification[] = [];
   presentedNewNotifications = false;
@@ -87,6 +143,8 @@ export class FakeNativeHelper implements NativeHelperAdapter {
     this.trusted = options.trusted ?? false;
     this.notificationPermission = options.notifications ?? "not_determined";
   }
+
+  isAvailable(): boolean { return true; }
 
   async screenTopology(): Promise<NativeHelperScreen[]> {
     return structuredClone(this.screens);
@@ -162,9 +220,18 @@ export class FakeNativeHelper implements NativeHelperAdapter {
   async sendTerminal(target: NativeHelperTerminalTarget, text: string, submit: boolean): Promise<void> {
     this.terminalSendRequests.push(structuredClone({ target, text, submit }));
   }
+
+  async cancelTerminal(target: NativeHelperTerminalTarget): Promise<void> {
+    this.terminalCancelRequests.push(structuredClone(target));
+  }
+
+  async cyclePermissionMode(target: NativeHelperTerminalTarget): Promise<void> {
+    this.cyclePermissionModeRequests.push(structuredClone(target));
+  }
 }
 
 export class UnavailableNativeHelper implements NativeHelperAdapter {
+  isAvailable(): boolean { return false; }
   async screenTopology(): Promise<NativeHelperScreen[]> { return []; }
   async accessibilityStatus(): Promise<boolean> { return false; }
   async notificationStatus(): Promise<NativeHelperNotificationPermission> { return "not_determined"; }
@@ -177,6 +244,8 @@ export class UnavailableNativeHelper implements NativeHelperAdapter {
   async focus(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async focusTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async sendTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
+  async cancelTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
+  async cyclePermissionMode(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
 }
 
 export async function retryNativeHelperStart<T>(start: () => Promise<T>): Promise<T> {
@@ -204,11 +273,13 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     private readonly root: string,
     private readonly onEvent: (event: NativeHelperEvent) => void,
   ) {
-    socket.on("data", (data) => this.ingest(data));
+    socket.on("data", (data) => this.ingest(Buffer.from(data)));
     socket.once("close", () => this.fail(new Error("The native helper connection closed.")));
     socket.once("error", (error) => this.fail(error));
     child.once("exit", () => this.fail(new Error("The native helper exited.")));
   }
+
+  isAvailable(): boolean { return !this.closed && !this.failure; }
 
   static async start(
     executable: string,
@@ -322,6 +393,14 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     await this.accepted("send_terminal", { target, text, submit });
   }
 
+  async cancelTerminal(target: NativeHelperTerminalTarget): Promise<void> {
+    await this.accepted("cancel_terminal", { target });
+  }
+
+  async cyclePermissionMode(target: NativeHelperTerminalTarget): Promise<void> {
+    await this.accepted("cycle_permission_mode", { target });
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     let invalidationError: unknown;
@@ -360,15 +439,13 @@ export class NativeHelperProcess implements NativeHelperAdapter {
   private request(method: string, params?: unknown) {
     if (this.closed) return Promise.reject(new Error("The native helper is closed."));
     if (this.failure) return Promise.reject(this.failure);
-    const id = randomUUID();
-    const body = Buffer.from(JSON.stringify({
-      version: 1,
-      id,
-      method,
-      ...(params === undefined ? {} : { params }),
-    }));
-    const header = Buffer.alloc(4);
-    header.writeUInt32BE(body.length);
+    let serialized: { id: string; frame: Buffer };
+    try {
+      serialized = serializeNativeHelperRequest(method, params);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const { id, frame } = serialized;
 
     return new Promise<Extract<NativeHelperResponse, { ok: true }>>((resolve, reject) => {
       const deadline = setTimeout(() => {
@@ -383,7 +460,7 @@ export class NativeHelperProcess implements NativeHelperAdapter {
         reject,
         deadline,
       });
-      this.socket.write(Buffer.concat([header, body]));
+      this.socket.write(frame);
     });
   }
 
@@ -391,7 +468,7 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     this.buffer = Buffer.concat([this.buffer, data]);
     while (this.buffer.length >= 4) {
       const size = this.buffer.readUInt32BE(0);
-      if (size > 1_048_576) {
+      if (size > NATIVE_HELPER_MAX_FRAME_BYTES) {
         this.fail(new Error("The native helper sent an oversized frame."));
         return;
       }

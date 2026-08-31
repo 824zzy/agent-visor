@@ -12,5 +12,6 @@ let package = Package(
         .target(name: "AgentVisorCore"),
         .executableTarget(name: "AgentVisorNativeHelper", dependencies: ["AgentVisorCore"]),
         .testTarget(name: "AgentVisorCoreTests", dependencies: ["AgentVisorCore"]),
+        .testTarget(name: "AgentVisorNativeHelperTests", dependencies: ["AgentVisorNativeHelper"]),
     ]
 )

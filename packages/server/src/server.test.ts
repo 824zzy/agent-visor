@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { defaultChatVisibility, serverMessageSchema } from "@agent-visor/protocol";
 import { fixtureSnapshot } from "./fixture.js";
 import { startServer, type RunningServer } from "./server.js";
@@ -128,7 +131,7 @@ describe("Agent Visor daemon", () => {
         items: [{ id: "u1", kind: "user" as const, text: "Fix it", images: [] }],
         hasMoreBefore: false,
         capabilities: {
-          canSendText: false, canSendImages: false, canApprove: false, canAnswer: false,
+          canSendText: false, canSendImages: false, canCancel: false, canApprove: false, canAnswer: false,
           readOnlyReason: "Read only.",
         },
         pendingAction: null,
@@ -148,15 +151,235 @@ describe("Agent Visor daemon", () => {
     socket.send(JSON.stringify({ type: "open_chat", sessionId: "pi-ready" }));
     socket.send(JSON.stringify({ type: "focus_session", id: "focus-1", sessionId: "pi-ready" }));
     socket.send(JSON.stringify({
-      type: "send_chat", id: "send-1", sessionId: "pi-ready", text: "Continue", images: [],
+      type: "send_chat", id: "send-1", sessionId: "pi-ready", generation: 1,
+      deliveryId: "delivery-1", text: "Continue", images: [],
     }));
-
     await expect.poll(() => messages.length).toBe(4);
     expect(messages[1]).toMatchObject({ type: "chat_page", sessionId: "pi-ready" });
     expect(messages).toContainEqual({ type: "native_action_result", id: "focus-1", ok: true });
     expect(acknowledged).toEqual(["pi-ready"]);
     expect(messages).toContainEqual({
-      type: "chat_action_result", id: "send-1", ok: false, error: "Read only.",
+      type: "chat_action_result", id: "send-1", action: "send", sessionId: "pi-ready",
+      generation: 1, deliveryId: "delivery-1", ok: false, error: "Read only.",
+    });
+    socket.close();
+  });
+
+  it("settles permission-mode cycle with exact action metadata", async () => {
+    const actions: unknown[] = [];
+    const source = {
+      current: () => fixtureSnapshot,
+      subscribe: () => () => undefined,
+      chatAction: async (message: Extract<import("@agent-visor/protocol").ClientMessage, {
+        type: "cycle_permission_mode";
+      }>) => {
+        actions.push(message);
+        return undefined;
+      },
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    socket.send(JSON.stringify({
+      type: "cycle_permission_mode", id: "cycle-1", sessionId: "claude-1",
+      generation: 4, expectedMode: "default",
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await expect.poll(() => messages.length).toBe(2);
+    expect(actions).toEqual([expect.objectContaining({
+      type: "cycle_permission_mode", sessionId: "claude-1", generation: 4,
+    })]);
+    expect(messages[1]).toEqual({
+      type: "chat_action_result", id: "cycle-1", action: "cycle_permission_mode",
+      sessionId: "claude-1", generation: 4, ok: true,
+    });
+    socket.close();
+  });
+
+  it("echoes send request identity in success and failure acknowledgements", async () => {
+    const actions: unknown[] = [];
+    const source = {
+      current: () => fixtureSnapshot,
+      subscribe: () => () => undefined,
+      chatAction: async (message: Extract<import("@agent-visor/protocol").ClientMessage, { type: "send_chat" }>) => {
+        actions.push(message);
+        return message.text === "fail" ? "Provider rejected the message." : undefined;
+      },
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+
+    socket.send(JSON.stringify({
+      type: "send_chat", id: "request-1", sessionId: "pi-ready", generation: 9,
+      deliveryId: "delivery-1", text: "Continue", images: [],
+    }));
+    socket.send(JSON.stringify({
+      type: "send_chat", id: "request-2", sessionId: "pi-ready", generation: 9,
+      deliveryId: "delivery-2", text: "fail", images: [],
+    }));
+    await expect.poll(() => messages.length).toBe(3);
+
+    expect(actions).toMatchObject([
+      { id: "request-1", sessionId: "pi-ready", generation: 9, deliveryId: "delivery-1" },
+      { id: "request-2", sessionId: "pi-ready", generation: 9, deliveryId: "delivery-2" },
+    ]);
+    expect(messages).toContainEqual({
+      type: "chat_action_result", id: "request-1", action: "send", sessionId: "pi-ready",
+      generation: 9, deliveryId: "delivery-1", ok: true,
+    });
+    expect(messages).toContainEqual({
+      type: "chat_action_result", id: "request-2", action: "send", sessionId: "pi-ready",
+      generation: 9, deliveryId: "delivery-2", ok: false, error: "Provider rejected the message.",
+    });
+    socket.close();
+  });
+
+  it("acknowledges a cancellation with request, session, and generation identity", async () => {
+    const actions: unknown[] = [];
+    const source = {
+      current: () => fixtureSnapshot,
+      subscribe: () => () => undefined,
+      chatPage: async (sessionId: string) => ({
+        type: "chat_page" as const,
+        sessionId,
+        items: [{ id: "working", kind: "assistant" as const, text: "Working" }],
+        hasMoreBefore: false,
+        capabilities: {
+          canSendText: true,
+          canSendImages: false,
+          canCancel: true,
+          canApprove: false,
+          canAnswer: false,
+        },
+        pendingAction: null,
+      }),
+      chatAction: async (message: unknown) => {
+        actions.push(message);
+        return undefined;
+      },
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+
+    socket.send(JSON.stringify({
+      type: "cancel_chat",
+      id: "cancel-1",
+      sessionId: "pi-ready",
+      generation: 4,
+      deliveryId: "send-1",
+    }));
+    await expect.poll(() => messages.length).toBe(2);
+
+    expect(actions).toEqual([expect.objectContaining({
+      type: "cancel_chat", id: "cancel-1", sessionId: "pi-ready", generation: 4,
+    })]);
+    expect(messages[1]).toEqual({
+      type: "chat_action_result",
+      id: "cancel-1",
+      action: "cancel",
+      sessionId: "pi-ready",
+      generation: 4,
+      deliveryId: "send-1",
+      ok: true,
+    });
+    socket.close();
+  });
+
+  it("settles thrown send, cancel, and respond actions with contextual errors", async () => {
+    const source = {
+      current: () => fixtureSnapshot,
+      subscribe: () => () => undefined,
+      chatAction: async () => { throw new Error("provider action exploded"); },
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+
+    socket.send(JSON.stringify({
+      type: "send_chat", id: "throw-send", sessionId: "pi-ready", generation: 3,
+      deliveryId: "delivery-throw", text: "send", images: [],
+    }));
+    socket.send(JSON.stringify({
+      type: "cancel_chat", id: "throw-cancel", sessionId: "pi-ready", generation: 3,
+      deliveryId: "delivery-throw",
+    }));
+    socket.send(JSON.stringify({
+      type: "respond_chat", id: "throw-respond", sessionId: "pi-ready",
+      toolUseId: "tool-throw", decision: "allow",
+    }));
+    await expect.poll(() => messages.length).toBe(4);
+
+    expect(messages).toContainEqual({
+      type: "chat_action_result", id: "throw-send", action: "send", sessionId: "pi-ready",
+      generation: 3, deliveryId: "delivery-throw", ok: false, error: "provider action exploded",
+    });
+    expect(messages).toContainEqual({
+      type: "chat_action_result", id: "throw-cancel", action: "cancel", sessionId: "pi-ready",
+      generation: 3, deliveryId: "delivery-throw", ok: false, error: "provider action exploded",
+    });
+    expect(messages).toContainEqual({
+      type: "chat_action_result", id: "throw-respond", action: "respond", sessionId: "pi-ready",
+      ok: false, error: "provider action exploded",
+    });
+    socket.close();
+  });
+
+  it("returns contextual daemon errors for malformed page and slash responses", async () => {
+    const source = {
+      current: () => fixtureSnapshot,
+      subscribe: () => () => undefined,
+      chatPage: async () => ({}) as never,
+      chatCommands: async () => ({}) as never,
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+
+    socket.send(JSON.stringify({ type: "open_chat", sessionId: "pi-ready" }));
+    socket.send(JSON.stringify({ type: "get_chat_commands", id: "commands-1", sessionId: "pi-ready" }));
+    await expect.poll(() => messages.length).toBe(3);
+
+    expect(messages).toContainEqual({
+      type: "daemon_error",
+      code: "invalid_response",
+      message: "Daemon produced an invalid protocol response.",
+      requestType: "open_chat",
+      sessionId: "pi-ready",
+    });
+    expect(messages).toContainEqual({
+      type: "daemon_error",
+      code: "invalid_response",
+      message: "Daemon produced an invalid protocol response.",
+      requestType: "get_chat_commands",
+      requestId: "commands-1",
+      sessionId: "pi-ready",
     });
     socket.close();
   });
@@ -197,6 +420,85 @@ describe("Agent Visor daemon", () => {
     expect(failed).toHaveBeenCalledWith("Agent Visor request failed: Error: conversation file changed");
     failed.mockRestore();
     socket.close();
+  });
+
+  it("serves slash commands through the lazy daemon seam", async () => {
+    const source = {
+      current: () => fixtureSnapshot,
+      subscribe: () => () => undefined,
+      chatCommands: async (sessionId: string) => ({
+        type: "chat_commands" as const,
+        sessionId,
+        truncated: false,
+        commands: [{
+          name: "review",
+          aliases: [],
+          description: "Review the current branch",
+          argNames: [],
+          source: "builtin" as const,
+          isHidden: false,
+          opensInTerminalDialog: false,
+        }],
+      }),
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    socket.send(JSON.stringify({ type: "get_chat_commands", id: "commands-1", sessionId: "pi-ready" }));
+    await expect.poll(() => messages.length).toBe(2);
+    expect(messages[1]).toEqual(expect.objectContaining({
+      type: "chat_commands",
+      sessionId: "pi-ready",
+      commands: [expect.objectContaining({ name: "review" })],
+    }));
+    socket.close();
+  });
+
+  it("serves slash commands for a hook-backed session without a discovered record", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-server-hook-chat-"));
+    try {
+      const cwd = path.join(root, "project");
+      await mkdir(path.join(cwd, ".claude", "commands"), { recursive: true });
+      await writeFile(path.join(cwd, ".claude", "commands", "hook-review.md"),
+        "---\nname: hook-review\n---\nReview from the hook cwd\n");
+      const source = new SessionRepository([]);
+      source.applyHook({
+        sessionId: "hook-only",
+        cwd,
+        provider: "claude_code",
+        event: "SessionStart",
+        status: "working",
+        receivedAt: "2026-08-22T08:00:00.000Z",
+        tty: "ttys001",
+        sessionFile: path.join(cwd, "conversation.jsonl"),
+      });
+      expect(source.chatRecord("hook-only")).toBeUndefined();
+      running = await startServer({ port: 0, source, token });
+      const socket = new WebSocket(running.url);
+      const messages: unknown[] = [];
+      socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+      await new Promise<void>((resolve, reject) => {
+        socket.once("open", resolve);
+        socket.once("error", reject);
+      });
+      socket.send(JSON.stringify({ type: "get_chat_commands", id: "hook-commands", sessionId: "hook-only" }));
+      await expect.poll(() => messages.length).toBe(2);
+      expect(messages[1]).toEqual(expect.objectContaining({
+        type: "chat_commands",
+        sessionId: "hook-only",
+      }));
+      expect((messages[1] as { commands: unknown[] }).commands).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: "hook-review", source: "project" }),
+      ]));
+      socket.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("delivers native settings and action results", async () => {
@@ -265,5 +567,37 @@ describe("Agent Visor daemon", () => {
 
     expect(socket.readyState).toBe(WebSocket.OPEN);
     socket.close();
+  });
+
+  it("closes an oversized frame without taking down the daemon", async () => {
+    running = await startServer({
+      port: 0,
+      snapshot: fixtureSnapshot,
+      token,
+      maxPayload: 256,
+    });
+    const oversized = new WebSocket(running.url);
+    oversized.on("error", () => undefined);
+    await new Promise<void>((resolve, reject) => {
+      oversized.once("open", resolve);
+      oversized.once("error", reject);
+    });
+    const closed = new Promise<number>((resolve) => {
+      oversized.once("close", (code) => resolve(code));
+    });
+    oversized.send(Buffer.alloc(2_048, 0x78));
+
+    await expect(closed).resolves.toBe(1009);
+
+    const healthy = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    healthy.on("message", (data) => messages.push(JSON.parse(data.toString())));
+    await new Promise<void>((resolve, reject) => {
+      healthy.once("open", resolve);
+      healthy.once("error", reject);
+    });
+    healthy.send(JSON.stringify({ type: "health" }));
+    await expect.poll(() => messages).toContainEqual({ type: "health", status: "ok" });
+    healthy.close();
   });
 });

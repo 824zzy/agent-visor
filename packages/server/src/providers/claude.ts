@@ -2,7 +2,8 @@ import path from "node:path";
 import type { ProviderAdapter, DiscoveredProviderSession } from "../sessions.js";
 import type { ProviderEnvironment } from "./environment.js";
 import {
-  applicationTargetForProcess, isRecord, iso, ownerForProcess, terminalTargetForProcess,
+  applicationTargetForProcess, isRecord, iso, ownerForProcess, processInstanceToken,
+  terminalTargetForProcess,
 } from "./shared.js";
 
 const terminalStatuses = new Set([
@@ -54,7 +55,16 @@ export class ClaudeProvider implements ProviderAdapter {
       const owner = process.tty
         ? ownerForProcess(pid, processes)
         : entrypoint.includes("vscode") ? "Cursor" : "Claude";
-      const terminalTarget = terminalTargetForProcess(process, cwd, processes);
+      const processStartToken = processInstanceToken(
+        pid,
+        await this.environment.processStartedAt(pid),
+      );
+      const terminalTarget = terminalTargetForProcess(
+        process,
+        cwd,
+        processes,
+        processStartToken,
+      );
       const applicationTarget = applicationTargetForProcess(process.pid, processes);
 
       results.push({

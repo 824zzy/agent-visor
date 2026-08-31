@@ -219,6 +219,10 @@ The footer remains quiet and fixed. It is the durable teaching surface for keybo
 
 Chat is a full-content destination in the existing main window. It is not a modal sheet and not a permanent split pane.
 
+The bullets below define the Swift behavior contract. They are not a claim
+that the Electron replacement has complete parity. The current baseline and
+the nine-phase implementation order are tracked in [Chat feature parity](chat-feature-parity.md).
+
 - The Sessions browser remains mounted but hidden so its query, keyboard cursor, and scroll position survive without reconstruction.
 - The header is a compact, single-line navigation toolbar between 44 and 48 points high. From left to right it contains the labeled `Back to Sessions` action, a compact status glyph plus the stable session title, a quiet always-visible `Open in <owner>` action when routing is available, and an overflow menu containing optional technical `Details`.
 - `Back to Sessions` owns a 44-point rectangular hit target covering its arrow, text, and padding. The visible arrow area contains no dead space.
@@ -233,6 +237,7 @@ Chat is a full-content destination in the existing main window. It is not a moda
 - The bottom status bar shares geometry across providers, not capabilities. Claude Code's permission-mode segment (`default`, `accept edits`, `plan`, and observed optional modes) appears only for Claude Code sessions. A terminal-owned Claude session may cycle it; a non-terminal Claude owner may show the latest mode read-only.
 - Pi, Codex, Cursor, and every other non-Claude provider hide Claude permission modes even if stale or falsely probed mode metadata exists. Their Chat composers do not expose or forward Claude's Shift-Tab mode action. Rendering, terminal probing, optimistic state, Details, and keystroke delivery consume the same provider-capability decision so no layer can reintroduce the control independently.
 - Assistant prose uses the rail width remaining after its status glyph. It has no independent readable-width frame and no decorative trailing spacer.
+- Thinking prose uses the same basic inline-Markdown presentation as assistant prose, with the established quieter italic tone; raw emphasis markers are not shown as content.
 - User prompts are trailing, content-hugging bubbles inside the rail. Short prompts keep balanced horizontal insets around their content; long prompts wrap only when the rail and the role-separating leading space require it. The rounded background never expands merely because the rail has spare width.
 - Pi uses the same view. Its provider owns active-branch parsing. A live exactly routed Pi terminal accepts the shared image composer: Agent Visor saves each image locally, shows the existing thumbnail, and submits one ordered path-plus-text prompt through Pi's provider-aware terminal route. Historical or owner-only Pi rows remain read-only, and image submission never mutates the system clipboard or changes the bundled lifecycle extension.
 - Technical metadata lives in the optional overflow `Details` menu and never becomes an intermediate destination.

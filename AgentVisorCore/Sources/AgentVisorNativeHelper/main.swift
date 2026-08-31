@@ -239,6 +239,14 @@ private func response(
             return NativeTerminalController().send(text, to: target, submit: submit)
                 ? .accepted(id: id)
                 : .error(id: id, code: .failed, message: "The terminal input could not be delivered.")
+        case .cancelTerminal(let id, let target):
+            return NativeTerminalController().cancel(target)
+                ? .accepted(id: id)
+                : .error(id: id, code: .failed, message: "The terminal input could not be cancelled.")
+        case .cyclePermissionMode(let id, let target):
+            return NativeTerminalController().cyclePermissionMode(target)
+                ? .accepted(id: id)
+                : .error(id: id, code: .failed, message: "The Claude permission mode could not be changed.")
         case .focus(let id, let target):
             guard target.windowId == nil else {
                 return .error(

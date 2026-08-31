@@ -949,9 +949,14 @@ actor ConversationParser {
         if let timestampStr = json["timestamp"] as? String {
             let formatter = ISO8601DateFormatter()
             formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            timestamp = formatter.date(from: timestampStr) ?? Date()
+            // Keep missing/invalid provider time explicit. Pending-echo
+            // reconciliation treats this sentinel as untrusted and will not
+            // use content-only matching without a real occurrence boundary.
+            timestamp = formatter.date(from: timestampStr) ?? .distantPast
         } else {
-            timestamp = Date()
+            // Do not fabricate `now`: it can make an old replay look newer
+            // than a just-submitted delivery.
+            timestamp = .distantPast
         }
 
         var blocks: [MessageBlock] = []
@@ -1022,6 +1027,15 @@ actor ConversationParser {
                             if !trimmed.isEmpty {
                                 blocks.append(.thinking(trimmed))
                             }
+                        }
+                    case "image":
+                        // Claude stores both typed text and image-only turns
+                        // as content blocks. Keep the exact provider image
+                        // reference so PendingEchoStore can reconcile one
+                        // canonical image row without using a display-only
+                        // "[Image]" placeholder.
+                        if let image = ClaudeImageBlockParser.attachment(from: block) {
+                            blocks.append(.image(image))
                         }
                     default:
                         break

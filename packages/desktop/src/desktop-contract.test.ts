@@ -12,6 +12,8 @@ import {
   ownerApplication,
   productName,
   rendererLocation,
+  rendererURLAllowed,
+  safeExternalURL,
   windowCloseAction,
 } from "./desktop-contract.js";
 
@@ -46,11 +48,27 @@ describe("desktop launch contract", () => {
     });
   });
 
+  it("allows only explicit loopback renderer origins", () => {
+    const location = rendererLocation("http://127.0.0.1:8081");
+    expect(location).toEqual({ kind: "url", value: "http://127.0.0.1:8081/" });
+    expect(rendererLocation("https://remote.example/app")).toBeUndefined();
+    expect(rendererLocation("http://192.168.1.20:8081/app")).toBeUndefined();
+    expect(rendererLocation("http://127.0.0.1:8081/app#unsafe")).toBeUndefined();
+    expect(rendererURLAllowed(location!, "http://127.0.0.1:8081/chat")).toBe(true);
+    expect(rendererURLAllowed(location!, "http://localhost:8081/chat")).toBe(false);
+    expect(rendererURLAllowed(location!, "https://127.0.0.1:8081/chat")).toBe(false);
+  });
+
   it("loads an exported renderer file without a credential query", () => {
-    expect(rendererLocation("/tmp/app/index.html")).toEqual({
+    const location = rendererLocation("/tmp/app/index.html");
+    expect(location).toEqual({
       kind: "file",
       path: "/tmp/app/index.html",
     });
+    expect(rendererURLAllowed(location!, "file:///tmp/app/index.html")).toBe(true);
+    expect(rendererURLAllowed(location!, "file:///tmp/app/other.html")).toBe(false);
+    expect(rendererURLAllowed(location!, "file:///tmp/app/index.html?redirect=1")).toBe(false);
+    expect(rendererURLAllowed(location!, "http://127.0.0.1:8081/index.html")).toBe(false);
   });
 
   it("accepts only a local WebSocket daemon ready message", () => {
@@ -144,6 +162,16 @@ describe("desktop launch contract", () => {
     expect(ownerApplication("Ghostty")).toBe("Ghostty");
     expect(ownerApplication("Claude Code")).toBe("Claude");
     expect(ownerApplication("arbitrary --argument")).toBeUndefined();
+  });
+
+  it("allows only bounded host-safe external URLs", () => {
+    expect(safeExternalURL("https://example.com/docs")).toBe("https://example.com/docs");
+    expect(safeExternalURL("mailto:owner@example.com")).toBe("mailto:owner@example.com");
+    expect(safeExternalURL("javascript:alert(1)")).toBeUndefined();
+    expect(safeExternalURL("file:///tmp/private")).toBeUndefined();
+    expect(safeExternalURL("https://example.com/\nopen")).toBeUndefined();
+    expect(safeExternalURL("https://example.com/" + "x".repeat(4_096))).toBeUndefined();
+    expect(safeExternalURL({ href: "https://example.com" })).toBeUndefined();
   });
 
   it("reads the daemon credential from Electron's isolated preload argument", () => {

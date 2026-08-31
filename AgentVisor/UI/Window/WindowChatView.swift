@@ -91,6 +91,7 @@ final class WindowChatViewModel: ObservableObject {
     /// rows without re-reading ChatHistoryManager.
     private var lastRealItems: [ChatHistoryItem] = []
     private var isHistoryLoadInFlight = false
+    private var hasObservedInitialHistory = false
 
     init(sessionId: String) {
         self.sessionId = sessionId
@@ -184,6 +185,10 @@ final class WindowChatViewModel: ObservableObject {
             if session != nil { session = nil }
             return
         }
+        // SessionStore is the authoritative owner of provider identity. Fold
+        // every refresh into the durable recovery scope before publishing the
+        // presentation copy, including same-PID process-token replacement.
+        _ = ComposerRecoveryScopeStore.shared.observeAuthoritativeSession(next)
         // Structural fingerprint. Earlier version used
         // `\(next.phase)` which calls `String(describing:)` and for
         // `.waitingForApproval(PermissionContext)` interpolates the
@@ -216,7 +221,9 @@ final class WindowChatViewModel: ObservableObject {
             originTag: next.origin.rawValue,
             codexControlCapability: next.codexControlCapability,
             tty: next.tty,
-            terminalHost: next.terminalHost
+            terminalHost: next.terminalHost,
+            pid: next.pid,
+            processStartToken: next.processStartToken
         )
         if fingerprint != lastPresentationFingerprint {
             lastPresentationFingerprint = fingerprint
@@ -259,7 +266,41 @@ final class WindowChatViewModel: ObservableObject {
         // the fingerprint dedupe — even if the slice fingerprint is
         // unchanged from a streaming-chunk republish, a freshly-
         // matched echo still needs to be evicted.
-        PendingEchoStore.shared.reconcile(sessionId: sessionId, realItems: items)
+        // A pre-load empty pulse is not an authoritative latest baseline. Do
+        // not let a later full page's old identical row consume a submission
+        // merely because the view happened to mount before file loading.
+        let authoritativeLatest = ChatHistoryManager.shared.isFileLoaded(sessionId: sessionId)
+        // Once the full file has loaded, an empty transcript is a complete
+        // baseline too. Only the pre-load empty pulse is incomplete.
+        let baselineComplete = authoritativeLatest
+        if !hasObservedInitialHistory || !authoritativeLatest {
+            if authoritativeLatest {
+                // The first complete page is both the baseline and a possible
+                // post-submit commit. PendingEchoStore reconciles it before
+                // remembering the remaining canonical IDs.
+                PendingEchoStore.shared.reconcile(
+                    sessionId: sessionId,
+                    realItems: items,
+                    authoritativeLatest: true,
+                    baselineComplete: true
+                )
+            } else {
+            PendingEchoStore.shared.observeCanonical(
+                sessionId: sessionId,
+                realItems: items,
+                authoritativeLatest: authoritativeLatest,
+                baselineComplete: baselineComplete
+            )
+            }
+            hasObservedInitialHistory = authoritativeLatest
+        } else {
+            PendingEchoStore.shared.reconcile(
+                sessionId: sessionId,
+                realItems: items,
+                authoritativeLatest: true,
+                baselineComplete: true
+            )
+        }
 
         // Tail-aware fingerprint. (count, lastId)-only used to swallow
         // streaming text growth on items at non-tail positions —
@@ -704,12 +745,21 @@ struct WindowChatView: View {
                     }
                     return
                 }
-                // 2. Cancel in-flight query if processing.
-                if case .processing = viewModelRef.session?.phase {
+                // 2. Cancel in-flight query if processing. Compaction is
+                // deliberately non-cancelable: consume Escape and leave the
+                // draft/attachments untouched while the provider rewrites
+                // context. WindowComposer shows the accessible explanation.
+                let escapeAction = ComposerCancellationCapabilityPolicy.escapeAction(
+                    phase: viewModelRef.session?.phase ?? .idle
+                )
+                if escapeAction == .cancel {
                     NotificationCenter.default.post(
                         name: WindowComposer.requestCancel,
                         object: nil
                     )
+                    return
+                }
+                if escapeAction == .consumeCompaction {
                     return
                 }
                 // 3. Else clear composer draft.

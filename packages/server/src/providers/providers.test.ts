@@ -10,6 +10,7 @@ import type {
 } from "./environment.js";
 import { PiProvider } from "./pi.js";
 import { ZedProvider } from "./zed.js";
+import { processInstanceToken } from "./shared.js";
 import { SessionRepository } from "../sessions.js";
 
 const home = "/Users/me";
@@ -65,6 +66,7 @@ describe("live provider adapters", () => {
     const environment = new FixtureEnvironment();
     const metadata = `${home}/.claude/sessions/42.json`;
     environment.processRows = terminalProcesses;
+    environment.starts.set(42, new Date("2026-08-22T07:59:00.000Z"));
     environment.directories.set(`${home}/.claude/sessions`, ["42.json"]);
     environment.files.set(metadata, JSON.stringify({
       sessionId: "claude-1",
@@ -85,7 +87,13 @@ describe("live provider adapters", () => {
       owner: "Ghostty",
       section: "working",
       messageTransport: "terminal",
-      controlTarget: { kind: "terminal", target: { application: "Ghostty", tty: "ttys001", cwd } },
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty", tty: "ttys001", cwd,
+        processStartToken: processInstanceToken(
+          42,
+          "2026-08-22T07:59:00.000Z",
+        ),
+      } },
     }]);
   });
 

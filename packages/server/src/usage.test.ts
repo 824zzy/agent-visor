@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codexUsageGlance } from "./usage.js";
+import { chatUsageGlanceFromNative, codexUsageGlance } from "./usage.js";
 
 describe("Codex usage glance", () => {
   it("presents five-hour and weekly remaining limits with the strongest tone", () => {
@@ -113,6 +113,26 @@ describe("Codex usage glance", () => {
         primary: { usedPercent: 18, windowDurationMins: 60 },
         secondary: { usedPercent: 39, windowDurationMins: 1_440 },
       },
+    })).toBeUndefined();
+  });
+
+  it("projects only complete Codex usage into Chat metadata", () => {
+    const native = codexUsageGlance({
+      rateLimits: {
+        primary: { usedPercent: 18, windowDurationMins: 300 },
+        secondary: { usedPercent: 39, windowDurationMins: 10_080 },
+      },
+    }, new Date("2026-08-24T12:00:00.000Z"));
+    expect(chatUsageGlanceFromNative(native)).toEqual({
+      provider: "codex",
+      percentUsed: 39,
+      label: "5h 82% | 7d 61%",
+      detail: "Codex usage, 5 hour 82 percent remaining, weekly 61 percent remaining",
+      observedAt: "2026-08-24T12:00:00.000Z",
+    });
+    expect(chatUsageGlanceFromNative({
+      id: "codex", label: "unknown", detail: "unknown", tone: "normal", priority: 1,
+      accessibilityLabel: "unknown",
     })).toBeUndefined();
   });
 });

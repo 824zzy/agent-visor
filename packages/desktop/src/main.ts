@@ -20,10 +20,16 @@ import {
   ownerApplication,
   productName,
   rendererLocation,
+  rendererURLAllowed,
+  safeExternalURL,
   windowCloseAction,
 } from "./desktop-contract.js";
+import { readImageFileURL } from "./image-file-reader.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
+const rendererBase = process.env.AGENT_VISOR_RENDERER_URL
+  ?? path.resolve(directory, "../../app/dist/index.html");
+const rendererTrust = rendererLocation(rendererBase);
 let daemon: ChildProcess | undefined;
 let mainWindow: BrowserWindow | undefined;
 let nativeActionQueue = Promise.resolve();
@@ -43,6 +49,27 @@ ipcMain.on("session:open-owner", (event, owner: unknown) => {
   const application = ownerApplication(owner);
   if (!application) return;
   void openApplication(application);
+});
+ipcMain.handle("chat:read-image-file", (event, value: unknown) => {
+  if (event.sender !== mainWindow?.webContents
+    || !rendererTrust
+    || !event.senderFrame
+    || !rendererURLAllowed(rendererTrust, event.senderFrame.url)) return undefined;
+  return readImageFileURL(value);
+});
+ipcMain.handle("chat:open-external", async (event, value: unknown) => {
+  if (event.sender !== mainWindow?.webContents
+    || !rendererTrust
+    || !event.senderFrame
+    || !rendererURLAllowed(rendererTrust, event.senderFrame.url)) return false;
+  const url = safeExternalURL(value);
+  if (!url) return false;
+  try {
+    await shell.openExternal(url);
+    return true;
+  } catch {
+    return false;
+  }
 });
 
 void app.whenReady()
@@ -81,9 +108,13 @@ async function createMainWindow(daemonUrl: string): Promise<BrowserWindow> {
     window.hide();
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  const rendererBase = process.env.AGENT_VISOR_RENDERER_URL
-    ?? path.resolve(directory, "../../app/dist/index.html");
-  const location = rendererLocation(rendererBase);
+  if (!rendererTrust) throw new Error("The renderer URL is not an approved local location.");
+  const location = rendererTrust;
+  const blockUnexpectedNavigation = (event: Electron.Event, url: string) => {
+    if (!rendererURLAllowed(location, url)) event.preventDefault();
+  };
+  window.webContents.on("will-navigate", blockUnexpectedNavigation);
+  window.webContents.on("will-redirect", blockUnexpectedNavigation);
   if (location.kind === "url") {
     await window.webContents.session.clearCache();
     await window.loadURL(location.value);

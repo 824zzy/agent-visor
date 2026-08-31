@@ -5,7 +5,9 @@ import type {
   ProviderAdapter,
 } from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
-import { isRecord, iso, ownerForProcess, terminalTargetForProcess } from "./shared.js";
+import {
+  isRecord, iso, ownerForProcess, processInstanceToken, terminalTargetForProcess,
+} from "./shared.js";
 
 type ModelCatalogCache = {
   signature?: string;
@@ -101,7 +103,15 @@ export class PiProvider implements ProviderAdapter {
       const process = matched.get(file.id);
       const title = await piTranscriptTitle(this.environment, file, this.nameCache);
       const terminalTarget = process
-        ? terminalTargetForProcess(process, file.cwd, processes)
+        ? terminalTargetForProcess(
+          process,
+          file.cwd,
+          processes,
+          processInstanceToken(
+            process.pid,
+            await this.environment.processStartedAt(process.pid),
+          ),
+        )
         : undefined;
       return {
         id: file.id,

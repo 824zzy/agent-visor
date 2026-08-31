@@ -38,20 +38,19 @@ final class LiveProcessInfoReader: @unchecked Sendable, ProcessInfoReader {
     }
 
     nonisolated private func parentPIDViaPS(pid: pid_t) -> pid_t? {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-p", String(pid), "-o", "ppid="]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
-        do {
-            try proc.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            proc.waitUntilExit()
-            let trimmed = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return pid_t(trimmed)
-        } catch {
+        switch ProcessExecutor.shared.runSyncWithResult(
+            "/bin/ps",
+            arguments: ["-p", String(pid), "-o", "ppid="],
+            timeout: SubprocessDeadlinePolicy.localRead
+        ) {
+        case .success(let result) where result.isSuccess:
+            guard let parent = TerminalProcessProbeParser.pid(from: result.output) else {
+                return nil
+            }
+            return pid_t(parent)
+        case .success, .failure:
+            // A timeout, malformed response, or non-zero exit is not an
+            // identity match. Never fall back to a cached parent process.
             return nil
         }
     }

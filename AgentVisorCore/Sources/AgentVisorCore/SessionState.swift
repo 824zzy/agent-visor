@@ -38,6 +38,10 @@ public struct SessionState: Equatable, Identifiable, Sendable {
     // MARK: - Instance Metadata
 
     public var pid: Int?
+    /// Stable process-instance token paired with `pid`.  Direct terminal
+    /// sends must revalidate this value before every irreversible write;
+    /// missing identity is intentionally not treated as a wildcard.
+    public var processStartToken: String?
     public var tty: String?
     public var isInTmux: Bool
 
@@ -177,6 +181,7 @@ public struct SessionState: Equatable, Identifiable, Sendable {
         origin: SessionOrigin = .terminal,
         codexControlCapability: CodexControlCapability? = nil,
         pid: Int? = nil,
+        processStartToken: String? = nil,
         tty: String? = nil,
         isInTmux: Bool = false,
         terminalHost: TerminalHost? = nil,
@@ -206,6 +211,7 @@ public struct SessionState: Equatable, Identifiable, Sendable {
         self.codexControlCapability = codexControlCapability
             ?? (origin == .codexAppServer ? .managed : .observed)
         self.pid = pid
+        self.processStartToken = processStartToken
         self.tty = tty
         self.isInTmux = isInTmux
         self.terminalHost = terminalHost
@@ -491,7 +497,8 @@ public struct SessionState: Equatable, Identifiable, Sendable {
         ImageSubmissionRoutePolicy.route(
             agent: agentID,
             canSend: supportsSilentSend,
-            hasTTY: tty != nil
+            hasTTY: tty != nil,
+            terminalHost: terminalHost
         )
     }
 }

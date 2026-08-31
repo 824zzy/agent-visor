@@ -73,6 +73,46 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
 
     private init() {}
 
+    /// Terminate every child currently owned by the executor and wait for its
+    /// exit. Chat's serializer supplies this as the concrete production
+    /// termination hook, so a timed-out lane cannot advance while an
+    /// `osascript`/tmux child is still capable of writing.
+    func terminateActiveProcesses(operationID: String? = nil) async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                TerminalProcessOperationRegistry.shared.terminateAndWait(
+                    operationID: operationID
+                )
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Associate synchronous adapter work on the current utility thread with
+    /// its serializer operation. This keeps a timeout/cancel scoped to one
+    /// session even when a legacy adapter still calls the synchronous API.
+    nonisolated static func withOperationID<Value>(
+        _ operationID: String,
+        _ body: () -> Value
+    ) -> Value {
+        let key = "AgentVisor.ProcessExecutor.operationID"
+        let previous = Thread.current.threadDictionary[key]
+        Thread.current.threadDictionary[key] = operationID
+        defer {
+            if let previous { Thread.current.threadDictionary[key] = previous }
+            else { Thread.current.threadDictionary.removeObject(forKey: key) }
+        }
+        return body()
+    }
+
+    /// The operation identity inherited by synchronous adapter work on the
+    /// current utility thread. Chat passes an explicit identity at its public
+    /// seam; this read lets legacy protocol conformers forward that same
+    /// identity into every child without widening their navigation API.
+    nonisolated static var currentOperationID: String? {
+        Thread.current.threadDictionary["AgentVisor.ProcessExecutor.operationID"] as? String
+    }
+
     /// Run a command asynchronously and return output (throws on failure)
     func run(_ executable: String, arguments: [String]) async throws -> String {
         let result = await runWithResult(executable, arguments: arguments)
@@ -88,6 +128,21 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
             executable,
             arguments: arguments,
             timeout: timeout
+        )
+        return try Self.output(from: result, command: executable)
+    }
+
+    func run(
+        _ executable: String,
+        arguments: [String],
+        timeout: TimeInterval,
+        operationID: String
+    ) async throws -> String {
+        let result = await runWithResult(
+            executable,
+            arguments: arguments,
+            timeout: timeout,
+            operationID: operationID
         )
         return try Self.output(from: result, command: executable)
     }
@@ -122,7 +177,8 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
     private func runWithResult(
         _ executable: String,
         arguments: [String],
-        timeout: TimeInterval?
+        timeout: TimeInterval?,
+        operationID: String? = nil
     ) async -> Result<ProcessResult, ProcessExecutorError> {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
@@ -130,7 +186,8 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
                     returning: Self.execute(
                         executable,
                         arguments: arguments,
-                        timeout: timeout
+                        timeout: timeout,
+                        operationID: operationID
                     )
                 )
             }
@@ -165,10 +222,64 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
         Self.execute(executable, arguments: arguments, timeout: nil)
     }
 
+    /// Run a synchronous command with a real child-process deadline. The
+    /// timeout path terminates (and, if needed, kills) the child and waits for
+    /// its termination before returning, so a serialized terminal action can
+    /// safely release its lane without a late AppleScript write.
+    nonisolated func runSyncWithResult(
+        _ executable: String,
+        arguments: [String],
+        timeout: TimeInterval
+    ) -> Result<ProcessResult, ProcessExecutorError> {
+        Self.execute(executable, arguments: arguments, timeout: timeout)
+    }
+
+    nonisolated func runSyncWithResult(
+        _ executable: String,
+        arguments: [String],
+        timeout: TimeInterval,
+        operationID: String
+    ) -> Result<ProcessResult, ProcessExecutorError> {
+        Self.execute(
+            executable,
+            arguments: arguments,
+            timeout: timeout,
+            operationID: operationID
+        )
+    }
+
+    /// Run a bounded child process with a finite stdin payload. This is used
+    /// for tmux image paste, where the payload must be written before the
+    /// command can exit. The same termination path as AppleScript is used on
+    /// timeout, so a lane never advances while this child can still write.
+    func runWithInput(
+        _ executable: String,
+        arguments: [String],
+        input: Data,
+        timeout: TimeInterval,
+        operationID: String? = nil
+    ) async -> Result<ProcessResult, ProcessExecutorError> {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                continuation.resume(
+                    returning: Self.execute(
+                        executable,
+                        arguments: arguments,
+                        timeout: timeout,
+                        standardInput: input,
+                        operationID: operationID
+                    )
+                )
+            }
+        }
+    }
+
     private nonisolated static func execute(
         _ executable: String,
         arguments: [String],
-        timeout: TimeInterval?
+        timeout: TimeInterval?,
+        standardInput: Data? = nil,
+        operationID: String? = nil
     ) -> Result<ProcessResult, ProcessExecutorError> {
         let process = Process()
         let stdoutPipe = Pipe()
@@ -179,6 +290,14 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
         process.arguments = arguments
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+        let stdinPipe: Pipe?
+        if standardInput != nil {
+            let pipe = Pipe()
+            process.standardInput = pipe
+            stdinPipe = pipe
+        } else {
+            stdinPipe = nil
+        }
         process.terminationHandler = { _ in termination.signal() }
 
         do {
@@ -205,6 +324,17 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
             ))
         }
 
+        let operationID = operationID ??
+            (Thread.current.threadDictionary["AgentVisor.ProcessExecutor.operationID"] as? String)
+        let registrationToken = TerminalProcessOperationRegistry.shared.register(
+            operationID: operationID ?? "",
+            process: process,
+            termination: termination
+        )
+        defer {
+            TerminalProcessOperationRegistry.shared.unregister(registrationToken)
+        }
+
         let capture = ProcessOutputCapture()
         let readers = DispatchGroup()
         readers.enter()
@@ -213,6 +343,19 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
                 fileDescriptor: stdoutPipe.fileHandleForReading.fileDescriptor
             ))
             readers.leave()
+        }
+
+        // Never write a potentially large stdin payload on this thread. A
+        // child that does not read stdin can fill the pipe and otherwise
+        // prevent us from reaching the deadline/termination path at all.
+        let writer = DispatchGroup()
+        if let standardInput, let stdinPipe {
+            writer.enter()
+            DispatchQueue.global(qos: .utility).async {
+                Self.write(standardInput, to: stdinPipe.fileHandleForWriting)
+                try? stdinPipe.fileHandleForWriting.close()
+                writer.leave()
+            }
         }
         readers.enter()
         DispatchQueue.global(qos: .utility).async {
@@ -231,11 +374,24 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
             Self.logger.warning(
                 "Gave up after \(Int(seconds))s: \(executable, privacy: .public)"
             )
-            process.terminate()
+            if process.isRunning { process.terminate() }
+            // Closing stdin is required to unblock a writer whose child never
+            // consumes its input. The writer is joined before this operation
+            // returns, so it cannot continue after the lane is released.
+            stdinPipe?.fileHandleForWriting.closeFile()
             if termination.wait(timeout: .now() + 1) == .timedOut {
                 Darwin.kill(process.processIdentifier, SIGKILL)
                 _ = termination.wait(timeout: .now() + 1)
             }
+        }
+
+        let writerTimedOut = writer.wait(timeout: .now() + 1) == .timedOut
+        if writerTimedOut {
+            // A child that exited without consuming stdin may leave a
+            // Foundation write blocked briefly. Close the descriptor again,
+            // then give the writer one bounded chance to observe EPIPE.
+            stdinPipe?.fileHandleForWriting.closeFile()
+            _ = writer.wait(timeout: .now() + 1)
         }
 
         // A child can exit while one of its descendants keeps stdout or stderr
@@ -254,7 +410,7 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
         }
         process.terminationHandler = nil
 
-        if timedOut || readerDrainTimedOut {
+        if timedOut || writerTimedOut || readerDrainTimedOut {
             Self.logger.error("Command or output drain timed out: \(executable, privacy: .public)")
             return .failure(.timedOut(command: executable))
         }
@@ -271,6 +427,32 @@ nonisolated final class ProcessExecutor: @unchecked Sendable, ProcessExecuting {
         }
 
         return .success(result)
+    }
+
+    private nonisolated static func write(_ data: Data, to handle: FileHandle) {
+        let fd = handle.fileDescriptor
+        // A deadline closes stdin while this writer may still be blocked. On
+        // macOS, a late write to that closed pipe otherwise raises SIGPIPE
+        // and can take down the whole app instead of returning EPIPE.
+        _ = Darwin.fcntl(fd, F_SETNOSIGPIPE, 1)
+        data.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.baseAddress else { return }
+            var offset = 0
+            while offset < rawBuffer.count {
+                let written = Darwin.write(
+                    fd,
+                    base.advanced(by: offset),
+                    rawBuffer.count - offset
+                )
+                if written > 0 {
+                    offset += written
+                } else if written < 0 && errno == EINTR {
+                    continue
+                } else {
+                    break
+                }
+            }
+        }
     }
 }
 

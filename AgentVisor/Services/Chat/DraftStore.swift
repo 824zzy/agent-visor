@@ -47,4 +47,14 @@ final class DraftStore {
     func clear(sessionId: String) {
         drafts.removeValue(forKey: sessionId)
     }
+
+    /// Attachment IDs currently owned by unsent drafts. Recovery cleanup must
+    /// consult this app-level store before deleting a file: a user can keep a
+    /// draft mounted in another window while a delivery reaches a terminal
+    /// state in this one.
+    func retainedAttachmentIDs() -> Set<String> {
+        Set(drafts.values.flatMap { draft in
+            draft.attachments.map { $0.id.uuidString }
+        })
+    }
 }

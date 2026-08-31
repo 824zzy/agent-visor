@@ -11,6 +11,27 @@ final class TerminalAppSessionLocatorTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0, "osacompile stderr: \(result.stderr)")
     }
 
+    func testEscapeScriptTargetsTerminalTabAndPostsNativeEscape() throws {
+        let script = TerminalAppSessionLocator.escapeScript(ttyName: "ttys042")
+        XCTAssertTrue(script.contains("tty of t ends with \"ttys042\""))
+        XCTAssertTrue(script.contains("set selected of targetTab to true"))
+        XCTAssertTrue(script.contains("key code 53"))
+        let result = Self.osacompile(script)
+        XCTAssertEqual(result.exitCode, 0, "osacompile stderr: \(result.stderr)")
+    }
+
+    func testBackspaceScriptIsBoundedAndUsesTerminalHostRoute() throws {
+        let script = TerminalAppSessionLocator.backspaceScript(
+            ttyName: "ttys042",
+            count: 99_999
+        )
+        XCTAssertTrue(script.contains("repeat 4096 times"))
+        XCTAssertTrue(script.contains("key code 51"))
+        XCTAssertFalse(script.contains("Ghostty"))
+        let result = Self.osacompile(script)
+        XCTAssertEqual(result.exitCode, 0, "osacompile stderr: \(result.stderr)")
+    }
+
     private struct CompileResult {
         let exitCode: Int32
         let stderr: String

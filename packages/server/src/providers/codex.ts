@@ -3,7 +3,9 @@ import path from "node:path";
 import type { DiscoveredProviderSession, ProviderAdapter } from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
 import { CodexLifecycleReader } from "./codex-lifecycle.js";
-import { isRecord, iso, ownerForProcess, terminalTargetForProcess } from "./shared.js";
+import {
+  isRecord, iso, ownerForProcess, processInstanceToken, terminalTargetForProcess,
+} from "./shared.js";
 
 type ModelCatalogCache = {
   signature?: string;
@@ -65,7 +67,15 @@ export class CodexProvider implements ProviderAdapter {
         indexTitles,
         ownerForProcess(process.pid, processes),
         modelCatalog,
-        terminalTargetForProcess(process, thread.cwd, processes),
+        terminalTargetForProcess(
+          process,
+          thread.cwd,
+          processes,
+          processInstanceToken(
+            process.pid,
+            await this.environment.processStartedAt(process.pid),
+          ),
+        ),
       ));
     }
 

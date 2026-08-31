@@ -3,6 +3,13 @@ declare global {
     agentVisor?: Readonly<{
       daemonUrl: string;
       openOwner(owner: string): void;
+      openExternal(url: string): Promise<boolean>;
+      readImageFile?(url: string): Promise<{
+        name: string;
+        mimeType: string;
+        byteLength: number;
+        data: string;
+      } | undefined>;
       onNavigate(listener: (action:
         | { page: "sessions" }
         | { page: "settings"; checkUpdates: boolean }

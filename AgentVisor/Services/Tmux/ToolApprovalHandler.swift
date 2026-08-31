@@ -44,14 +44,33 @@ actor ToolApprovalHandler {
         return true
     }
 
-    /// Send a message to a tmux target
-    func sendMessage(_ message: String, to target: TmuxTarget) async -> Bool {
-        await sendKeys(to: target, keys: message, pressEnter: true)
+    /// Send a message to a tmux target. Chat supplies the session-bound
+    /// verifier so text and Enter are separate identity-checked actions;
+    /// there is intentionally no unverified Chat send-keys overload.
+    func sendMessage(
+        _ message: String,
+        to target: TmuxTarget,
+        operationID: String,
+        verifyTarget: @escaping @Sendable () -> Bool
+    ) async -> Bool {
+        await sendKeys(
+            to: target,
+            keys: message,
+            pressEnter: true,
+            operationID: operationID,
+            verifyTarget: verifyTarget
+        )
     }
 
     // MARK: - Private Methods
 
-    private func sendKeys(to target: TmuxTarget, keys: String, pressEnter: Bool) async -> Bool {
+    private func sendKeys(
+        to target: TmuxTarget,
+        keys: String,
+        pressEnter: Bool,
+        operationID: String? = nil,
+        verifyTarget: (@Sendable () -> Bool)? = nil
+    ) async -> Bool {
         guard let tmuxPath = await TmuxPathFinder.shared.getTmuxPath() else {
             return false
         }
@@ -62,14 +81,26 @@ actor ToolApprovalHandler {
         let textArgs = ["send-keys", "-t", targetStr, "-l", keys]
 
         do {
+            guard verifyTarget?() ?? true else { return false }
             Self.logger.debug("Sending text to \(targetStr, privacy: .public)")
-            _ = try await ProcessExecutor.shared.run(tmuxPath, arguments: textArgs)
+            _ = try await ProcessExecutor.shared.run(
+                tmuxPath,
+                arguments: textArgs,
+                timeout: SubprocessDeadlinePolicy.appCommand,
+                operationID: operationID ?? "tmux-\(targetStr)"
+            )
 
             // Send Enter as a separate command if needed
             if pressEnter {
+                guard verifyTarget?() ?? true else { return false }
                 Self.logger.debug("Sending Enter key")
                 let enterArgs = ["send-keys", "-t", targetStr, "Enter"]
-                _ = try await ProcessExecutor.shared.run(tmuxPath, arguments: enterArgs)
+                _ = try await ProcessExecutor.shared.run(
+                    tmuxPath,
+                    arguments: enterArgs,
+                    timeout: SubprocessDeadlinePolicy.appCommand,
+                    operationID: operationID ?? "tmux-\(targetStr)"
+                )
             }
             return true
         } catch {

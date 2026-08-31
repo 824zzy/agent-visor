@@ -7,7 +7,8 @@ final class ImageSubmissionRoutePolicyTests: XCTestCase {
             ImageSubmissionRoutePolicy.route(
                 agent: .pi,
                 canSend: true,
-                hasTTY: true
+                hasTTY: true,
+                terminalHost: .ghostty
             ),
             .terminalPathPrompt
         )
@@ -18,7 +19,8 @@ final class ImageSubmissionRoutePolicyTests: XCTestCase {
             ImageSubmissionRoutePolicy.route(
                 agent: .pi,
                 canSend: true,
-                hasTTY: false
+                hasTTY: false,
+                terminalHost: .ghostty
             ),
             .unavailable
         )
@@ -29,7 +31,8 @@ final class ImageSubmissionRoutePolicyTests: XCTestCase {
             ImageSubmissionRoutePolicy.route(
                 agent: .pi,
                 canSend: false,
-                hasTTY: true
+                hasTTY: true,
+                terminalHost: .ghostty
             ),
             .unavailable
         )
@@ -40,7 +43,8 @@ final class ImageSubmissionRoutePolicyTests: XCTestCase {
             ImageSubmissionRoutePolicy.route(
                 agent: .claudeCode,
                 canSend: true,
-                hasTTY: true
+                hasTTY: true,
+                terminalHost: .iterm2
             ),
             .terminalAttachment
         )
@@ -51,7 +55,8 @@ final class ImageSubmissionRoutePolicyTests: XCTestCase {
             ImageSubmissionRoutePolicy.route(
                 agent: .codex,
                 canSend: true,
-                hasTTY: false
+                hasTTY: false,
+                terminalHost: .codexApp
             ),
             .appServerLocalImage
         )
@@ -63,7 +68,36 @@ final class ImageSubmissionRoutePolicyTests: XCTestCase {
                 ImageSubmissionRoutePolicy.route(
                     agent: agent,
                     canSend: true,
-                    hasTTY: true
+                    hasTTY: true,
+                    terminalHost: .ghostty
+                ),
+                .unavailable
+            )
+        }
+    }
+
+    func testTerminalAppNeverAdvertisesImageDelivery() {
+        for agent in [AgentID.claudeCode, .pi] {
+            XCTAssertEqual(
+                ImageSubmissionRoutePolicy.route(
+                    agent: agent,
+                    canSend: true,
+                    hasTTY: true,
+                    terminalHost: .terminalApp
+                ),
+                .unavailable
+            )
+        }
+    }
+
+    func testUnknownOrMissingHostFailsClosedForTerminalImages() {
+        for host: TerminalHost? in [nil, .unknown, .zed] {
+            XCTAssertEqual(
+                ImageSubmissionRoutePolicy.route(
+                    agent: .claudeCode,
+                    canSend: true,
+                    hasTTY: true,
+                    terminalHost: host
                 ),
                 .unavailable
             )

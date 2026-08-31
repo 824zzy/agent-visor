@@ -1,7 +1,20 @@
 import Foundation
 
 public let nativeHelperProtocolVersion = 1
-public let nativeHelperMaximumPayloadBytes = 1_048_576
+
+/// Hard limits shared with the Electron protocol. Terminal text is measured
+/// in UTF-8 bytes because the native helper ultimately writes the payload to a
+/// PTY; frame bytes are the length-prefixed JSON payload, excluding its
+/// four-byte prefix.
+public enum NativeHelperWireLimits {
+    public static let maxTerminalTextBytes = 65_536
+    public static let maxFramePayloadBytes = 1_048_576
+}
+
+// Keep the legacy names source-compatible for the helper executable while
+// making the shared limits above the single source of truth.
+public let nativeHelperMaximumTerminalTextBytes = NativeHelperWireLimits.maxTerminalTextBytes
+public let nativeHelperMaximumPayloadBytes = NativeHelperWireLimits.maxFramePayloadBytes
 
 public enum NativeHelperWireError: Error, Equatable {
     case invalidRequest
@@ -159,11 +172,25 @@ public enum NativeHelperTerminalApplication: String, Codable, Equatable {
 
 public struct NativeHelperTerminalTarget: Codable, Equatable {
     public let application: NativeHelperTerminalApplication
+    /// Agent process identity. TTY names can be reused after a process exits.
+    public let pid: Int32?
+    /// Helper-derived process-instance identity. PID reuse must fail closed.
+    /// ponytail: this token must come from the live process start identity;
+    /// do not synthesize it from PID/TTY when extending discovery.
+    public let processStartToken: String?
     public let tty: String
     public let cwd: String
 
-    public init(application: NativeHelperTerminalApplication, tty: String, cwd: String) {
+    public init(
+        application: NativeHelperTerminalApplication,
+        pid: Int32? = nil,
+        processStartToken: String? = nil,
+        tty: String,
+        cwd: String
+    ) {
         self.application = application
+        self.pid = pid
+        self.processStartToken = processStartToken
         self.tty = tty
         self.cwd = cwd
     }
@@ -294,6 +321,8 @@ public enum NativeHelperRequest: Equatable {
     case focus(id: String, target: NativeHelperFocusTarget)
     case focusTerminal(id: String, target: NativeHelperTerminalTarget)
     case sendTerminal(id: String, target: NativeHelperTerminalTarget, text: String, submit: Bool)
+    case cancelTerminal(id: String, target: NativeHelperTerminalTarget)
+    case cyclePermissionMode(id: String, target: NativeHelperTerminalTarget)
 
     public var id: String {
         switch self {
@@ -303,7 +332,8 @@ public enum NativeHelperRequest: Equatable {
              .reconcilePiRestoration(let id, _), .requestAccessibility(let id),
              .openAccessibilitySettings(let id),
              .presentPills(let id, _, _, _, _, _, _, _, _), .focus(let id, _),
-             .focusTerminal(let id, _), .sendTerminal(let id, _, _, _):
+             .focusTerminal(let id, _), .sendTerminal(let id, _, _, _),
+             .cancelTerminal(let id, _), .cyclePermissionMode(let id, _):
             id
         }
     }
@@ -317,7 +347,8 @@ public enum NativeHelperRequest: Equatable {
 
         let requiredKeys: Set<String> = [
             "present_pills", "reconcile_notifications", "reconcile_pi_restoration",
-            "focus", "focus_terminal", "send_terminal",
+                "focus", "focus_terminal", "send_terminal",
+                "cancel_terminal", "cycle_permission_mode",
         ].contains(method)
             ? ["version", "id", "method", "params"]
             : ["version", "id", "method"]
@@ -454,10 +485,22 @@ public enum NativeHelperRequest: Equatable {
                   Set(params.keys) == ["target", "text", "submit"],
                   let target = params.terminalTarget,
                   let text = params.text,
-                  text.count <= 65_536,
+                  text.utf8.count <= nativeHelperMaximumTerminalTextBytes,
                   let submit = params.submit,
                   target.isValid else { throw NativeHelperWireError.invalidRequest }
             return .sendTerminal(id: wire.id, target: target, text: text, submit: submit)
+        case "cancel_terminal":
+            guard let params = wire.params,
+                  Set(params.keys) == ["target"],
+                  let target = params.terminalTarget,
+                  target.isValid else { throw NativeHelperWireError.invalidRequest }
+            return .cancelTerminal(id: wire.id, target: target)
+        case "cycle_permission_mode":
+            guard let params = wire.params,
+                  Set(params.keys) == ["target"],
+                  let target = params.terminalTarget,
+                  target.isValid else { throw NativeHelperWireError.invalidRequest }
+            return .cyclePermissionMode(id: wire.id, target: target)
         default:
             throw NativeHelperWireError.invalidRequest
         }
@@ -756,12 +799,34 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         guard let params = object["params"] as? [String: Any],
               Set(params.keys) == ["target"],
               let target = params["target"] as? [String: Any] else { return false }
-        return Set(target.keys) == ["application", "tty", "cwd"]
+        let keys = Set(target.keys)
+        return keys == ["application", "tty", "cwd"]
+            || keys == ["application", "pid", "tty", "cwd"]
+            || keys == ["application", "pid", "processStartToken", "tty", "cwd"]
     case "send_terminal":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys) == ["target", "text", "submit"],
               let target = params["target"] as? [String: Any] else { return false }
-        return Set(target.keys) == ["application", "tty", "cwd"]
+        let keys = Set(target.keys)
+        return keys == ["application", "tty", "cwd"]
+            || keys == ["application", "pid", "tty", "cwd"]
+            || keys == ["application", "pid", "processStartToken", "tty", "cwd"]
+    case "cancel_terminal":
+        guard let params = object["params"] as? [String: Any],
+              Set(params.keys) == ["target"],
+              let target = params["target"] as? [String: Any] else { return false }
+        let keys = Set(target.keys)
+        return keys == ["application", "tty", "cwd"]
+            || keys == ["application", "pid", "tty", "cwd"]
+            || keys == ["application", "pid", "processStartToken", "tty", "cwd"]
+    case "cycle_permission_mode":
+        guard let params = object["params"] as? [String: Any],
+              Set(params.keys) == ["target"],
+              let target = params["target"] as? [String: Any] else { return false }
+        let keys = Set(target.keys)
+        return keys == ["application", "tty", "cwd"]
+            || keys == ["application", "pid", "tty", "cwd"]
+            || keys == ["application", "pid", "processStartToken", "tty", "cwd"]
     default:
         return true
     }
@@ -911,7 +976,9 @@ private extension NativeHelperTerminalTarget {
     var isValid: Bool {
         let name = tty.hasPrefix("/dev/") ? String(tty.dropFirst(5)) : tty
         let suffix = name.hasPrefix("ttys") ? name.dropFirst(4) : ""
-        return !suffix.isEmpty && suffix.allSatisfy { $0.isASCII && $0.isNumber }
+        return pid.map { $0 > 0 } == true
+            && processStartToken.map { !$0.isEmpty && $0.count <= 256 && !$0.contains("\0") } == true
+            && !suffix.isEmpty && suffix.allSatisfy { $0.isASCII && $0.isNumber }
             && tty.count <= 32
             && cwd.hasPrefix("/") && cwd.count <= 4_096
             && !cwd.contains("\0")

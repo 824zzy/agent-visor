@@ -26,19 +26,35 @@ struct ITermAdapter: TerminalAdapter {
     nonisolated init() {}
 
     func sendText(_ text: String, toSession session: SessionState) -> Bool {
+        sendTextOutcome(
+            text,
+            toSession: session,
+            operationID: ProcessExecutor.currentOperationID
+        ).isDelivered
+    }
+
+    func sendTextOutcome(
+        _ text: String,
+        toSession session: SessionState,
+        operationID: String?
+    ) -> TerminalAttachmentDeliveryOutcome {
+        guard TerminalProcessIdentityResolver.isVerified(session),
+              TerminalTextPolicy.canSend(text) else {
+            return .failedBeforeWrite(reason: "The iTerm2 message was rejected before write.")
+        }
         let probeStart = Date()
         Self.logger.info("sendText: enter sid=\(session.sessionId.prefix(8), privacy: .public) tty=\(session.tty ?? "?", privacy: .public) len=\(text.count, privacy: .public)")
         guard let ttyName = ttyName(for: session) else {
             Self.logger.error("sendText: no ttyName resolved for sid=\(session.sessionId.prefix(8), privacy: .public) tty=\(session.tty ?? "nil", privacy: .public)")
-            return false
+            return .failedBeforeWrite(reason: "The iTerm2 session has no verified TTY.")
         }
         let escaped = AppleScriptEscaper.escape(text)
 
         // Two-step submission: first write text without newline to populate
-        // the TUI input, then send an empty line to trigger submit. Mirrors
-        // the Ghostty flow (`input text` + `send key enter`) and avoids
-        // ambiguity around whether Claude Code's TUI treats an embedded \n
-        // as a literal newline or a submit.
+        // the TUI input, then revalidate the process identity and send Enter
+        // through a second AppleScript action. Keeping Enter separate is
+        // important: a process/TTY replacement between these actions must
+        // stop the transaction rather than submit into the new process.
         //
         // iTerm2's `write` verb requires the session as the `tell` receiver,
         // not a `to <session>` argument — the latter parses but silently
@@ -52,8 +68,6 @@ struct ITermAdapter: TerminalAdapter {
                             if tty of s ends with "\(ttyName)" then
                                 tell s
                                     write text "\(escaped)" newline false
-                                    delay 0.3
-                                    write text "" newline true
                                 end tell
                                 return "ok"
                             end if
@@ -64,15 +78,32 @@ struct ITermAdapter: TerminalAdapter {
             return "fail"
         end tell
         """
-        let result = runAppleScript(script)
+        let textDispatch = runAppleScriptOutcome(script, operationID: operationID)
         let elapsedMs = Int(Date().timeIntervalSince(probeStart) * 1000)
-        let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed != "ok" {
-            Self.logger.error("sendText: script returned \(trimmed.isEmpty ? "<empty>" : trimmed, privacy: .public) for tty=\(ttyName, privacy: .public) elapsed=\(elapsedMs, privacy: .public)ms")
-        } else {
+        if textDispatch.isAccepted {
             Self.logger.info("sendText: ok tty=\(ttyName, privacy: .public) elapsed=\(elapsedMs, privacy: .public)ms")
+        } else {
+            Self.logger.error("sendText: script did not accept text for tty=\(ttyName, privacy: .public) outcome=\(String(describing: textDispatch), privacy: .public) elapsed=\(elapsedMs, privacy: .public)ms")
         }
-        return trimmed == "ok"
+        guard textDispatch.isAccepted else {
+            return TerminalAttachmentDeliveryPolicy.textDispatchOutcome(textDispatch)
+        }
+        guard TerminalProcessIdentityResolver.isVerified(session) else {
+            return TerminalAttachmentDeliveryPolicy.textAndEnterOutcome(
+                textDispatch: .accepted,
+                enterDispatch: .indeterminate(reason: "The iTerm2 target changed after text was accepted.")
+            )
+        }
+        let enterDispatch = sendSingleStepOutcome(
+            .key("enter"),
+            ttyName: ttyName,
+            session: session,
+            operationID: operationID
+        )
+        return TerminalAttachmentDeliveryPolicy.textAndEnterOutcome(
+            textDispatch: textDispatch,
+            enterDispatch: enterDispatch
+        )
     }
 
     /// Send the digit char `(index + 1)` to claude-code's TUI question UI,
@@ -80,7 +111,9 @@ struct ITermAdapter: TerminalAdapter {
     /// documented as "as though typed" (not a paste), so this should
     /// reach the program as a real keystroke and trigger the shortcut.
     func sendDigitShortcut(index: Int, toSession session: SessionState) -> Bool {
-        guard let ttyName = ttyName(for: session) else { return false }
+        let operationID = ProcessExecutor.currentOperationID
+        guard TerminalProcessIdentityResolver.isVerified(session),
+              let ttyName = ttyName(for: session) else { return false }
         let digit = String(index + 1)
         let script = """
         tell application "iTerm"
@@ -101,17 +134,19 @@ struct ITermAdapter: TerminalAdapter {
             return "fail"
         end tell
         """
-        return runAppleScript(script) == "ok"
+        return runAppleScriptOutcome(script, operationID: operationID).isAccepted
     }
 
     /// Send a sequence of named-key + literal-text + delay steps to the
-    /// session. iTerm2's `write text` accepts a raw byte stream (CSI
-    /// sequences for arrow keys, control chars for tab/enter), so each
-    /// run between delays gets coalesced into one `write text` call.
-    /// Delays emit AppleScript `delay X` between writes — required so
-    /// state-transition keystrokes (enter that advances a question) get
-    /// time to remount the TUI's next component before more keys arrive.
-    func sendSteps(_ steps: [KeystrokeStep], toSession session: SessionState) -> Bool {
+    /// session. Each irreversible write is its own bounded AppleScript
+    /// action and is preceded by a fresh process/TTY identity check. This
+    /// intentionally does not coalesce steps: a process swap between two
+    /// keys must stop the remainder rather than write into a reused pane.
+    func sendSteps(
+        _ steps: [KeystrokeStep],
+        toSession session: SessionState,
+        operationID: String? = nil
+    ) -> Bool {
         let probeStart = Date()
         let summary = steps.map { step -> String in
             switch step {
@@ -121,44 +156,91 @@ struct ITermAdapter: TerminalAdapter {
             }
         }.joined(separator: ",")
         Self.logger.info("sendSteps: enter sid=\(session.sessionId.prefix(8), privacy: .public) tty=\(session.tty ?? "?", privacy: .public) count=\(steps.count, privacy: .public) seq=[\(summary, privacy: .public)]")
-        guard let ttyName = ttyName(for: session), !steps.isEmpty else {
+        guard ttyName(for: session) != nil, !steps.isEmpty else {
             Self.logger.error("sendSteps: bail — ttyName=\(self.ttyName(for: session) ?? "nil", privacy: .public) empty=\(steps.isEmpty, privacy: .public)")
             return false
         }
-        var commands: [String] = []
-        var pending = ""
-        let flushPending: () -> String? = {
-            guard !pending.isEmpty else { return nil }
-            let escaped = pending
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-            return "write text \"\(escaped)\" newline false"
-        }
-        for step in steps {
-            switch step {
-            case .delay(let seconds):
-                if let cmd = flushPending() { commands.append(cmd); pending = "" }
-                commands.append("delay \(seconds)")
-            case .key(let name) where name.lowercased() == "enter" || name.lowercased() == "return":
-                // Emit Enter as a discrete `write text "" newline true`
-                // call rather than appending "\r" to the pending byte
-                // stream. iTerm2's write text converts every CR to LF
-                // unconditionally (verified xxd-trace 2026-05-12), so
-                // an embedded "\r" arrives at claude-code as a newline
-                // *inside the preceding text chunk* — Ink's TextInput
-                // reads it as multi-line text input, not as the Enter
-                // event that fires onSubmit. The two-call form mirrors
-                // the working `sendText` submit pattern and gives Ink
-                // a separate keypress to fire its return handler.
-                if let cmd = flushPending() { commands.append(cmd); pending = "" }
-                commands.append("write text \"\" newline true")
-            default:
-                pending += Self.iTermBytes(for: step)
+        let tty = ttyName(for: session)!
+        let outcome = TerminalAttachmentDeliveryPolicy.run(
+            steps: steps,
+            verifyTarget: { TerminalProcessIdentityResolver.isVerified(session) },
+            name: { step in
+                switch step {
+                case .key(let name): return "key:\(name)"
+                case .text(let text): return "text:\(text.utf8.count)"
+                case .delay: return "delay"
+                }
+            },
+            perform: { step in
+                switch step {
+                case .delay(let seconds):
+                    guard seconds.isFinite, seconds >= 0, seconds <= 5 else {
+                        return .failedBeforeWrite(step: "delay", reason: "Invalid terminal delay.")
+                    }
+                    usleep(useconds_t(seconds * 1_000_000))
+                    return .succeeded(step: "delay")
+                default:
+                    switch sendSingleStepOutcome(
+                        step,
+                        ttyName: tty,
+                        session: session,
+                        operationID: operationID
+                    ) {
+                    case .accepted:
+                        return .succeeded(step: "terminal-step")
+                    case .provenRejected(let reason):
+                        return .failedBeforeWrite(
+                            step: "terminal-step",
+                            reason: reason
+                        )
+                    case .indeterminate(let reason):
+                        return .failedAfterWrite(
+                            step: "terminal-step",
+                            reason: reason
+                        )
+                    }
+                }
             }
+        )
+        let elapsedMs = Int(Date().timeIntervalSince(probeStart) * 1000)
+        Self.logger.info("sendSteps: result=\(outcome.isDelivered, privacy: .public) tty=\(tty, privacy: .public) cmdCount=\(steps.count, privacy: .public) elapsed=\(elapsedMs, privacy: .public)ms")
+        return outcome.isDelivered
+    }
+
+    private func sendSingleStep(
+        _ step: KeystrokeStep,
+        ttyName: String,
+        session: SessionState,
+        operationID: String?
+    ) -> Bool {
+        sendSingleStepOutcome(
+            step,
+            ttyName: ttyName,
+            session: session,
+            operationID: operationID
+        ).isAccepted
+    }
+
+    private func sendSingleStepOutcome(
+        _ step: KeystrokeStep,
+        ttyName: String,
+        session: SessionState,
+        operationID: String?
+    ) -> TerminalTextDispatchResult {
+        let command: String
+        switch step {
+        case .key(let name) where name.lowercased() == "enter" || name.lowercased() == "return":
+            command = "write text \"\" newline true"
+        case .key, .text:
+            let bytes = Self.iTermBytes(for: step)
+            guard !bytes.isEmpty else {
+                return .provenRejected(reason: "The iTerm2 step was empty.")
+            }
+            let escaped = AppleScriptEscaper.escape(bytes)
+            command = "write text \"\(escaped)\" newline false"
+        case .delay:
+            return .accepted
         }
-        if let cmd = flushPending() { commands.append(cmd) }
-        guard !commands.isEmpty else { return false }
-        let body = commands.joined(separator: "\n                                    ")
         let script = """
         tell application "iTerm"
             repeat with w in windows
@@ -167,7 +249,7 @@ struct ITermAdapter: TerminalAdapter {
                         try
                             if tty of s ends with "\(ttyName)" then
                                 tell s
-                                    \(body)
+                                    \(command)
                                 end tell
                                 return "ok"
                             end if
@@ -178,16 +260,10 @@ struct ITermAdapter: TerminalAdapter {
             return "fail"
         end tell
         """
-        let result = runAppleScript(script)
-        let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
-        let elapsedMs = Int(Date().timeIntervalSince(probeStart) * 1000)
-        let cmdCount = commands.count
-        if trimmed != "ok" {
-            Self.logger.error("sendSteps: script returned \(trimmed.isEmpty ? "<empty>" : trimmed, privacy: .public) tty=\(ttyName, privacy: .public) cmdCount=\(cmdCount, privacy: .public) elapsed=\(elapsedMs, privacy: .public)ms")
-        } else {
-            Self.logger.info("sendSteps: ok tty=\(ttyName, privacy: .public) cmdCount=\(cmdCount, privacy: .public) elapsed=\(elapsedMs, privacy: .public)ms")
+        guard TerminalProcessIdentityResolver.isVerified(session) else {
+            return .provenRejected(reason: "The iTerm2 target was not verified before the step.")
         }
-        return trimmed == "ok"
+        return runAppleScriptOutcome(script, operationID: operationID)
     }
 
     /// Map a step to the bytes iTerm2's `write text` will deliver as that
@@ -222,8 +298,12 @@ struct ITermAdapter: TerminalAdapter {
     /// Send the ESC key to cancel claude-code's TUI question UI.
     /// `write text ""` writes the ESC character, treated as a real
     /// keypress by Ink-based TUIs.
-    func sendEscape(toSession session: SessionState) -> Bool {
-        guard let ttyName = ttyName(for: session) else { return false }
+    func sendEscape(
+        toSession session: SessionState,
+        operationID: String? = nil
+    ) -> Bool {
+        guard TerminalProcessIdentityResolver.isVerified(session),
+              let ttyName = ttyName(for: session) else { return false }
         let script = """
         tell application "iTerm"
             repeat with w in windows
@@ -243,7 +323,7 @@ struct ITermAdapter: TerminalAdapter {
             return "fail"
         end tell
         """
-        return runAppleScript(script) == "ok"
+        return runAppleScriptOutcome(script, operationID: operationID).isAccepted
     }
 
     /// Deliver `payload` as a bracketed paste to the matching iTerm2
@@ -252,13 +332,21 @@ struct ITermAdapter: TerminalAdapter {
     /// image paste: claude-code's DECSET 2004 handler recognizes the
     /// markers and reads the path as a file attachment instead of
     /// typed text.
-    func sendBracketedPaste(_ payload: String, toSession session: SessionState) -> Bool {
+    func sendBracketedPaste(
+        _ payload: String,
+        toSession session: SessionState,
+        operationID: String? = nil
+    ) -> Bool {
+        guard TerminalProcessIdentityResolver.isVerified(session),
+              TerminalTextPolicy.canSend(payload) else { return false }
         guard let ttyName = ttyName(for: session) else { return false }
         let script = ITermSessionLocator.bracketedPasteScript(
             ttyName: ttyName,
             payload: payload
         )
-        return ITermSessionLocator.parseSelectOutput(runAppleScript(script))
+        return ITermSessionLocator.parseSelectOutput(
+            runAppleScriptOutput(script, operationID: operationID)
+        )
     }
 
     /// Send Ctrl+U (NAK, 0x15) to clear Claude Code's TUI input buffer in
@@ -268,8 +356,12 @@ struct ITermAdapter: TerminalAdapter {
     /// TUI doesn't interpret NAK as kill-to-start-of-line. Kept for
     /// callers that still expect this method, but `sendBackspaces`
     /// is the path that actually clears the buffer.
-    func sendCtrlU(toSession session: SessionState) -> Bool {
-        guard let ttyName = ttyName(for: session) else { return false }
+    func sendCtrlU(
+        toSession session: SessionState,
+        operationID: String? = nil
+    ) -> Bool {
+        guard TerminalProcessIdentityResolver.isVerified(session),
+              let ttyName = ttyName(for: session) else { return false }
         let escaped = AppleScriptEscaper.escape("\u{15}")
         let script = """
         tell application "iTerm"
@@ -290,7 +382,7 @@ struct ITermAdapter: TerminalAdapter {
             return "fail"
         end tell
         """
-        return runAppleScript(script) == "ok"
+        return runAppleScriptOutcome(script, operationID: operationID).isAccepted
     }
 
     /// Send `count` DEL bytes (0x7F) via iTerm's `write text` to
@@ -299,8 +391,14 @@ struct ITermAdapter: TerminalAdapter {
     /// "delete-left" key to DEL (0x7F), not backspace (0x08). Ink's
     /// input field listens for DEL — empirical: 0x08 is silently
     /// dropped, 0x7F deletes one char.
-    func sendBackspaces(count: Int, toSession session: SessionState) -> Bool {
-        guard count > 0, let ttyName = ttyName(for: session) else { return false }
+    func sendBackspaces(
+        count: Int,
+        toSession session: SessionState,
+        operationID: String? = nil
+    ) -> Bool {
+        guard count > 0,
+              TerminalProcessIdentityResolver.isVerified(session),
+              let ttyName = ttyName(for: session) else { return false }
         let payload = String(repeating: "\u{7F}", count: count)
         let escaped = AppleScriptEscaper.escape(payload)
         let script = """
@@ -322,12 +420,13 @@ struct ITermAdapter: TerminalAdapter {
             return "fail"
         end tell
         """
-        return runAppleScript(script) == "ok"
+        return runAppleScriptOutcome(script, operationID: operationID).isAccepted
     }
 
     func focusSession(_ session: SessionState) -> Bool {
         let sid4 = String(session.sessionId.prefix(4))
-        guard let ttyName = ttyName(for: session) else {
+        guard TerminalProcessIdentityResolver.isVerified(session),
+              let ttyName = ttyName(for: session) else {
             Self.pillNavLog.notice("iterm focus sid=\(sid4, privacy: .public) result=fail reason=noTTYName rawTTY=\(session.tty ?? "nil", privacy: .public)")
             return false
         }
@@ -400,7 +499,7 @@ struct ITermAdapter: TerminalAdapter {
             return "ok"
         end tell
         """
-        let result = runAppleScript(script)
+        let result = runAppleScriptOutput(script)
         let selectedTargetMatches = result == "ok"
             && Self.currentItermSessionMatches(expectedTTY: ttyName, sid4: sid4)
         let hostIsFrontmost = TerminalHostActivator.isFrontmost(app)
@@ -561,19 +660,65 @@ struct ITermAdapter: TerminalAdapter {
         }
     }
 
-    private func runAppleScript(_ source: String) -> String {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        proc.arguments = ["-e", source]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
-        do {
-            try proc.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            proc.waitUntilExit()
-            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        } catch {
+    private func executeAppleScript(
+        _ source: String,
+        operationID: String?
+    ) -> Result<ProcessResult, ProcessExecutorError> {
+        let result: Result<ProcessResult, ProcessExecutorError>
+        if let operationID {
+            result = ProcessExecutor.shared.runSyncWithResult(
+                "/usr/bin/osascript",
+                arguments: ["-e", source],
+                timeout: SubprocessDeadlinePolicy.appCommand,
+                operationID: operationID
+            )
+        } else {
+            result = ProcessExecutor.shared.runSyncWithResult(
+                "/usr/bin/osascript",
+                arguments: ["-e", source],
+                timeout: SubprocessDeadlinePolicy.appCommand
+            )
+        }
+        return result
+    }
+
+    /// Rich dispatch result for text and submit actions. An osascript
+    /// execution/launch/timeout error is indeterminate: the child may have
+    /// delivered text before failing, so it must not select another tier.
+    private func runAppleScriptOutcome(
+        _ source: String,
+        operationID: String? = nil
+    ) -> TerminalTextDispatchResult {
+        switch executeAppleScript(source, operationID: operationID) {
+        case .success(let result):
+            let output = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            switch output {
+            case "ok":
+                return .accepted
+            case "fail":
+                return .provenRejected(reason: "The iTerm2 script rejected the target before write.")
+            default:
+                return .indeterminate(
+                    reason: output.isEmpty
+                        ? "The iTerm2 script returned no dispatch result."
+                        : "The iTerm2 script returned an unexpected dispatch result."
+                )
+            }
+        case .failure(let error):
+            return .indeterminate(reason: error.localizedDescription)
+        }
+    }
+
+    /// Compatibility output used only by focus/diagnostic scripts whose
+    /// result is not a text-dispatch acknowledgement.
+    private func runAppleScriptOutput(
+        _ source: String,
+        operationID: String? = nil
+    ) -> String {
+        switch executeAppleScript(source, operationID: operationID) {
+        case .success(let result):
+            return result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .failure:
             return ""
         }
     }

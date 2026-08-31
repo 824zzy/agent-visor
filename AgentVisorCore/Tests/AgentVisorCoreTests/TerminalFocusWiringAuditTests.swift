@@ -33,7 +33,8 @@ final class TerminalFocusWiringAuditTests: XCTestCase {
         XCTAssertTrue(adapter.contains("TerminalHostActivator.activateAndWait"))
         XCTAssertTrue(adapter.contains("TerminalFocusVerificationPolicy.isSuccessful"))
         XCTAssertTrue(adapter.contains("focused terminal of selected tab of front window"))
-        XCTAssertTrue(adapter.contains("ProcessExecutor.shared.runSyncOrNil"))
+        XCTAssertTrue(adapter.contains("ProcessExecutor.shared.runSyncWithResult"))
+        XCTAssertTrue(adapter.contains("timeout: SubprocessDeadlinePolicy.appCommand"))
         XCTAssertFalse(adapter.contains("let process = Process()"))
     }
 

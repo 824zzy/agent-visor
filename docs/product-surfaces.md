@@ -148,6 +148,10 @@ A model identifier is provider data, not a human-facing label. Agent Visor prese
 
 User-facing UI calls the desktop conversation surface **Chat**, not **Transcript** or **Inspect**. Transcript remains an implementation term for parsers, files, and diagnostic internals; it is not the name of the user task.
 
+The rules in this section define the target behavior. The Electron migration
+currently provides a bounded subset; its parity status and implementation
+order are tracked in [Chat feature parity](chat-feature-parity.md).
+
 - A normal Sessions-browser row click and Return open the canonical owner. If that destination is unavailable, activation safely falls back to Chat when renderable.
 - Shift-Return opens Agent Visor Chat when renderable. If Chat is unavailable, it falls back to the owner.
 - The row names its primary owner destination as `Open in <owner>` with an external-open symbol. It does not repeat the owner as a metadata chip.

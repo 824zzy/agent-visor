@@ -1,9 +1,12 @@
 import {
   sessionSnapshotSchema,
   type ChatPage,
+  type ChatCommands,
   type ClientMessage,
   type SessionSection,
   type ChatImage,
+  type ChatItem,
+  type ChatUsageGlance,
   type ChatPendingAction,
   type NativeHelperFocusTarget,
   type NativeHelperPiRestorationUpdate,
@@ -23,7 +26,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { readChatPage } from "./chat.js";
+import { chatCapabilities, normalizeChatText, readChatPage } from "./chat.js";
+import { loadSlashCommandCatalog } from "./slash-commands.js";
 
 export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie";
 
@@ -52,17 +56,83 @@ export type DiscoveredProviderSession = {
   codexLifecycle?: import("./providers/codex-lifecycle.js").CodexLifecycle;
 };
 
+export type ChatDeliveryEvidence = {
+  /** Bounded IDs from the authoritative latest page before the send. */
+  baselineUserEntryIds: string[];
+  /** True only when the baseline page was not truncated before its oldest row. */
+  baselineComplete: boolean;
+  /** Provider-normalized text used only as a bounded fallback matcher. */
+  submittedText: string;
+  /** The daemon request identity, when the provider transcript preserves it. */
+  requestId?: string;
+  /** Renderer generation that owns this delivery's temporary resources. */
+  generation?: number;
+  /** False when the baseline probe was missing, empty, malformed, or partial. */
+  authoritativeComplete?: boolean;
+  /** Monotonic provider-time boundary for content-only fallback. */
+  submittedAt?: string;
+  /** Newest source timestamp in the authoritative baseline, when known. */
+  baselineSourceTimestamp?: string;
+};
+
+/**
+ * Operation-owned guard for a send that may wait behind native controls.
+ * Implementations must check it at the provider-write boundary, not only
+ * when the repository first admits the action.
+ */
+export type ChatSendCurrentness = () => boolean;
+
+export type ChatCanonicalUserEntry = Pick<Extract<ChatItem, { kind: "user" }>,
+  "id" | "text" | "requestId" | "deliveryId" | "providerMessageId">;
+
 export interface SessionControls {
+  /** False when the native helper cannot currently execute terminal actions. */
+  isAvailable?(): boolean;
   focus(session: DiscoveredProviderSession): Promise<void>;
-  send(session: DiscoveredProviderSession, text: string, images: ChatImage[]): Promise<void>;
+  send(
+    session: DiscoveredProviderSession,
+    text: string,
+    images: ChatImage[],
+    deliveryId?: string,
+    evidence?: ChatDeliveryEvidence,
+    isCurrent?: ChatSendCurrentness,
+  ): Promise<void>;
+  /** Return the exact live delivery targeted by the provider cancel route. */
+  activeCancelDeliveryId?(session: DiscoveredProviderSession): string | undefined;
+  /** Return true only when this exact live session has a provider cancel route. */
+  canCancel?(session: DiscoveredProviderSession, deliveryId?: string): boolean;
+  cancel?(session: DiscoveredProviderSession, deliveryId?: string): Promise<void>;
+  /** Return true only when Claude's verified terminal can receive Shift+Tab. */
+  canCyclePermissionMode?(session: DiscoveredProviderSession): boolean;
+  cyclePermissionMode?(session: DiscoveredProviderSession): Promise<void>;
+  /** Reconcile provider lifecycle and exact native target identity. */
+  reconcile?(session: DiscoveredProviderSession): void;
+  /** Reconcile a terminal delivery against authoritative canonical transcript rows. */
+  reconcileChatPage?(
+    session: DiscoveredProviderSession,
+    page: ChatPage,
+    authoritativeLatest?: boolean,
+  ): void;
+  /** Clear a completed or failed delivery from the native control registry. */
+  clear?(sessionId: string, deliveryId?: string): void;
+  /** Forget all state for a session that has left the authoritative catalog. */
+  forget?(sessionId: string): void;
 }
 
 export interface SessionSnapshotSource {
   current(): SessionSnapshot;
   subscribe(listener: (snapshot: SessionSnapshot) => void): () => void;
   acknowledgeReady?(sessionId: string): void;
-  chatPage?(sessionId: string, before?: number, limit?: number): Promise<ChatPage>;
-  chatAction?(message: Extract<ClientMessage, { type: "send_chat" | "respond_chat" }>): Promise<string | undefined>;
+  chatPage?(
+    sessionId: string,
+    before?: number,
+    limit?: number,
+    generation?: number,
+  ): Promise<ChatPage>;
+  chatCommands?(sessionId: string): Promise<ChatCommands>;
+  chatAction?(message: Extract<ClientMessage, {
+    type: "send_chat" | "cancel_chat" | "respond_chat" | "cycle_permission_mode";
+  }>): Promise<string | undefined>;
   focusSession?(sessionId: string): Promise<string | undefined>;
 }
 
@@ -105,11 +175,55 @@ const piHookReadyStaleCeilingMs = 30 * 60 * 1_000;
 const distantPast = "1970-01-01T00:00:00.000Z";
 const maxPiRuntimeLinks = 64;
 const maxPiRuntimeStateBytes = 1_048_576;
+// ponytail: this bounds the pre-send transcript scan used to prove a new
+// terminal turn. Keep it aligned with the page parser cap and raise it only
+// with an explicit memory/latency review.
+const maxTerminalBaselineUserEntryIds = 512;
+// ponytail: bound queued + running chat operations per session before any
+// transcript evidence or image payload is retained. Raise only with a
+// memory/latency review; all exits release the operation reservation.
+export const MAX_CHAT_ACTIONS_PER_SESSION = 32;
 
 type SessionRepositoryOptions = {
   piRuntimeStatePath?: string;
   bootSessionUUID?: string;
   now?: () => Date;
+  /** Deterministic page-read seam for proving async session replacement. */
+  chatPageReader?: (
+    session: DiscoveredProviderSession,
+    before?: number,
+    limit?: number,
+  ) => Promise<ChatPage>;
+  /** Optional provider-authoritative quota seam. Missing data stays absent. */
+  chatUsageGlance?: (
+    session: DiscoveredProviderSession,
+  ) => Promise<ChatUsageGlance | undefined>;
+};
+
+type ChatStateOperationReservation = {
+  epoch: number;
+  active: boolean;
+};
+
+type ChatPageReadReservation = {
+  /** Exact session key used to look up current state after the await. */
+  sessionId: string;
+  /** Monotonic read request for this session; newer work supersedes it. */
+  requestEpoch: number;
+  /** Session-state epoch rejects reads that outlive forget/reuse. */
+  stateEpoch: number;
+  /** Renderer generation and session identity guard the captured record. */
+  generation: number;
+  sessionFingerprint: string;
+  /** Optional operation identity for a delivery-owned baseline read. */
+  deliveryKey?: string;
+  active: boolean;
+};
+
+type ChatSendInFlight = {
+  epoch: number;
+  reservation: ChatStateOperationReservation;
+  promise: Promise<string | undefined>;
 };
 
 type PiRuntimeState = {
@@ -124,6 +238,31 @@ type PersistedPiRuntimeLink = {
   tty: string;
   sessionFile: string;
 };
+
+type ExternalApprovalState = "pending" | "responding" | "completed" | "uncertain";
+
+type ExternalApprovalRecord = {
+  approvalId: string;
+  pending: ChatPendingAction;
+  receivedAt: string;
+  generation: number;
+  respond: (message: Extract<ClientMessage, { type: "respond_chat" }>) => Promise<void>;
+  state: ExternalApprovalState;
+  responseFingerprint?: string;
+  responseToken: number;
+  result?: string;
+  inFlight?: Promise<string | undefined>;
+  expiresAt: number;
+  expiryTimer?: ReturnType<typeof setTimeout>;
+};
+
+// ponytail: completed approval results are retained briefly so a lost
+// response can be replayed without invoking the provider twice. Keep this
+// cap coordinated with the provider action queue and evict only terminal
+// records; pending approvals are never silently replaced.
+export const MAX_EXTERNAL_APPROVAL_RECORDS = 64;
+export const EXTERNAL_APPROVAL_TTL_MS = 5 * 60_000;
+export const EXTERNAL_APPROVAL_RESPONSE_TIMEOUT_MS = 30_000;
 
 const providerNames: Record<ProviderID, string> = {
   claude_code: "Claude Code",
@@ -159,23 +298,53 @@ export class SessionRepository {
   private readonly chatBySession = new Map<string, DiscoveredProviderSession>();
   private readonly listeners = new Set<(snapshot: SessionSnapshot) => void>();
   private readonly controlBySession = new Map<string, DiscoveredProviderSession>();
-  private readonly externalActions = new Map<string, {
-    pending: ChatPendingAction;
-    receivedAt: string;
-    respond(message: Extract<ClientMessage, { type: "respond_chat" }>): Promise<void>;
-  }>();
+  private readonly externalActions = new Map<string, Map<string, ExternalApprovalRecord>>();
   private controls: SessionControls | undefined;
   private readonly now: () => Date;
+  private readonly chatPageReader: NonNullable<SessionRepositoryOptions["chatPageReader"]>;
+  private readonly chatUsageGlance: SessionRepositoryOptions["chatUsageGlance"];
   private readonly hookResponders = new Map<string, {
     sessionId: string;
     respond(response: HookResponse): void;
   }>();
+  // Renderer generations are request identity, not provider state. Keep the
+  // highest generation observed per live session so an old renderer cannot
+  // send after an async transcript/evidence read.
+  private readonly chatGenerationBySession = new Map<string, number>();
+  private readonly chatSendRequestIdentity = new Map<string, string>();
+  private readonly chatSendDeliveryIdentity = new Map<string, string>();
+  private readonly chatSendIdentityOrder: Array<{
+    sessionId: string;
+    requestKey: string;
+    deliveryKey: string;
+    pairKey: string;
+  }> = [];
+  private readonly chatSendResults = new Map<string, string | undefined>();
+  private readonly chatSendInFlight = new Map<string, ChatSendInFlight>();
+  private readonly chatStateEpochBySession = new Map<string, number>();
+  // Operation-owned reservations survive bounded epoch-history eviction. A
+  // delayed provider result must stay stale after 513 unrelated removals and
+  // old session-ID reuse; it cannot recreate dedupe/cache state.
+  // ponytail: reservations are released in the operation finally path; add a
+  // durable operation journal before retaining them beyond settled promises.
+  private readonly chatStateReservationsBySession = new Map<string, Set<ChatStateOperationReservation>>();
+  // A page/baseline reader is also operation-owned. Its monotonic request
+  // epoch prevents an older transcript result from mutating native delivery
+  // evidence after a newer page or delivery has started.
+  private readonly chatPageRequestEpochBySession = new Map<string, number>();
+  // Renderer page reads and delivery baselines have different ownership. A
+  // new page invalidates older delivery baselines, while another admitted
+  // send must not invalidate a concurrent send's exact reservation.
+  private readonly chatPageReadReservationsBySession = new Map<string, ChatPageReadReservation>();
+  private readonly chatDeliveryPageReadReservationsBySession = new Map<string, Set<ChatPageReadReservation>>();
 
   constructor(
     private readonly providers: ProviderAdapter[],
     options: SessionRepositoryOptions = {},
   ) {
     this.now = options.now ?? (() => new Date());
+    this.chatPageReader = options.chatPageReader ?? readChatPage;
+    this.chatUsageGlance = options.chatUsageGlance;
     const bootSessionUUID = canonicalBootSessionUUID(options.bootSessionUUID);
     if (!options.piRuntimeStatePath || !bootSessionUUID) return;
     this.piRuntimeState = { path: options.piRuntimeStatePath, bootSessionUUID };
@@ -267,26 +436,216 @@ export class SessionRepository {
   }
 
   pendingAction(sessionId: string): ChatPendingAction | undefined {
-    const pending = this.externalActions.get(sessionId)?.pending
-      ?? pendingChatAction(this.hookBySession.get(sessionId));
-    return pending ? structuredClone(pending) : undefined;
+    return this.pendingActions(sessionId)[0];
+  }
+
+  /** Return every still-actionable approval/question for one exact session. */
+  pendingActions(sessionId: string): ChatPendingAction[] {
+    const external = [...(this.externalActions.get(sessionId)?.values() ?? [])]
+      .filter((record) => record.state === "pending" || record.state === "responding")
+      .sort((left, right) => left.receivedAt.localeCompare(right.receivedAt))
+      .map((record) => ({
+        ...structuredClone(record.pending),
+        ...(record.state === "responding" ? { responding: true } : {}),
+      }));
+    const hook = pendingChatAction(this.hookBySession.get(sessionId));
+    if (hook) external.push(structuredClone(hook));
+    return external;
   }
 
   registerExternalAction(
     sessionId: string,
     pending: ChatPendingAction,
     respond: (message: Extract<ClientMessage, { type: "respond_chat" }>) => Promise<void>,
+    generation?: number,
   ): () => void {
-    this.externalActions.set(sessionId, {
-      pending: structuredClone(pending), receivedAt: new Date().toISOString(), respond,
-    });
+    this.pruneExternalActions(sessionId);
+    const currentGeneration = this.chatGenerationBySession.get(sessionId) ?? 1;
+    if (generation !== undefined && generation !== currentGeneration) {
+      // Codex can finish registering an approval after a page refresh. Do
+      // not attach that provider callback to the newer renderer generation.
+      return () => undefined;
+    }
+    const approvalId = pending.approvalId ?? pending.toolUseId;
+    let records = this.externalActions.get(sessionId);
+    if (!records) {
+      records = new Map();
+      this.externalActions.set(sessionId, records);
+    }
+    const existing = records.get(approvalId);
+    if (existing) {
+      // A provider replay for the same approval must not replace its responder
+      // or reset an in-flight response. The first exact route owns the ID.
+      return () => undefined;
+    }
+    if (this.externalActionCount() >= MAX_EXTERNAL_APPROVAL_RECORDS) {
+      // Fail closed when every retained record is actionable. The provider
+      // remains unacknowledged rather than silently routing it to another ID.
+      return () => undefined;
+    }
+    const receivedAt = new Date().toISOString();
+    const record: ExternalApprovalRecord = {
+      approvalId,
+      pending: structuredClone(pending),
+      receivedAt,
+      generation: generation ?? currentGeneration,
+      respond,
+      state: "pending",
+      responseToken: 0,
+      expiresAt: Date.now() + EXTERNAL_APPROVAL_TTL_MS,
+    };
+    record.expiryTimer = setTimeout(() => this.expireExternalAction(sessionId, approvalId), EXTERNAL_APPROVAL_TTL_MS);
+    record.expiryTimer.unref?.();
+    records.set(approvalId, record);
     this.publish([...this.lastByProvider.values()].flat());
     return () => {
-      if (this.externalActions.get(sessionId)?.respond === respond) {
-        this.externalActions.delete(sessionId);
+      const current = this.externalActions.get(sessionId)?.get(approvalId);
+      if (current?.respond === respond && current.state === "pending") {
+        if (current.expiryTimer) clearTimeout(current.expiryTimer);
+        const currentRecords = this.externalActions.get(sessionId);
+        currentRecords?.delete(approvalId);
+        if (currentRecords?.size === 0) this.externalActions.delete(sessionId);
         this.publish([...this.lastByProvider.values()].flat());
       }
     };
+  }
+
+  private externalActionCount(): number {
+    let count = 0;
+    for (const records of this.externalActions.values()) count += records.size;
+    return count;
+  }
+
+  private pruneExternalActions(sessionId?: string): void {
+    const entries = sessionId === undefined
+      ? [...this.externalActions.entries()]
+      : [[sessionId, this.externalActions.get(sessionId)] as const];
+    const now = Date.now();
+    for (const [id, records] of entries) {
+      if (!records) continue;
+      for (const [approvalId, record] of records) {
+        if (record.state === "pending" || record.state === "responding") continue;
+        if (record.expiresAt > now) continue;
+        if (record.expiryTimer) clearTimeout(record.expiryTimer);
+        records.delete(approvalId);
+      }
+      if (records.size === 0) this.externalActions.delete(id);
+    }
+  }
+
+  private expireExternalAction(sessionId: string, approvalId: string): void {
+    const record = this.externalActions.get(sessionId)?.get(approvalId);
+    if (!record) return;
+    if (record.state === "pending" || record.state === "responding") {
+      record.state = "uncertain";
+      record.result = "This approval expired before the provider confirmed it.";
+      record.responseToken += 1;
+      record.inFlight = undefined;
+      record.expiresAt = Date.now() + EXTERNAL_APPROVAL_TTL_MS;
+      record.expiryTimer = setTimeout(
+        () => this.expireExternalAction(sessionId, approvalId),
+        EXTERNAL_APPROVAL_TTL_MS,
+      );
+      record.expiryTimer.unref?.();
+      this.publish([...this.lastByProvider.values()].flat());
+      return;
+    }
+    const records = this.externalActions.get(sessionId);
+    records?.delete(approvalId);
+    if (records?.size === 0) this.externalActions.delete(sessionId);
+  }
+
+  private invalidateExternalActions(sessionId: string, reason: string): void {
+    const records = this.externalActions.get(sessionId);
+    if (!records) return;
+    for (const record of records.values()) {
+      if (record.state === "completed" || record.state === "uncertain") continue;
+      record.state = "uncertain";
+      record.result = reason;
+      record.responseToken += 1;
+      record.inFlight = undefined;
+      if (record.expiryTimer) clearTimeout(record.expiryTimer);
+      record.expiresAt = Date.now() + EXTERNAL_APPROVAL_TTL_MS;
+      record.expiryTimer = setTimeout(
+        () => this.expireExternalAction(sessionId, record.approvalId),
+        EXTERNAL_APPROVAL_TTL_MS,
+      );
+      record.expiryTimer.unref?.();
+    }
+  }
+
+  private respondExternalAction(
+    sessionId: string,
+    message: Extract<ClientMessage, { type: "respond_chat" }>,
+  ): Promise<string | undefined> {
+    const approvalId = message.approvalId ?? message.toolUseId;
+    const record = this.externalActions.get(sessionId)?.get(approvalId);
+    if (!record || record.pending.toolUseId !== message.toolUseId) {
+      return Promise.resolve("This approval is no longer waiting for a response.");
+    }
+    if (message.generation !== undefined && message.generation !== record.generation) {
+      return Promise.resolve("This approval belongs to an older session generation.");
+    }
+    const responseFingerprint = responseIdentity(message);
+    if (record.state === "completed" || record.state === "uncertain") {
+      if (record.responseFingerprint === undefined
+        || record.responseFingerprint === responseFingerprint) {
+        return Promise.resolve(record.result);
+      }
+      return Promise.resolve("This approval already has a different response.");
+    }
+    if (record.state === "responding") {
+      if (record.responseFingerprint !== responseFingerprint) {
+        return Promise.resolve("This approval is already responding with a different response.");
+      }
+      return record.inFlight ?? Promise.resolve("This approval response is still settling.");
+    }
+    // Reserve the exact approval synchronously before entering provider code.
+    record.state = "responding";
+    record.responseFingerprint = responseFingerprint;
+    const responseToken = ++record.responseToken;
+    const operation = this.invokeExternalResponse(sessionId, record, message, responseToken);
+    record.inFlight = operation;
+    return operation;
+  }
+
+  private async invokeExternalResponse(
+    sessionId: string,
+    record: ExternalApprovalRecord,
+    message: Extract<ClientMessage, { type: "respond_chat" }>,
+    responseToken: number,
+  ): Promise<string | undefined> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const provider = Promise.resolve()
+      .then(() => record.respond(message))
+      .then(() => undefined, (error: unknown) => (
+        error instanceof Error ? error.message : "The provider rejected this approval."
+      ));
+    const deadline = new Promise<string>((resolve) => {
+      timeout = setTimeout(() => resolve("The provider approval response timed out."), EXTERNAL_APPROVAL_RESPONSE_TIMEOUT_MS);
+      timeout.unref?.();
+    });
+    const result = await Promise.race([provider, deadline]);
+    if (timeout) clearTimeout(timeout);
+    if (record.responseToken !== responseToken || record.state !== "responding") {
+      return record.result;
+    }
+    record.inFlight = undefined;
+    record.result = result;
+    record.state = result === undefined ? "completed" : "uncertain";
+    record.expiresAt = Date.now() + EXTERNAL_APPROVAL_TTL_MS;
+    if (record.expiryTimer) clearTimeout(record.expiryTimer);
+    record.expiryTimer = setTimeout(
+      () => this.expireExternalAction(
+        sessionId,
+        record.approvalId,
+      ),
+      EXTERNAL_APPROVAL_TTL_MS,
+    );
+    // sessionId is intentionally not taken from the response payload: use the
+    // exact registration scope when scheduling result-cache cleanup.
+    record.expiryTimer.unref?.();
+    return result;
   }
 
   registerHookResponder(
@@ -307,30 +666,130 @@ export class SessionRepository {
     };
   }
 
-  async chatPage(sessionId: string, before?: number, limit?: number): Promise<ChatPage> {
+  async chatPage(
+    sessionId: string,
+    before?: number,
+    limit?: number,
+    generation?: number,
+  ): Promise<ChatPage> {
     const hook = this.hookBySession.get(sessionId);
     const discovered = this.chatBySession.get(sessionId);
     const record = discovered ?? (hook ? hookSession(hook) : undefined);
-    if (!record) return unavailableChatPage(sessionId, "This session is no longer available.");
-    const page = await readChatPage(record, before, limit);
-    const pendingAction = this.pendingAction(sessionId);
-    if (pendingAction) {
-      page.pendingAction = pendingAction;
-      page.capabilities.canApprove = pendingAction.type === "approval";
-      page.capabilities.canAnswer = pendingAction.type === "question";
+    if (!record) {
+      this.controls?.clear?.(sessionId);
+      return unavailableChatPage(sessionId, "This session is no longer available.");
     }
-    return page;
+    const generationError = generation === undefined
+      ? this.ensureChatGeneration(sessionId)
+      : this.acceptAuthoritativeChatGeneration(
+        sessionId, generation, before === undefined,
+      );
+    if (generationError) {
+      return unavailableChatPage(sessionId, generationError);
+    }
+    const pageGeneration = this.chatGenerationBySession.get(sessionId);
+    if (pageGeneration === undefined) {
+      return unavailableChatPage(sessionId, "This chat session has no authoritative generation.");
+    }
+    const pageReservation = this.reserveChatPageRead(
+      sessionId,
+      pageGeneration,
+      record,
+    );
+    this.controls?.reconcile?.(record);
+    try {
+      const page = await this.chatPageReader(record, before, limit);
+      // Revalidate before any post-read native reconciliation or capability
+      // mutation. A late R1 is data for the renderer only; it cannot rewind
+      // delivery evidence established by a newer R2/baseline.
+      if (!this.isChatPageReadCurrent(pageReservation)) return page;
+      if (before === undefined && this.chatUsageGlance) {
+        try {
+          const usage = await this.chatUsageGlance(record);
+          const providerMatches = (record.provider === "codex" && usage?.provider === "codex")
+            || (record.provider === "claude_code" && usage?.provider === "claude");
+          if (this.isChatPageReadCurrent(pageReservation) && providerMatches && usage) {
+            page.metadata = { ...(page.metadata ?? {}), usageGlance: usage };
+          }
+        } catch {
+          // Usage is an optional status enhancement. A provider/tool failure
+          // must leave the page valid and omit the value, never fabricate it.
+        }
+      }
+      // Earlier pages are renderer history, never authoritative native
+      // delivery evidence. Keep this call latest-only so a future control
+      // implementation cannot accidentally treat `false` as permission.
+      if (before === undefined) {
+        this.controls?.reconcileChatPage?.(record, page, true);
+      }
+      if (record.messageTransport === "terminal" && this.controls?.isAvailable?.() === false) {
+        const readOnlyReason = "The native helper is unavailable. Terminal chat is read only until it recovers.";
+        page.capabilities.canSendText = false;
+        page.capabilities.canSendImages = false;
+        page.capabilities.canCancel = false;
+        delete page.capabilities.cancelDeliveryId;
+        page.capabilities.readOnlyReason = readOnlyReason;
+      }
+      const canCyclePermissionMode = page.capabilities.canCyclePermissionMode === true
+        && this.controls?.canCyclePermissionMode?.(record) === true;
+      page.capabilities.canCyclePermissionMode = canCyclePermissionMode;
+      // A transcript transport is not enough to cancel. Keep the page honest
+      // when the daemon has no live helper or daemon-owned Codex turn. The
+      // capability and identity are derived from one live control lookup so a
+      // page cannot advertise a route for an unrelated delivery.
+      const cancelDeliveryId = this.controls?.activeCancelDeliveryId?.(record);
+      const canCancel = cancelDeliveryId !== undefined
+        && (this.controls?.canCancel?.(record, cancelDeliveryId) ?? false);
+      page.capabilities.canCancel = canCancel;
+      if (canCancel) page.capabilities.cancelDeliveryId = cancelDeliveryId;
+      else delete page.capabilities.cancelDeliveryId;
+      const pendingActions = this.pendingActions(sessionId);
+      if (pendingActions.length) {
+        page.pendingAction = pendingActions[0] ?? null;
+        page.pendingActions = pendingActions;
+        page.capabilities.canApprove = pendingActions.some((action) => action.type === "approval");
+        page.capabilities.canAnswer = pendingActions.some((action) => action.type === "question");
+      }
+      return page;
+    } finally {
+      this.releaseChatPageRead(sessionId, pageReservation);
+    }
+  }
+
+  async chatCommands(sessionId: string): Promise<ChatCommands> {
+    const session = this.chatBySession.get(sessionId)
+      ?? (this.hookBySession.get(sessionId)
+        ? hookSession(this.hookBySession.get(sessionId)!)
+        : undefined);
+    if (!session) {
+      return { type: "chat_commands", sessionId, commands: [], truncated: false };
+    }
+    const catalog = await loadSlashCommandCatalog(session.cwd);
+    return {
+      type: "chat_commands",
+      sessionId,
+      ...catalog,
+    };
   }
 
   async focusSession(sessionId: string): Promise<string | undefined> {
     const session = this.controlBySession.get(sessionId);
     if (!session?.controlTarget || !this.controls) return "Exact session focus is unavailable.";
+    const reservation = this.reserveChatStateOperation(
+      sessionId,
+      this.chatStateEpoch(sessionId),
+    );
+    if (!reservation) {
+      return "Too many chat actions are queued for this session.";
+    }
     this.acknowledgeReady(sessionId);
     try {
       await this.controls.focus(structuredClone(session));
       return undefined;
     } catch (error) {
       return error instanceof Error ? error.message : "Exact session focus failed.";
+    } finally {
+      this.releaseChatStateOperation(sessionId, reservation);
     }
   }
 
@@ -342,30 +801,194 @@ export class SessionRepository {
   }
 
   async chatAction(
-    message: Extract<ClientMessage, { type: "send_chat" | "respond_chat" }>,
+    message: Extract<ClientMessage, {
+      type: "send_chat" | "cancel_chat" | "respond_chat" | "cycle_permission_mode";
+    }>,
   ): Promise<string | undefined> {
-    if (message.type === "send_chat") {
-      const session = this.chatBySession.get(message.sessionId);
-      if (!session?.messageTransport || !this.controls) {
-        return "Continue in the source app while native message transport is unavailable.";
-      }
+    if (message.type === "cycle_permission_mode") {
+      const stateEpoch = this.chatStateEpoch(message.sessionId);
+      const generationError = this.acceptChatGeneration(message.sessionId, message.generation);
+      if (generationError) return generationError;
+      const reservation = this.reserveChatStateOperation(message.sessionId, stateEpoch);
+      if (!reservation) return "Too many chat actions are queued for this session.";
       try {
-        await this.controls.send(structuredClone(session), message.text, message.images);
+        const session = this.chatBySession.get(message.sessionId);
+        if (!session || !this.controls?.cyclePermissionMode
+          || !this.controls.canCyclePermissionMode?.(session)
+          || !chatCapabilities(session).canCyclePermissionMode) {
+          return "Permission mode cycling is unavailable for this session.";
+        }
+        const latest = await this.chatPageReader(
+          session,
+          undefined,
+          maxTerminalBaselineUserEntryIds,
+        );
+        if (!this.isChatOperationCurrent(message.sessionId, stateEpoch, reservation)) {
+          return "This chat session changed before permission mode could be changed.";
+        }
+        if (latest.metadata?.permissionMode !== message.expectedMode) {
+          return "Permission mode changed before this request was delivered.";
+        }
+        await this.controls.cyclePermissionMode(structuredClone(session));
+        if (!this.isChatOperationCurrent(message.sessionId, stateEpoch, reservation)) {
+          return "This chat session changed before permission mode could be confirmed.";
+        }
         return undefined;
       } catch (error) {
-        return error instanceof Error ? error.message : "The message could not be delivered.";
+        return error instanceof Error ? error.message : "Permission mode could not be changed.";
+      } finally {
+        this.releaseChatStateOperation(message.sessionId, reservation);
       }
     }
-    const external = this.externalActions.get(message.sessionId);
-    if (external && external.pending.toolUseId === message.toolUseId) {
+    if (message.type === "send_chat") {
+      const session = this.chatBySession.get(message.sessionId);
+      const stateEpoch = this.chatStateEpoch(message.sessionId);
+      const generationError = this.acceptChatGeneration(message.sessionId, message.generation);
+      if (generationError) return generationError;
+      const requestKey = chatSendRequestKey(message.sessionId, message.generation, message.id);
+      const deliveryKey = chatSendDeliveryKey(
+        message.sessionId, message.generation, message.deliveryId,
+      );
+      const pairKey = chatSendPairKey(
+        message.sessionId, message.generation, message.id, message.deliveryId,
+      );
+      const inFlight = this.chatSendInFlight.get(pairKey);
+      if (inFlight) {
+        if (inFlight.reservation.active && inFlight.epoch === stateEpoch) return inFlight.promise;
+        // A prior operation for this exact identity is still settling after
+        // the session was removed/replaced. Never let the replacement
+        // coalesce with that stale provider work.
+        return "A previous send with this identity is still settling.";
+      }
+      const previousDelivery = this.chatSendRequestIdentity.get(requestKey);
+      if (previousDelivery !== undefined && previousDelivery !== message.deliveryId) {
+        return "This send request ID was already used for another delivery.";
+      }
+      const previousRequest = this.chatSendDeliveryIdentity.get(deliveryKey);
+      if (previousRequest !== undefined && previousRequest !== message.id) {
+        return "This delivery ID was already used for another request.";
+      }
+      const isNewIdentity = previousDelivery === undefined && previousRequest === undefined;
+      if (!isNewIdentity && (previousDelivery !== message.deliveryId || previousRequest !== message.id)) {
+        // A partially retained pair is an internal inconsistency. Fail closed
+        // instead of reconstructing identity from one side of the registry.
+        return "This send identity was already used by another request.";
+      }
+      if (this.chatSendResults.has(pairKey)) return this.chatSendResults.get(pairKey);
+      const reservation = this.reserveChatStateOperation(message.sessionId, stateEpoch);
+      if (!reservation) {
+        return "Too many chat actions are queued for this session.";
+      }
+      if (isNewIdentity) {
+        this.chatSendRequestIdentity.set(requestKey, message.deliveryId);
+        this.chatSendDeliveryIdentity.set(deliveryKey, message.id);
+        this.chatSendIdentityOrder.push({
+          sessionId: message.sessionId, requestKey, deliveryKey, pairKey,
+        });
+        this.trimChatSendIdentityWindow();
+      }
+      const operation = this.performChatSend(
+        message,
+        session,
+        () => this.isChatOperationCurrent(message.sessionId, stateEpoch, reservation),
+        pairKey,
+      );
+      this.chatSendInFlight.set(pairKey, {
+        epoch: stateEpoch,
+        reservation,
+        promise: operation,
+      });
+      let result: string | undefined;
+      let operationWasCurrent = false;
       try {
-        await external.respond(message);
-        this.externalActions.delete(message.sessionId);
-        this.publish([...this.lastByProvider.values()].flat());
+        result = await operation;
+        operationWasCurrent = this.isChatOperationCurrent(
+          message.sessionId, stateEpoch, reservation,
+        );
+      } finally {
+        this.releaseChatStateOperation(message.sessionId, reservation);
+        if (this.chatSendInFlight.get(pairKey)?.promise === operation) {
+          this.chatSendInFlight.delete(pairKey);
+        }
+      }
+      // A removed session may have invalidated this operation while its
+      // provider/evidence await was in flight. Do not resurrect its dedupe
+      // result or any identity reservation after forgetChatState().
+      if (!operationWasCurrent) {
+        return "This chat session changed before the message could be delivered.";
+      }
+      this.chatSendResults.set(pairKey, result);
+      // ponytail: this is a bounded replay-dedup window. Add a durable
+      // request cursor before increasing it so renderer retries stay safe.
+      while (this.chatSendResults.size > 512) {
+        this.chatSendResults.delete(this.chatSendResults.keys().next().value!);
+      }
+      return result;
+    }
+    if (message.type === "cancel_chat") {
+      const stateEpoch = this.chatStateEpoch(message.sessionId);
+      const generationError = this.acceptChatGeneration(message.sessionId, message.generation);
+      if (generationError) return generationError;
+      const reservation = this.reserveChatStateOperation(message.sessionId, stateEpoch);
+      if (!reservation) {
+        return "Too many chat actions are queued for this session.";
+      }
+      try {
+      const session = this.chatBySession.get(message.sessionId);
+      // Re-read the latest canonical page before a terminal Escape. This is
+      // the last authoritative opportunity to reject an external same-target
+      // turn that arrived since the renderer's previous page refresh.
+      if (session && this.controls?.reconcileChatPage) {
+        const pageReservation = this.reserveChatPageRead(
+          message.sessionId,
+          message.generation,
+          session,
+        );
+        try {
+          const latest = await this.chatPageReader(session, undefined, maxTerminalBaselineUserEntryIds);
+          if (this.isChatOperationCurrent(message.sessionId, stateEpoch, reservation)
+            && this.isChatPageReadCurrent(pageReservation)) {
+            this.controls.reconcileChatPage(session, latest, true);
+          }
+        } catch {
+          if (this.isChatOperationCurrent(message.sessionId, stateEpoch, reservation)
+            && this.isChatPageReadCurrent(pageReservation)) {
+            this.controls.clear?.(message.sessionId, message.deliveryId);
+          }
+        } finally {
+          this.releaseChatPageRead(message.sessionId, pageReservation);
+        }
+      }
+      if (!session || !message.deliveryId || !this.controls?.canCancel?.(session, message.deliveryId)
+        || !this.controls.cancel) {
+        return "Cancellation is unavailable for this session.";
+      }
+      if (!this.isChatOperationCurrent(message.sessionId, stateEpoch, reservation)) {
+        return "This chat session changed before cancellation could be delivered.";
+      }
+      try {
+        await this.controls.cancel(structuredClone(session), message.deliveryId);
+        if (!this.isChatOperationCurrent(message.sessionId, stateEpoch, reservation)) {
+          return "This chat session changed before cancellation could be confirmed.";
+        }
+        this.controls.clear?.(message.sessionId, message.deliveryId);
         return undefined;
       } catch (error) {
-        return error instanceof Error ? error.message : "The response could not be delivered.";
+        return error instanceof Error ? error.message : "The turn could not be cancelled.";
       }
+      } finally {
+        this.releaseChatStateOperation(message.sessionId, reservation);
+      }
+    }
+    const approvalKey = message.approvalId ?? message.toolUseId;
+    const externalRecords = this.externalActions.get(message.sessionId);
+    if (externalRecords?.has(approvalKey)
+      || [...(externalRecords?.values() ?? [])].some((record) => (
+        record.pending.toolUseId === message.toolUseId
+      ))) {
+      const result = await this.respondExternalAction(message.sessionId, message);
+      this.publish([...this.lastByProvider.values()].flat());
+      return result;
     }
     const pending = this.hookResponders.get(message.toolUseId);
     const hook = this.hookBySession.get(message.sessionId);
@@ -378,6 +1001,321 @@ export class SessionRepository {
     this.hookBySession.delete(message.sessionId);
     this.publish([...this.lastByProvider.values()].flat());
     return undefined;
+  }
+
+  private async performChatSend(
+    message: Extract<ClientMessage, { type: "send_chat" }>,
+    initialSession: DiscoveredProviderSession | undefined,
+    operationIsCurrent: () => boolean,
+    deliveryKey: string,
+  ): Promise<string | undefined> {
+    const capabilities = initialSession ? chatCapabilities(initialSession) : undefined;
+    if (!initialSession || !this.controls || !capabilities?.canSendText) {
+      return "Chat sending is unavailable for this session.";
+    }
+    if (initialSession.messageTransport === "terminal" && this.controls.isAvailable?.() === false) {
+      return "The native helper is unavailable. Terminal chat is read only until it recovers.";
+    }
+    if (message.images.length > 0 && !capabilities.canSendImages) {
+      return "Image sending is unavailable for this session.";
+    }
+    const initialFingerprint = sessionActionFingerprint(initialSession);
+    const submittedAt = this.now().toISOString();
+    // A delivery baseline supersedes any page read that started earlier. The
+    // baseline itself owns an exact page-read reservation, but
+    // concurrent sends must remain independent: one send cannot make every
+    // other admitted send stale merely because their evidence reads overlap.
+    const pageReservation = isTerminalChatRoute(initialSession)
+      ? (() => {
+        this.invalidateChatPageReads(message.sessionId);
+        return this.reserveChatPageRead(
+          message.sessionId,
+          message.generation,
+          initialSession,
+          deliveryKey,
+        );
+      })()
+      : undefined;
+    const isCurrent = (): boolean => {
+      if (!operationIsCurrent()) return false;
+      if (pageReservation && !this.isChatPageReadCurrent(pageReservation)) return false;
+      const currentSession = this.chatBySession.get(message.sessionId);
+      return currentSession !== undefined
+        && this.chatGenerationBySession.get(message.sessionId) === message.generation
+        && sessionActionFingerprint(currentSession) === initialFingerprint
+        && chatCapabilities(currentSession).canSendText
+        && (message.images.length === 0 || chatCapabilities(currentSession).canSendImages);
+    };
+    try {
+      const evidence = await captureTerminalDeliveryEvidence(
+        initialSession,
+        message.text,
+        message.id,
+        message.images,
+        this.chatPageReader,
+        message.generation,
+        submittedAt,
+      );
+      if ((pageReservation && !this.isChatPageReadCurrent(pageReservation)) || !operationIsCurrent()) {
+        return "This chat session changed before the message could be delivered.";
+      }
+      const session = this.chatBySession.get(message.sessionId);
+      const generation = this.chatGenerationBySession.get(message.sessionId);
+      const liveCapabilities = session ? chatCapabilities(session) : undefined;
+      if (!session
+        || generation !== message.generation
+        || sessionActionFingerprint(session) !== initialFingerprint
+        || !liveCapabilities?.canSendText
+        || (message.images.length > 0 && !liveCapabilities.canSendImages)) {
+        return "This chat session changed before the message could be delivered.";
+      }
+      if (session.messageTransport === "terminal" && this.controls.isAvailable?.() === false) {
+        return "The native helper is unavailable. Terminal chat is read only until it recovers.";
+      }
+      await this.controls.send(
+        structuredClone(session), message.text, message.images, message.deliveryId, evidence,
+        isCurrent,
+      );
+      return undefined;
+    } catch (error) {
+      // A queued native action can fail after its repository operation has
+      // become stale. Never let that old failure clear a replacement control
+      // record with the same delivery ID.
+      if (isCurrent()) this.controls.clear?.(message.sessionId, message.deliveryId);
+      return error instanceof Error ? error.message : "The message could not be delivered.";
+    } finally {
+      if (pageReservation) this.releaseChatPageRead(message.sessionId, pageReservation);
+    }
+  }
+
+  private acceptChatGeneration(sessionId: string, generation: number): string | undefined {
+    const current = this.chatGenerationBySession.get(sessionId);
+    if (current === undefined) {
+      return "This chat session has no authoritative generation.";
+    }
+    if (generation < current) {
+      return "This chat request belongs to an older session view.";
+    }
+    if (generation > current) {
+      return "This chat request belongs to a future session generation.";
+    }
+    return undefined;
+  }
+
+  private ensureChatGeneration(sessionId: string): string | undefined {
+    if (this.chatGenerationBySession.has(sessionId)) return undefined;
+    this.chatGenerationBySession.set(sessionId, 1);
+    this.trimChatGenerationWindow();
+    return undefined;
+  }
+
+  private acceptAuthoritativeChatGeneration(
+    sessionId: string,
+    generation: number,
+    latest: boolean,
+  ): string | undefined {
+    const current = this.chatGenerationBySession.get(sessionId);
+    if (current === undefined) {
+      if (generation !== 1) {
+        return "This chat open belongs to a future session generation.";
+      }
+      this.chatGenerationBySession.set(sessionId, generation);
+      this.trimChatGenerationWindow();
+      return undefined;
+    }
+    if (generation === current) return undefined;
+    if (!latest || generation !== current + 1) {
+      return generation < current
+        ? "This chat open belongs to an older session generation."
+        : "This chat open belongs to a future session generation.";
+    }
+    this.chatGenerationBySession.set(sessionId, generation);
+    this.invalidateExternalActions(
+      sessionId,
+      "This approval belongs to an older session generation.",
+    );
+    return undefined;
+  }
+
+  private trimChatGenerationWindow(): void {
+    // ponytail: bound renderer-generation state to the same 512-session
+    // identity window as send dedupe; use a durable session cursor before
+    // increasing this ceiling.
+    while (this.chatGenerationBySession.size > 512) {
+      this.chatGenerationBySession.delete(this.chatGenerationBySession.keys().next().value!);
+    }
+  }
+
+  private chatStateEpoch(sessionId: string): number {
+    return this.chatStateEpochBySession.get(sessionId) ?? 0;
+  }
+
+  private isChatStateCurrent(sessionId: string, epoch: number): boolean {
+    return this.chatStateEpoch(sessionId) === epoch;
+  }
+
+  private reserveChatStateOperation(
+    sessionId: string,
+    epoch: number,
+  ): ChatStateOperationReservation | undefined {
+    const existing = this.chatStateReservationsBySession.get(sessionId);
+    if ((existing?.size ?? 0) >= MAX_CHAT_ACTIONS_PER_SESSION) return undefined;
+    const reservation: ChatStateOperationReservation = { epoch, active: true };
+    let reservations = existing;
+    if (!reservations) {
+      reservations = new Set();
+      this.chatStateReservationsBySession.set(sessionId, reservations);
+    }
+    reservations.add(reservation);
+    return reservation;
+  }
+
+  private releaseChatStateOperation(
+    sessionId: string,
+    reservation: ChatStateOperationReservation,
+  ): void {
+    reservation.active = false;
+    const reservations = this.chatStateReservationsBySession.get(sessionId);
+    if (!reservations) return;
+    reservations.delete(reservation);
+    if (reservations.size === 0) this.chatStateReservationsBySession.delete(sessionId);
+  }
+
+  private isChatOperationCurrent(
+    sessionId: string,
+    epoch: number,
+    reservation: ChatStateOperationReservation,
+  ): boolean {
+    return reservation.active && this.isChatStateCurrent(sessionId, epoch);
+  }
+
+  private reserveChatPageRead(
+    sessionId: string,
+    generation: number,
+    session: DiscoveredProviderSession,
+    deliveryKey?: string,
+  ): ChatPageReadReservation {
+    const currentEpoch = this.chatPageRequestEpochBySession.get(sessionId) ?? 0;
+    const requestEpoch = deliveryKey === undefined ? currentEpoch + 1 : currentEpoch;
+    if (!this.chatPageRequestEpochBySession.has(sessionId)) {
+      this.chatPageRequestEpochBySession.set(sessionId, currentEpoch);
+    }
+    const reservation: ChatPageReadReservation = {
+      sessionId,
+      requestEpoch,
+      stateEpoch: this.chatStateEpoch(sessionId),
+      generation,
+      sessionFingerprint: sessionActionFingerprint(session),
+      ...(deliveryKey !== undefined ? { deliveryKey } : {}),
+      active: true,
+    };
+    if (deliveryKey === undefined) {
+      this.chatPageRequestEpochBySession.set(sessionId, requestEpoch);
+      const previous = this.chatPageReadReservationsBySession.get(sessionId);
+      if (previous) previous.active = false;
+      this.chatPageReadReservationsBySession.set(sessionId, reservation);
+    } else {
+      let reservations = this.chatDeliveryPageReadReservationsBySession.get(sessionId);
+      if (!reservations) {
+        reservations = new Set();
+        this.chatDeliveryPageReadReservationsBySession.set(sessionId, reservations);
+      }
+      reservations.add(reservation);
+    }
+    return reservation;
+  }
+
+  private releaseChatPageRead(
+    sessionId: string,
+    reservation: ChatPageReadReservation,
+  ): void {
+    reservation.active = false;
+    if (this.chatPageReadReservationsBySession.get(sessionId) === reservation) {
+      this.chatPageReadReservationsBySession.delete(sessionId);
+    }
+    const deliveryReservations = this.chatDeliveryPageReadReservationsBySession.get(sessionId);
+    if (deliveryReservations) {
+      deliveryReservations.delete(reservation);
+      if (deliveryReservations.size === 0) {
+        this.chatDeliveryPageReadReservationsBySession.delete(sessionId);
+      }
+    }
+  }
+
+  private invalidateChatPageReads(sessionId: string): void {
+    // A new terminal delivery owns the next evidence boundary. Invalidate
+    // only the renderer page reservation; concurrent delivery baselines keep
+    // their own operation reservations and may proceed independently.
+    const pageReservation = this.chatPageReadReservationsBySession.get(sessionId);
+    if (pageReservation) pageReservation.active = false;
+    this.chatPageReadReservationsBySession.delete(sessionId);
+  }
+
+  private isChatPageReadCurrent(reservation: ChatPageReadReservation): boolean {
+    if (!reservation.active) return false;
+    const currentSession = this.chatBySession.get(reservation.sessionId)
+      ?? (this.hookBySession.has(reservation.sessionId)
+        ? hookSession(this.hookBySession.get(reservation.sessionId)!)
+        : undefined);
+    return this.chatStateEpoch(reservation.sessionId) === reservation.stateEpoch
+      && this.chatPageRequestEpochBySession.get(reservation.sessionId) === reservation.requestEpoch
+      && this.chatGenerationBySession.get(reservation.sessionId) === reservation.generation
+      && currentSession !== undefined
+      && sessionActionFingerprint(currentSession) === reservation.sessionFingerprint;
+  }
+
+  private forgetChatState(sessionId: string): void {
+    this.chatStateEpochBySession.set(sessionId, this.chatStateEpoch(sessionId) + 1);
+    // In-flight operations carry their own reservation because the bounded
+    // epoch tombstone may later be reclaimed. Invalidate those reservations
+    // now; releaseChatStateOperation removes them only after the provider
+    // promise has actually settled.
+    for (const reservation of this.chatStateReservationsBySession.get(sessionId) ?? []) {
+      reservation.active = false;
+    }
+    const pageReservation = this.chatPageReadReservationsBySession.get(sessionId);
+    if (pageReservation) pageReservation.active = false;
+    this.chatPageReadReservationsBySession.delete(sessionId);
+    for (const reservation of this.chatDeliveryPageReadReservationsBySession.get(sessionId) ?? []) {
+      reservation.active = false;
+    }
+    this.chatDeliveryPageReadReservationsBySession.delete(sessionId);
+    this.chatPageRequestEpochBySession.delete(sessionId);
+    this.invalidateExternalActions(sessionId, "This approval session is no longer available.");
+    this.chatGenerationBySession.delete(sessionId);
+    for (const entry of this.chatSendIdentityOrder) {
+      if (entry.sessionId !== sessionId) continue;
+      this.chatSendRequestIdentity.delete(entry.requestKey);
+      this.chatSendDeliveryIdentity.delete(entry.deliveryKey);
+      this.chatSendResults.delete(entry.pairKey);
+    }
+    for (let index = this.chatSendIdentityOrder.length - 1; index >= 0; index -= 1) {
+      if (this.chatSendIdentityOrder[index]!.sessionId === sessionId) {
+        this.chatSendIdentityOrder.splice(index, 1);
+      }
+    }
+    // ponytail: this epoch map is only a bounded stale-operation tombstone;
+    // removed session state above is deleted immediately.
+    while (this.chatStateEpochBySession.size > 512) {
+      this.chatStateEpochBySession.delete(this.chatStateEpochBySession.keys().next().value!);
+    }
+  }
+
+  private trimChatSendIdentityWindow(): void {
+    // Keep request and delivery reservations as one-to-one pairs. Do not
+    // evict an in-flight pair; if all old entries are in flight, a temporary
+    // overshoot is safer than allowing a replay to issue a duplicate send.
+    while (this.chatSendIdentityOrder.length > 512) {
+      const index = this.chatSendIdentityOrder.findIndex(
+        (entry) => !this.chatSendInFlight.has(entry.pairKey),
+      );
+      if (index < 0) return;
+      const [entry] = this.chatSendIdentityOrder.splice(index, 1);
+      if (!entry) return;
+      this.chatSendRequestIdentity.delete(entry.requestKey);
+      this.chatSendDeliveryIdentity.delete(entry.deliveryKey);
+      this.chatSendResults.delete(entry.pairKey);
+    }
   }
 
   async refresh(): Promise<SessionSnapshot> {
@@ -530,10 +1468,12 @@ export class SessionRepository {
     }
     const merged = applyHooks(discovered, this.hookBySession);
     for (const record of merged) {
-      if (this.externalActions.has(record.id)) {
+      if (this.pendingActions(record.id).some((action) => action.type === "approval" || action.type === "question")) {
         record.section = "needs_you";
         record.subtitle = "Approval required";
-        record.updatedAt = this.externalActions.get(record.id)!.receivedAt;
+        const latestApproval = [...(this.externalActions.get(record.id)?.values() ?? [])]
+          .find((action) => action.state === "pending");
+        record.updatedAt = latestApproval?.receivedAt ?? new Date().toISOString();
       }
       // Codex's discovery age gate applies to source-only history, not a
       // tracked Ready/working/Needs-you session with a canonical transcript.
@@ -543,6 +1483,7 @@ export class SessionRepository {
         record.canEnterChat = true;
       }
     }
+    const previousControlSessionIDs = new Set(this.controlBySession.keys());
     this.controlBySession.clear();
     for (const record of merged) {
       const existing = this.controlBySession.get(record.id);
@@ -551,6 +1492,16 @@ export class SessionRepository {
       }
     }
     const sessions = normalize(merged);
+    for (const sessionId of previousControlSessionIDs) {
+      if (!this.controlBySession.has(sessionId)) {
+        this.controls?.forget?.(sessionId);
+        this.forgetChatState(sessionId);
+      }
+    }
+    for (const session of this.controlBySession.values()) {
+      this.ensureChatGeneration(session.id);
+      this.controls?.reconcile?.(session);
+    }
     const previousSections = new Map(
       this.snapshotValue.sessions.map(({ id, section }) => [id, section]),
     );
@@ -821,12 +1772,99 @@ function unavailableChatPage(sessionId: string, readOnlyReason: string): ChatPag
     capabilities: {
       canSendText: false,
       canSendImages: false,
+      canCancel: false,
       canApprove: false,
       canAnswer: false,
       readOnlyReason,
     },
     pendingAction: null,
   };
+}
+
+async function captureTerminalDeliveryEvidence(
+  session: DiscoveredProviderSession,
+  text: string,
+  requestId: string,
+  _images: ChatImage[] = [],
+  pageReader: (
+    session: DiscoveredProviderSession,
+    before?: number,
+    limit?: number,
+  ) => Promise<ChatPage> = readChatPage,
+  generation?: number,
+  submittedAt?: string,
+): Promise<ChatDeliveryEvidence | undefined> {
+  if (!isTerminalChatRoute(session)) return undefined;
+  try {
+    const page = await pageReader(session, undefined, maxTerminalBaselineUserEntryIds);
+    const baselineUserEntryIds: string[] = [];
+    const seen = new Set<string>();
+    for (const item of page.items) {
+      if (item.kind !== "user" || seen.has(item.id)) continue;
+      seen.add(item.id);
+      baselineUserEntryIds.push(item.id);
+      if (baselineUserEntryIds.length >= maxTerminalBaselineUserEntryIds) break;
+    }
+    return {
+      baselineUserEntryIds,
+      baselineComplete: page.transcriptEvidence?.complete ?? !page.hasMoreBefore,
+      // NativeSessionControls replaces this provisional text with Pi's exact
+      // path-bearing prompt after it allocates image files. The text-only
+      // fallback remains useful for Claude and for providers that omit IDs.
+      submittedText: normalizeChatText(text),
+      requestId,
+      ...(generation !== undefined ? { generation } : {}),
+      ...(submittedAt ? { submittedAt } : {}),
+      // A custom/failed reader that does not provide an authority record is
+      // deliberately non-authoritative. Exact provider identity can still
+      // reconcile, but content-only fallback stays disabled.
+      authoritativeComplete: page.transcriptEvidence?.authoritative === true
+        && page.transcriptEvidence.complete === true,
+      ...(page.transcriptEvidence?.sourceTimestamp
+        ? { baselineSourceTimestamp: page.transcriptEvidence.sourceTimestamp }
+        : {}),
+    };
+  } catch {
+    // Sending may still be valid when a transcript is being rewritten, but
+    // cancellation must remain fail-closed until a baseline is available.
+    return undefined;
+  }
+}
+
+function sessionActionFingerprint(session: DiscoveredProviderSession): string {
+  return JSON.stringify([
+    session.id,
+    session.provider,
+    session.section,
+    session.cwd,
+    session.chatPath,
+    session.messageTransport,
+    session.controlTarget,
+  ]);
+}
+
+function chatSendRequestKey(sessionId: string, generation: number, requestId: string): string {
+  return JSON.stringify([sessionId, generation, requestId]);
+}
+
+function chatSendDeliveryKey(sessionId: string, generation: number, deliveryId: string): string {
+  return JSON.stringify([sessionId, generation, deliveryId]);
+}
+
+function chatSendPairKey(
+  sessionId: string,
+  generation: number,
+  requestId: string,
+  deliveryId: string,
+): string {
+  return JSON.stringify([sessionId, generation, requestId, deliveryId]);
+}
+
+function isTerminalChatRoute(session: DiscoveredProviderSession): boolean {
+  return session.section === "working"
+    && session.messageTransport === "terminal"
+    && session.controlTarget?.kind === "terminal"
+    && (session.provider === "claude_code" || session.provider === "pi");
 }
 
 function pendingChatAction(hook: HookSessionEvent | undefined): ChatPage["pendingAction"] {
@@ -888,6 +1926,17 @@ function hookResponse(
     ...(message.decision === "allow_always" && hook.permissionSuggestions
       ? { updated_permissions: hook.permissionSuggestions } : {}),
   };
+}
+
+function responseIdentity(
+  message: Extract<ClientMessage, { type: "respond_chat" }>,
+): string {
+  return JSON.stringify({
+    decision: message.decision,
+    reason: message.reason ?? "",
+    answers: Object.entries(message.answers ?? {})
+      .sort(([left], [right]) => left.localeCompare(right)),
+  });
 }
 
 function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {

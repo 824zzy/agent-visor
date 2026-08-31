@@ -2,6 +2,36 @@ import XCTest
 @testable import AgentVisorCore
 
 final class NativeHelperWireProtocolTests: XCTestCase {
+    func testNativeHelperLimitsUseTheSharedWireContract() {
+        XCTAssertEqual(NativeHelperWireLimits.maxTerminalTextBytes, 65_536)
+        XCTAssertEqual(NativeHelperWireLimits.maxFramePayloadBytes, 1_048_576)
+        XCTAssertEqual(nativeHelperMaximumTerminalTextBytes, NativeHelperWireLimits.maxTerminalTextBytes)
+        XCTAssertEqual(nativeHelperMaximumPayloadBytes, NativeHelperWireLimits.maxFramePayloadBytes)
+    }
+
+    func testTerminalTextLimitIsMeasuredInUTF8Bytes() throws {
+        let boundary = String(repeating: "😀", count: NativeHelperWireLimits.maxTerminalTextBytes / 4)
+        XCTAssertEqual(boundary.utf8.count, NativeHelperWireLimits.maxTerminalTextBytes)
+        XCTAssertNoThrow(try NativeHelperRequest.decode(terminalRequestData(id: "boundary", text: boundary)))
+
+        XCTAssertThrowsError(try NativeHelperRequest.decode(terminalRequestData(id: "overflow", text: boundary + "x"))) { error in
+            XCTAssertEqual(error as? NativeHelperWireError, .invalidRequest)
+        }
+    }
+
+    private func terminalRequestData(id: String, text: String) throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "version": 1,
+            "id": id,
+            "method": "send_terminal",
+            "params": [
+                "target": ["application": "Ghostty", "pid": 42, "processStartToken": "2026-08-22T08:00:00Z", "tty": "ttys012", "cwd": "/tmp/project"],
+                "text": text,
+                "submit": true,
+            ],
+        ])
+    }
+
     func testDecodesEverySupportedRequest() throws {
         let requests = [
             #"{"version":1,"id":"screens","method":"screen_topology"}"#,
@@ -14,8 +44,10 @@ final class NativeHelperWireProtocolTests: XCTestCase {
             #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","subtitle":"Ready to continue","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","attentionTier":"acknowledged_ready","priority":1,"accessibilityLabel":"Review migration, ready"},{"id":"session-2","title":"Recent migration","phase":"history","priority":2,"accessibilityLabel":"Recent migration, recent session"}],"shortcutModifierFamily":"controlCommand","hotkeyTrigger":"custom","customHotkeyCombo":"49:8","usageGlances":[{"id":"codex","label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage"}]}}"#,
             #"{"version":1,"id":"legacy-pills","method":"present_pills","params":{"pills":[{"id":"legacy","title":"Legacy","phase":"working","priority":2,"accessibilityLabel":"Legacy, in progress"}]}}"#,
             #"{"version":1,"id":"focus","method":"focus","params":{"target":{"pid":42,"bundleIdentifier":"com.mitchellh.ghostty","windowId":7}}}"#,
-            #"{"version":1,"id":"focus-terminal","method":"focus_terminal","params":{"target":{"application":"Ghostty","tty":"ttys012","cwd":"/tmp/project"}}}"#,
-            #"{"version":1,"id":"send-terminal","method":"send_terminal","params":{"target":{"application":"Ghostty","tty":"/dev/ttys012","cwd":"/tmp/project"},"text":"Continue","submit":true}}"#,
+            #"{"version":1,"id":"focus-terminal","method":"focus_terminal","params":{"target":{"application":"Ghostty","pid":42,"processStartToken":"2026-08-22T08:00:00Z","tty":"ttys012","cwd":"/tmp/project"}}}"#,
+            #"{"version":1,"id":"send-terminal","method":"send_terminal","params":{"target":{"application":"Ghostty","pid":42,"processStartToken":"2026-08-22T08:00:00Z","tty":"/dev/ttys012","cwd":"/tmp/project"},"text":"Continue","submit":true}}"#,
+            #"{"version":1,"id":"cancel-terminal","method":"cancel_terminal","params":{"target":{"application":"Ghostty","pid":42,"processStartToken":"2026-08-22T08:00:00Z","tty":"/dev/ttys012","cwd":"/tmp/project"}}}"#,
+            #"{"version":1,"id":"cycle-permission","method":"cycle_permission_mode","params":{"target":{"application":"Ghostty","pid":42,"processStartToken":"2026-08-22T08:00:00Z","tty":"/dev/ttys012","cwd":"/tmp/project"}}}"#,
         ]
 
         XCTAssertEqual(
@@ -23,7 +55,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
             [
                 "screens", "access", "notifications", "request-notifications",
                 "request-access", "open-access", "pi-restoration",
-                "pills", "legacy-pills", "focus", "focus-terminal", "send-terminal",
+                "pills", "legacy-pills", "focus", "focus-terminal", "send-terminal", "cancel-terminal", "cycle-permission",
             ]
         )
     }
@@ -121,6 +153,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         assertInvalid(#"{"version":1,"id":"bad","method":"focus","params":{"target":{"pid":0,"bundleIdentifier":""}}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"focus","params":{"target":{"pid":42,"bundleIdentifier":"app","provider":"Pi"}}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"focus_terminal","params":{"target":{"application":"Ghostty","tty":"/dev/null","cwd":"/"}}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"cancel_terminal","params":{"target":{"application":"Ghostty","pid":42,"tty":"ttys012","cwd":"/","extra":true}}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[{"id":"1","title":"A","subtitle":"Ready","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"A","provider":"Pi"}],"usageGlances":[]}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[{"id":"1","title":"A","phase":"ready","priority":1,"accessibilityLabel":"A","inspector":{"status":"Ready","runtimeItems":["Pi"],"detailRows":[],"projectPath":"/tmp","activityAt":"2026-08-22T21:02:18.000Z","provider":"Pi"}}]}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[],"usageGlances":[{"id":"codex","label":"5h 0%","detail":"Codex usage","tone":"critical","priority":100,"accessibilityLabel":"Codex usage","windows":[{"title":"5 hour limit","remainingPercent":101}]}]}}"#)

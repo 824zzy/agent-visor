@@ -20,4 +20,16 @@ public enum PiTtyBackfillPolicy {
         guard agentID == .pi, let pid, pid > 0 else { return false }
         return (tty ?? "").isEmpty
     }
+
+    /// Normalize the result of the bounded live `ps` probe. A non-zero exit,
+    /// timeout, empty output, or malformed TTY is intentionally indistinguish-
+    /// able from no evidence: callers must fail closed rather than reuse a
+    /// cached or guessed terminal target.
+    public static func tty(
+        from output: String?,
+        succeeded: Bool
+    ) -> String? {
+        guard succeeded, let output else { return nil }
+        return TTYNormalizer.normalize(output)
+    }
 }

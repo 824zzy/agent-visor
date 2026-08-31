@@ -7,6 +7,8 @@ if (!argument) throw new Error("The Electron renderer did not receive its daemon
 contextBridge.exposeInMainWorld("agentVisor", Object.freeze({
   daemonUrl: argument.slice(prefix.length),
   openOwner: (owner: string) => ipcRenderer.send("session:open-owner", owner),
+  openExternal: (url: string) => ipcRenderer.invoke("chat:open-external", url),
+  readImageFile: (url: string) => ipcRenderer.invoke("chat:read-image-file", url),
   onNavigate: (listener: (action: unknown) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, value: unknown) => {
       if (typeof value !== "object" || value === null) return;

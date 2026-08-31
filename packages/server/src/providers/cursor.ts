@@ -2,7 +2,9 @@ import type { NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import path from "node:path";
 import type { DiscoveredProviderSession, ProviderAdapter } from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
-import { iso, isRecord, ownerForProcess, terminalTargetForProcess } from "./shared.js";
+import {
+  iso, isRecord, ownerForProcess, processInstanceToken, terminalTargetForProcess,
+} from "./shared.js";
 
 type CursorTranscript = {
   id: string;
@@ -45,7 +47,15 @@ export class CursorProvider implements ProviderAdapter {
         ownerForProcess(process.pid, processes),
         "history",
         this.titleCache,
-        terminalTargetForProcess(process, transcript.cwd, processes),
+        terminalTargetForProcess(
+          process,
+          transcript.cwd,
+          processes,
+          processInstanceToken(
+            process.pid,
+            await this.environment.processStartedAt(process.pid),
+          ),
+        ),
       ));
     }
 
