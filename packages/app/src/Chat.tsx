@@ -32,6 +32,7 @@ import {
 } from "./chat-presentation";
 import {
   chatToolPresentation,
+  chatLocalReference,
   parseChatRichText,
   presentChatMath,
   safeChatLink,
@@ -134,7 +135,8 @@ export function Chat({
 }) {
   const chat = useChat(session.id, session.section);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const styles = useMemo(() => createStyles(palette, contentScale), [contentScale, palette]);
+  const chatSurface = useMemo(() => createChatPalette(palette), [palette]);
+  const styles = useMemo(() => createStyles(chatSurface, contentScale), [chatSurface, contentScale]);
   const canonicalItems = chat.page?.items ?? [];
   const canonicalItemCount = useRef(canonicalItems.length);
   canonicalItemCount.current = canonicalItems.length;
@@ -670,7 +672,6 @@ export function Chat({
             onRequestSlashCommands={chat.loadSlashCommands}
           onSend={sendChat}
           recoveryCommand={chat.recoveryCommand}
-          readOnlyReason={chat.page.capabilities.readOnlyReason}
           sessionId={session.id}
           slashCommands={chat.slashCommands}
           slashCommandsError={chat.slashCommandsError}
@@ -828,7 +829,6 @@ function Message({ item, styles }: { item: ChatItem; styles: ChatStyles }) {
       nativeID={messageNativeID(item.id)}
       style={styles.assistant}
     >
-      <View style={styles.assistantDot} />
       <RichMessageText styles={styles} text={item.text} />
     </View>
   );
@@ -943,7 +943,9 @@ function RichInlineText({
   styles: ChatStyles;
   tone: "body" | "thinking";
 }) {
-  return parts.map((part, index) => {
+  return (
+    <Text selectable style={[styles.inlineFlow, tone === "thinking" && styles.thinkingText]}>
+      {parts.map((part, index) => {
     if (part.kind === "strong") return <Text key={index} style={styles.bold}>{part.text}</Text>;
     if (part.kind === "emphasis") return <Text key={index} style={styles.emphasis}>{part.text}</Text>;
     if (part.kind === "strike") return <Text key={index} style={styles.strike}>{part.text}</Text>;
@@ -963,8 +965,23 @@ function RichInlineText({
         </Text>
       ) : <Text key={index}>{part.text}</Text>;
     }
+    if (part.kind === "local-reference") {
+      const reference = chatLocalReference(part.href, part.text);
+      if (!reference) return <Text key={index}>{part.text}</Text>;
+      return (
+        <LocalReference
+          key={index}
+          label={reference.label}
+          path={reference.path}
+          styles={styles}
+          textStyle={styles.localReference}
+        />
+      );
+    }
     return <Text key={index} style={tone === "thinking" ? styles.thinkingText : undefined}>{part.text}</Text>;
-  });
+      })}
+    </Text>
+  );
 }
 
 function Tool({ item, styles }: { item: Extract<ChatItem, { kind: "tool" }>; styles: ChatStyles }) {
@@ -998,7 +1015,7 @@ function ToolDetail({
     return (
       <View accessibilityLabel="Plan" style={styles.planCard}>
         <Text style={styles.planTitle}>{presentation.title}</Text>
-        {presentation.filePath ? <Text selectable style={styles.planPath}>{presentation.filePath}</Text> : null}
+        {presentation.filePath ? <LocalPath path={presentation.filePath} styles={styles} textStyle="planPath" /> : null}
         {presentation.text ? <RichMessageText styles={styles} text={presentation.text} /> : <Text style={styles.muted}>No plan content available.</Text>}
       </View>
     );
@@ -1006,7 +1023,7 @@ function ToolDetail({
   if (presentation.kind === "edit") {
     return (
       <View accessibilityLabel="Edit hunk" style={styles.editCard}>
-        {presentation.filePath ? <Text selectable style={styles.editPath}>{presentation.filePath}</Text> : null}
+        {presentation.filePath ? <LocalPath path={presentation.filePath} styles={styles} textStyle="editPath" /> : null}
         {presentation.oldText ? <Text selectable style={styles.diffRemoved}>{`- ${presentation.oldText}`}</Text> : null}
         {presentation.newText ? <Text selectable style={styles.diffAdded}>{`+ ${presentation.newText}`}</Text> : null}
       </View>
@@ -1020,6 +1037,56 @@ function ToolDetail({
       ) : null}
     </View>
   );
+}
+
+function LocalPath({
+  path,
+  styles,
+  textStyle,
+}: {
+  path: string;
+  styles: ChatStyles;
+  textStyle: "planPath" | "editPath";
+}) {
+  const reference = chatLocalReference(path);
+  if (!reference) return <Text selectable style={styles[textStyle]}>{path}</Text>;
+  return (
+    <LocalReference
+      label={reference.label}
+      path={reference.path}
+      styles={styles}
+      textStyle={styles[textStyle]}
+    />
+  );
+}
+
+function LocalReference({
+  label,
+  path,
+  styles,
+  textStyle,
+}: {
+  label: string;
+  path: string;
+  styles: ChatStyles;
+  textStyle: TextStyle;
+}) {
+  const [revealed, setRevealed] = useState(false);
+  const toggle = () => setRevealed((value) => !value);
+  return createElement(Text, {
+    accessibilityHint: revealed ? "Press to hide the full local path." : "Press to reveal the full local path; the revealed text can be copied.",
+    accessibilityLabel: "Local file reference: " + path,
+    accessibilityRole: "button",
+    accessibilityState: { expanded: revealed },
+    onKeyDown: (event: { key: string; preventDefault(): void }) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      toggle();
+    },
+    onPress: toggle,
+    selectable: true,
+    style: [textStyle, revealed && styles.localReferenceFull],
+  } as never, revealed ? path : label);
 }
 
 function SystemMessage({
@@ -1044,7 +1111,7 @@ function SystemMessage({
     return <Text selectable style={[styles.system, styles.localCommand]}>⎿ {item.text}</Text>;
   }
   if (item.category === "turn_duration") {
-    return <Text selectable style={styles.system}>✻ {item.text}</Text>;
+    return <Text selectable style={styles.duration}>✻ {item.text}</Text>;
   }
   return <Text selectable style={[styles.system, item.tone === "error" && styles.errorText]}>{item.text}</Text>;
 }
@@ -1328,7 +1395,6 @@ export function Composer({
   onRequestSlashCommands,
   onSend,
   recoveryCommand,
-  readOnlyReason,
   sessionId,
   slashCommands,
   slashCommandsError,
@@ -1343,7 +1409,6 @@ export function Composer({
   onRequestSlashCommands(): void;
   onSend(text: string, images: ChatImage[]): boolean | void;
   recoveryCommand?: ComposerRecoveryCommand;
-  readOnlyReason?: string;
   sessionId: string;
   slashCommands?: ChatSlashCommand[];
   slashCommandsError?: string;
@@ -1651,13 +1716,7 @@ export function Composer({
   };
 
   if (!canSendText && !canSendImages) {
-    return (
-      <View onLayout={onResize} style={styles.composerSurface}>
-        <View accessibilityLabel="Chat composer rail" style={styles.composerRail}>
-          <Text style={styles.readOnlyBanner}>{readOnlyReason ?? "Chat history is read only."}</Text>
-        </View>
-      </View>
-    );
+    return null;
   }
 
   return (
@@ -1830,7 +1889,15 @@ function ChatStatusBar({
       ) : null}
       <Text numberOfLines={1} style={styles.statusProject}>{summary.project}</Text>
       <Text accessibilityLabel={`Chat source: ${summary.source}; path: ${summary.path}`} numberOfLines={1} style={styles.statusPath}>{summary.source} · {summary.path}</Text>
-      {summary.readOnly ? <Text accessibilityLabel={summary.readOnlyReason ?? "Read only"} style={styles.readOnly}>Read only</Text> : null}
+      {summary.readOnly ? (
+        <Text
+          accessibilityLabel={summary.readOnlyReason ?? "Read only"}
+          selectable
+          style={styles.readOnly}
+        >
+          Read only{summary.readOnlyReason ? ` · ${summary.readOnlyReason}` : ""}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -1906,6 +1973,34 @@ function sectionColor(section: SessionSummary["section"], palette: Palette): str
   return { needs_you: palette.attention, ready: palette.ready, working: palette.working, history: palette.history }[section];
 }
 
+// Chat uses a calm reading surface while Sessions keeps the shared palette.
+// Semantic accents remain provider/status colors so state and links retain
+// their existing meaning in both appearances.
+function createChatPalette(palette: Palette): Palette {
+  const isDark = hexLuminance(palette.background) < 0.2;
+  return {
+    ...palette,
+    background: isDark ? "#202124" : "#ffffff",
+    border: isDark ? "#3b3d43" : "#e7e7e3",
+    card: isDark ? "#2b2d31" : "#f7f7f5",
+    settingsCard: isDark ? "#2b2d31" : "#f7f7f5",
+    foreground: isDark ? "#ecece8" : "#2d2d2b",
+    muted: isDark ? "#b7b7b1" : "#6c6c68",
+    tertiary: isDark ? "#92928d" : "#70706b",
+    accentWash: isDark ? "#ffffff10" : "#00000008",
+  };
+}
+
+function hexLuminance(value: string): number {
+  const match = /^#([0-9a-f]{6})$/i.exec(value);
+  if (!match) return 1;
+  const channels = [0, 2, 4].map((start) => Number.parseInt(match[1]!.slice(start, start + 2), 16) / 255);
+  const linear = channels.map((channel) => channel <= 0.03928
+    ? channel / 12.92
+    : ((channel + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!;
+}
+
 type ChatStyles = ReturnType<typeof createStyles>;
 function createStyles(palette: Palette, scale: number) {
   const font = (size: number) => size * scale;
@@ -1924,7 +2019,7 @@ function createStyles(palette: Palette, scale: number) {
     detailsRail: { ...contentRailStyle(), alignItems: "flex-end", paddingTop: 8 },
     details: { backgroundColor: palette.card, borderColor: palette.border, borderRadius: 10, borderWidth: 1, gap: 5, maxWidth: 420, padding: 12 },
     scroller: { flex: 1 },
-    timeline: { paddingBottom: 20, paddingHorizontal: CONTENT_RAIL_INSET, paddingTop: 12, width: "100%" },
+    timeline: { paddingBottom: 28, paddingHorizontal: CONTENT_RAIL_INSET, paddingTop: 16, width: "100%" },
     // Keep update announcements in the accessibility tree without adding a
     // visible row or participating in the FlatList layout.
     timelineUpdate: { height: 1, opacity: 0, overflow: "hidden", position: "absolute", width: 1 },
@@ -1935,33 +2030,36 @@ function createStyles(palette: Palette, scale: number) {
     historyLimitText: { color: palette.tertiary, fontSize: font(11), textAlign: "center" },
     // Each grouped turn is split into bounded FlatList cells. These styles
     // retain the visual turn spacing without mounting a whole turn at once.
-    turnPrompt: { paddingTop: 8 },
-    turnAnswer: { paddingTop: 8 },
-    work: { paddingTop: 8 },
-    workItem: { paddingTop: 7 },
+    turnPrompt: { paddingTop: 10 },
+    turnAnswer: { paddingTop: 10 },
+    work: { paddingTop: 7 },
+    workItem: { paddingTop: 6 },
     workHeader: { alignSelf: "flex-start", minHeight: 30, paddingVertical: 6 },
     workLabel: { color: palette.tertiary, fontSize: font(11), fontWeight: "600" },
     userRow: { alignItems: "flex-end", paddingLeft: 60 },
-    userBubble: { backgroundColor: palette.card, borderRadius: 18, gap: 8, maxWidth: "82%", minWidth: 0, paddingHorizontal: 14, paddingVertical: 10 },
-    assistant: { alignItems: "flex-start", flexDirection: "row", gap: 8 },
-    assistantDot: { backgroundColor: palette.accent, borderRadius: 3, height: 6, marginTop: 7, width: 6 },
-    messageText: { flex: 1, gap: 8, maxWidth: "100%", minWidth: 0 },
-    body: { color: palette.foreground, flexShrink: 1, fontSize: font(13), lineHeight: font(19), maxWidth: "100%", minWidth: 0 },
+    userBubble: { backgroundColor: palette.foreground + "12", borderRadius: 15, gap: 8, maxWidth: "82%", minWidth: 0, paddingHorizontal: 14, paddingVertical: 10 },
+    assistant: { alignItems: "flex-start", maxWidth: "100%", minWidth: 0 },
+    messageText: { flex: 1, gap: 16, maxWidth: "100%", minWidth: 0 },
+    inlineFlow: { color: palette.foreground, flex: 1, flexShrink: 1, fontSize: font(14), lineHeight: font(22), maxWidth: "100%", minWidth: 0 },
+    body: { color: palette.foreground, flexShrink: 1, fontSize: font(14), lineHeight: font(22), maxWidth: "100%", minWidth: 0 },
     heading: { fontWeight: "700" },
     emphasis: { fontStyle: "italic" },
     strike: { textDecorationLine: "line-through" },
     chatLink: { color: palette.accent, textDecorationLine: "underline" },
+    localReference: { color: palette.muted, fontFamily: "monospace", fontSize: font(12), textDecorationLine: "underline" },
+    localReferenceFull: { fontSize: font(10) },
     bold: { fontWeight: "700" },
     inlineCode: { backgroundColor: palette.card, fontFamily: "monospace", fontSize: font(12) },
     inlineMath: { backgroundColor: palette.card, fontFamily: "monospace", fontSize: font(12), fontStyle: "italic" },
     blockquote: { borderLeftColor: palette.border, borderLeftWidth: 3, paddingLeft: 10 },
-    list: { gap: 4, paddingLeft: 8 },
-    listItem: { alignItems: "flex-start", flexDirection: "row", gap: 7, maxWidth: "100%", minWidth: 0 },
-    listMarker: { color: palette.accent, fontSize: font(13), minWidth: 18 },
-    thinking: { paddingLeft: 14 },
+    list: { gap: 6, paddingLeft: 2 },
+    listItem: { alignItems: "flex-start", flexDirection: "row", gap: 8, maxWidth: "100%", minWidth: 0 },
+    listMarker: { color: palette.tertiary, fontSize: font(14), lineHeight: font(22), minWidth: 22 },
+    thinking: { paddingLeft: 0 },
     thinkingText: { color: palette.tertiary, fontSize: font(12), fontStyle: "italic", lineHeight: font(18) },
     systemRow: { maxWidth: "100%", width: "100%" },
-    system: { color: palette.tertiary, flexShrink: 1, fontSize: font(11), maxWidth: "100%", textAlign: "center" },
+    system: { color: palette.tertiary, flexShrink: 1, fontSize: font(11), maxWidth: "100%", textAlign: "left" },
+    duration: { color: palette.tertiary, fontSize: font(11), letterSpacing: 0.1, lineHeight: font(16), paddingVertical: 4, textAlign: "left" },
     recap: { fontStyle: "italic" },
     localCommand: { color: palette.accent },
     compactBoundary: { alignItems: "center", gap: 6, width: "100%" },
@@ -1980,13 +2078,13 @@ function createStyles(palette: Palette, scale: number) {
     table: { borderColor: palette.border, borderRadius: 6, borderWidth: 1, maxWidth: "100%", overflow: "hidden" },
     tableRow: { borderBottomColor: palette.border, borderBottomWidth: 1, flexDirection: "row", maxWidth: "100%", minWidth: 0 },
     tableCell: { flex: 1, minWidth: 0, paddingHorizontal: 8, paddingVertical: 6 },
-    tool: { paddingLeft: 14 },
+    tool: { paddingLeft: 0 },
     toolHeader: { alignItems: "center", flexDirection: "row", gap: 7, minHeight: 32 },
     toolStatus: { color: palette.ready, fontSize: font(11), width: 12 },
     toolName: { color: palette.foreground, fontSize: font(12), fontWeight: "600" },
     toolSummary: { color: palette.muted, flex: 1, fontFamily: "monospace", fontSize: font(10) },
     toolChevron: { color: palette.tertiary, fontSize: font(14) },
-    toolDetail: { gap: 7, maxWidth: "100%", minWidth: 0, paddingLeft: 19, paddingTop: 4 },
+    toolDetail: { gap: 7, maxWidth: "100%", minWidth: 0, paddingLeft: 0, paddingTop: 4 },
     toolResult: { color: palette.muted, fontFamily: "monospace", fontSize: font(11), lineHeight: font(16) },
     planCard: { backgroundColor: palette.accentWash, borderColor: palette.accent, borderRadius: 8, borderWidth: 1, gap: 5, maxWidth: "100%", padding: 9 },
     planTitle: { color: palette.accent, fontSize: font(12), fontWeight: "700" },
@@ -2043,10 +2141,9 @@ function createStyles(palette: Palette, scale: number) {
     removeAttachmentText: { color: palette.foreground, fontSize: font(14), lineHeight: font(16) },
     validationErrors: { backgroundColor: `${palette.error}16`, borderColor: `${palette.error}55`, borderRadius: 7, borderWidth: 1, gap: 3, paddingHorizontal: 8, paddingVertical: 5 },
     validationError: { color: palette.error, fontSize: font(11) },
-    readOnlyBanner: { color: palette.muted, fontSize: font(11), paddingVertical: 10, textAlign: "center" },
     centered: { alignItems: "center", flex: 1, justifyContent: "center", minHeight: 200 },
     statusBar: { borderTopColor: palette.border, borderTopWidth: 1, minHeight: 32, paddingHorizontal: CONTENT_RAIL_INSET },
-    statusRail: { ...contentRailStyle(), alignItems: "center", flexDirection: "row", gap: 8, minHeight: 32, minWidth: 0 },
+    statusRail: { ...contentRailStyle(), alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 8, minHeight: 32, minWidth: 0, paddingVertical: 4 },
     statusText: { color: palette.muted, fontSize: font(10), fontWeight: "600" },
     statusEffort: { color: palette.tertiary, fontFamily: "monospace", fontSize: font(10) },
     contextStatus: { alignItems: "center", flexDirection: "row", gap: 4 },
@@ -2059,6 +2156,6 @@ function createStyles(palette: Palette, scale: number) {
     permissionMode: { color: palette.accent, fontFamily: "monospace", fontSize: font(10), fontWeight: "600" },
     statusProject: { color: palette.accent, fontFamily: "monospace", fontSize: font(10), maxWidth: 160 },
     statusPath: { color: palette.tertiary, flex: 1, flexShrink: 1, fontSize: font(10), minWidth: 0 },
-    readOnly: { color: palette.tertiary, fontSize: font(10), fontWeight: "600" },
+    readOnly: { color: palette.tertiary, flexShrink: 1, fontSize: font(10), fontWeight: "600", minWidth: 0 },
   });
 }

@@ -15,6 +15,7 @@ export type ChatRichInline =
   | { kind: "strike"; text: string }
   | { kind: "code"; text: string }
   | { kind: "link"; text: string; href: string }
+  | { kind: "local-reference"; text: string; href: string }
   | { kind: "math"; text: string };
 
 export type ChatRichBlock =
@@ -41,6 +42,9 @@ export type ChatMathPresentation = {
 
 const CHAT_CODE_TOKEN_INPUT_LIMIT = 32_768;
 const CHAT_MATH_INPUT_LIMIT = 4_096;
+// ponytail: keep local-reference parsing bounded; a larger authored path
+// requires a dedicated disclosure/copy surface rather than more inline work.
+const CHAT_LOCAL_REFERENCE_INPUT_LIMIT = 4_096;
 
 export type ChatRichDocument = {
   source: string;
@@ -251,6 +255,31 @@ export function safeChatLink(value: string): string | undefined {
   }
 }
 
+export type ChatLocalReference = {
+  label: string;
+  path: string;
+};
+
+/**
+ * Project an absolute local evidence path into a compact, non-opening label.
+ * The full authored path remains in the path field for accessibility and disclosure.
+ */
+export function chatLocalReference(value: string, authoredLabel?: string): ChatLocalReference | undefined {
+  const path = value.trim();
+  if (!path || path.length > CHAT_LOCAL_REFERENCE_INPUT_LIMIT || /[\0\r\n]/.test(path)) return undefined;
+  const normalized = path.replaceAll("\\", "/");
+  const location = /(?::\d+(?::\d+)?|#L\d+(?:-L\d+)?)$/.exec(normalized);
+  const basePath = location ? normalized.slice(0, location.index) : normalized;
+  const absolute = (basePath.startsWith("/") && !basePath.startsWith("//"))
+    || /^[A-Za-z]:\//.test(basePath);
+  if (!absolute || basePath.endsWith("/") || basePath.endsWith("/.") || basePath.endsWith("/..")) return undefined;
+  const basename = basePath.slice(basePath.lastIndexOf("/") + 1);
+  if (!basename || basename === "." || basename === "..") return undefined;
+  const suffix = location ? normalized.slice(location.index) : "";
+  const label = authoredLabel?.trim() ? stripInlineMarkers(authoredLabel).trim() : basename + suffix;
+  return { label: label || basename + suffix, path };
+}
+
 /**
  * Tokenize the common fenced languages without changing the source text.
  * Unknown languages and oversized input intentionally fall back to one
@@ -453,11 +482,21 @@ function parseLink(source: string, start: number): { inline: ChatRichInline; nex
   if (closeLabel < 0) return undefined;
   const closeURL = source.indexOf(")", closeLabel + 2);
   if (closeURL < 0) return undefined;
-  const href = safeChatLink(source.slice(closeLabel + 2, closeURL));
-  if (!href) return undefined;
   const label = source.slice(start + 1, closeLabel);
   if (!label) return undefined;
-  return { inline: { kind: "link", text: stripInlineMarkers(label), href }, nextIndex: closeURL + 1 };
+  const authoredHref = source.slice(closeLabel + 2, closeURL);
+  const href = safeChatLink(authoredHref);
+  if (href) {
+    return { inline: { kind: "link", text: stripInlineMarkers(label), href }, nextIndex: closeURL + 1 };
+  }
+  const localReference = chatLocalReference(authoredHref, label);
+  if (localReference) {
+    return {
+      inline: { kind: "local-reference", text: localReference.label, href: localReference.path },
+      nextIndex: closeURL + 1,
+    };
+  }
+  return undefined;
 }
 
 function findMathEnd(source: string, start: number): { openLength: number; closeLength: number; end: number } | undefined {

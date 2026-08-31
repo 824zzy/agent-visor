@@ -711,6 +711,39 @@ exact provider responses. Phase 8 covers truthful read-only/ended controls,
 focus order, labels and live announcements, light/dark theme, scaling, and
 overflow-safe rail geometry.
 
+## Focused Chat visual polish evidence
+
+Approved direction for the 2026-08-30 Chat-only pass: keep Sessions' existing
+palette unchanged while giving Chat a neutral white/light or neutral dark
+reading canvas, a soft gray user prompt bubble, readable 14 px/22 px prose,
+left-aligned subdued durations, and no decorative assistant status dot. The
+existing 980 px rail and 28 px inset, provider/status accents, Swift behavior,
+security rules, and all send/cancel/draft/scroll semantics remain in scope;
+these are proposed defaults, not pixel measurements of another product.
+
+The focused fixture evidence is kept outside the repository in
+`.scratch/agent-visor-chat-polish.uqx1lx/`: `screenshots-before/` contains the
+installed-renderer baseline, while `screenshots-final/` contains the worktree
+light wide, light narrow, light 250% scaled, dark wide, and read-only captures.
+The same fixture exercises a compact local evidence reference with keyboard
+reveal and selectable full path, plus one visible read-only reason in the
+status footer. The renderer check now measures the actual mixed-list item and
+table cell at wide and narrow widths, including body font/line-height
+inheritance and no horizontal overflow. The isolated worktree fixture passed
+the painted 250% scale and keyboard probes. The full Chat E2E remains
+unresolved: the worktree invocation stopped at the local-send tail-pin check
+(`scrollTop=0`, `distanceFromBottom=13024`, `scrollHeight=13586`,
+`clientHeight=562`) before reaching mixed-flow, while a byte-for-byte baseline
+run using the installed renderer and preload stopped earlier at near-tail
+insertion (`scrollTop=10288`, `distanceFromBottom=564`, `scrollHeight=11414`,
+`clientHeight=562`). These outcomes are recorded as open E2E failures, not
+classified as pre-existing or timing-only.
+
+Old coverage gap closed by this pass: the previous DOM probe could select the
+whole answer instead of a table cell and had no narrow/scaled mixed Markdown
+geometry assertion, so a flex-column regression could remain hidden. The
+updated probe selects the real row/cell and waits for a painted 250% frame.
+
 ## Phase 9 final gate evidence
 
 Final evidence from the exact 2026-08-29 gate:

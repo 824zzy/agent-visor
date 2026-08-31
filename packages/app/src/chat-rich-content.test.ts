@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatItem } from "@agent-visor/protocol";
 import {
   chatToolPresentation,
+  chatLocalReference,
   parseChatRichInline,
   parseChatRichText,
   presentChatMath,
@@ -31,18 +32,22 @@ describe("Chat rich content", () => {
   });
 
   it("parses safe inline links, emphasis, code, and inline math", () => {
-    expect(parseChatRichInline("See [docs](https://example.com/docs), *now*, `x`, and $a+b$."))
+    const source = "See [docs](https://example.com/docs), [mail](mailto:team@example.com), *now*, `x`, and $a+b$.";
+    expect(parseChatRichInline(source))
       .toEqual([
         { kind: "text", text: "See " },
         { kind: "link", text: "docs", href: "https://example.com/docs" },
+        { kind: "text", text: ", " },
+        { kind: "link", text: "mail", href: "mailto:team@example.com" },
         { kind: "text", text: ", " },
         { kind: "emphasis", text: "now" },
         { kind: "text", text: ", " },
         { kind: "code", text: "x" },
         { kind: "text", text: ", and " },
         { kind: "math", text: "a+b" },
-      { kind: "text", text: "." },
-    ]);
+        { kind: "text", text: "." },
+      ]);
+    expect(parseChatRichText(source).source).toBe(source);
     expect(parseChatRichInline("Inspecting ```text\nfiles\n```"))
       .toEqual([{ kind: "text", text: "Inspecting " }, { kind: "code", text: "files\n" }]);
     expect(parseChatRichText("Inspecting ```text\nfiles\n```").blocks)
@@ -52,6 +57,8 @@ describe("Chat rich content", () => {
       ] }]);
     expect(safeChatLink("javascript:alert(1)")).toBeUndefined();
     expect(safeChatLink("file:///tmp/private.txt")).toBeUndefined();
+    expect(safeChatLink("data:text/plain,private")).toBeUndefined();
+    expect(safeChatLink("mailto:team@example.com")).toBe("mailto:team@example.com");
     expect(safeChatLink("https://example.com/docs")).toBe("https://example.com/docs");
   });
 
@@ -67,6 +74,28 @@ describe("Chat rich content", () => {
     }]);
     expect(parseChatRichInline("[bad](javascript:alert(1))")).toEqual([
       { kind: "text", text: "[bad](javascript:alert(1))" },
+    ]);
+    expect(parseChatRichInline("[relative](src/private.md)")).toEqual([
+      { kind: "text", text: "[relative](src/private.md)" },
+    ]);
+  });
+
+  it("presents absolute local evidence paths with compact labels and full-path identity", () => {
+    const path = "/Users/zhengyuanz/Codes/.scratch/service-investigation-20260830/investigation.md:27";
+    expect(chatLocalReference(path, "Request evidence")).toEqual({
+      label: "Request evidence",
+      path,
+    });
+    expect(chatLocalReference(path)).toEqual({
+      label: "investigation.md:27",
+      path,
+    });
+    expect(parseChatRichInline(`[Request evidence](${path})`)).toEqual([
+      { kind: "local-reference", text: "Request evidence", href: path },
+    ]);
+    expect(chatLocalReference("javascript:alert(1)")).toBeUndefined();
+    expect(parseChatRichInline(`[bad](${path}`)).toEqual([
+      { kind: "text", text: `[bad](${path}` },
     ]);
   });
 

@@ -471,7 +471,7 @@ async function run() {
           ] },
           { id: "thinking-1", kind: "thinking", text: "Inspecting ```text\nfiles\n```" },
           { id: "tool-1", kind: "tool", name: "Bash", input: { command: "npm test" }, status: "success", result: "45 passed" },
-          { id: "answer-1", kind: "assistant", text: "**Done**\n\n[Open the docs](https://example.com/docs)\n\n~~old~~ *new* and $x^2$\n\n| Check | Result |\n| --- | --- |\n| Tests | **passed** |\n\n```text\nAll checks passed\n```" },
+          { id: "answer-1", kind: "assistant", text: "**Done**\n\n[Open the docs](https://example.com/docs)\n\n1. **Your request reached an old API pod** (`8821978`) because [Request evidence](/Users/zhengyuanz/Codes/.scratch/service-investigation-20260830/investigation.md:27)\n2. **The replacement API pod** loaded the corrected configuration.\n\n~~old~~ *new* and $x^2$\n\n| Check | Result |\n| --- | --- |\n| Tests | **all 45 tests passed** (`packages/server`) |\n\n```text\nAll checks passed\n```" },
         ],
         hasMoreBefore: true,
         nextBefore: 100,
@@ -1493,6 +1493,96 @@ async function run() {
         && document.body.textContent.includes('new')`),
       "rich Chat content preserves code language, links, tables, formulas, and emphasis",
     );
+    await waitForMixedFlowLayout(window);
+    const mixedFlowProbe = await measureMixedFlow(window);
+    assert(
+      mixedFlowIsContinuous(mixedFlowProbe)
+        && mixedFlowProbe.tableCellHeight < 70,
+      "mixed Markdown fragments flow as readable list/table text (" + JSON.stringify(mixedFlowProbe) + ")",
+    );
+    assert(
+      Math.abs(mixedFlowProbe.markerLineHeight - mixedFlowProbe.phraseLineHeight) <= 0.5
+        && Math.abs(mixedFlowProbe.phraseFontSize - 14) <= 0.5,
+      "mixed list fragments inherit the body type scale and line height (" + JSON.stringify(mixedFlowProbe) + ")",
+    );
+    await window.setSize(1_440, 760);
+    await waitFor(window, `window.innerWidth >= 1_300`);
+    await waitForMixedFlowLayout(window);
+    const wideMixedFlow = await measureMixedFlow(window);
+    assert(
+      mixedFlowIsContinuous(wideMixedFlow)
+        && wideMixedFlow.tableCellHeight < 70,
+      "wide Chat keeps mixed list/table content in one readable flow (" + JSON.stringify(wideMixedFlow) + ")",
+    );
+    await window.setSize(960, 760);
+    await waitFor(window, `window.innerWidth <= 1_000`);
+    await waitForMixedFlowLayout(window);
+    const narrowMixedFlow = await measureMixedFlow(window);
+    assert(
+      mixedFlowIsContinuous(narrowMixedFlow)
+        && narrowMixedFlow.tableCellHeight < 90,
+      "narrow Chat keeps mixed list/table content within the rail (" + JSON.stringify(narrowMixedFlow) + ")",
+    );
+    await window.setSize(1_040, 760);
+    await waitFor(window, `window.innerWidth >= 1_000 && window.innerWidth <= 1_100`);
+    await waitForMixedFlowLayout(window);
+    const localReferencePath = "/Users/zhengyuanz/Codes/.scratch/service-investigation-20260830/investigation.md:27";
+    const localReferenceSelector = "[aria-label=\"Local file reference: " + localReferencePath + "\"]";
+    const localReferenceProbe = await window.webContents.executeJavaScript([
+      "(() => {",
+      "  const element = document.querySelector(" + JSON.stringify(localReferenceSelector) + ");",
+      "  return {",
+      "    label: element?.getAttribute('aria-label') ?? '',",
+      "    role: element?.getAttribute('role') ?? '',",
+      "    tabIndex: element?.getAttribute('tabindex') ?? '',",
+      "    expanded: element?.getAttribute('aria-expanded') ?? '',",
+      "    userSelect: element ? getComputedStyle(element).userSelect : '',",
+      "    text: element?.textContent ?? '',",
+      "  };",
+      "})()",
+    ].join("\n"));
+    assert(
+      localReferenceProbe.label === "Local file reference: " + localReferencePath
+        && localReferenceProbe.role === "button"
+        && localReferenceProbe.tabIndex === "0"
+        && localReferenceProbe.expanded === "false"
+        && localReferenceProbe.userSelect !== "none"
+        && localReferenceProbe.text === "Request evidence",
+      "local evidence uses a compact, keyboard-operable label with full-path identity (" + JSON.stringify(localReferenceProbe) + ")",
+    );
+    const localReferenceEnter = await window.webContents.executeJavaScript([
+      "(() => {",
+      "  const element = document.querySelector(" + JSON.stringify(localReferenceSelector) + ");",
+      "  if (!element) return { defaultPrevented: false };",
+      "  element.focus();",
+      "  const down = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });",
+      "  const up = new KeyboardEvent('keyup', { key: 'Enter', bubbles: true, cancelable: true });",
+      "  element.dispatchEvent(down);",
+      "  element.dispatchEvent(up);",
+      "  return { defaultPrevented: down.defaultPrevented, focused: document.activeElement === element };",
+      "})()",
+    ].join("\n"));
+    await waitFor(window,
+      "document.querySelector(" + JSON.stringify(localReferenceSelector) + ")?.textContent === " + JSON.stringify(localReferencePath),
+    );
+    assert(localReferenceEnter.defaultPrevented && localReferenceEnter.focused,
+      "Enter reveals the selectable full local evidence path");
+    const localReferenceSpace = await window.webContents.executeJavaScript([
+      "(() => {",
+      "  const element = document.querySelector(" + JSON.stringify(localReferenceSelector) + ");",
+      "  if (!element) return { defaultPrevented: false };",
+      "  const down = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });",
+      "  const up = new KeyboardEvent('keyup', { key: ' ', bubbles: true, cancelable: true });",
+      "  element.dispatchEvent(down);",
+      "  element.dispatchEvent(up);",
+      "  return { defaultPrevented: down.defaultPrevented };",
+      "})()",
+    ].join("\n"));
+    await waitFor(window,
+      "document.querySelector(" + JSON.stringify(localReferenceSelector) + ")?.textContent === " + JSON.stringify("Request evidence"),
+    );
+    assert(localReferenceSpace.defaultPrevented,
+      "Space hides the full local evidence path without opening a file URL");
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Link: Open the docs"]')?.click()`);
     await waitUntil(() => externalURLs.includes("https://example.com/docs"));
     assert(await window.webContents.executeJavaScript(`Boolean(document.querySelector('[aria-label="Back to Sessions"]'))
@@ -1899,6 +1989,99 @@ async function measureRails(window, includeAction = false) {
       }
     }
   })()`);
+}
+
+async function measureMixedFlow(window) {
+  return window.webContents.executeJavaScript(`(() => {
+    const answer = document.querySelector('#chat-item-answer-1');
+    const phraseText = 'Your request reached an old API pod';
+    const listItem = [...(answer?.querySelectorAll('div') ?? [])].find((element) => {
+      const marker = [...element.children].find((child) => child.textContent?.trim() === '1.');
+      const hasPhrase = [...element.children].some((child) => child.textContent?.includes(phraseText));
+      return Boolean(marker && hasPhrase);
+    });
+    const phrase = [...(listItem?.querySelectorAll('*') ?? [])].find((element) =>
+      element.textContent?.trim() === phraseText);
+    const marker = [...(listItem?.children ?? [])].find((element) =>
+      element.textContent?.trim() === '1.');
+    const table = answer?.querySelector('[aria-label="Markdown table"]');
+    // A table's own container also contains the whole answer text. Restrict
+    // the measurement to the direct row -> cell hierarchy.
+    const tableRows = [...(table?.children ?? [])];
+    const tableCells = tableRows.flatMap((row) => [...row.children]);
+    const tableCell = tableCells.find((element) =>
+      element.textContent?.includes('all 45 tests passed'));
+    const listItemRect = listItem?.getBoundingClientRect();
+    const markerRect = marker?.getBoundingClientRect();
+    const phraseRect = phrase?.getBoundingClientRect();
+    const phraseParentRect = phrase?.parentElement?.getBoundingClientRect();
+    const tableRect = tableCell?.getBoundingClientRect();
+    const tableContainerRect = table?.getBoundingClientRect();
+    const phraseStyle = phrase ? getComputedStyle(phrase) : undefined;
+    const markerStyle = marker ? getComputedStyle(marker) : undefined;
+    return {
+      listItemDisplay: listItem ? getComputedStyle(listItem).display : '',
+      listItemWidth: listItemRect?.width ?? 0,
+      listItemHeight: listItemRect?.height ?? 0,
+      markerRight: markerRect?.right ?? 0,
+      markerWidth: markerRect?.width ?? 0,
+      phraseWidth: phraseRect?.width ?? 0,
+      phraseHeight: phraseRect?.height ?? 0,
+      phraseLeft: phraseRect?.left ?? 0,
+      phraseRight: phraseRect?.right ?? 0,
+      phraseParentDisplay: phrase?.parentElement ? getComputedStyle(phrase.parentElement).display : '',
+      phraseParentWidth: phraseParentRect?.width ?? 0,
+      phraseParentRight: phraseParentRect?.right ?? 0,
+      phraseLineHeight: phraseStyle ? Number.parseFloat(phraseStyle.lineHeight) || Number.parseFloat(phraseStyle.fontSize) * 1.2 : 0,
+      phraseFontSize: phraseStyle ? Number.parseFloat(phraseStyle.fontSize) || 0 : 0,
+      markerLineHeight: markerStyle ? Number.parseFloat(markerStyle.lineHeight) || Number.parseFloat(markerStyle.fontSize) * 1.2 : 0,
+      tableRows: tableRows.length,
+      tableCellDirectRow: Boolean(tableCell?.parentElement?.parentElement === table),
+      tableCellWidth: tableRect?.width ?? 0,
+      tableCellHeight: tableRect?.height ?? 0,
+      tableWidth: tableContainerRect?.width ?? 0,
+      tableCellRight: tableRect?.right ?? 0,
+      tableRight: tableContainerRect?.right ?? 0,
+    };
+  })()`);
+}
+
+function mixedFlowIsContinuous(metrics) {
+  return metrics.listItemDisplay === "flex"
+    && metrics.phraseParentDisplay !== "flex"
+    && metrics.phraseWidth > 0
+    && metrics.phraseHeight <= metrics.phraseLineHeight * 1.5
+    && metrics.listItemWidth > metrics.phraseWidth
+    && metrics.phraseLeft >= metrics.markerRight - 0.5
+    && metrics.phraseRight <= metrics.phraseParentRight + 0.5
+    && metrics.phraseParentWidth >= metrics.listItemWidth - metrics.markerWidth - 12
+    && metrics.tableRows >= 2
+    && metrics.tableCellDirectRow
+    && metrics.tableCellWidth > 0
+    && metrics.tableCellHeight > 0
+    && metrics.tableCellRight <= metrics.tableRight + 0.5;
+}
+
+async function waitForMixedFlowLayout(window) {
+  await waitFor(window, `(() => {
+    const answer = document.querySelector('#chat-item-answer-1');
+    const listItem = [...(answer?.querySelectorAll('div') ?? [])].find((element) =>
+      [...element.children].some((child) => child.textContent?.trim() === '1.'));
+    const table = answer?.querySelector('[aria-label="Markdown table"]');
+    const tableCell = [...(table?.children ?? [])]
+      .flatMap((row) => [...row.children])
+      .find((element) => element.textContent?.includes('all 45 tests passed'));
+    if (!answer || !listItem || !tableCell) return false;
+    const listRect = listItem.getBoundingClientRect();
+    const cellRect = tableCell.getBoundingClientRect();
+    return listRect.width > 0 && listRect.height > 0
+      && cellRect.width > 0 && cellRect.height > 0
+      && listRect.right <= window.innerWidth + 1
+      && cellRect.right <= window.innerWidth + 1;
+  })()`);
+  await window.webContents.executeJavaScript(`new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  })`);
 }
 
 async function measureDetails(window) {
