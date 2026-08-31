@@ -757,11 +757,23 @@ async function run() {
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Back to Sessions"]')?.click()`);
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Open Chat for Codex Usage Chat"]'))`);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Open Chat for Codex Usage Chat"]')?.click()`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Chat Details"]'))`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Chat Details"]')?.click()`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Chat technical details"]'))`);
     await waitFor(window, `Boolean(document.querySelector('[aria-label*="42% used"]'))`);
     assert(
       await window.webContents.executeJavaScript(`Boolean(document.querySelector('[aria-label="Codex usage, 5 hour 42 percent used; 42% used"]'))`),
-      "Codex Chat shows the authoritative usage glance with its provider detail",
+      "Codex Chat Details shows the authoritative usage glance with its provider detail",
     );
+    assert(
+      await window.webContents.executeJavaScript(`(() => {
+        const details = document.querySelector('[aria-label="Chat technical details"]');
+        const usage = document.querySelector('[aria-label="Codex usage, 5 hour 42 percent used; 42% used"]');
+        return Boolean(details && usage && details.contains(usage));
+      })()`),
+      "Codex usage remains contained by the Details surface",
+    );
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Chat Details"]')?.click()`);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Back to Sessions"]')?.click()`);
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Open Chat for Claude Permission Chat"]'))`);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Open Chat for Claude Permission Chat"]')?.click()`);
@@ -1949,8 +1961,7 @@ function assert(value, message) {
 async function measureRails(window, includeAction = false) {
   return window.webContents.executeJavaScript(`(() => {
     const timeline = document.querySelector('[aria-label="Chat timeline"]');
-    const labels = ['Chat header rail', 'Chat timeline rail', ${includeAction ? '' : '"Chat composer rail",'} 'Chat status rail']
-      .concat(${includeAction ? '["Chat action rail"]' : '[]'});
+    const labels = ['Chat header rail', 'Chat timeline rail', ${includeAction ? '"Chat action rail"' : '"Chat composer rail"'}];
       return {
         viewportWidth: window.innerWidth,
         timelineLeft: timeline?.getBoundingClientRect().left ?? -1,
@@ -1961,8 +1972,8 @@ async function measureRails(window, includeAction = false) {
         timelineScrollWidth: timeline?.scrollWidth ?? -1,
         timelineClientWidth: timeline?.clientWidth ?? -1,
         scaleProbeFontSize: (() => {
-          const status = document.querySelector('[aria-label="Chat status rail"]');
-          const probe = status?.firstElementChild;
+          const composer = document.querySelector('[aria-label="Chat composer"]');
+          const probe = composer?.querySelector('[aria-label="Chat message"]');
           return probe ? Number.parseFloat(getComputedStyle(probe).fontSize) : -1;
         })(),
         rails: labels.map((label) => {

@@ -2,9 +2,15 @@
 
 Status: Phases 4 through 8—streaming-aware tail pinning, bounded paging,
 virtualized rendering, rich content, approvals/questions, provider-aware
-status and modes, and read-only/accessibility/theme/scale behavior—are
-implemented and verified, 2026-08-29. Phase 9's complete local, packaging, and
-release gates are recorded below.
+status and modes, and read-only/accessibility/theme/scale behavior—remain
+implemented and verified as of 2026-08-29. The approved 2026-08-31 composer
+enclosure implementation is present on `migration/react-native-electron-macos`,
+and scoped composer verification passes. Three bounded source-review fixes—
+permission capability, pending Stop visibility, and typography remeasurement—
+have regression coverage, and the scoped composer checks now pass. The overall
+verification gate remains blocked by current failures in the full npm test and
+full Chat E2E runs. The full scrolling Chat E2E caveat remains unresolved, so
+this document does not claim a final pass for the composer change.
 
 This document is the behavior contract for the Electron Chat migration. The
 approved target is parity with the released Swift Chat behavior. Electron may
@@ -41,13 +47,13 @@ The Swift implementation is the source of truth:
 | Shell and rail | Chat replaces the browser in the same window. Header, conversation, composer, and status content use one centered rail with the established maximum width. | Shared rail alignment is implemented. Other header and footer details remain under review. |
 | Transcript | Provider parsers retain canonical text and images. Chat is lazy, bounded, and read-only when control metadata is not verified. | Claude Code, Codex, Pi, and Cursor pages render through the daemon with canonical provider text preserved and provider-neutral presentation transforms. |
 | Turn presentation | User prompts, assistant answers, thinking, tools, system rows, durations, recaps, compact boundaries, and provider grouping follow the visibility rules. | Turn grouping, thinking/tool/system rows, durations, recaps, compact boundaries, and provider-neutral rich presentation are implemented and covered by pure and Electron checks. |
-| Composer state | Draft and attachments are per session. Focus, multiline growth, Enter/Shift-Enter, Escape, slash completion, paste, and removal follow the Swift interaction contract. | Phase 2 implements the per-session in-memory store, deterministic restore, initial focus, IME-safe keyboard policy, eight-line measured growth with internal scrolling, lazy daemon-backed slash completion, image picker/paste/preview/remove/validation, capability-gated disabled states, and generation-safe cancellation for late reads. |
-| Send and cancel | Sends use the provider route, show an optimistic echo, reconcile or remove it safely, restore canceled input, and report failures. | The daemon re-checks the live working section and provider/image capabilities before every send. Provider-honest cancellation has identity-bound daemon/native routes, a working-only Stop control, confirmed/failure states, stale-result guards, optimistic delivery rows, canonical reconciliation, bounded expiry, and non-clobbering failure/cancel recovery. |
+| Composer state | Draft and attachments are per session. Focus, multiline growth, Enter/Shift-Enter, Escape, slash completion, paste, and removal follow the Swift interaction contract. | The current pass uses one rounded enclosure for attachment previews, the multiline textarea, and the bottom toolbar. Add image and Send expose 44 px targets; Send's visible face is 32 px. Model/effort and truthful permission context stay near the draft, while context/usage/provider/path diagnostics remain in Details. Text and image capabilities remain independent, with eight-line measured growth and internal scrolling. Scoped composer checks pass; the overall gate remains blocked. |
+| Send and cancel | Sends use the provider route, show an optimistic echo, reconcile or remove it safely, restore canceled input, and report failures. | The daemon re-checks the live working section and provider/image capabilities before every send. The shared action area keeps Send and Stop capability-correct: Stop requires an identity-bound active cancellable delivery, can occupy the primary position with no sendable draft, and remains beside Send when both are legitimate. Repeat cancellation is disabled and drafts remain recoverable. Scoped composer checks pass; the overall gate remains blocked. |
 | Scrolling and scale | Initial history is bounded. Streaming follows the tail only when the user is near it. Loading earlier rows preserves the reading position. Content scale does not create horizontal overflow. | The daemon requests an initial 100 rows. Turn-aligned pages may exceed that request up to the protocol cap. The client keeps at most 4,000 retained rows and shows a visible history-limit status. FlatList renders grouped turns as virtualized cells. The exact 80 px near-tail policy preserves far-reader position, while local sends always pin and composer resize pins only near the tail. Earlier paging is single-flight with a stable anchor, and a latest no-overlap response inserts one visible history-gap row. Tail frames are session-scoped and canceled on session change or unmount. |
 | Rich content | Markdown includes block structure, links, code, tables, emphasis, strike-through, syntax highlighting, LaTeX, images, tools, plans, and edit hunks. | Provider-neutral block/inline Markdown, safe links, bounded syntax-token presentation, MathML with literal fallback, tables, images/placeholders, tools, plans, edit hunks, and thinking/recap rows are implemented without rewriting canonical text. |
 | Approvals and questions | Controls show provider context, validate answers, support keyboard use and cancellation, and send the exact provider response. | Exact action identity, provider context, validation, multiple choice/text answers, disabled/responding state, keyboard actions, Escape cancellation, and exact provider responses are implemented. |
-| Status and modes | The footer shows resolved model and effort, context and usage, project, and provider-gated permission modes. | Provider-aware status and modes are implemented: authoritative Codex usage appears when available, Claude permission modes cycle through an exact session/generation/terminal-identity action seam, and Claude usage remains absent when no provider-authoritative source is available. |
-| Accessibility and read-only | Labels, focus order, keyboard actions, state announcements, theme, scaling, and ended-session behavior remain usable and truthful. | Chat labels, focus order, live state announcements, keyboard actions, read-only/ended controls, light/dark palette, 250% scaling, and no-overflow rail geometry are implemented and covered by the Electron checks. |
+| Status and modes | The footer shows resolved model and effort, context and usage, project, and provider-gated permission modes. | Model/effort and provider-truthful permission context now sit beside the draft in the composer; context/usage/provider/path diagnostics remain in Details. No fake model selector is introduced. Existing provider-aware usage and Claude permission action seams remain in force. |
+| Accessibility and read-only | Labels, focus order, keyboard actions, state announcements, theme, scaling, and ended-session behavior remain usable and truthful. | Chat labels, focus order, live state announcements, keyboard actions, read-only/ended controls, light/dark palette, 250% scaling, and no-overflow rail geometry remain in scope. Read-only shows one reason and the supported source action without a dead composer shell; text and image capability gates stay independent. Scoped visual/state checks pass; the overall gate remains blocked. |
 | Large history | The renderer uses bounded visible rows and safe pagination without freezing during stream updates or repeated expansion. | Initial daemon requests use 100 rows, with turn alignment allowed to return a larger page up to the protocol cap. Earlier requests are single-flight and preserve the reader's anchor. The client retains at most 4,000 rows, reports when that limit is reached, and uses FlatList virtualization, including flattened cells for grouped turns. Replayed or out-of-order earlier responses are rejected, and a latest page with no overlap does not erase loaded history. |
 
 The Electron baseline does not normalize, reflow, or rewrite provider text.
@@ -69,8 +75,9 @@ approved contract before they can be called parity.
    presentation.
 6. [Complete] Complete approval and question controls.
 7. [Complete] Add the provider-aware status bar and permission modes.
-8. [Complete] Complete read-only states, accessibility, theme, scaling, and visual review.
-9. [Complete] Run the complete local gates, leave the exact worktree uncommitted, and
+8. [Scoped pass; overall blocked] Complete read-only states, accessibility, theme,
+   scaling, and composer visual review.
+9. [Blocked] Run the complete local gates, leave the exact worktree uncommitted, and
    open it in Cursor for review before any commit.
 
 Phase 1 delivered the rail alignment and thinking Markdown improvement. The
@@ -82,7 +89,8 @@ recovery. Phase 4 owns the exact tail policy, safe paging, retained-history
 cap, virtualized visible cells, and session-scoped frame cleanup. Phases 5
 through 8 now own the completed rich presentation, action surfaces,
 provider-aware status/modes, and read-only/accessibility/theme/scale behavior
-described in the contract.
+described in the contract. The 2026-08-31 composer enclosure pass refines the
+existing composer/action seams and remains in verification.
 
 ## Public test seams
 
@@ -744,9 +752,68 @@ whole answer instead of a table cell and had no narrow/scaled mixed Markdown
 geometry assertion, so a flex-column regression could remain hidden. The
 updated probe selects the real row/cell and waits for a painted 250% frame.
 
-## Phase 9 final gate evidence
+## Composer enclosure implementation evidence (2026-08-31)
 
-Final evidence from the exact 2026-08-29 gate:
+The approved composer direction is represented in the current worktree as one
+rounded enclosure containing attachment previews, the multiline textarea, and
+the bottom toolbar. Add image and Send use 44 px hit targets; Send's visible
+face is 32 px. Model/effort and truthful permission context stay near the
+draft, while context/usage/provider/path diagnostics remain behind Details.
+The read-only branch shows one reason and the supported source action without a
+dead composer shell. Approval and question responses remain dedicated action
+surfaces.
+
+Current behavior boundaries:
+
+- The local controller admits a payload only when each present part is allowed:
+  `canSendText` and `canSendImages` are checked independently. No
+  backend/provider additions were made; the current daemon never advertises an
+  image-only capability.
+- Send and Stop share the bottom-right action area. Stop is shown only for an
+  identity-bound active cancellable delivery, takes the primary position when
+  there is no sendable draft, and remains beside Send when both actions are
+  legitimately available. Repeat cancellation is disabled without clearing a
+  newer draft.
+- Per-session drafts, IME-safe Enter/Shift+Enter, paste, eight visual lines,
+  approval identity, and send/recovery semantics remain the governing contract.
+
+Evidence status:
+
+- Captured command-level red evidence is limited to the initial missing
+  `composer-enclosure` check and the separate two-test controller red run,
+  followed by the focused 34-test controller green run.
+- Permission-capability, pending-Stop-visibility, and typography-remeasurement
+  changes are source-review fixes with regression coverage; no command-level red
+  run was captured before those fixes.
+- Scoped current-tree checks passed: `npm run build` (protocol, server, app
+  export/export-path check, and desktop), `npm run typecheck`, app 192 tests
+  across 22 files, desktop 18 across 2 files, and protocol 22 across 3 files.
+- The new exported composer fixture passed with exit 0 and success JSON. It
+  covers keyboard/paste, approval draft text and image restoration,
+  no-authority Stop absence, capability-gated permission, deferred cancellation
+  without duplicate requests, newer-draft preservation, real image-only send,
+  focus, growth/shrink, and light/dark/narrow/250% captures in
+  `.scratch/agent-visor-composer-implementation.50yAcf/screenshots-final/`.
+  The scoped visual presentation was inspected and accepted.
+- Full `npm test` is not green: server 274/275, with
+  `slash-commands.test.ts:359` (`marks a bounded remaining-source probe unknown
+  when a symlinked directory hides a candidate`) timing out at 5,000 ms and its
+  `afterEach` hook timing out at 10,000 ms. An isolated retry of that 20-test
+  file reproduced the same 19/20 failure without source changes.
+- One full Chat E2E run is not green. `test-chat-accessibility.mjs:833`,
+  `stream growth keeps a near-tail reader pinned`, failed with
+  `scrollTop=557.5`, `distanceFromBottom=576.5`, `scrollHeight=1666`, and
+  `clientHeight=532`. This is a different current failing point from the prior
+  caveats; keep it open and do not call it pre-existing or timing-only.
+- The candidate bundle index is
+  `f5ac6a3ff67e47b8117179d71520e7d9.js`. At the review checkpoint, overall
+  verification remained blocked and the diff was left uncommitted; this
+  section did not make a final-pass or commit-ready claim.
+
+## Phase 9 prior gate evidence (2026-08-29)
+
+Historical evidence from the exact 2026-08-29 gate, before the current
+composer enclosure pass; it does not close current composer verification:
 
 - Protocol passed 22 tests across 3 files, server 241 across 20, app 189
   across 22, and desktop 18 across 2: 470 tests across 47 files total.

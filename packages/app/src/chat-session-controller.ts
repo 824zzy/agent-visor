@@ -294,8 +294,8 @@ export function createChatSessionController(
     },
     beginDelivery(candidate, draft) {
       if (!isCurrent(candidate)
-        || !state.page?.capabilities.canSendText
-        || activeSessionId.length === 0) return undefined;
+        || activeSessionId.length === 0
+        || !draftCapabilitiesAllow(state.page, draft)) return undefined;
       const requestId = createRequestId();
       const deliveryId = createDeliveryId();
       const delivery = deliveryStore.begin({
@@ -473,8 +473,14 @@ export function createChatSessionController(
       return Math.min(...pending.map((delivery) => delivery.createdAt + CHAT_DELIVERY_TTL_MS));
     },
     retryRecovery(candidate, recoveryId) {
-      if (!isCurrent(candidate)
-        || !state.page?.capabilities.canSendText) return undefined;
+      if (!isCurrent(candidate) || activeSessionId.length === 0) return undefined;
+      // Validate the immutable recovery snapshot before mutating the recovery
+      // store. Capability changes between the original send and Retry must
+      // not strand a retry reservation or make an image-only retry use text
+      // capability as its master switch.
+      const recovery = recoveryStore.list(activeSessionId, candidate)
+        .find((record) => record.id === recoveryId);
+      if (!recovery || !draftCapabilitiesAllow(state.page, recovery.draft)) return undefined;
       const decision = recoveryStore.retry({
         sessionId: activeSessionId,
         generation: candidate,
@@ -1309,6 +1315,25 @@ function cloneSubmittedDraft(draft: SubmittedChatDraft): SubmittedChatDraft {
     text: draft.text,
     images: draft.images.map((image) => ({ ...image })),
   };
+}
+
+/**
+ * Keep the controller's admission policy aligned with the composer: text and
+ * images are independent capabilities, while an empty submitted draft is not
+ * a delivery. The composer owns validation of size/content before this seam;
+ * this guard only prevents a stale or changed page capability from admitting
+ * a forbidden payload.
+ */
+function draftCapabilitiesAllow(
+  page: ChatPage | undefined,
+  draft: SubmittedChatDraft,
+): boolean {
+  if (!page) return false;
+  const hasText = draft.text.trim().length > 0;
+  const hasImages = draft.images.length > 0;
+  return (hasText || hasImages)
+    && (!hasText || page.capabilities.canSendText)
+    && (!hasImages || page.capabilities.canSendImages);
 }
 
 const MAX_TRACKED_DELIVERY_IDS = 512;

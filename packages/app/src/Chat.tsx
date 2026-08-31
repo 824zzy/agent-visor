@@ -46,7 +46,7 @@ import {
   pendingChatActionIdentity,
   validateQuestionAnswers,
 } from "./chat-action-policy";
-import { chatStatusSummary } from "./chat-status";
+import { chatStatusSummary, displayMode } from "./chat-status";
 import {
   appendComposerAttachments,
   applyComposerRecoveryCommand,
@@ -83,7 +83,7 @@ import {
 } from "./chat-paste";
 import { CONTENT_RAIL_INSET, contentRailStyle } from "./content-rail";
 import type { Palette } from "./theme";
-import { chatCancellationView } from "./chat-cancellation";
+import { chatCancellationView, type ChatCancellationView } from "./chat-cancellation";
 import type { ChatDeliveryRecoveryRecord } from "./chat-delivery-recovery";
 import { chatRecoveryView } from "./chat-recovery-presentation";
 import {
@@ -627,32 +627,19 @@ export function Chat({
           chat.canCancelForActiveDelivery ?? false,
           chat.cancel?.status,
         );
-        return cancellation.visible ? (
-          <View style={styles.cancelSurface}>
-            <View accessibilityLabel="Chat cancellation rail" style={styles.cancelRail}>
-              <Pressable
-                accessibilityLabel={cancellation.accessibilityLabel}
-                accessibilityRole="button"
-                accessibilityState={{ disabled: !cancellation.enabled }}
-                disabled={!cancellation.enabled}
-                onPress={chat.cancelChat}
-                style={[styles.cancelButton, !cancellation.enabled && styles.cancelButtonDisabled]}
-              >
-                <Text style={[styles.link, !cancellation.enabled && styles.cancelStatus]}>{cancellation.label}</Text>
-              </Pressable>
-            </View>
-          </View>
-        ) : null;
-      })()}
-      {chat.page && (chat.page.pendingActions?.length ?? (chat.page.pendingAction ? 1 : 0)) > 0 ? (
+        const pendingActions = chat.page?.pendingActions
+          ?? (chat.page?.pendingAction ? [chat.page.pendingAction] : []);
+        return pendingActions.length > 0 ? (
         <View style={styles.actionSurface}>
           <View accessibilityLabel="Chat action rail" style={styles.actionRail}>
-            {(chat.page.pendingActions ?? (chat.page.pendingAction ? [chat.page.pendingAction] : [])).map((action) => (
+            {pendingActions.map((action, index) => (
               <PendingAction
                 action={action}
                 canRespond={action.type === "approval"
                   ? chat.page?.capabilities.canApprove === true
                   : chat.page?.capabilities.canAnswer === true}
+                cancellation={index === 0 ? cancellation : undefined}
+                onCancel={chat.cancelChat}
                 key={action.approvalId ?? action.toolUseId}
                 onRespond={chat.respond}
                 source={session.source}
@@ -661,35 +648,36 @@ export function Chat({
             ))}
           </View>
         </View>
-      ) : chat.page ? (
+        ) : chat.page && chat.page.capabilities.canSendText === false
+          && chat.page.capabilities.canSendImages === false ? (
+          <ReadOnlyNotice reason={chat.page.capabilities.readOnlyReason} styles={styles} />
+        ) : chat.page ? (
           <Composer
             key={session.id}
             canSendImages={chat.page.capabilities.canSendImages}
             canSendText={chat.page.capabilities.canSendText}
             maxTextBytes={chat.page.capabilities.maxTextBytes}
+            metadata={chat.page.metadata}
             onDraftChange={chat.noteComposerDraft}
+            onCancel={chat.cancelChat}
+            cancellation={cancellation}
+            canCyclePermissionMode={chat.page.capabilities.canCyclePermissionMode === true}
+            onCycleMode={chat.cyclePermissionMode}
+            cycleModeDisabled={chat.permissionModeCycle !== undefined}
             onResize={handleComposerResize}
             onRequestSlashCommands={chat.loadSlashCommands}
-          onSend={sendChat}
-          recoveryCommand={chat.recoveryCommand}
-          sessionId={session.id}
-          slashCommands={chat.slashCommands}
-          slashCommandsError={chat.slashCommandsError}
-          slashCommandsTruncated={chat.slashCommandsTruncated}
-          styles={styles}
-        />
-      ) : null}
-      <View style={styles.statusBar}>
-        <ChatStatusBar
-          capabilities={chat.page?.capabilities}
-          metadata={chat.page?.metadata}
-          onCycleMode={chat.cyclePermissionMode}
-          permissionModeOverride={chat.optimisticPermissionMode}
-          cycleModeDisabled={chat.permissionModeCycle !== undefined}
-          session={session}
-          styles={styles}
-        />
-      </View>
+            onSend={sendChat}
+            permissionModeOverride={chat.optimisticPermissionMode}
+            recoveryCommand={chat.recoveryCommand}
+            sessionId={session.id}
+            session={session}
+            slashCommands={chat.slashCommands}
+            slashCommandsError={chat.slashCommandsError}
+            slashCommandsTruncated={chat.slashCommandsTruncated}
+            styles={styles}
+          />
+        ) : null;
+      })()}
     </View>
   );
 }
@@ -1220,13 +1208,17 @@ function RecoverySurface({
 function PendingAction({
   action,
   canRespond,
+  cancellation,
   onRespond,
+  onCancel,
   source,
   styles,
 }: {
   action: ChatPendingAction;
   canRespond: boolean;
+  cancellation?: ChatCancellationView;
   onRespond(message: Parameters<ReturnType<typeof useChat>["respond"]>[0]): void;
+  onCancel?(): boolean;
   source: string;
   styles: ChatStyles;
 }) {
@@ -1259,7 +1251,7 @@ function PendingAction({
     return () => window.removeEventListener("keydown", handleEscape, true);
   }, [action, enabled]);
   if (action.type === "question") {
-    return <QuestionAction action={action} canRespond={canRespond} onRespond={respondOnce} responding={responding} source={source} styles={styles} />;
+    return <QuestionAction action={action} canRespond={canRespond} cancellation={cancellation} onCancel={onCancel} onRespond={respondOnce} responding={responding} source={source} styles={styles} />;
   }
   const approvalId = pendingChatActionIdentity(action);
   return (
@@ -1275,6 +1267,7 @@ function PendingAction({
         <ActionButton disabled={!enabled} label="Deny" onPress={() => respondOnce({ type: "respond_chat", toolUseId: action.toolUseId, approvalId, decision: "deny" })} styles={styles} />
         <ActionButton disabled={!enabled} label="Allow" onPress={() => respondOnce({ type: "respond_chat", toolUseId: action.toolUseId, approvalId, decision: "allow" })} styles={styles} />
         {action.canPersist ? <ActionButton disabled={!enabled} label="Always allow" onPress={() => respondOnce({ type: "respond_chat", toolUseId: action.toolUseId, approvalId, decision: "allow_always" })} styles={styles} /> : null}
+        {cancellation?.visible && onCancel ? <CancellationButton cancellation={cancellation} onCancel={onCancel} primary={!enabled} styles={styles} /> : null}
       </View>
       {responding ? <Text accessibilityLiveRegion="polite" style={styles.cancelStatus}>Responding…</Text> : null}
     </View>
@@ -1284,6 +1277,8 @@ function PendingAction({
 function QuestionAction({
   action,
   canRespond,
+  cancellation,
+  onCancel,
   onRespond,
   responding,
   source,
@@ -1291,6 +1286,8 @@ function QuestionAction({
 }: {
   action: Extract<ChatPendingAction, { type: "question" }>;
   canRespond: boolean;
+  cancellation?: ChatCancellationView;
+  onCancel?(): boolean;
   onRespond(message: Parameters<ReturnType<typeof useChat>["respond"]>[0]): void;
   responding: boolean;
   source: string;
@@ -1380,8 +1377,21 @@ function QuestionAction({
       <View style={styles.actionButtons}>
         <ActionButton label="Cancel" disabled={!enabled} onPress={cancel} styles={styles} />
         <ActionButton label="Submit answers" disabled={!enabled} onPress={submit} styles={styles} />
+        {cancellation?.visible && onCancel ? <CancellationButton cancellation={cancellation} onCancel={onCancel} primary={!enabled} styles={styles} /> : null}
       </View>
       {responding ? <Text accessibilityLiveRegion="polite" style={styles.cancelStatus}>Responding…</Text> : !canRespond ? <Text accessibilityRole="alert" style={styles.actionUnavailable}>This question is not available from this Chat surface.</Text> : null}
+    </View>
+  );
+}
+
+function ReadOnlyNotice({ reason, styles }: { reason?: string; styles: ChatStyles }) {
+  return (
+    <View accessibilityLabel="Chat read-only notice" style={styles.readOnlySurface}>
+      <View style={styles.readOnlyRail}>
+        <Text accessibilityLabel={reason ?? "This conversation is read only."} style={styles.readOnlyNotice}>
+          {reason ?? "This conversation is read only."}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -1389,13 +1399,21 @@ function QuestionAction({
 export function Composer({
   canSendImages,
   canSendText,
+  canCyclePermissionMode,
+  cancellation,
   maxTextBytes,
+  metadata,
+  onCancel,
   onDraftChange,
+  onCycleMode,
+  cycleModeDisabled = false,
   onResize,
   onRequestSlashCommands,
   onSend,
+  permissionModeOverride,
   recoveryCommand,
   sessionId,
+  session,
   slashCommands,
   slashCommandsError,
   slashCommandsTruncated,
@@ -1403,13 +1421,21 @@ export function Composer({
 }: {
   canSendImages: boolean;
   canSendText: boolean;
+  canCyclePermissionMode: boolean;
+  cancellation: ChatCancellationView;
   maxTextBytes?: number;
+  metadata?: ChatMetadata;
+  onCancel(): boolean;
   onDraftChange?(draft: { text: string; images: ChatImage[] }): void;
+  onCycleMode?(): boolean;
+  cycleModeDisabled?: boolean;
   onResize?(): void;
   onRequestSlashCommands(): void;
   onSend(text: string, images: ChatImage[]): boolean | void;
+  permissionModeOverride?: string;
   recoveryCommand?: ComposerRecoveryCommand;
   sessionId: string;
+  session: SessionSummary;
   slashCommands?: ChatSlashCommand[];
   slashCommandsError?: string;
   slashCommandsTruncated?: boolean;
@@ -1432,6 +1458,12 @@ export function Composer({
   const clearDraftRef = useRef<() => void>(() => undefined);
   const draftRevisionRef = useRef(0);
   const appliedRecoveryCommandRef = useRef<string | undefined>(undefined);
+  const statusMetadata = permissionModeOverride
+    ? { ...(metadata ?? {}), permissionMode: permissionModeOverride }
+    : metadata;
+  const composerContext = chatStatusSummary(session, statusMetadata, {
+    canSendText,
+  });
 
   draftRef.current = draft;
   const commitDraft = (nextOrUpdate: ComposerDraft | ((current: ComposerDraft) => ComposerDraft)) => {
@@ -1508,18 +1540,28 @@ export function Composer({
     const lineHeight = Number.parseFloat(computed.lineHeight) || COMPOSER_DEFAULT_LINE_HEIGHT;
     const padding = (Number.parseFloat(computed.paddingTop) || 0)
       + (Number.parseFloat(computed.paddingBottom) || 0);
-    setLayout(composerLayoutForContent({
-      contentHeight: element.scrollHeight,
+    const assignedHeight = element.style.height;
+    element.style.height = "0px";
+    const contentHeight = element.scrollHeight;
+    element.style.height = assignedHeight;
+    const nextLayout = composerLayoutForContent({
+      contentHeight,
       lineHeight,
       verticalPadding: padding || COMPOSER_VERTICAL_PADDING,
-    }));
+    });
+    setLayout((current) => current.height === nextLayout.height
+      && current.maxHeight === nextLayout.maxHeight
+      && current.visualLineCount === nextLayout.visualLineCount
+      && current.scrollable === nextLayout.scrollable
+      ? current
+      : nextLayout);
   };
 
   useLayoutEffect(() => {
     if (typeof document === "undefined") return;
     const frame = requestAnimationFrame(updateMeasuredHeight);
     return () => cancelAnimationFrame(frame);
-  }, [draft.text, inputId]);
+  }, [draft.text, inputId, styles.composerInput]);
 
   const submit = () => {
     const textError = validateComposerText(draftRef.current.text, maxTextBytes);
@@ -1529,6 +1571,14 @@ export function Composer({
     }
     const submission = draftSubmission(draftRef.current, maxTextBytes);
     if (!submission) return;
+    if ((submission.text && !canSendText) || (submission.images.length && !canSendImages)) {
+      setValidationErrors([
+        submission.text && !canSendText
+          ? "Text messages are unavailable from this Chat surface."
+          : "Image attachments are unavailable from this Chat surface.",
+      ]);
+      return;
+    }
     const previousDraft = {
       text: draftRef.current.text,
       images: draftRef.current.images.map((image) => ({ ...image })),
@@ -1719,9 +1769,15 @@ export function Composer({
     return null;
   }
 
+  const submission = draftSubmission(draft, maxTextBytes);
+  const canSendDraft = Boolean(submission
+    && (!submission.text || canSendText)
+    && (!submission.images.length || canSendImages));
+
   return (
     <View onLayout={onResize} style={styles.composerSurface}>
-      <View accessibilityLabel="Chat composer rail" style={styles.composerRail}>
+      <View accessibilityLabel="Chat composer rail" style={styles.composerRailContainer}>
+        <View accessibilityLabel="Chat composer" style={styles.composerRail}>
         {slashOpen ? (
           <View accessibilityLabel="Slash command suggestions" style={styles.slashPopover}>
             <ScrollView keyboardShouldPersistTaps="handled" style={styles.slashScroller}>
@@ -1771,37 +1827,76 @@ export function Composer({
             {validationErrors.map((error, index) => <Text key={`${error}-${index}`} style={styles.validationError}>{error}</Text>)}
           </View>
         ) : null}
-        <View style={styles.composerRow}>
-          {canSendImages ? <ActionButton label="Add image" onPress={addPickedImages} styles={styles} /> : null}
-          <TextInput
-            accessibilityLabel="Chat message"
-            accessibilityHint={maxTextBytes
-              ? `Maximum ${maxTextBytes.toLocaleString()} UTF-8 bytes for this terminal`
-              : undefined}
-            editable={canSendText}
-            multiline
-            maxLength={COMPOSER_MAX_TEXT_LENGTH}
-            nativeID={inputId}
-            onChangeText={(value) => {
-              const textError = validateComposerText(value, maxTextBytes);
-              if (textError) {
-                setValidationErrors([textError.message]);
-                return;
-              }
-              commitDraft((current) => ({ ...current, text: value }));
-              setValidationErrors([]);
-            }}
-            placeholder={canSendText ? "Message agent…" : "Text messages are unavailable"}
-            placeholderTextColor={undefined}
-            scrollEnabled={layout.scrollable}
-            style={[styles.composerInput, {
-              height: layout.height,
-              maxHeight: layout.maxHeight,
-              overflowY: layout.scrollable ? "auto" : "hidden",
-            } as unknown as TextStyle]}
-            value={draft.text}
-          />
-          <ActionButton label="Send" onPress={submit} styles={styles} />
+        <TextInput
+          accessibilityLabel="Chat message"
+          accessibilityHint={maxTextBytes
+            ? `Maximum ${maxTextBytes.toLocaleString()} UTF-8 bytes for this terminal`
+            : undefined}
+          editable={canSendText}
+          multiline
+          maxLength={COMPOSER_MAX_TEXT_LENGTH}
+          nativeID={inputId}
+          onChangeText={(value) => {
+            const textError = validateComposerText(value, maxTextBytes);
+            if (textError) {
+              setValidationErrors([textError.message]);
+              return;
+            }
+            commitDraft((current) => ({ ...current, text: value }));
+            setValidationErrors([]);
+          }}
+          onLayout={updateMeasuredHeight}
+          placeholder={canSendText ? "Message agent…" : "Text messages are unavailable"}
+          placeholderTextColor={styles.composerPlaceholder.color}
+          scrollEnabled={layout.scrollable}
+          style={[styles.composerInput, {
+            height: layout.height,
+            maxHeight: layout.maxHeight,
+            overflowY: layout.scrollable ? "auto" : "hidden",
+          } as unknown as TextStyle]}
+          value={draft.text}
+        />
+        <View accessibilityLabel="Chat composer actions" style={styles.composerToolbar}>
+          <View style={styles.composerLeadingActions}>
+            {canSendImages ? <ComposerIconButton label="Add image" onPress={addPickedImages} styles={styles}>+</ComposerIconButton> : null}
+            {composerContext.permission ? (
+              onCycleMode && canCyclePermissionMode ? (
+                <Pressable
+                  accessibilityLabel={`Permission mode: ${composerContext.permission.label}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: cycleModeDisabled }}
+                  disabled={cycleModeDisabled}
+                  onPress={() => { onCycleMode(); }}
+                  style={styles.permissionButton}
+                >
+                  <Text style={[styles.composerPermission, cycleModeDisabled && styles.composerPermissionDisabled]}>
+                    {composerContext.permission.label}
+                  </Text>
+                </Pressable>
+              ) : (
+                <Text accessibilityLabel={`Permission mode: ${composerContext.permission.label}`} style={styles.composerPermission}>
+                  {composerContext.permission.label}
+                </Text>
+              )
+            ) : null}
+          </View>
+          <View style={styles.composerToolbarSpacer} />
+          <Text accessibilityLabel="Composer model and effort" numberOfLines={1} style={styles.composerModel}>
+            {composerContext.model ?? composerContext.source}
+            {composerContext.effort ? ` · Reasoning ${displayComposerMode(composerContext.effort)}` : ""}
+          </Text>
+          <View style={styles.composerActionCluster}>
+            {cancellation.visible ? (
+              <CancellationButton
+                cancellation={cancellation}
+                onCancel={onCancel}
+                primary={!canSendDraft}
+                styles={styles}
+              />
+            ) : null}
+            <SendButton disabled={!canSendDraft} onPress={submit} styles={styles} />
+          </View>
+        </View>
         </View>
       </View>
     </View>
@@ -1818,86 +1913,23 @@ function Details({
   styles: ChatStyles;
 }) {
   const rows = metadata ? chatMetadataRows(metadata) : [];
+  const statusMetadata = metadata;
+  const usage = chatStatusSummary(session, statusMetadata, {}).usage;
   return (
     <View accessibilityLabel="Chat technical details" style={styles.details}>
       <Text style={styles.actionTitle}>Details</Text>
       {rows.map((row) => (
         <Text key={row.label} selectable style={styles.muted}>{row.label}: {row.value}</Text>
       ))}
+      {usage ? (
+        <Text accessibilityLabel={`${usage.detail}; ${usage.percentUsed}% used`} selectable style={styles.muted}>
+          Usage: {usage.detail} ({usage.percentUsed}% used)
+        </Text>
+      ) : null}
       <Text style={styles.muted}>Source: {session.source}</Text>
       <Text style={styles.muted}>Owner: {session.owner}</Text>
       <Text style={styles.muted}>Project: {session.project}</Text>
       <Text selectable style={styles.muted}>Path: {session.cwd}</Text>
-    </View>
-  );
-}
-
-function ChatStatusBar({
-  capabilities,
-  metadata,
-  onCycleMode,
-  permissionModeOverride,
-  cycleModeDisabled = false,
-  session,
-  styles,
-}: {
-  capabilities?: { canSendText: boolean; canCyclePermissionMode?: boolean; readOnlyReason?: string };
-  metadata?: ChatMetadata;
-  onCycleMode?: () => boolean;
-  permissionModeOverride?: string;
-  cycleModeDisabled?: boolean;
-  session: SessionSummary;
-  styles: ChatStyles;
-}) {
-  const statusMetadata = permissionModeOverride
-    ? { ...(metadata ?? {}), permissionMode: permissionModeOverride }
-    : metadata;
-  const summary = chatStatusSummary(session, statusMetadata, {
-    ...(capabilities ? { canSendText: capabilities.canSendText } : {}),
-    ...(capabilities?.readOnlyReason ? { readOnlyReason: capabilities.readOnlyReason } : {}),
-  });
-  return (
-    <View accessibilityLabel="Chat status rail" accessibilityHint={summary.accessibilityLabel} style={styles.statusRail}>
-      <Text numberOfLines={1} style={styles.statusText}>{summary.model ?? summary.source}</Text>
-      {summary.effort ? <Text numberOfLines={1} style={styles.statusEffort}>| {summary.effort}</Text> : null}
-      {summary.context ? (
-        <View accessibilityLabel={summary.context.label} style={styles.contextStatus}>
-          <View style={styles.contextTrack}><View style={[styles.contextFill, { width: `${summary.context.percent}%` }]} /></View>
-          <Text style={styles.statusContextPercent}>{summary.context.percent}%</Text>
-        </View>
-      ) : null}
-      {summary.permission ? (
-        onCycleMode && capabilities?.canCyclePermissionMode === true ? (
-          <Pressable
-            accessibilityLabel={`Permission mode: ${summary.permission.label}`}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: cycleModeDisabled }}
-            disabled={cycleModeDisabled}
-            onPress={() => { onCycleMode(); }}
-          >
-            <Text style={[styles.permissionMode, cycleModeDisabled && styles.statusEffort]}>{summary.permission.label}</Text>
-          </Pressable>
-        ) : (
-          <Text accessibilityLabel={`Permission mode: ${summary.permission.label}`} style={styles.permissionMode}>{summary.permission.label}</Text>
-        )
-      ) : null}
-      {summary.usage ? (
-        <View accessibilityLabel={`${summary.usage.detail}; ${summary.usage.percentUsed}% used`} style={styles.usageStatus}>
-          <Text style={styles.statusUsageLabel}>Usage</Text>
-          <Text style={styles.statusUsagePercent}>{summary.usage.percentUsed}%</Text>
-        </View>
-      ) : null}
-      <Text numberOfLines={1} style={styles.statusProject}>{summary.project}</Text>
-      <Text accessibilityLabel={`Chat source: ${summary.source}; path: ${summary.path}`} numberOfLines={1} style={styles.statusPath}>{summary.source} · {summary.path}</Text>
-      {summary.readOnly ? (
-        <Text
-          accessibilityLabel={summary.readOnlyReason ?? "Read only"}
-          selectable
-          style={styles.readOnly}
-        >
-          Read only{summary.readOnlyReason ? ` · ${summary.readOnlyReason}` : ""}
-        </Text>
-      ) : null}
     </View>
   );
 }
@@ -1915,6 +1947,94 @@ function ActionButton({ disabled = false, label, onPress, styles }: { disabled?:
       <Text style={[styles.link, disabled && styles.cancelStatus]}>{label}</Text>
     </Pressable>
   );
+}
+
+function ComposerIconButton({
+  children,
+  label,
+  onPress,
+  styles,
+}: {
+  children: string;
+  label: string;
+  onPress(): void;
+  styles: ChatStyles;
+}) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <Pressable
+      accessibilityLabel={label}
+      accessibilityRole="button"
+      onBlur={() => setFocused(false)}
+      onFocus={() => setFocused(true)}
+      onPress={onPress}
+      style={[styles.composerIconButton, focused && styles.composerFocusRing]}
+    >
+      <Text style={styles.composerPlus}>{children}</Text>
+    </Pressable>
+  );
+}
+
+function SendButton({ disabled, onPress, styles }: { disabled: boolean; onPress(): void; styles: ChatStyles }) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <Pressable
+      accessibilityLabel="Send"
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onBlur={() => setFocused(false)}
+      onFocus={() => setFocused(true)}
+      onPress={onPress}
+      style={[styles.sendButton, disabled && styles.sendButtonDisabled, focused && styles.composerFocusRing]}
+    >
+      <View style={[styles.sendFace, disabled && styles.sendFaceDisabled]}>
+        <Text style={[styles.sendGlyph, disabled && styles.sendGlyphDisabled]}>↑</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function CancellationButton({
+  cancellation,
+  onCancel,
+  primary,
+  styles,
+}: {
+  cancellation: ChatCancellationView;
+  onCancel(): boolean;
+  primary: boolean;
+  styles: ChatStyles;
+}) {
+  const [focused, setFocused] = useState(false);
+  const disabled = !cancellation.enabled;
+  return (
+    <Pressable
+      accessibilityLabel={cancellation.accessibilityLabel}
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onBlur={() => setFocused(false)}
+      onFocus={() => setFocused(true)}
+      onPress={onCancel}
+      style={[
+        styles.stopButton,
+        primary && styles.stopButtonPrimary,
+        disabled && styles.stopButtonDisabled,
+        focused && styles.composerFocusRing,
+      ]}
+    >
+      <Text style={[
+        styles.stopLabel,
+        primary && styles.stopLabelPrimary,
+        disabled && !primary && styles.stopLabelDisabled,
+      ]}>{cancellation.label}</Text>
+    </Pressable>
+  );
+}
+
+function displayComposerMode(value: string): string {
+  return displayMode(value).replace(/^Extra /, "");
 }
 
 function Centered({ text, styles }: { text: string; styles: ChatStyles }) {
@@ -2122,9 +2242,36 @@ function createStyles(palette: Palette, scale: number) {
     choiceSelected: { backgroundColor: palette.accentWash, borderColor: palette.accent },
     answerInput: { backgroundColor: palette.background, borderColor: palette.border, borderRadius: 7, borderWidth: 1, color: palette.foreground, fontSize: font(12), minHeight: 38, padding: 8 },
     composerSurface: { paddingHorizontal: CONTENT_RAIL_INSET, paddingVertical: 8 },
-    composerRail: { ...contentRailStyle(), gap: 7 },
-    composerRow: { alignItems: "flex-end", flexDirection: "row", gap: 8 },
-    composerInput: { backgroundColor: palette.card, borderColor: palette.border, borderRadius: 10, borderWidth: 1, color: palette.foreground, flex: 1, fontSize: font(13), maxHeight: 180, minHeight: 42, padding: 10 },
+    composerRailContainer: contentRailStyle(),
+    composerRail: { ...contentRailStyle(), backgroundColor: palette.card, borderColor: palette.border, borderRadius: 22, borderWidth: 1, gap: 4, paddingBottom: 5, paddingHorizontal: 10, paddingTop: 8 },
+    composerInput: { backgroundColor: "transparent", borderColor: "transparent", borderRadius: 4, borderWidth: 0, color: palette.foreground, fontSize: font(14), lineHeight: font(22), maxHeight: 180, minHeight: 42, paddingHorizontal: 7, paddingTop: 2, paddingBottom: 6, width: "100%" },
+    composerToolbar: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 4, minHeight: 44 },
+    composerLeadingActions: { alignItems: "center", flexDirection: "row", flexShrink: 1, gap: 4, minHeight: 44, minWidth: 0 },
+    composerToolbarSpacer: { flex: 1, minWidth: 8 },
+    composerIconButton: { alignItems: "center", borderColor: "transparent", borderRadius: 12, borderWidth: 0, height: 44, justifyContent: "center", padding: 0, width: 44 },
+    composerPlus: { color: palette.muted, fontSize: 18, lineHeight: 22 },
+    composerPlaceholder: { color: palette.tertiary },
+    composerPermission: { color: palette.muted, fontSize: font(12), lineHeight: font(18), maxWidth: 220 },
+    composerPermissionDisabled: { color: palette.tertiary },
+    permissionButton: { alignItems: "center", justifyContent: "center", minHeight: 44, paddingHorizontal: 4 },
+    composerModel: { color: palette.muted, flexShrink: 1, fontSize: font(12), lineHeight: font(18), marginHorizontal: 4, maxWidth: 300, minWidth: 0, textAlign: "right" },
+    composerActionCluster: { alignItems: "center", flexDirection: "row", flexShrink: 0, gap: 2, minHeight: 44 },
+    sendButton: { alignItems: "center", backgroundColor: "transparent", borderColor: "transparent", borderRadius: 22, borderWidth: 0, height: 44, justifyContent: "center", padding: 6, width: 44 },
+    sendButtonDisabled: { opacity: 1 },
+    sendFace: { alignItems: "center", backgroundColor: palette.foreground, borderRadius: 16, height: 32, justifyContent: "center", width: 32 },
+    sendFaceDisabled: { backgroundColor: palette.border },
+    sendGlyph: { color: palette.background, fontSize: 18, lineHeight: 20 },
+    sendGlyphDisabled: { color: palette.tertiary },
+    stopButton: { alignItems: "center", backgroundColor: "transparent", borderColor: palette.border, borderRadius: 14, borderWidth: 1, justifyContent: "center", minHeight: 44, paddingHorizontal: 12 },
+    stopButtonPrimary: { backgroundColor: palette.foreground, borderColor: palette.foreground },
+    stopButtonDisabled: { opacity: 0.7 },
+    stopLabel: { color: palette.foreground, fontSize: font(12), fontWeight: "600" },
+    stopLabelPrimary: { color: palette.background },
+    stopLabelDisabled: { color: palette.muted },
+    composerFocusRing: { borderColor: palette.accent, borderWidth: 2 },
+    readOnlySurface: { paddingHorizontal: CONTENT_RAIL_INSET, paddingVertical: 8 },
+    readOnlyRail: { ...contentRailStyle() },
+    readOnlyNotice: { color: palette.muted, fontSize: font(12), lineHeight: font(18), paddingHorizontal: 4, paddingVertical: 6 },
     slashPopover: { backgroundColor: palette.card, borderColor: palette.border, borderRadius: 10, borderWidth: 1, maxHeight: 148, overflow: "hidden" },
     slashScroller: { maxHeight: 148 },
     slashRow: { alignItems: "center", flexDirection: "row", gap: 7, minHeight: 28, paddingHorizontal: 10, paddingVertical: 5 },
@@ -2142,20 +2289,5 @@ function createStyles(palette: Palette, scale: number) {
     validationErrors: { backgroundColor: `${palette.error}16`, borderColor: `${palette.error}55`, borderRadius: 7, borderWidth: 1, gap: 3, paddingHorizontal: 8, paddingVertical: 5 },
     validationError: { color: palette.error, fontSize: font(11) },
     centered: { alignItems: "center", flex: 1, justifyContent: "center", minHeight: 200 },
-    statusBar: { borderTopColor: palette.border, borderTopWidth: 1, minHeight: 32, paddingHorizontal: CONTENT_RAIL_INSET },
-    statusRail: { ...contentRailStyle(), alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 8, minHeight: 32, minWidth: 0, paddingVertical: 4 },
-    statusText: { color: palette.muted, fontSize: font(10), fontWeight: "600" },
-    statusEffort: { color: palette.tertiary, fontFamily: "monospace", fontSize: font(10) },
-    contextStatus: { alignItems: "center", flexDirection: "row", gap: 4 },
-    contextTrack: { backgroundColor: palette.card, borderRadius: 2, height: 6, overflow: "hidden", width: 48 },
-    contextFill: { backgroundColor: palette.ready, height: 6 },
-    statusContextPercent: { color: palette.ready, fontFamily: "monospace", fontSize: font(10) },
-    usageStatus: { alignItems: "center", flexDirection: "row", gap: 3 },
-    statusUsageLabel: { color: palette.tertiary, fontSize: font(10) },
-    statusUsagePercent: { color: palette.accent, fontFamily: "monospace", fontSize: font(10), fontWeight: "600" },
-    permissionMode: { color: palette.accent, fontFamily: "monospace", fontSize: font(10), fontWeight: "600" },
-    statusProject: { color: palette.accent, fontFamily: "monospace", fontSize: font(10), maxWidth: 160 },
-    statusPath: { color: palette.tertiary, flex: 1, flexShrink: 1, fontSize: font(10), minWidth: 0 },
-    readOnly: { color: palette.tertiary, flexShrink: 1, fontSize: font(10), fontWeight: "600", minWidth: 0 },
   });
 }

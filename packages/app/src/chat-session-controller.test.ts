@@ -18,6 +18,153 @@ const page = (sessionId: string, text: string): ChatPage => ({
 });
 
 describe("Chat session controller", () => {
+  it("accepts an image-only delivery when text sending is unavailable", () => {
+    const controller = createChatSessionController({
+      onState: () => undefined,
+      onSlashCommands: () => undefined,
+      onOpenLatest: () => undefined,
+    }, { createRequestId: () => "image-request", createDeliveryId: () => "image-delivery" });
+    const generation = controller.activate("image-only", "working");
+    controller.receive(generation, JSON.stringify({
+      ...page("image-only", "ready"),
+      capabilities: {
+        ...page("image-only", "ready").capabilities,
+        canSendText: false,
+        canSendImages: true,
+      },
+    }), { close: () => undefined, send: () => true });
+
+    expect(controller.beginDelivery(generation, {
+      text: "text is not allowed",
+      images: [],
+    })).toBeUndefined();
+    expect(controller.beginDelivery(generation, {
+      text: "mixed content is not allowed",
+      images: [{
+        name: "diagram.png",
+        mimeType: "image/png",
+        byteLength: 8,
+        data: "iVBORw0KGgo=",
+      }],
+    })).toBeUndefined();
+    const imageDelivery = controller.beginDelivery(generation, {
+      text: "",
+      images: [{
+        name: "diagram.png",
+        mimeType: "image/png",
+        byteLength: 8,
+        data: "iVBORw0KGgo=",
+      }],
+    });
+    expect(imageDelivery).toMatchObject({
+      requestId: "image-request",
+      deliveryId: "image-delivery",
+    });
+
+    controller.receive(generation, JSON.stringify({
+      ...page("image-only", "text only"),
+      capabilities: {
+        ...page("image-only", "text only").capabilities,
+        canSendText: true,
+        canSendImages: false,
+      },
+    }), { close: () => undefined, send: () => true });
+    expect(controller.beginDelivery(generation, {
+      text: "text with a forbidden image",
+      images: imageDelivery!.draft.images,
+    })).toBeUndefined();
+  });
+
+  it("rechecks image capability before retrying an image-only recovery", () => {
+    const controller = createChatSessionController({
+      onState: () => undefined,
+      onSlashCommands: () => undefined,
+      onOpenLatest: () => undefined,
+    }, {
+      createRequestId: (() => {
+        const ids = ["initial-request", "retry-request"];
+        return () => ids.shift() ?? "unexpected-request";
+      })(),
+      createDeliveryId: (() => {
+        const ids = ["initial-delivery", "retry-delivery"];
+        return () => ids.shift() ?? "unexpected-delivery";
+      })(),
+    });
+    const transport = { close: () => undefined, send: () => true };
+    const generation = controller.activate("image-retry", "working");
+    const canSendImagesOnly = {
+      ...page("image-retry", "ready").capabilities,
+      canSendText: false,
+      canSendImages: true,
+    };
+    controller.receive(generation, JSON.stringify({
+      ...page("image-retry", "ready"),
+      capabilities: canSendImagesOnly,
+    }), transport);
+    const draft = {
+      text: "",
+      images: [{
+        name: "diagram.png",
+        mimeType: "image/png" as const,
+        byteLength: 8,
+        data: "iVBORw0KGgo=",
+      }],
+    };
+    const initial = controller.beginDelivery(generation, draft)!;
+    controller.receive(generation, JSON.stringify({
+      type: "chat_action_result",
+      id: initial.requestId,
+      action: "send",
+      sessionId: "image-retry",
+      generation,
+      deliveryId: initial.deliveryId,
+      ok: false,
+      error: "Provider rejected the image.",
+    }), transport);
+    const recoveryId = controller.currentState().recovery?.[0]?.id;
+    expect(recoveryId).toBeDefined();
+
+    // Capability changes must be enforced at retry time, not only when the
+    // original draft was submitted. The preflight must run before the
+    // recovery store allocates a retry identity or changes the record state.
+    controller.receive(generation, JSON.stringify({
+      ...page("image-retry", "images unavailable"),
+      capabilities: {
+        ...canSendImagesOnly,
+        canSendImages: false,
+      },
+    }), transport);
+    expect(controller.retryRecovery(generation, recoveryId!)).toBeUndefined();
+    expect(controller.currentState().recovery).toMatchObject([{
+      id: recoveryId,
+      status: "failed",
+    }]);
+    expect(controller.currentState().recovery?.[0]?.retryRequestId).toBeUndefined();
+    expect(controller.currentState().recovery?.[0]?.retryDeliveryId).toBeUndefined();
+
+    controller.receive(generation, JSON.stringify({
+      ...page("image-retry", "ready again"),
+      capabilities: canSendImagesOnly,
+    }), transport);
+    expect(controller.retryRecovery(generation, recoveryId!)).toMatchObject({
+      send: true,
+      delivery: { requestId: "retry-request", deliveryId: "retry-delivery" },
+    });
+
+    controller.receive(generation, JSON.stringify({
+      ...page("image-retry", "text-only now"),
+      capabilities: {
+        ...canSendImagesOnly,
+        canSendImages: false,
+      },
+    }), transport);
+    expect(controller.retryRecovery(generation, recoveryId!)).toBeUndefined();
+    expect(controller.currentState().recovery).toMatchObject([{
+      id: recoveryId,
+      status: "retrying",
+    }]);
+  });
+
   it("sends one identity-bound cancel request only for a working cancellable page", () => {
     const states: Array<ReturnType<typeof createChatSessionController>["currentState"] extends () => infer T ? T : never> = [];
     const sent: string[] = [];
