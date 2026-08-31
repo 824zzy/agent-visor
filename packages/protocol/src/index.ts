@@ -26,6 +26,15 @@ export const sessionAttentionTierSchema = z.enum([
   "history",
 ]);
 
+// A provider's interaction class is separate from its current lifecycle
+// phase. It lets ambient surfaces exclude machine-owned work without
+// changing the transcript's actual status for the Sessions browser.
+export const sessionClassSchema = z.enum([
+  "interactive",
+  "terminal",
+  "automation",
+]);
+
 export const sessionSummarySchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -35,6 +44,7 @@ export const sessionSummarySchema = z.object({
   owner: z.string().min(1),
   cwd: z.string().min(1),
   section: sessionSectionSchema,
+  sessionClass: sessionClassSchema.optional(),
   attentionTier: sessionAttentionTierSchema.optional(),
   updatedAt: z.iso.datetime(),
   canOpenOwner: z.boolean(),
@@ -992,3 +1002,4 @@ export type SessionSection = z.infer<typeof sessionSectionSchema>;
 export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
 export type SessionSummary = z.infer<typeof sessionSummarySchema>;
 export type SessionAttentionTier = z.infer<typeof sessionAttentionTierSchema>;
+export type SessionClass = z.infer<typeof sessionClassSchema>;

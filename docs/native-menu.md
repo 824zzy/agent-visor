@@ -52,6 +52,12 @@ Chat-only transcript history remains in Sessions and does not crowd the menu bar
 
 Completed Codex history also remains in Sessions and More Sessions without keeping a physical pill. Active headless Codex jobs require a thread-catalog record and rollout before opening their exact `codex://threads/<id>` source. Hook-only internal tasks stay hidden.
 
+Codex `exec` rows are classified as machine-owned automation. They remain in
+the bounded navigator catalog for search and read-only inspection, but never
+enter physical pill packing, Ready attention, notifications, Dock badges, or
+the normal `+N` overflow set. Their ambient catalog label is
+`Codex automation · <project>`; the raw automation prompt is not a pill title.
+
 
 Visible items retain their normal labels, up to 20 characters plus an ellipsis. Untitled Codex rows use `Codex · <project>` so distinct sessions do not share one fallback label. The helper uses `+N` instead of compact or tight labels.
 

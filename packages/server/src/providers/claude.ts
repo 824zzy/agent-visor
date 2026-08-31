@@ -78,6 +78,7 @@ export class ClaudeProvider implements ProviderAdapter {
         updatedAt: iso(transcriptStamp?.modifiedAt ?? metadataStamp?.modifiedAt ?? this.environment.now()),
         canOpenOwner: true,
         canEnterChat: true,
+        sessionClass: terminalTarget ? "terminal" : "interactive",
         chatPath: transcript,
         ...(terminalTarget ? {
           controlTarget: { kind: "terminal" as const, target: terminalTarget },

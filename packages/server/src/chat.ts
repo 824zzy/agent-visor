@@ -61,6 +61,16 @@ export async function readChatPage(
 }
 
 export function chatCapabilities(session: DiscoveredProviderSession): ChatCapabilities {
+  if (session.sessionClass === "automation") {
+    return {
+      canSendText: false,
+      canSendImages: false,
+      canCancel: false,
+      canApprove: false,
+      canAnswer: false,
+      readOnlyReason: "Automation sessions are read only.",
+    };
+  }
   if (session.section === "history") {
     return {
       canSendText: false,

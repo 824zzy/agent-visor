@@ -11,6 +11,7 @@ import {
   type NativeHelperFocusTarget,
   type NativeHelperPiRestorationUpdate,
   type NativeHelperTerminalTarget,
+  type SessionClass,
   type SessionSnapshot,
   type SessionSummary,
 } from "@agent-visor/protocol";
@@ -48,6 +49,8 @@ export type DiscoveredProviderSession = {
   updatedAt: string;
   canOpenOwner: boolean;
   canEnterChat: boolean;
+  /** Provider-owned interaction class used by ambient attention surfaces. */
+  sessionClass?: SessionClass;
   authority?: number;
   chatPath?: string;
   controlTarget?: SessionControlTarget;
@@ -263,6 +266,7 @@ type ExternalApprovalRecord = {
 export const MAX_EXTERNAL_APPROVAL_RECORDS = 64;
 export const EXTERNAL_APPROVAL_TTL_MS = 5 * 60_000;
 export const EXTERNAL_APPROVAL_RESPONSE_TIMEOUT_MS = 30_000;
+const automationChatReadOnlyReason = "Automation sessions are read only.";
 
 const providerNames: Record<ProviderID, string> = {
   claude_code: "Claude Code",
@@ -750,6 +754,19 @@ export class SessionRepository {
         page.capabilities.canApprove = pendingActions.some((action) => action.type === "approval");
         page.capabilities.canAnswer = pendingActions.some((action) => action.type === "question");
       }
+      if (record.sessionClass === "automation") {
+        // Automation may expose pending provider state for inspection, but it
+        // must never turn that state into a writable Agent Visor action card.
+        page.capabilities.canSendText = false;
+        page.capabilities.canSendImages = false;
+        page.capabilities.canCancel = false;
+        page.capabilities.canApprove = false;
+        page.capabilities.canAnswer = false;
+        delete page.capabilities.cancelDeliveryId;
+        delete page.capabilities.canCyclePermissionMode;
+        delete page.capabilities.maxTextBytes;
+        page.capabilities.readOnlyReason = automationChatReadOnlyReason;
+      }
       return page;
     } finally {
       this.releaseChatPageRead(sessionId, pageReservation);
@@ -929,12 +946,13 @@ export class SessionRepository {
       const stateEpoch = this.chatStateEpoch(message.sessionId);
       const generationError = this.acceptChatGeneration(message.sessionId, message.generation);
       if (generationError) return generationError;
+      const session = this.chatBySession.get(message.sessionId);
+      if (session?.sessionClass === "automation") return automationChatReadOnlyReason;
       const reservation = this.reserveChatStateOperation(message.sessionId, stateEpoch);
       if (!reservation) {
         return "Too many chat actions are queued for this session.";
       }
       try {
-      const session = this.chatBySession.get(message.sessionId);
       // Re-read the latest canonical page before a terminal Escape. This is
       // the last authoritative opportunity to reject an external same-target
       // turn that arrived since the renderer's previous page refresh.
@@ -959,6 +977,9 @@ export class SessionRepository {
           this.releaseChatPageRead(message.sessionId, pageReservation);
         }
       }
+      if (this.chatBySession.get(message.sessionId)?.sessionClass === "automation") {
+        return automationChatReadOnlyReason;
+      }
       if (!session || !message.deliveryId || !this.controls?.canCancel?.(session, message.deliveryId)
         || !this.controls.cancel) {
         return "Cancellation is unavailable for this session.";
@@ -979,6 +1000,9 @@ export class SessionRepository {
       } finally {
         this.releaseChatStateOperation(message.sessionId, reservation);
       }
+    }
+    if (this.chatBySession.get(message.sessionId)?.sessionClass === "automation") {
+      return automationChatReadOnlyReason;
     }
     const approvalKey = message.approvalId ?? message.toolUseId;
     const externalRecords = this.externalActions.get(message.sessionId);
@@ -1513,7 +1537,9 @@ export class SessionRepository {
       if (session.section !== "ready" || previousSections.get(session.id) !== "ready") {
         this.acknowledgedReadyIDs.delete(session.id);
       }
-      session.attentionTier = session.section === "ready" && this.acknowledgedReadyIDs.has(session.id)
+      session.attentionTier = session.sessionClass === "automation"
+        ? "history"
+        : session.section === "ready" && this.acknowledgedReadyIDs.has(session.id)
         ? "acknowledged_ready"
         : session.section;
     }
@@ -1634,6 +1660,7 @@ function applyHooks(
       updatedAt: hook.activityAt ?? hook.receivedAt,
       canOpenOwner: Boolean(hook.pid || hook.tty),
       canEnterChat: hookCanEnterChat(hook),
+      sessionClass: hook.tty ? "terminal" : "interactive",
       chatPath: hook.sessionFile,
     });
   }
@@ -1759,6 +1786,7 @@ function hookSession(hook: HookSessionEvent): DiscoveredProviderSession {
     updatedAt: hook.activityAt ?? hook.receivedAt,
     canOpenOwner: hook.provider !== "codex" && Boolean(hook.pid || hook.tty),
     canEnterChat: hookCanEnterChat(hook),
+    sessionClass: hook.tty ? "terminal" : "interactive",
     chatPath: hook.sessionFile,
   };
 }
@@ -1835,6 +1863,7 @@ function sessionActionFingerprint(session: DiscoveredProviderSession): string {
   return JSON.stringify([
     session.id,
     session.provider,
+    session.sessionClass,
     session.section,
     session.cwd,
     session.chatPath,
@@ -1961,6 +1990,7 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
       updatedAt: session.updatedAt,
       canOpenOwner: session.canOpenOwner,
       canEnterChat: session.canEnterChat,
+      ...(session.sessionClass ? { sessionClass: session.sessionClass } : {}),
     }))
     .sort((left, right) =>
       right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id));

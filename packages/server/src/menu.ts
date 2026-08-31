@@ -49,6 +49,10 @@ export function menuPresentation(
       || left.id.localeCompare(right.id));
   const navigatorPills = ordered.slice(0, 512).map(presentationPill);
   const pills = ordered
+    // Headless Codex exec records are useful in the navigator, but they are
+    // machine-owned work and must not compete with user-facing sessions for
+    // ambient menu-bar space or Ready attention.
+    .filter((session) => session.sessionClass !== "automation")
     .filter((session) => session.source !== "Codex" || session.section !== "history")
     .filter((session) => session.canOpenOwner
       || (session.section !== "history" && session.canEnterChat))
@@ -62,7 +66,9 @@ function presentationPill(
   session: SessionSnapshot["sessions"][number],
   priority: number,
 ) {
-  const title = (session.source === "Codex" && session.title === "Codex session"
+  const title = (session.sessionClass === "automation"
+    ? `Codex automation · ${session.project}`
+    : session.source === "Codex" && session.title === "Codex session"
     ? `Codex · ${session.project}`
     : session.title).slice(0, 256);
   return {

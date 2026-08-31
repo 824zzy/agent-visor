@@ -43,6 +43,24 @@ A pill title is a stable session identity, not a live activity ticker.
 - Running tools, commands, and latest-message excerpts must not replace the title. Current phase remains visible through the status dot, while richer activity context belongs in hover detail, the Sessions browser, or Chat.
 - A tool start, tool completion, approval request, or message update must not relabel or resize a pill. This keeps neighboring pills and overflow membership stable while the user is targeting them.
 
+## Machine-Owned Automation Visibility
+
+Codex headless `exec` records are automation, not user-facing session
+identities. Provider discovery carries this class through the session snapshot
+as `automation`; Codex Desktop and live Codex CLI records remain
+`interactive` and `terminal` respectively.
+
+- Automation records remain available to the Sessions browser and the menu
+  navigator catalog so users can search and inspect their read-only history.
+- Automation records do not create physical menu-bar pills, Ready attention,
+  notifications, Dock badges, or normal pill overflow entries.
+- Ambient labels for automation use a stable `Codex automation · <project>`
+  label. Raw `exec` prompts must never become menu-bar pill titles.
+- If an automation record is eligible for Agent Visor Chat, that view is read
+  only; existing Codex age and transcript-evidence rules may withhold Chat
+  entry. The owning Codex Desktop and CLI surfaces keep their existing
+  behavior.
+
 ## Menu-Bar Space Efficiency
 
 The pill strip maximizes the visible highest-priority session prefix inside measured safe widths. It does not reduce the 28-point application-menu margin, the 16-point system-status margin, or the 8-point notch-edge padding to gain capacity.

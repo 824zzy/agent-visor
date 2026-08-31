@@ -54,6 +54,7 @@ export class ZedProvider implements ProviderAdapter {
         updatedAt: iso(touched),
         canOpenOwner: true,
         canEnterChat: provider !== "auggie",
+        sessionClass: "interactive",
         authority: 2,
         ...(applicationTarget ? {
           controlTarget: { kind: "application" as const, target: applicationTarget },

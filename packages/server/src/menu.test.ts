@@ -163,6 +163,30 @@ describe("menu presentation", () => {
     expect(presentation.navigatorPills.map(({ id }) => id)).toContain("history");
   });
 
+  it("keeps Codex automation searchable without a physical pill or raw prompt title", () => {
+    const prompt = "Current message from an automation run: " + "secret prompt";
+    const presentation = menuPresentation({
+      ...snapshot,
+      sessions: [{
+        ...snapshot.sessions[1]!,
+        id: "codex-exec",
+        title: prompt,
+        project: "agent-visor",
+        sessionClass: "automation",
+        section: "ready",
+        canEnterChat: true,
+        updatedAt: "2026-08-22T22:00:00.000Z",
+      }],
+    }, []);
+
+    expect(presentation.pills).toEqual([]);
+    expect(presentation.navigatorPills).toMatchObject([{
+      id: "codex-exec",
+      title: "Codex automation · agent-visor",
+    }]);
+    expect(presentation.navigatorPills[0]?.title).not.toContain(prompt);
+  });
+
   it("uses the project to distinguish untitled Codex pills", () => {
     const codexSessions: SessionSnapshot = {
       type: "session_snapshot",

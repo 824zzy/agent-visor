@@ -291,6 +291,27 @@ describe("native services", () => {
     expect(effects).toEqual([{ action: "set_badge", count: 1 }]);
   });
 
+  it("does not notify or badge for a Ready Codex automation record", async () => {
+    const { services, effects, helper } = await notificationFixture();
+
+    services.reconcileSessions({
+      type: "session_snapshot", revision: 1,
+      sessions: [{
+        ...session,
+        id: "codex-exec",
+        title: "Current message from a private prompt",
+        source: "Codex",
+        owner: "Codex",
+        sessionClass: "automation",
+        section: "ready",
+        subtitle: "Ready to continue",
+      }],
+    });
+
+    expect(helper.presentedNotifications).toEqual([]);
+    expect(effects).toEqual([]);
+  });
+
   it("notifies only when a session enters an attention state", async () => {
     const { services, helper } = await notificationFixture();
     const piSession = { ...session, source: "Pi" };

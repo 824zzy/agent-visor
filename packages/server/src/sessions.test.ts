@@ -79,6 +79,62 @@ describe("SessionRepository", () => {
     expect(changed.sessions[0]?.section).toBe("ready");
   });
 
+  it("keeps automation searchable but outside Ready attention", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{
+      ...live,
+      provider: "codex",
+      owner: "Codex",
+      title: "Current message from an automation prompt",
+      section: "ready",
+      sessionClass: "automation",
+    }];
+    const repository = new SessionRepository([provider]);
+
+    const snapshot = await repository.refresh();
+
+    expect(snapshot.sessions[0]).toMatchObject({
+      id: "pi-1",
+      title: "Current message from an automation prompt",
+      sessionClass: "automation",
+      section: "ready",
+      attentionTier: "history",
+    });
+  });
+
+  it("keeps automation Chat capabilities read only when actions are pending", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{
+      ...live,
+      provider: "codex",
+      owner: "Codex",
+      sessionClass: "automation",
+      chatPath: "/tmp/automation.jsonl",
+    }];
+    const repository = new SessionRepository([provider]);
+    await repository.refresh();
+    repository.registerExternalAction("pi-1", {
+      type: "approval", toolUseId: "automation-approval", toolName: "Command",
+      input: { command: "echo private" }, canPersist: false,
+    }, async () => undefined);
+    repository.registerExternalAction("pi-1", {
+      type: "question", toolUseId: "automation-question",
+      questions: [{ id: "continue", question: "Continue?", choices: ["Yes"], multiple: false }],
+    }, async () => undefined);
+
+    const page = await repository.chatPage("pi-1");
+
+    expect(page.pendingActions).toHaveLength(2);
+    expect(page.capabilities).toMatchObject({
+      canSendText: false,
+      canSendImages: false,
+      canCancel: false,
+      canApprove: false,
+      canAnswer: false,
+      readOnlyReason: "Automation sessions are read only.",
+    });
+  });
+
   it("preserves the last provider snapshot after a transient read failure", async () => {
     const provider = new FakeProvider();
     const repository = new SessionRepository([provider]);
@@ -806,6 +862,53 @@ describe("SessionRepository", () => {
       toolUseId: "codex-command-1", decision: "allow_always",
     })).toBeUndefined();
     expect(decision).toBe("allow_always");
+  });
+
+  it("rejects automation cancellation and approval/question responses", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{
+      ...live,
+      provider: "codex",
+      owner: "Codex",
+      section: "working",
+      sessionClass: "automation",
+      chatPath: "/tmp/automation.jsonl",
+    }];
+    const repository = new SessionRepository([provider]);
+    let cancelCalls = 0;
+    let responseCalls = 0;
+    repository.setControls({
+      focus: async () => undefined,
+      send: async () => undefined,
+      canCancel: () => true,
+      cancel: async () => { cancelCalls += 1; },
+    });
+    await repository.refresh();
+    repository.registerExternalAction("pi-1", {
+      type: "approval", toolUseId: "automation-approval", toolName: "Command",
+      input: { command: "echo private" }, canPersist: false,
+    }, async () => { responseCalls += 1; });
+    repository.registerExternalAction("pi-1", {
+      type: "question", toolUseId: "automation-question",
+      questions: [{ id: "continue", question: "Continue?", choices: ["Yes"], multiple: false }],
+    }, async () => { responseCalls += 1; });
+
+    await expect(repository.chatAction({
+      type: "cancel_chat", id: "cancel-automation", sessionId: "pi-1", generation: 1,
+      deliveryId: "delivery-automation",
+    })).resolves.toBe("Automation sessions are read only.");
+    await expect(repository.chatAction({
+      type: "respond_chat", id: "respond-approval", sessionId: "pi-1",
+      toolUseId: "automation-approval", decision: "allow",
+    })).resolves.toBe("Automation sessions are read only.");
+    await expect(repository.chatAction({
+      type: "respond_chat", id: "respond-question", sessionId: "pi-1",
+      toolUseId: "automation-question", decision: "answer", answers: { continue: "Yes" },
+    })).resolves.toBe("Automation sessions are read only.");
+
+    expect(cancelCalls).toBe(0);
+    expect(responseCalls).toBe(0);
+    expect(repository.pendingActions("pi-1")).toHaveLength(2);
   });
 
   it("keeps concurrent approvals separate and routes each exact approval out of order", async () => {

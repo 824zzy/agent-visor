@@ -134,7 +134,11 @@ export class NativeServicesRepository implements NativeServicesSource {
   reconcileSessions(snapshot: SessionSnapshot): void {
     this.reconcilePiRestoration();
     const notifications = snapshot.sessions.flatMap((session) => {
-      if (session.section !== "needs_you" && session.section !== "ready") return [];
+      // Headless Codex exec records are machine-owned. Keep them in the
+      // session snapshot for search, but never turn their lifecycle into a
+      // user-facing notification or Dock badge.
+      if (session.sessionClass === "automation"
+        || (session.section !== "needs_you" && session.section !== "ready")) return [];
       const pending = this.options.pendingAction?.(session.id);
       const approval = session.section === "needs_you" && pending?.type === "approval"
         ? pending

@@ -127,6 +127,7 @@ async function cursorSession(
     updatedAt: iso(transcript.modifiedAt),
     canOpenOwner: true,
     canEnterChat: true,
+    sessionClass: terminalTarget ? "terminal" : "interactive",
     chatPath: transcript.path,
     ...(terminalTarget ? { controlTarget: { kind: "terminal" as const, target: terminalTarget } } : {}),
   };

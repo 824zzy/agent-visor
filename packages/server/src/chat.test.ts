@@ -272,6 +272,25 @@ describe("provider Chat parsing", () => {
     });
   });
 
+  it("keeps automation sessions read only while preserving their lifecycle phase", () => {
+    const automation = {
+      id: "codex-exec", provider: "codex" as const, cwd: "/tmp/project", owner: "Codex",
+      section: "working" as const, updatedAt: "2026-08-23T00:00:00.000Z",
+      canOpenOwner: true, canEnterChat: true,
+      sessionClass: "automation" as const,
+      messageTransport: "codex_app_server" as const,
+    };
+
+    expect(chatCapabilities(automation)).toEqual({
+      canSendText: false,
+      canSendImages: false,
+      canCancel: false,
+      canApprove: false,
+      canAnswer: false,
+      readOnlyReason: "Automation sessions are read only.",
+    });
+  });
+
   it("pages backward without repeating visible messages", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "agent-visor-chat-"));
     const transcript = path.join(directory, "session.jsonl");

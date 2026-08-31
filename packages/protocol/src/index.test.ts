@@ -75,6 +75,29 @@ describe("session snapshot protocol", () => {
     expect(sessionSnapshotSchema.parse(snapshot)).toEqual(snapshot);
   });
 
+  it("preserves the typed session class in snapshots", () => {
+    const snapshot = {
+      type: "session_snapshot",
+      revision: 7,
+      sessions: [{
+        id: "codex-exec",
+        title: "Headless automation",
+        subtitle: "Ready to continue",
+        source: "Codex",
+        project: "agent-visor",
+        owner: "Codex",
+        cwd: "/Users/me/Codes/agent-visor",
+        section: "ready",
+        sessionClass: "automation",
+        updatedAt: "2026-08-22T08:00:00.000Z",
+        canOpenOwner: true,
+        canEnterChat: true,
+      }],
+    };
+
+    expect(sessionSnapshotSchema.parse(snapshot)).toEqual(snapshot);
+  });
+
   it("rejects unknown sections instead of inventing UI state", () => {
     expect(() =>
       sessionSnapshotSchema.parse({

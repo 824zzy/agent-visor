@@ -124,6 +124,7 @@ export class PiProvider implements ProviderAdapter {
         updatedAt: iso(file.modifiedAt),
         canOpenOwner: process !== undefined,
         canEnterChat: true,
+        sessionClass: process ? "terminal" : "interactive",
         chatPath: file.path,
         ...(modelCatalog ? { modelCatalog } : {}),
         ...(terminalTarget ? {

@@ -277,6 +277,7 @@ describe("live provider adapters", () => {
       id: "codex-1",
       title: "Codex title",
       provider: "codex",
+      sessionClass: "interactive",
       owner: "Codex",
       canEnterChat: true,
       modelCatalog: {
@@ -380,8 +381,41 @@ describe("live provider adapters", () => {
     expect(sessions).toMatchObject([{
       id: "codex-exec",
       title: "Headless job",
+      sessionClass: "automation",
       canOpenOwner: true,
       controlTarget: { kind: "url", url: "codex://threads/codex-exec" },
+    }]);
+  });
+
+  it("classifies a live Codex CLI row as terminal-owned", async () => {
+    const environment = new FixtureEnvironment();
+    const database = `${home}/.codex/sqlite/state_5.sqlite`;
+    const rollout = `${home}/.codex/sessions/2026/08/22/rollout-codex-cli.jsonl`;
+    environment.stamps.set(database, { modifiedAt: now, size: 100 });
+    environment.stamps.set(rollout, { modifiedAt: now, size: 100 });
+    environment.sqliteRows.set(database, [{
+      id: "codex-cli",
+      rollout_path: rollout,
+      cwd,
+      title: "CLI task",
+      updated_at: Math.floor(now.valueOf() / 1_000),
+      archived: 0,
+      source: "cli",
+    }]);
+    environment.processRows = [
+      { pid: 60, parentPID: 7, tty: "ttys002", command: "/usr/local/bin/codex", arguments: "codex" },
+      { pid: 7, parentPID: 1, tty: "ttys002", command: "/Applications/Ghostty.app/Contents/MacOS/ghostty", arguments: "ghostty" },
+    ];
+    environment.cwdByPID.set(60, cwd);
+    environment.starts.set(60, new Date("2026-08-22T07:59:00.000Z"));
+
+    const sessions = await new CodexProvider(environment).discover();
+
+    expect(sessions).toMatchObject([{
+      id: "codex-cli",
+      sessionClass: "terminal",
+      owner: "Ghostty",
+      controlTarget: { kind: "terminal", target: { tty: "ttys002" } },
     }]);
   });
 

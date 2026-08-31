@@ -104,6 +104,9 @@ export class CodexProvider implements ProviderAdapter {
     modelCatalog?: DiscoveredProviderSession["modelCatalog"],
     terminalTarget?: NativeHelperTerminalTarget,
   ): Promise<DiscoveredProviderSession> {
+    const sessionClass = thread.source === "exec"
+      ? "automation" as const
+      : thread.source === "cli" ? "terminal" as const : "interactive" as const;
     const storedTitle = indexTitles.get(thread.id) || thread.title;
     const title = storedTitle || await codexRolloutTitle(this.environment, thread.rolloutPath);
     const codexLifecycle = owner === "Codex" && !terminalTarget
@@ -129,6 +132,7 @@ export class CodexProvider implements ProviderAdapter {
       canOpenOwner: true,
       canEnterChat: owner !== "Codex"
         || this.environment.now().valueOf() - thread.updatedAt * 1_000 <= 120_000,
+      sessionClass,
       chatPath: thread.rolloutPath,
       messageTransport: "codex_app_server",
       ...(modelCatalog ? { modelCatalog } : {}),
