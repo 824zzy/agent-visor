@@ -289,6 +289,8 @@ async function run() {
   await openChat(mainSession);
   const emptyProbe = await probeComposer();
   assert(emptyProbe.outer && emptyProbe.rail, `integrated composer exposes one public enclosure and rail (${JSON.stringify(emptyProbe)})`);
+  assert(emptyProbe.surfaceBackground === emptyProbe.canvasBackground,
+    `composer enclosure shares the light Chat canvas (${emptyProbe.canvasBackground} → ${emptyProbe.surfaceBackground})`);
   assert(emptyProbe.borderWidth === "1px" && emptyProbe.borderRadius >= 20 && emptyProbe.borderRadius <= 22,
     `composer enclosure uses the neutral 1px 20-22px surface (${JSON.stringify(emptyProbe)})`);
   assert(emptyProbe.inputBorderWidth === "0px" && emptyProbe.inputBackground === "rgba(0, 0, 0, 0)",
@@ -539,11 +541,11 @@ async function run() {
   nativeTheme.themeSource = "dark";
   await new Promise((resolve) => setTimeout(resolve, 120));
   const darkProbe = await window.webContents.executeJavaScript(`(() => ({
-    bodyBackground: getComputedStyle(document.body).backgroundColor,
+    canvasBackground: getComputedStyle(document.getElementById('chat-canvas')).backgroundColor,
     surfaceBackground: getComputedStyle(document.querySelector('[aria-label="Chat composer"]')).backgroundColor,
   }))()`);
-  assert(darkProbe.bodyBackground !== "" && darkProbe.surfaceBackground !== "rgba(0, 0, 0, 0)",
-    `dark mode keeps a visible neutral composer surface (${JSON.stringify(darkProbe)})`);
+  assert(darkProbe.surfaceBackground === darkProbe.canvasBackground,
+    `composer enclosure shares the dark Chat canvas (${darkProbe.canvasBackground} → ${darkProbe.surfaceBackground})`);
   await capture("dark-narrow.png");
   await window.setSize(1_200, 760);
   for (let index = 0; index < 15; index += 1) {
@@ -623,6 +625,8 @@ async function probeComposer() {
     const sendRect = send?.getBoundingClientRect();
     return {
       outer: Boolean(outer), rail: Boolean(rail),
+      canvasBackground: getComputedStyle(document.getElementById('chat-canvas')).backgroundColor,
+      surfaceBackground: style?.backgroundColor ?? "",
       outerWidth: outerRect?.width ?? 0, outerHeight: outerRect?.height ?? 0,
       borderWidth: style?.borderWidth ?? "", borderRadius: Number.parseFloat(style?.borderRadius ?? "0"),
       inputBorderWidth: inputStyle?.borderWidth ?? "", inputBackground: inputStyle?.backgroundColor ?? "",
