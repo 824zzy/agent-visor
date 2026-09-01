@@ -144,8 +144,16 @@ async function run() {
   assert(afterHover.cursor === before.cursor, "hover preserves the keyboard cursor");
   assert(afterHover.scrollTop === before.scrollTop, "hover preserves the Sessions viewport");
 
+  const lightSessionsCanvas = await window.webContents.executeJavaScript(
+    `getComputedStyle(document.getElementById('sessions-canvas')).backgroundColor`,
+  );
   await window.webContents.executeJavaScript(`document.querySelectorAll('[aria-label^="Open Chat for"]')[27]?.click()`);
   await waitFor(window, `Boolean(document.querySelector('[aria-label="Back to Sessions"]'))`);
+  const lightChatCanvas = await window.webContents.executeJavaScript(
+    `getComputedStyle(document.getElementById('chat-canvas')).backgroundColor`,
+  );
+  assert(lightChatCanvas === lightSessionsCanvas,
+    `Chat and Sessions share the light canvas (${lightSessionsCanvas} → ${lightChatCanvas})`);
   assert(
     await window.webContents.executeJavaScript(`getComputedStyle(document.querySelector('[aria-label="Search sessions"]')).visibility === 'hidden'`),
     "Chat hides the retained Sessions browser from accessibility",
@@ -210,8 +218,20 @@ async function run() {
   );
   nativeTheme.themeSource = "dark";
   await waitFor(window, `[...document.querySelectorAll('*')].some((item) => getComputedStyle(item).backgroundColor === 'rgb(30, 30, 46)')`);
+  const darkSessionsCanvas = await window.webContents.executeJavaScript(
+    `getComputedStyle(document.getElementById('sessions-canvas')).backgroundColor`,
+  );
+  await window.webContents.executeJavaScript(
+    `document.querySelector('[aria-label^="Open Chat for"]')?.click()`,
+  );
+  await waitFor(window, `Boolean(document.getElementById('chat-canvas'))`);
+  const darkChatCanvas = await window.webContents.executeJavaScript(
+    `getComputedStyle(document.getElementById('chat-canvas')).backgroundColor`,
+  );
+  assert(darkChatCanvas === darkSessionsCanvas,
+    `Chat and Sessions share the dark canvas (${darkSessionsCanvas} → ${darkChatCanvas})`);
 
-  console.log("Sessions accessibility PASS: action labels, disjoint frames, aligned columns, and retained browser state.");
+  console.log("Sessions accessibility PASS: action labels, disjoint frames, aligned columns, shared canvas, and retained browser state.");
   } finally {
     nativeTheme.themeSource = "system";
     window.destroy();

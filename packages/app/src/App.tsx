@@ -271,7 +271,7 @@ function SessionBrowser({
   }, [active, cursorId, onContentScaleChange, onOpenChat, onOpenSettings, query, visibleKey]);
 
   return (
-    <View style={browserStyles.app}>
+    <View nativeID="sessions-canvas" style={browserStyles.app}>
       <View style={browserStyles.header}>
         <View style={browserStyles.railRow}>
           <View style={[browserStyles.searchShell, searchFocused && browserStyles.searchFocused]}>

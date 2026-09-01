@@ -82,7 +82,7 @@ import {
   insertComposerTextAtSelection,
 } from "./chat-paste";
 import { CONTENT_RAIL_INSET, contentRailStyle } from "./content-rail";
-import type { Palette } from "./theme";
+import { createChatPalette, type Palette } from "./theme";
 import { chatCancellationView, type ChatCancellationView } from "./chat-cancellation";
 import type { ChatDeliveryRecoveryRecord } from "./chat-delivery-recovery";
 import { chatRecoveryView } from "./chat-recovery-presentation";
@@ -475,7 +475,7 @@ export function Chat({
   }, [detailsOpen, onBack, onContentScaleChange]);
 
   return (
-    <View style={styles.app}>
+    <View nativeID="chat-canvas" style={styles.app}>
       <View style={styles.header}>
         <View accessibilityLabel="Chat header rail" style={styles.headerRail}>
           <Pressable accessibilityLabel="Back to Sessions" onPress={onBack} style={styles.backButton}>
@@ -2091,34 +2091,6 @@ function sectionLabel(section: SessionSummary["section"]): string {
 
 function sectionColor(section: SessionSummary["section"], palette: Palette): string {
   return { needs_you: palette.attention, ready: palette.ready, working: palette.working, history: palette.history }[section];
-}
-
-// Chat uses a calm reading surface while Sessions keeps the shared palette.
-// Semantic accents remain provider/status colors so state and links retain
-// their existing meaning in both appearances.
-function createChatPalette(palette: Palette): Palette {
-  const isDark = hexLuminance(palette.background) < 0.2;
-  return {
-    ...palette,
-    background: isDark ? "#202124" : "#ffffff",
-    border: isDark ? "#3b3d43" : "#e7e7e3",
-    card: isDark ? "#2b2d31" : "#f7f7f5",
-    settingsCard: isDark ? "#2b2d31" : "#f7f7f5",
-    foreground: isDark ? "#ecece8" : "#2d2d2b",
-    muted: isDark ? "#b7b7b1" : "#6c6c68",
-    tertiary: isDark ? "#92928d" : "#70706b",
-    accentWash: isDark ? "#ffffff10" : "#00000008",
-  };
-}
-
-function hexLuminance(value: string): number {
-  const match = /^#([0-9a-f]{6})$/i.exec(value);
-  if (!match) return 1;
-  const channels = [0, 2, 4].map((start) => Number.parseInt(match[1]!.slice(start, start + 2), 16) / 255);
-  const linear = channels.map((channel) => channel <= 0.03928
-    ? channel / 12.92
-    : ((channel + 0.055) / 1.055) ** 2.4);
-  return 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!;
 }
 
 type ChatStyles = ReturnType<typeof createStyles>;

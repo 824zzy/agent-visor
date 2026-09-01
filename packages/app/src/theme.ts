@@ -12,3 +12,30 @@ export const palettes = {
 };
 
 export type Palette = typeof palettes.light;
+
+// ponytail: Chat may tune content layers, but its root canvas must stay equal
+// to Sessions so navigating between the two surfaces does not flash or drift.
+export function createChatPalette(palette: Palette): Palette {
+  const isDark = hexLuminance(palette.background) < 0.2;
+  return {
+    ...palette,
+    background: palette.background,
+    border: isDark ? "#3b3d43" : "#e7e7e3",
+    card: isDark ? "#2b2d31" : "#f7f7f5",
+    settingsCard: isDark ? "#2b2d31" : "#f7f7f5",
+    foreground: isDark ? "#ecece8" : "#2d2d2b",
+    muted: isDark ? "#b7b7b1" : "#6c6c68",
+    tertiary: isDark ? "#92928d" : "#70706b",
+    accentWash: isDark ? "#ffffff10" : "#00000008",
+  };
+}
+
+function hexLuminance(value: string): number {
+  const match = /^#([0-9a-f]{6})$/i.exec(value);
+  if (!match) return 1;
+  const channels = [0, 2, 4].map((start) => Number.parseInt(match[1]!.slice(start, start + 2), 16) / 255);
+  const linear = channels.map((channel) => channel <= 0.03928
+    ? channel / 12.92
+    : ((channel + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!;
+}

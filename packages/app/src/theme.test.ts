@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { palettes } from "./theme.js";
+import { createChatPalette, palettes } from "./theme.js";
 
 describe("surface palettes", () => {
   it("matches the released accessible Catppuccin colors", () => {
@@ -28,5 +28,12 @@ describe("surface palettes", () => {
       working: "#d97857",
       error: "#f38ba8",
     });
+  });
+
+  it("keeps the Chat canvas aligned with the Sessions canvas", () => {
+    expect(createChatPalette(palettes.light).background).toBe(palettes.light.background);
+    expect(createChatPalette(palettes.dark).background).toBe(palettes.dark.background);
+    expect(createChatPalette(palettes.light).card).not.toBe(palettes.light.card);
+    expect(createChatPalette(palettes.dark).card).not.toBe(palettes.dark.card);
   });
 });

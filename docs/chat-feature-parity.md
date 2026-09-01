@@ -721,13 +721,15 @@ overflow-safe rail geometry.
 
 ## Focused Chat visual polish evidence
 
-Approved direction for the 2026-08-30 Chat-only pass: keep Sessions' existing
-palette unchanged while giving Chat a neutral white/light or neutral dark
-reading canvas, a soft gray user prompt bubble, readable 14 px/22 px prose,
-left-aligned subdued durations, and no decorative assistant status dot. The
-existing 980 px rail and 28 px inset, provider/status accents, Swift behavior,
-security rules, and all send/cancel/draft/scroll semantics remain in scope;
-these are proposed defaults, not pixel measurements of another product.
+The 2026-08-30 Chat-only pass introduced a neutral white/light or neutral dark
+reading canvas. Live comparison on 2026-08-31 superseded that part of the
+direction: Sessions and Chat now share the same root canvas in both
+appearances, while Chat keeps its quieter cards, borders, user prompt bubble,
+readable 14 px/22 px prose, left-aligned subdued durations, and no decorative
+assistant status dot. The existing 980 px rail and 28 px inset,
+provider/status accents, Swift behavior, security rules, and all
+send/cancel/draft/scroll semantics remain in scope; these are product defaults,
+not pixel measurements of another product.
 
 The focused fixture evidence is kept outside the repository in
 `.scratch/agent-visor-chat-polish.uqx1lx/`: `screenshots-before/` contains the
