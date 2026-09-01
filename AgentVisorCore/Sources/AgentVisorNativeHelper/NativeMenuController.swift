@@ -1189,6 +1189,12 @@ final class NativeMenuController: NSObject {
                 pillWidth: capsuleWidth(label, includesDot: true, padding: standardPadding)
             )
         }
+        let menuPillIDs = Set(orderedPills.map(\.id))
+        let navigatorOnlyCount = navigatorPills.reduce(into: 0) { count, pill in
+            if !menuPillIDs.contains(pill.id) && pill.defaultOverflowEligible == true {
+                count += 1
+            }
+        }
 
         let usage = displayedUsageIDs.compactMap { usagePresentations[$0] }
         let usageWidths = usage.map {
@@ -1217,6 +1223,11 @@ final class NativeMenuController: NSObject {
             ),
             currentDensity: density,
             releaseHeadroom: 8,
+            // ponytail: navigator-only rows must reserve +N here; otherwise
+            // a fully fitting physical set makes the complete navigator
+            // unreachable from the menu bar. Automation rows opt out on the
+            // wire and remain searchable without ambient overflow attention.
+            supplementalHiddenCount: navigatorOnlyCount,
             overflowPillWidthFor: { [standardPadding] count in
                 capsuleWidth("+\(count)", includesDot: false, padding: standardPadding)
             }

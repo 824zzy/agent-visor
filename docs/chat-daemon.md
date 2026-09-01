@@ -22,9 +22,9 @@ the lifecycle phase: Desktop rows are `interactive`, live CLI rows are
 rows remain searchable in Sessions and the navigator as read-only records, but
 they are excluded from physical menu-bar pills and ambient Ready attention.
 
-Codex Desktop discovery defaults to source-only entry after two minutes without a database update. After status reconciliation, a tracked **In progress**, **Ready to continue**, or **Needs you** session with a canonical transcript still exposes **Open Chat**, regardless of that inactivity age. This restores the Swift tracked-session behavior; it does not grant send, cancel, or approval authority. The provider's separate observed-session window still bounds discovery.
+Codex Desktop sessions with an available canonical transcript expose **Open Chat** in every section, including **History**, regardless of inactivity age. Reading a conversation is separate from controlling its provider: historical conversations remain read-only, and opening Chat does not grant send, cancel, or approval authority.
 
-Codex rows that remain **History** keep the existing source-only age rule. Historical Pi records with valid conversation content remain readable. Missing transcripts and unsupported providers or hosts do not gain Chat entry from this rule.
+The provider's separate observed-session window, archive exclusions, and missing-transcript checks still bound discovery; this entry rule does not add older or undiscovered sessions to the list. Historical Pi records with valid conversation content remain readable. Unsupported providers do not gain Chat entry, and host-specific control restrictions remain unchanged.
 
 ## Authoritative metadata
 

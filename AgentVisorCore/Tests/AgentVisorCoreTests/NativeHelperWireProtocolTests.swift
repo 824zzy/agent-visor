@@ -89,7 +89,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
     }
 
     func testDecodesSeparateNavigatorCatalog() throws {
-        let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"visible","title":"Visible","phase":"working","priority":0,"accessibilityLabel":"Visible, in progress"}],"navigatorPills":[{"id":"visible","title":"Visible","phase":"working","priority":0,"accessibilityLabel":"Visible, in progress"},{"id":"chat-history","title":"Chat history","phase":"history","priority":1,"accessibilityLabel":"Chat history, recent session"}]}}"#
+        let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"visible","title":"Visible","phase":"working","priority":0,"accessibilityLabel":"Visible, in progress"}],"navigatorPills":[{"id":"visible","title":"Visible","phase":"working","priority":0,"accessibilityLabel":"Visible, in progress"},{"id":"chat-history","title":"Chat history","phase":"history","priority":1,"defaultOverflowEligible":true,"accessibilityLabel":"Chat history, recent session"}]}}"#
 
         let request = try NativeHelperRequest.decode(Data(json.utf8))
         guard case .presentPills(_, let pills, let navigatorPills, _, _, _, _, _, _) = request else {
@@ -97,6 +97,8 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         }
         XCTAssertEqual(pills.map(\.id), ["visible"])
         XCTAssertEqual(navigatorPills.map(\.id), ["visible", "chat-history"])
+        XCTAssertNil(navigatorPills.first?.defaultOverflowEligible)
+        XCTAssertEqual(navigatorPills.last?.defaultOverflowEligible, true)
     }
 
     func testDecodesDisplayAndFullScreenPreferences() throws {

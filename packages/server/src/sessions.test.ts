@@ -144,7 +144,7 @@ describe("SessionRepository", () => {
     expect(await repository.refresh()).toEqual(first);
   });
 
-  it("opens idle tracked Codex history without changing control permissions", async () => {
+  it("preserves Codex Chat entry and control permissions when history becomes Ready", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "codex-chat-entry-"));
     const transcript = path.join(directory, "rollout.jsonl");
     writeFileSync(transcript, `${JSON.stringify({
@@ -158,10 +158,12 @@ describe("SessionRepository", () => {
       const provider = new FakeProvider();
       provider.sessions = [{
         ...live, provider: "codex", owner: "Codex", section: "history",
-        canEnterChat: false, chatPath: transcript, messageTransport: "codex_app_server",
+        canEnterChat: true, chatPath: transcript, messageTransport: "codex_app_server",
       }];
       const repository = new SessionRepository([provider]);
-      await repository.refresh();
+      expect((await repository.refresh()).sessions[0]).toMatchObject({
+        section: "history", canEnterChat: true,
+      });
       const previousCapabilities = (await repository.chatPage(live.id)).capabilities;
       const snapshot = repository.applyHook({
         sessionId: live.id, provider: "codex", cwd: live.cwd,
@@ -181,7 +183,7 @@ describe("SessionRepository", () => {
     { provider: "codex" as const, owner: "Codex", chatPath: undefined },
     { provider: "codex" as const, owner: "Zed", chatPath: "/tmp/zed.jsonl" },
     { provider: "cursor" as const, owner: "Cursor", chatPath: "/tmp/cursor.jsonl" },
-  ])("preserves unsupported Chat entry for $provider owned by $owner", async (record) => {
+  ])("preserves provider Chat entry restrictions for $provider owned by $owner", async (record) => {
     const provider = new FakeProvider();
     provider.sessions = [{ ...live, ...record, section: "ready", canEnterChat: false }];
     const repository = new SessionRepository([provider]);

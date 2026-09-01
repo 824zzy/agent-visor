@@ -32,7 +32,16 @@ export function nativeActionFor(event: NativeHelperEvent, snapshot: SessionSnaps
   }
   const session = snapshot.sessions.find((candidate) => candidate.id === event.sessionId);
   if (!session) return undefined;
-  return event.intent === "chat" && session.canEnterChat
+  if (event.intent === "chat") {
+    return session.canEnterChat
+      ? { type: "native_action", action: "open_chat", sessionId: session.id } as const
+      : undefined;
+  }
+  // Owner-first remains the normal path for source-backed sessions: bin.ts
+  // resolves focus asynchronously when an owner route exists. A Chat-capable
+  // row without that route needs an authoritative primary action instead of
+  // silently dropping a normal click/Return.
+  return !session.canOpenOwner && session.canEnterChat
     ? { type: "native_action", action: "open_chat", sessionId: session.id } as const
     : undefined;
 }
@@ -53,7 +62,6 @@ export function menuPresentation(
     // machine-owned work and must not compete with user-facing sessions for
     // ambient menu-bar space or Ready attention.
     .filter((session) => session.sessionClass !== "automation")
-    .filter((session) => session.source !== "Codex" || session.section !== "history")
     .filter((session) => session.canOpenOwner
       || (session.section !== "history" && session.canEnterChat))
     .slice(0, 64)
@@ -88,6 +96,7 @@ function presentationPill(
     },
     phase: session.section,
     priority,
+    defaultOverflowEligible: session.sessionClass !== "automation",
     accessibilityLabel: [
       title,
       phaseLabel[session.section],

@@ -30,7 +30,8 @@ Every request contains protocol `version: 1`, a non-empty `id`, and one method:
 - `request_notifications` asks macOS for notification access.
 - `reconcile_notifications` accepts bounded notices and removes resolved notices.
 - `reconcile_pi_restoration` accepts bounded exact candidates, current live session IDs, candidate-removal IDs, and the clean-termination signal.
-- `present_pills` accepts at most 64 active or recent pill descriptions, bounded optional inspector content, eight usage glances, session shortcuts, the window hotkey, pill-screen selection, and full-screen policy.
+- `present_pills` accepts at most 64 active or recent physical pill descriptions and an optional `navigatorPills` catalog of at most 512 bounded rows, plus bounded optional inspector content, eight usage glances, session shortcuts, the window hotkey, pill-screen selection, and full-screen policy.
+- Each optional navigator row may carry `defaultOverflowEligible`. Explicit `true` rows that are not physical candidates contribute to the default `+N`; explicit `false` rows remain searchable-only (the automation contract). An omitted field preserves old-wire helper behavior: it is not inferred from catalog membership, while a hidden physical `pills` row still contributes to `+N`.
 - Each usage glance may include two bounded limit windows, fixed capsule width, per-window tone, reset times, reset-credit count, sync time, and stale state.
 - `focus_terminal` selects one allowlisted terminal through its exact TTY.
 - `send_terminal` sends bounded text to that exact terminal and optionally submits it.

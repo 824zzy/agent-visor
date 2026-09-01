@@ -66,6 +66,9 @@ public struct NativeHelperPill: Codable, Equatable {
     public let inspector: NativeHelperSessionInspector?
     public let phase: NativeHelperPillPhase
     public let attentionTier: NativeHelperSessionAttentionTier?
+    /// Whether this navigator row should contribute to the default +N
+    /// overflow count. Omitted values preserve the legacy wire behavior.
+    public let defaultOverflowEligible: Bool?
     public let priority: Int
     public let accessibilityLabel: String
 
@@ -79,6 +82,7 @@ public struct NativeHelperPill: Codable, Equatable {
         inspector: NativeHelperSessionInspector? = nil,
         phase: NativeHelperPillPhase,
         attentionTier: NativeHelperSessionAttentionTier? = nil,
+        defaultOverflowEligible: Bool? = nil,
         priority: Int,
         accessibilityLabel: String
     ) {
@@ -91,6 +95,7 @@ public struct NativeHelperPill: Codable, Equatable {
         self.inspector = inspector
         self.phase = phase
         self.attentionTier = attentionTier
+        self.defaultOverflowEligible = defaultOverflowEligible
         self.priority = priority
         self.accessibilityLabel = accessibilityLabel
     }
@@ -756,6 +761,7 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         ]
         let detailedPillKeys = legacyPillKeys.union([
             "subtitle", "source", "project", "owner", "inspector", "attentionTier",
+            "defaultOverflowEligible",
         ])
         return (pills + navigatorPills).allSatisfy {
             let keys = Set($0.keys)

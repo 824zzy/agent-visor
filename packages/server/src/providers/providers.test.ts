@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AuggieProvider } from "./auggie.js";
 import { ClaudeProvider } from "./claude.js";
@@ -310,8 +313,55 @@ describe("live provider adapters", () => {
       modifiedAt: new Date(now.valueOf() - 3_600_000),
       size: 100,
     });
-    expect((await new CodexProvider(environment).discover())[0]?.canEnterChat).toBe(false);
+    expect((await new CodexProvider(environment).discover())[0]?.canEnterChat).toBe(true);
   });
+
+  it.each([120_000, 121_000, 720_000, 3_600_000, 24 * 3_600_000, 41 * 3_600_000])(
+    "opens readable Codex History after %i ms idle without enabling controls",
+    async (ageMs) => {
+      const directory = mkdtempSync(path.join(tmpdir(), "codex-history-chat-"));
+      const rollout = path.join(directory, "rollout.jsonl");
+      writeFileSync(rollout, `${JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message", id: "history-user", role: "user",
+          content: [{ type: "input_text", text: "Existing conversation" }],
+        },
+      })}\n`);
+      try {
+        const environment = new FixtureEnvironment();
+        const database = `${home}/.codex/sqlite/state_5.sqlite`;
+        const updatedAt = new Date(now.valueOf() - ageMs);
+        environment.stamps.set(database, { modifiedAt: now, size: 100 });
+        environment.stamps.set(rollout, { modifiedAt: updatedAt, size: 100 });
+        environment.sqliteRows.set(database, [{
+          id: "history-codex", rollout_path: rollout, cwd, title: "Codex history",
+          updated_at: updatedAt.valueOf() / 1_000, archived: 0, source: "vscode",
+        }]);
+        const repository = new SessionRepository([new CodexProvider(environment)], {
+          now: () => now,
+        });
+
+        const snapshot = await repository.refresh();
+        expect(snapshot.sessions).toMatchObject([{
+          id: "history-codex", section: "history", canOpenOwner: true, canEnterChat: true,
+        }]);
+        const page = await repository.chatPage("history-codex");
+        expect(page.items).toMatchObject([{ kind: "user", text: "Existing conversation" }]);
+        expect(page.capabilities).toMatchObject({
+          canSendText: false, canSendImages: false, canCancel: false,
+          canApprove: false, canAnswer: false,
+          readOnlyReason: "This session has ended. Chat history is read only.",
+        });
+        expect((await repository.refresh()).sessions).toEqual(snapshot.sessions);
+
+        environment.stamps.delete(rollout);
+        expect((await repository.refresh()).sessions).toEqual([]);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     { section: "ready", event: "Stop", status: "waiting_for_input", ageMs: 121_000 },
@@ -336,7 +386,7 @@ describe("live provider adapters", () => {
       now: () => now,
     });
     expect((await repository.refresh()).sessions).toMatchObject([{
-      id: "ready-codex", section: "history", canOpenOwner: true, canEnterChat: false,
+      id: "ready-codex", section: "history", canOpenOwner: true, canEnterChat: true,
     }]);
 
     const completed = repository.applyHook({
@@ -353,11 +403,51 @@ describe("live provider adapters", () => {
       sessionId: "ready-codex", provider: "codex", cwd,
       event: "SessionEnd", status: "ended", receivedAt: now.toISOString(),
     }).sessions).toMatchObject([{
-      id: "ready-codex", section: "history", canOpenOwner: true, canEnterChat: false,
+      id: "ready-codex", section: "history", canOpenOwner: true, canEnterChat: true,
     }]);
 
     environment.stamps.delete(rollout);
     expect((await repository.refresh()).sessions).toEqual([]);
+  });
+
+  it("applies the shared 42-hour observed window before menu selection", async () => {
+    const environment = new FixtureEnvironment();
+    const database = `${home}/.codex/sqlite/state_5.sqlite`;
+    const recentRollout = `${home}/.codex/sessions/recent.jsonl`;
+    const oldRollout = `${home}/.codex/sessions/old.jsonl`;
+    environment.stamps.set(database, { modifiedAt: now, size: 100 });
+    environment.stamps.set(recentRollout, {
+      modifiedAt: new Date(now.valueOf() - 41 * 60 * 60 * 1_000),
+      size: 100,
+    });
+    environment.stamps.set(oldRollout, {
+      modifiedAt: new Date(now.valueOf() - 43 * 60 * 60 * 1_000),
+      size: 100,
+    });
+    environment.sqliteRows.set(database, [
+      {
+        id: "recent-codex",
+        rollout_path: recentRollout,
+        cwd,
+        title: "Recent Codex",
+        updated_at: Math.floor((now.valueOf() - 41 * 60 * 60 * 1_000) / 1_000),
+        archived: 0,
+        source: "vscode",
+      },
+      {
+        id: "old-codex",
+        rollout_path: oldRollout,
+        cwd,
+        title: "Old Codex",
+        updated_at: Math.floor((now.valueOf() - 43 * 60 * 60 * 1_000) / 1_000),
+        archived: 0,
+        source: "vscode",
+      },
+    ]);
+
+    const sessions = await new CodexProvider(environment).discover();
+
+    expect(sessions.map(({ id }) => id)).toEqual(["recent-codex"]);
   });
 
   it("discovers authoritative headless Codex jobs", async () => {

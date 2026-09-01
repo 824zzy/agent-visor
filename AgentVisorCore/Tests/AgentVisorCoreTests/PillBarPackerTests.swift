@@ -31,6 +31,37 @@ final class PillBarPackerTests: XCTestCase {
         XCTAssertEqual(result.hiddenCount, 0)
     }
 
+    func testNavigatorOnlySessionsReserveOverflowWithoutBecomingPhysicalPills() {
+        let result = PillBarPacker.pack(
+            candidates: [.init(id: "active", pillWidth: 50)],
+            leftMax: 100,
+            rightMax: 100,
+            pillSpacing: 4,
+            supplementalHiddenCount: 2,
+            overflowPillWidthFor: { count in count == 2 ? 30 : 1_000 }
+        )
+
+        XCTAssertEqual(result.leftVisibleIds + result.rightVisibleIds, ["active"])
+        XCTAssertEqual(result.hiddenIds, [])
+        XCTAssertEqual(result.hiddenCount, 2)
+        XCTAssertEqual(result.overflowSide, .right)
+    }
+
+    func testEligibleNavigatorOnlySessionUsesOverflowWhenNoPhysicalCandidatesExist() {
+        let result = PillBarPacker.pack(
+            candidates: [],
+            leftMax: 0,
+            rightMax: 100,
+            pillSpacing: 4,
+            supplementalHiddenCount: 1,
+            overflowPillWidthFor: { _ in 30 }
+        )
+
+        XCTAssertEqual(result.hiddenCount, 1)
+        XCTAssertEqual(result.hiddenIds, [])
+        XCTAssertEqual(result.overflowSide, .right)
+    }
+
     // T3: two pills that both fit are balanced ACROSS the notch (one per
     // side) rather than stacked on the left — the pills should flank the
     // notch. a(40) on the left, b(50) on the right minimizes imbalance.

@@ -1499,13 +1499,6 @@ export class SessionRepository {
           .find((action) => action.state === "pending");
         record.updatedAt = latestApproval?.receivedAt ?? new Date().toISOString();
       }
-      // Codex's discovery age gate applies to source-only history, not a
-      // tracked Ready/working/Needs-you session with a canonical transcript.
-      // Chat send/cancel authority remains separate from this read-only entry.
-      if (record.provider === "codex" && record.owner === "Codex"
-        && record.section !== "history" && record.chatPath) {
-        record.canEnterChat = true;
-      }
     }
     const previousControlSessionIDs = new Set(this.controlBySession.keys());
     this.controlBySession.clear();

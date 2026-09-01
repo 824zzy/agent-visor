@@ -130,8 +130,9 @@ export class CodexProvider implements ProviderAdapter {
       updatedAt: codexLifecycle?.observedAt ?? iso(thread.updatedAt * 1_000),
       ...(codexLifecycle ? { codexLifecycle } : {}),
       canOpenOwner: true,
-      canEnterChat: owner !== "Codex"
-        || this.environment.now().valueOf() - thread.updatedAt * 1_000 <= 120_000,
+      // Desktop discovery already requires an existing transcript. Inactivity
+      // does not prevent reading it; send/cancel authority is checked separately.
+      canEnterChat: true,
       sessionClass,
       chatPath: thread.rolloutPath,
       messageTransport: "codex_app_server",

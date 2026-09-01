@@ -32,6 +32,18 @@ Full-screen detection uses native `AXFullScreen` evidence on the selected displa
 
 Needs you items come first, then unacknowledged Ready to continue, In progress, acknowledged Ready to continue, and source-backed recent History shortcuts.
 
+### Pill-surface selection contract
+
+Provider discovery owns observed-session recency. Codex, Cursor, and Zed use the configured observed-agent window, which defaults to 42 hours. The menu selector does not apply a second clock or a provider-specific History ban.
+
+Needs you, Ready, and Working rows are active pill candidates. A History row with an exact source action is a recent-shortcut candidate. A History row that has only Chat remains navigator-only because it has no safe physical-pill action.
+
+The daemon sends active candidates first and recent shortcuts second. The helper renders recent shortcuts with the muted History treatment and packs the complete ordered physical list into the available menu-bar space.
+
+`+N` counts every bounded, default-overflow-eligible navigator row that is not visible. This includes physical candidates that do not fit and eligible navigator-only rows; searchable-only automation is excluded. The helper reserves space for that total before it places physical pills, so a complete navigator remains reachable even when all physical candidates fit.
+
+Ponytail: a change to the observed window, History eligibility, or overflow count must update the provider, menu-presentation, packer, and overflow-snapshot tests together. Do not restore a source-specific History exclusion at the presentation seam.
+
 A normal click acknowledges a Ready item and moves it behind In progress. Activity-only refreshes cannot move other pills while the user targets them.
 
 An observed transition into Ready pulses its status dot for up to seven minutes. Initial snapshots do not invent completions, and acknowledgment stops the pulse.
@@ -40,7 +52,7 @@ Ready status color fades linearly from fresh green to muted gray over 42 minutes
 
 Each item matches the released 24-point dark capsule, six-point status dot, seven-point outer padding, and three-point dot-to-title spacing.
 
-Hovering for 0.35 seconds opens a compact session inspector. Leaving the item dismisses it, while clicking keeps the normal source action.
+Hovering for 0.35 seconds opens a compact session inspector. Leaving the item dismisses it, while clicking keeps the normal source action or opens Chat for an ownerless Chat-capable row.
 
 The inspector matches Swift’s content order: title, phase badge, latest runtime, conditional detail rows, project path, conditional context, activity, and direct-open shortcut.
 
@@ -48,9 +60,9 @@ Reasoning, mode, access, model, and context appear only when the daemon has auth
 
 The inspector retains Swift’s layout, typography, native arrow, and shadow. Semantic macOS colors provide a white light-mode card and a dark dark-mode card.
 
-Chat-only transcript history remains in Sessions and does not crowd the menu bar.
+Chat-only transcript history remains navigator-only in Sessions and does not crowd the menu bar.
 
-Completed Codex history also remains in Sessions and More Sessions without keeping a physical pill. Active headless Codex jobs require a thread-catalog record and rollout before opening their exact `codex://threads/<id>` source. Hook-only internal tasks stay hidden.
+Source-backed Codex history inside the observed-session window remains a dimmed recent pill candidate and opens its exact `codex://threads/<id>` source. Older or Chat-only history remains available through Sessions and More Sessions. Active headless Codex jobs require a thread-catalog record and rollout before source activation. Hook-only internal tasks stay hidden.
 
 Codex `exec` rows are classified as machine-owned automation. They remain in
 the bounded navigator catalog for search and read-only inspection, but never
@@ -61,11 +73,11 @@ the normal `+N` overflow set. Their ambient catalog label is
 
 Visible items retain their normal labels, up to 20 characters plus an ellipsis. Untitled Codex rows use `Codex · <project>` so distinct sessions do not share one fallback label. The helper uses `+N` instead of compact or tight labels.
 
-Clicking `+N` opens a nonactivating More Sessions popover. Its initial rows are the exact sessions omitted by the current pill layout.
+Clicking `+N` opens a nonactivating More Sessions popover. Its count and initial rows are the exact default-overflow-eligible navigator sessions omitted by the current pill layout.
 
-The popover freezes that layout while open. Search covers the complete bounded navigator catalog, including visible items and Chat-only History that does not enter menu packing.
+The popover freezes that layout while open. Search covers the complete bounded navigator catalog, including visible items, Chat-only History, and searchable-only automation that do not enter menu packing.
 
-Rows open the exact source session. Footer actions open Sessions or Settings, and a second `+N` activation closes the popover.
+Rows open the exact source session when one is available. An ownerless Chat-capable row opens Chat as its primary normal-click/Return action. Footer actions open Sessions or Settings, and a second `+N` activation closes the popover.
 
 Phase and membership changes adopt the new priority order. Existing panels move or update in place without replacing their native buttons.
 
@@ -88,7 +100,7 @@ The application shortcut hides an active Sessions window. Otherwise it raises Se
 
 A helper action travels back through the authenticated local helper connection. The daemon resolves current capabilities before acting.
 
-A normal click opens only the exact source session. Failed exact focus does not launch a new owner window or fall back to Agent Visor Chat. Option-click opens Chat when supported. Electron serializes owner activations and rejects owners outside its application allowlist.
+A normal click opens the exact source session when an owner route is available. An ownerless Chat-capable row opens Agent Visor Chat as the primary action; a failed owner focus does not invent a new owner window or silently fall back to Chat. Option-click remains the explicit Chat action for owner-backed rows. Electron serializes owner activations and rejects owners outside its application allowlist.
 
 Pill actions use the provider-owned exact target when one exists.
 

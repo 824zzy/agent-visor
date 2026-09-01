@@ -191,6 +191,27 @@ describe("Codex desktop lifecycle status", () => {
     expect((await repository.refresh()).sessions[0]?.section).toBe("working");
   });
 
+  it("keeps a dormant completed task in recent History with Open Chat", async () => {
+    const { environment, repository, hook } = setup();
+    environment.append("task_started", "turn-1");
+    environment.append("task_complete", "turn-1");
+    await repository.refresh();
+    hook("Stop", "waiting_for_input");
+    environment.clock += 41 * 60 * 60 * 1_000;
+
+    const snapshot = await repository.refresh();
+
+    expect(snapshot.sessions).toMatchObject([{
+      id: sessionId,
+      section: "history",
+      canEnterChat: true,
+    }]);
+    expect(menuPresentation(snapshot, []).pills).toMatchObject([{
+      id: sessionId,
+      phase: "history",
+    }]);
+  });
+
   it("does not revive a completed turn from a duplicate start marker", async () => {
     const { environment, repository } = setup();
     environment.append("task_started", "turn-1");

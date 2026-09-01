@@ -4,7 +4,44 @@ import XCTest
 @testable import AgentVisorCore
 
 final class NativeMenuOverflowTests: XCTestCase {
-    func testShowsOnlyHiddenSessionsUntilSearchFindsAnyPresentedSession() {
+    func testNavigatorOnlyEligibleSessionsArePartOfDefaultOverflow() {
+        let visible = pill("visible", title: "Visible migration", project: "Personal")
+        let navigatorOnly = pill(
+            "chat",
+            title: "Chat transcript",
+            project: "Archive",
+            defaultOverflowEligible: true
+        )
+        let automation = pill(
+            "automation",
+            title: "Codex automation · Archive",
+            project: "Archive",
+            defaultOverflowEligible: false
+        )
+        let snapshot = NativeMenuOverflowSnapshot(
+            menuPills: [visible],
+            navigatorPills: [visible, navigatorOnly, automation],
+            visibleSessionIDs: ["visible"]
+        )
+
+        XCTAssertEqual(snapshot.overflowSessionIDs, ["chat"])
+        XCTAssertEqual(snapshot.selection(query: "").orderedSessionIDs, ["chat"])
+    }
+
+    func testOmittedNavigatorOnlyEligibilityPreservesLegacyOverflowBehavior() {
+        let visible = pill("visible", title: "Visible migration", project: "Personal")
+        let legacyNavigatorOnly = pill("legacy", title: "Legacy transcript", project: "Archive")
+        let snapshot = NativeMenuOverflowSnapshot(
+            menuPills: [visible],
+            navigatorPills: [visible, legacyNavigatorOnly],
+            visibleSessionIDs: ["visible"]
+        )
+
+        XCTAssertEqual(snapshot.overflowSessionIDs, [])
+        XCTAssertEqual(snapshot.selection(query: "transcript").orderedSessionIDs, ["legacy"])
+    }
+
+    func testShowsEveryOmittedSessionUntilSearchFindsAnyPresentedSession() {
         let visible = pill("visible", title: "Visible migration", project: "Personal")
         let hidden = pill("hidden", title: "Hidden review", project: "agent-visor")
         let chatHistory = pill("chat", title: "Chat transcript", project: "Archive")
@@ -108,7 +145,8 @@ final class NativeMenuOverflowTests: XCTestCase {
         _ id: String,
         title: String,
         project: String,
-        activityAt: String? = nil
+        activityAt: String? = nil,
+        defaultOverflowEligible: Bool? = nil
     ) -> NativeHelperPill {
         NativeHelperPill(
             id: id,
@@ -127,6 +165,7 @@ final class NativeMenuOverflowTests: XCTestCase {
                 )
             },
             phase: .working,
+            defaultOverflowEligible: defaultOverflowEligible,
             priority: 0,
             accessibilityLabel: "\(title), in progress"
         )

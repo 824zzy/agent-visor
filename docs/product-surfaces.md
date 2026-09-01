@@ -15,7 +15,7 @@ Permission setup and recovery are specified in [Permission Health](permission-he
 
 ## Principles
 
-1. **Stable actions by surface.** Menu-bar pills, the `+N` popover, and Sessions-browser rows return to the canonical owner. A Chat-capable browser row keeps `Open Chat` as an explicit secondary action. Labels and hit targets never exchange meanings.
+1. **Stable actions by surface.** Menu-bar pills, the `+N` popover, and Sessions-browser rows return to the canonical owner when one is available; an ownerless Chat-capable row opens Chat as its primary action. A Chat-capable owner-backed row keeps `Open Chat` as an explicit secondary action. Labels and hit targets never exchange meanings.
 2. **Actionability before recency.** Needs-attention, ready, and working sessions appear before recent sessions when a surface has to prioritize.
 3. **Honest capability.** UI copy and controls reflect the evidence and transport Agent Visor actually has. Inferred status and mirrored history are labeled as such.
 4. **One session truth, different surface scopes.** Surfaces share session identity and phase semantics, but each surface may show a different subset for its job.
@@ -27,9 +27,9 @@ Permission setup and recovery are specified in [Permission Health](permission-he
 
 | Surface | Primary job | Content | Primary action | Must not become |
 | --- | --- | --- | --- | --- |
-| Menu-bar pills | Ambient status and fastest return path | Discoverable sessions, ordered by actionability then recency, packed to available width | Open original owner | A full history browser |
-| `+N` popover | Quick access to sessions that do not fit as pills | The `+N` overflow by default; all recent navigable sessions while searching | Open original owner | A full history or Chat browser |
-| Sessions browser | Complete searchable navigation | Current cross-source sessions plus supported saved history | Open the original owner; offer Chat explicitly when renderable | A replacement for the owning source |
+| Menu-bar pills | Ambient status and fastest return path | Discoverable sessions, ordered by actionability then recency, packed to available width | Open original owner, or Chat when no owner route exists | A full history browser |
+| `+N` popover | Quick access to sessions that do not fit as pills | The `+N` overflow by default; all recent navigable sessions while searching | Open original owner, or Chat when no owner route exists | A full history or Chat browser |
+| Sessions browser | Complete searchable navigation | Current cross-source sessions plus supported saved history | Open the original owner when available; otherwise open Chat when renderable | A replacement for the owning source |
 | Agent Visor Chat | In-window conversation and continuation | Mirrored conversation, composer when controllable, and compact status | Continue in Chat or open original | An implicitly authoritative replacement for the owner |
 | Owning app | Canonical conversation and control | Native task, conversation, composer, tools, approvals, and source-specific UI | Continue work | Something Agent Visor attempts to duplicate wholesale |
 | Usage glance | Peripheral account-capacity awareness when supported | Available Codex 5-hour and 7-day limits | Open compact usage detail | A placeholder for unavailable provider data |
@@ -50,16 +50,18 @@ identities. Provider discovery carries this class through the session snapshot
 as `automation`; Codex Desktop and live Codex CLI records remain
 `interactive` and `terminal` respectively.
 
-- Automation records remain available to the Sessions browser and the menu
-  navigator catalog so users can search and inspect their read-only history.
+- Automation records are always available to the Sessions browser and remain
+  in the menu navigator's search catalog whenever that navigator is open, so
+  users can search and inspect their read-only history.
 - Automation records do not create physical menu-bar pills, Ready attention,
   notifications, Dock badges, or normal pill overflow entries.
 - Ambient labels for automation use a stable `Codex automation · <project>`
   label. Raw `exec` prompts must never become menu-bar pill titles.
-- If an automation record is eligible for Agent Visor Chat, that view is read
-  only; existing Codex age and transcript-evidence rules may withhold Chat
-  entry. The owning Codex Desktop and CLI surfaces keep their existing
-  behavior.
+- Automation records with an available canonical transcript expose Agent
+  Visor Chat as a read-only view, regardless of inactivity age. Missing
+  transcripts, archive exclusions, and the provider's observed-session window
+  may still withhold the record; the owning Codex Desktop and CLI surfaces
+  keep their existing behavior.
 
 ## Menu-Bar Space Efficiency
 
@@ -85,7 +87,7 @@ The Agent Sessions browser is the durable teaching surface for global session sh
 - The guidance must not imply that `1-9` indexes rows in the full browser. Return uses the provider-neutral label `Open source app`, while Shift-Return uses `Open Chat` when supported; exact owner names belong to rows.
 - When shortcuts are off, the same location says that global session shortcuts are off and directs the user to Settings.
 - Shortcut glyphs come from the effective persisted setting. Copy must not hard-code Control-Command, Option-Command, or any other family.
-- The footer separates browser-local actions on the left from global shortcuts on the right. Up/Down navigates, Return opens the selected row's owner, and Shift-Return opens Chat when supported. Capability fallback is reflected in the labels.
+- The footer separates browser-local actions on the left from global shortcuts on the right. Up/Down navigates, Return opens the selected row's owner when available or Chat for an ownerless Chat-capable row, and Shift-Return opens Chat when supported. Capability fallback is reflected in the labels.
 - Generic copy such as `Find a session, then return to the app that owns it.` and `Codex history included` is omitted. The browser structure, source chips, and history rows already communicate those facts.
 - Pill hover hints remain as contextual reinforcement for users who rarely open the browser.
 
@@ -111,12 +113,12 @@ The `+N` sessions popover and Usage glance are nonactivating menu-bar surfaces. 
 - The overflow shortcut uses the current rendered `+N` snapshot and does nothing when no overflow pill exists. Holding `0` must not repeatedly open and close the popover.
 - Clicking outside a transient popover dismisses it without consuming the click or activating Agent Visor. The click must still reach the app or menu-bar control the user chose.
 - Opening `More Sessions` selects its first overflow session. With an empty query, Up and Down move through the flattened overflow rows across section boundaries and stop at the list ends; section headers and footer actions are not cursor stops.
-- Return opens the selected session in its original owner. Option-Return opens it directly in Agent Visor Chat. Either action closes the popover.
+- Return opens the selected session in its original owner when available, or opens Chat for an ownerless Chat-capable row. Option-Return opens it directly in Agent Visor Chat. Either action closes the popover.
 - A compact search field sits below the header. Clicking it, pressing Command-F, or typing printable text starts search without opening or activating the full Agent Sessions browser.
 - An empty query keeps the exact frozen `+N` overflow list. A non-empty query searches the complete recent navigable session snapshot, including sessions already visible as pills, because users should not need to know which side of the packing boundary contains the target.
 - Popover search matches title, project, source, owner, and path. It does not search Chat content or preview text.
 - Search results rank title matches before metadata matches, then use recency and stable session ID. They are presented as one result list rather than state sections.
-- Editing the query selects its first result. Up and Down navigate results, Return opens the selected result, and Option-Return opens Chat in Agent Visor.
+- Editing the query selects its first result. Up and Down navigate results, Return opens the selected result's owner when available or Chat for an ownerless Chat-capable result, and Option-Return opens Chat in Agent Visor.
 - Escape clears a non-empty query and keeps the popover open. A second Escape with an empty query dismisses the popover.
 - The query resets whenever the popover closes.
 - Keyboard commands handled by `More Sessions` must not leak to the previously active owning app. Pointer hover may add hover feedback but must not discard the keyboard cursor.
@@ -259,7 +261,7 @@ Within an attention tier, newer phase-entry evidence sorts first and session ID 
 
 - Hidden, ended, archived, and titleless sessions are excluded wherever their corresponding policy says they are not navigable.
 - Pills are width-constrained. Sessions that do not fit are represented by `+N`; the overflow count is not a status count.
-- With an empty query, the `+N` popover contains only the sessions omitted from the current rendered pill snapshot. It keeps state grouping and ordering within that overflow set, including idle observed sessions that did not fit.
+- With an empty query, the `+N` popover contains only default-overflow-eligible navigator sessions omitted from the current rendered pill snapshot. It keeps state grouping and ordering within that overflow set, including Chat-only History rows; searchable-only automation remains excluded from the default count.
 - With a non-empty query, the popover searches the complete recent navigable snapshot and may return sessions already visible as pills. Search does not expand the observed window or invent historical rows.
 - The popover header identifies the default rows as `More Sessions` and search results as `Search Sessions`. Its footer opens the complete workspace explicitly as `Open Agent Sessions`.
 - The Sessions browser is the broadest surface. It includes current source-agnostic sessions plus supported saved Codex Desktop and Pi history that can be routed, opened in Chat, or viewed as Details according to actual capability.
@@ -268,7 +270,7 @@ Within an attention tier, newer phase-entry evidence sorts first and session ID 
 
 ## Navigation Contract
 
-- In the Sessions browser, a normal row click or Return opens the canonical owner when routing is supported. Chat-only rows open Chat instead of exposing a dead owner action.
+- In the Sessions browser, a normal row click or Return opens the canonical owner when routing is supported. An ownerless Chat-capable row opens Chat as its primary action instead of exposing a dead owner action; the same fallback applies to its `+N` overflow row.
 - Shift-Return opens Chat when renderable. `Open in <owner>` names the row's primary destination, while `Open Chat` remains a separate, quieter action.
 - Pointer and keyboard activation agree. Menu-bar pills and the `+N` popover retain their original-owner-first behavior; Option-click or their explicit Agent Visor action enters Chat.
 - Saved legacy browser-action and click-routing preferences are inert and must not override these surface-specific actions.

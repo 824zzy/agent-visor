@@ -72,7 +72,10 @@ public struct PillBarPacker {
         public let leftVisibleIds: [String]
         public let rightVisibleIds: [String]
         public let hiddenIds: [String]
-        public var hiddenCount: Int { hiddenIds.count }
+        /// Bounded navigator rows that require +N but are intentionally not
+        /// physical candidates. Their identities remain with the navigator.
+        public let supplementalHiddenCount: Int
+        public var hiddenCount: Int { hiddenIds.count + supplementalHiddenCount }
         /// Only meaningful when `hiddenCount > 0`. Defaults to `.right` when
         /// no overflow pill renders.
         public let overflowSide: OverflowSide
@@ -91,6 +94,7 @@ public struct PillBarPacker {
             leftVisibleIds: [String],
             rightVisibleIds: [String],
             hiddenIds: [String],
+            supplementalHiddenCount: Int = 0,
             overflowSide: OverflowSide,
             compactedIds: Set<String> = [],
             minimizedIds: Set<String> = [],
@@ -99,6 +103,7 @@ public struct PillBarPacker {
             self.leftVisibleIds = leftVisibleIds
             self.rightVisibleIds = rightVisibleIds
             self.hiddenIds = hiddenIds
+            self.supplementalHiddenCount = max(0, supplementalHiddenCount)
             self.overflowSide = overflowSide
             self.compactedIds = compactedIds
             self.minimizedIds = minimizedIds
@@ -110,6 +115,7 @@ public struct PillBarPacker {
                 leftVisibleIds: leftVisibleIds,
                 rightVisibleIds: rightVisibleIds,
                 hiddenIds: hiddenIds,
+                supplementalHiddenCount: supplementalHiddenCount,
                 overflowSide: overflowSide,
                 compactedIds: compactedIds,
                 minimizedIds: minimizedIds,
@@ -126,6 +132,7 @@ public struct PillBarPacker {
         pressureProfile: PackingProfile,
         currentDensity: Density = .standard,
         releaseHeadroom: CGFloat = 8,
+        supplementalHiddenCount: Int = 0,
         overflowPillWidthFor: (Int) -> CGFloat
     ) -> PackResult {
         var overflowWidthCache: [Int: CGFloat] = [:]
@@ -141,6 +148,7 @@ public struct PillBarPacker {
             leftMax: leftMax,
             rightMax: rightMax,
             profile: standardProfile,
+            supplementalHiddenCount: supplementalHiddenCount,
             overflowPillWidthFor: overflowWidth
         )
         let pressure = pack(
@@ -148,6 +156,7 @@ public struct PillBarPacker {
             leftMax: leftMax,
             rightMax: rightMax,
             profile: pressureProfile,
+            supplementalHiddenCount: supplementalHiddenCount,
             overflowPillWidthFor: overflowWidth
         )
         if pressure.hiddenCount < standard.hiddenCount {
@@ -164,6 +173,7 @@ public struct PillBarPacker {
             leftMax: max(0, leftMax - margin),
             rightMax: max(0, rightMax - margin),
             profile: standardProfile,
+            supplementalHiddenCount: supplementalHiddenCount,
             overflowPillWidthFor: overflowWidth
         )
         return standardWithHeadroom.hiddenCount <= pressure.hiddenCount
@@ -176,6 +186,7 @@ public struct PillBarPacker {
         leftMax: CGFloat,
         rightMax: CGFloat,
         profile: PackingProfile,
+        supplementalHiddenCount: Int,
         overflowPillWidthFor: (Int) -> CGFloat
     ) -> PackResult {
         let adjusted = candidates.map { candidate in
@@ -195,6 +206,7 @@ public struct PillBarPacker {
             leftMax: leftMax,
             rightMax: rightMax,
             pillSpacing: profile.pillSpacing,
+            supplementalHiddenCount: supplementalHiddenCount,
             overflowPillWidthFor: { count in
                 max(0, overflowPillWidthFor(count) - profile.widthReduction)
             }
@@ -207,6 +219,7 @@ public struct PillBarPacker {
         leftMax: CGFloat,
         rightMax: CGFloat,
         pillSpacing: CGFloat,
+        supplementalHiddenCount: Int = 0,
         overflowPillWidthFor: (Int) -> CGFloat
     ) -> PackResult {
         var overflowWidthCache: [Int: CGFloat] = [:]
@@ -223,6 +236,7 @@ public struct PillBarPacker {
             leftMax: leftMax,
             rightMax: rightMax,
             pillSpacing: pillSpacing,
+            supplementalHiddenCount: supplementalHiddenCount,
             overflowPillWidthFor: overflowWidth
         )
 
@@ -234,6 +248,7 @@ public struct PillBarPacker {
             leftMax: leftMax,
             rightMax: rightMax,
             pillSpacing: pillSpacing,
+            supplementalHiddenCount: supplementalHiddenCount,
             overflowPillWidthFor: overflowWidth
            ) {
             selected = compressed
@@ -266,6 +281,7 @@ public struct PillBarPacker {
         leftMax: CGFloat,
         rightMax: CGFloat,
         pillSpacing: CGFloat,
+        supplementalHiddenCount: Int,
         overflowPillWidthFor: (Int) -> CGFloat
     ) -> PackResult? {
         guard !candidates.isEmpty else { return nil }
@@ -366,6 +382,7 @@ public struct PillBarPacker {
                     leftMax: leftMax,
                     rightMax: rightMax,
                     pillSpacing: pillSpacing,
+                    supplementalHiddenCount: initial.supplementalHiddenCount,
                     overflowPillWidthFor: overflowPillWidthFor
                 )
                 let improvesHiddenCount = result.hiddenCount < initial.hiddenCount
@@ -482,6 +499,7 @@ public struct PillBarPacker {
             leftVisibleIds: Array(visible[0..<split.k]),
             rightVisibleIds: Array(visible[split.k...]),
             hiddenIds: result.hiddenIds,
+            supplementalHiddenCount: result.supplementalHiddenCount,
             overflowSide: result.overflowSide,
             compactedIds: compactedIds,
             minimizedIds: minimizedIds
@@ -583,6 +601,7 @@ public struct PillBarPacker {
             leftVisibleIds: result.leftVisibleIds,
             rightVisibleIds: result.rightVisibleIds,
             hiddenIds: result.hiddenIds,
+            supplementalHiddenCount: result.supplementalHiddenCount,
             overflowSide: result.overflowSide,
             compactedIds: compactedIds,
             minimizedIds: minimizedIds,
@@ -597,14 +616,16 @@ public struct PillBarPacker {
         leftMax: CGFloat,
         rightMax: CGFloat,
         pillSpacing: CGFloat,
+        supplementalHiddenCount: Int,
         overflowPillWidthFor: (Int) -> CGFloat
     ) -> PackResult {
+        let supplementalHiddenCount = max(0, supplementalHiddenCount)
         // Decide which side the +N overflow pill will live on. If the right
         // bar can fit at least the overflow pill itself, default to .right
         // (puts +N at the natural reading-end of the row). Otherwise +N
         // falls back to the end of the left bar.
         let overflowSide: OverflowSide =
-            rightMax >= overflowPillWidthFor(1) ? .right : .left
+            rightMax >= overflowPillWidthFor(max(1, supplementalHiddenCount)) ? .right : .left
 
         var left: [String] = []
         var leftUsed: CGFloat = 0
@@ -612,7 +633,7 @@ public struct PillBarPacker {
         while i < candidates.count {
             let c = candidates[i]
             let spacing: CGFloat = left.isEmpty ? 0 : pillSpacing
-            let remainingAfter = candidates.count - i - 1
+            let remainingAfter = candidates.count - i - 1 + supplementalHiddenCount
             let overflowReserve: CGFloat
             if overflowSide == .left && remainingAfter > 0 {
                 overflowReserve = pillSpacing + overflowPillWidthFor(remainingAfter)
@@ -633,7 +654,7 @@ public struct PillBarPacker {
         while i < candidates.count {
             let c = candidates[i]
             let spacing: CGFloat = right.isEmpty ? 0 : pillSpacing
-            let remainingAfter = candidates.count - i - 1
+            let remainingAfter = candidates.count - i - 1 + supplementalHiddenCount
             let overflowReserve: CGFloat
             if overflowSide == .right && remainingAfter > 0 {
                 overflowReserve = pillSpacing + overflowPillWidthFor(remainingAfter)
@@ -655,6 +676,7 @@ public struct PillBarPacker {
             leftVisibleIds: left,
             rightVisibleIds: right,
             hiddenIds: hiddenIds,
+            supplementalHiddenCount: supplementalHiddenCount,
             overflowSide: overflowSide,
             compactedIds: [],
             minimizedIds: []

@@ -91,6 +91,7 @@ describe("menu presentation", () => {
           owner: "Ghostty",
           phase: "needs_you",
           priority: 0,
+          defaultOverflowEligible: true,
           accessibilityLabel: "Approve release, needs you, Claude Code, agent-visor",
         },
         {
@@ -102,6 +103,7 @@ describe("menu presentation", () => {
           owner: "Cursor",
           phase: "ready",
           priority: 1,
+          defaultOverflowEligible: true,
           accessibilityLabel: "Review result, ready to continue, Cursor, agent-visor",
         },
         {
@@ -113,7 +115,20 @@ describe("menu presentation", () => {
           owner: "Ghostty",
           phase: "working",
           priority: 2,
+          defaultOverflowEligible: true,
           accessibilityLabel: "Build menu, in progress, Pi, agent-visor",
+        },
+        {
+          id: "history",
+          title: "Old session",
+          subtitle: "Session ended",
+          source: "Codex",
+          project: "agent-visor",
+          owner: "Codex",
+          phase: "history",
+          priority: 3,
+          defaultOverflowEligible: true,
+          accessibilityLabel: "Old session, recent session, Codex, agent-visor",
         },
       ],
       usageGlances: [],
@@ -156,11 +171,17 @@ describe("menu presentation", () => {
     expect(presentation.pills[0]?.title).toHaveLength(256);
   });
 
-  it("keeps completed Codex history in Sessions without a physical pill", () => {
+  it("keeps source-backed recent Codex history as a physical recent pill", () => {
     const presentation = menuPresentation(snapshot, []);
 
-    expect(presentation.pills.map(({ id }) => id)).not.toContain("history");
+    expect(presentation.pills.map(({ id }) => id)).toContain("history");
     expect(presentation.navigatorPills.map(({ id }) => id)).toContain("history");
+    expect(presentation.pills.find(({ id }) => id === "history")).toMatchObject({
+      phase: "history",
+      priority: 3,
+      accessibilityLabel: "Old session, recent session, Codex, agent-visor",
+      defaultOverflowEligible: true,
+    });
   });
 
   it("keeps Codex automation searchable without a physical pill or raw prompt title", () => {
@@ -183,6 +204,7 @@ describe("menu presentation", () => {
     expect(presentation.navigatorPills).toMatchObject([{
       id: "codex-exec",
       title: "Codex automation · agent-visor",
+      defaultOverflowEligible: false,
     }]);
     expect(presentation.navigatorPills[0]?.title).not.toContain(prompt);
   });
@@ -226,7 +248,10 @@ describe("menu presentation", () => {
     const presentation = menuPresentation(snapshot, []);
 
     expect(presentation.pills.map(({ id }) => id)).not.toContain("history-chat-only");
-    expect(presentation.navigatorPills.map(({ id }) => id)).toContain("history-chat-only");
+    expect(presentation.navigatorPills).toContainEqual(expect.objectContaining({
+      id: "history-chat-only",
+      defaultOverflowEligible: true,
+    }));
   });
 
   it("builds the Swift inspector content from authoritative session fields", () => {
@@ -241,7 +266,7 @@ describe("menu presentation", () => {
     });
   });
 
-  it("routes helper actions without a standard-click fallback", () => {
+  it("routes owner actions first and falls back to Chat when no owner exists", () => {
     expect(nativeActionFor({
       version: 1,
       type: "event",
@@ -279,7 +304,11 @@ describe("menu presentation", () => {
       type: "event",
       event: "activate_pill",
       sessionId: "chat-only",
-    }, chatOnly)).toBeUndefined();
+    }, chatOnly)).toEqual({
+      type: "native_action",
+      action: "open_chat",
+      sessionId: "chat-only",
+    });
     expect(nativeActionFor({
       version: 1,
       type: "event",
@@ -295,5 +324,28 @@ describe("menu presentation", () => {
       type: "event",
       event: "open_settings",
     }, snapshot)).toEqual({ type: "native_action", action: "open_settings" });
+  });
+
+  it("opens Chat on a normal click when the session has no owner route", () => {
+    const chatOnly = {
+      ...snapshot,
+      sessions: [{
+        ...snapshot.sessions[2]!,
+        id: "chat-only-normal-click",
+        canOpenOwner: false,
+        canEnterChat: true,
+      }],
+    };
+
+    expect(nativeActionFor({
+      version: 1,
+      type: "event",
+      event: "activate_pill",
+      sessionId: "chat-only-normal-click",
+    }, chatOnly)).toEqual({
+      type: "native_action",
+      action: "open_chat",
+      sessionId: "chat-only-normal-click",
+    });
   });
 });

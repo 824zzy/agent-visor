@@ -727,6 +727,10 @@ export const nativeHelperPillSchema = z.object({
   inspector: nativeHelperSessionInspectorSchema.optional(),
   phase: sessionSectionSchema,
   attentionTier: sessionAttentionTierSchema.optional(),
+  // Omitted on older wire messages to preserve the helper's legacy overflow
+  // behavior. New presentations set this explicitly so the helper does not
+  // infer eligibility (or automation status) from catalog membership.
+  defaultOverflowEligible: z.boolean().optional(),
   priority: z.number().int(),
   accessibilityLabel: z.string().min(1).max(512),
 }).strict();

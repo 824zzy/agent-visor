@@ -28,7 +28,17 @@ public struct NativeMenuOverflowSnapshot {
         var seen = Set<String>()
         pills = (navigatorPills + menuPills).filter { seen.insert($0.id).inserted }
         pillsByID = Dictionary(uniqueKeysWithValues: pills.map { ($0.id, $0) })
-        overflowSessionIDs = menuPills.map(\.id).filter { !visibleSessionIDs.contains($0) }
+        // Physical menu candidates have always contributed to overflow when
+        // hidden. Navigator-only rows are a newer additive capability and
+        // must opt in explicitly; an omitted field preserves old-wire
+        // behavior without making a formerly invisible row countable.
+        let menuIDs = Set(menuPills.map(\.id))
+        overflowSessionIDs = pills
+            .filter {
+                !visibleSessionIDs.contains($0.id)
+                    && (menuIDs.contains($0.id) || $0.defaultOverflowEligible == true)
+            }
+            .map(\.id)
     }
 
     public func selection(query: String) -> SessionNavigatorSearchSelection {
