@@ -470,7 +470,8 @@ function parseCodex(
   if (type === "message") {
     const role = text(payload.role);
     const blocks = Array.isArray(payload.content) ? payload.content : [];
-    const body = blocks.filter(record).map((block) => text(block.text)).filter(Boolean).join("\n");
+    const body = blocks.filter(record).map((block) => text(block.text))
+      .filter((body) => body && !(role === "user" && isCodexContextBlock(body))).join("\n");
     const images = blocks.filter(record).flatMap((block, index): ChatImage[] => {
       if (block.type !== "input_image") return [];
       const image = normalizeImage(block.image_url || block.url, undefined);
@@ -504,6 +505,21 @@ function parseCodex(
   if (type === "function_call_output" || type === "custom_tool_call_output") {
     finishTool(items, tools, text(payload.call_id), false, contentText(payload.output));
   }
+}
+
+function isCodexContextBlock(body: string): boolean {
+  // Codex stores injected setup as user-role text. Match only a complete,
+  // context-only block so quoted examples, mixed prose, and sibling images survive.
+  const trimmed = body.trim();
+  return [
+    "environment_context", "developer_context", "permissions instructions",
+    "app-context", "skills_instructions",
+  ].some((tag) => {
+    if (!trimmed.startsWith(`<${tag}>`)) return false;
+    const closingTag = `</${tag}>`;
+    const closingIndex = trimmed.indexOf(closingTag);
+    return closingIndex >= 0 && closingIndex + closingTag.length === trimmed.length;
+  });
 }
 
 function parsePi(

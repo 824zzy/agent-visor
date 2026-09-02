@@ -47,6 +47,21 @@ The renderer groups reasoning and tool work under each prompt. Final assistant p
 
 ## Visibility
 
+Before Chat items are created, the Codex parser excludes user-role text blocks
+that consist entirely of a known injected context wrapper: `environment_context`,
+`developer_context`, `permissions instructions`, `app-context`, or
+`skills_instructions`. These match the Swift context categories. Only complete
+context-only blocks are hidden; quoted examples, mixed prose, incomplete or
+unknown wrappers, sibling prompt text, and attachments remain visible. Assistant
+messages and other providers are unchanged. This is a display convention, not a
+security boundary: the rollout does not distinguish a user's verbatim standalone
+copy of these wrappers from injected context.
+
+Hidden blocks are not user turns or delivery evidence and do not consume the
+history page's visible-item budget. Structured model, usage, and permission
+metadata still comes from the separate metadata parser. Source transcripts are
+never modified.
+
 Chat settings filter only rendered rows. Canonical transcript items remain unchanged.
 
 All categories are visible by default. Users can independently control provider turn grouping, user and assistant messages, thinking, known tool families, MCP tools, unknown tools, interruptions, durations, recaps, compact boundaries, and local command output.

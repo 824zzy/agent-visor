@@ -147,6 +147,85 @@ describe("provider Chat parsing", () => {
     ])[0]).toMatchObject({ family: "edit" });
   });
 
+  it("hides injected Codex environment context without hiding the real prompt", () => {
+    const items = parseChatLines("codex", [
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", id: "context", role: "user", content: [{
+          type: "input_text",
+          text: "<environment_context>\n<current_date>2026-09-01</current_date>\n</environment_context>",
+        }],
+      } }),
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", id: "prompt", role: "user",
+        content: [{ type: "input_text", text: "Proceed" }],
+      } }),
+    ]);
+
+    expect(items).toEqual([{ id: "prompt", kind: "user", text: "Proceed", images: [], timestamp: undefined }]);
+  });
+
+  it.each([
+    "developer_context", "permissions instructions", "app-context", "skills_instructions",
+  ])("hides Codex %s context using the Swift visibility categories", (tag) => {
+    expect(parseChatLines("codex", [JSON.stringify({ type: "response_item", payload: {
+      type: "message", id: "context", role: "user",
+      content: [{ type: "input_text", text: ` \n<${tag}>\nInjected setup\n</${tag}>\n ` }],
+    } })])).toEqual([]);
+  });
+
+  it.each([
+    "Explain <environment_context>setup</environment_context>.",
+    "```xml\n<environment_context>setup</environment_context>\n```",
+    "> <environment_context>setup</environment_context>",
+    "<environment_context>setup</environment_context>\nPlease explain this.",
+    "<environment_context>first</environment_context>\nKeep this prompt\n<environment_context>second</environment_context>",
+    "<environment_context>incomplete",
+    "<environment_context>",
+    "<environment_context>mismatched</developer_context>",
+    "<custom_context>user data</custom_context>",
+  ])("keeps quoted, mixed, incomplete, or unknown Codex user content: %s", (body) => {
+    expect(parseChatLines("codex", [JSON.stringify({ type: "response_item", payload: {
+      type: "message", id: "prompt", role: "user",
+      content: [{ type: "input_text", text: body }],
+    } })])).toEqual([{ id: "prompt", kind: "user", text: body, images: [], timestamp: undefined }]);
+  });
+
+  it.each(["Describe the image", ""])("preserves Codex prompt %j, images, and delivery identity beside injected blocks", (prompt) => {
+    const timestamp = "2026-09-01T10:00:00.000Z";
+    const items = parseChatLines("codex", [JSON.stringify({ type: "response_item", timestamp, payload: {
+      type: "message", id: "prompt", role: "user",
+      request_id: "request-1", delivery_id: "delivery-1", provider_message_id: "provider-1",
+      content: [
+        { type: "input_text", text: "<environment_context>setup</environment_context>" },
+        { type: "input_text", text: "<app-context>setup</app-context>" },
+        { type: "input_text", text: prompt },
+        { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+      ],
+    } })]);
+
+    expect(items).toEqual([{
+      id: "prompt", kind: "user", text: prompt, timestamp,
+      requestId: "request-1", deliveryId: "delivery-1", providerMessageId: "provider-1",
+      images: [{ name: "image-4", mimeType: "image/png", data: "iVBORw0KGgo=" }],
+    }]);
+  });
+
+  it("leaves assistant examples and other providers' user messages unchanged", () => {
+    const body = "<environment_context>user example</environment_context>";
+    const codex = parseChatLines("codex", [JSON.stringify({ type: "response_item", payload: {
+      type: "message", id: "answer", role: "assistant", content: [{ type: "output_text", text: body }],
+    } })]);
+    const claude = parseChatLines("claude_code", [JSON.stringify({
+      type: "user", uuid: "prompt", message: { role: "user", content: body },
+    })]);
+    const pi = parseChatLines("pi", [JSON.stringify({
+      type: "message", id: "prompt", message: { role: "user", content: [{ type: "text", text: body }] },
+    })]);
+
+    expect([codex[0], claude[0], pi[0]].map((item) => item?.kind === "user" || item?.kind === "assistant" ? item.text : undefined))
+      .toEqual([body, body, body]);
+  });
+
   it("parses Pi messages and tool results", () => {
     const items = parseChatLines("pi", [
       JSON.stringify({ type: "message", id: "u1", timestamp: "2026-08-22T10:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "Fix it" }] } }),
@@ -332,6 +411,54 @@ describe("provider Chat parsing", () => {
         complete: false,
         sourceTimestamp: "2026-08-22T10:04:00.000Z",
       });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("pages across hidden Codex context while preserving prompts, metadata, and evidence rules", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "agent-visor-codex-context-"));
+    const transcript = path.join(directory, "session.jsonl");
+    const session = {
+      id: "codex-context", provider: "codex", cwd: "/tmp", owner: "Codex", section: "history",
+      updatedAt: "2026-09-01T10:00:00.000Z", canOpenOwner: true, canEnterChat: true, chatPath: transcript,
+    } as const;
+    const context = JSON.stringify({ type: "response_item", payload: {
+      type: "message", role: "user", content: [{
+        type: "input_text", text: "<environment_context>setup</environment_context>",
+      }],
+    } });
+    const metadata = JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol", effort: "high" } });
+    try {
+      await writeFile(transcript, `${metadata}\n${context}\n`);
+      const contextOnly = await readChatPage(session);
+      expect(contextOnly.items).toEqual([]);
+      expect(contextOnly.transcriptEvidence).toEqual({ authoritative: false, complete: true });
+      expect(contextOnly.metadata).toMatchObject({ modelId: "gpt-5.6-sol", reasoningEffort: "high" });
+
+      const turns = [1, 2].flatMap((turn) => [
+        context,
+        JSON.stringify({ type: "response_item", payload: {
+          type: "message", id: `user-${turn}`, role: "user",
+          content: [{ type: "input_text", text: `Prompt ${turn}` }],
+        } }),
+        JSON.stringify({ type: "response_item", payload: {
+          type: "message", id: `answer-${turn}`, role: "assistant",
+          content: [{ type: "output_text", text: `Answer ${turn}` }],
+        } }),
+      ]);
+      await writeFile(transcript, `${[metadata, ...turns, context].join("\n")}\n`);
+      const latest = await readChatPage(session, undefined, 2);
+      const earlier = await readChatPage(session, latest.nextBefore, 2);
+      const complete = await readChatPage(session);
+
+      expect(latest.items.map(({ id }) => id)).toEqual(["user-2", "answer-2"]);
+      expect(latest.hasMoreBefore).toBe(true);
+      expect(latest.metadata).toEqual(contextOnly.metadata);
+      expect(earlier.items.map(({ id }) => id)).toEqual(["user-1", "answer-1"]);
+      expect(earlier.metadata).toBeUndefined();
+      expect(complete.items.map(({ id }) => id)).toEqual(["user-1", "answer-1", "user-2", "answer-2"]);
+      expect(complete.transcriptEvidence).toEqual({ authoritative: true, complete: true });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
