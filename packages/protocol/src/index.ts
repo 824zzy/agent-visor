@@ -287,7 +287,7 @@ export const chatItemSchema = z.discriminatedUnion("kind", [
   z.object({
     id: z.string().min(1).max(512),
     kind: z.literal("activity"),
-    activity: z.enum(["subagent", "delegation"]),
+    activity: z.enum(["subagent", "delegation", "background_task"]),
     title: z.string().min(1).max(512),
     text: z.string().min(1).max(20_000_000),
     timestamp: chatTimestamp,

@@ -168,8 +168,8 @@ describe("Chat presentation", () => {
     }]);
   });
 
-  it("keeps both structured activity variants in the work disclosure", () => {
-    const delegation = item("delegation-1", "activity", "Delegation finished.", "delegation");
+  it.each(["delegation", "background_task"] as const)("keeps %s activity in the work disclosure", (activity) => {
+    const delegation = item("delegation-1", "activity", "Delegation finished.", activity);
     const turns = groupChatTurns([
       item("prompt-1", "user"),
       delegation,
@@ -182,7 +182,7 @@ describe("Chat presentation", () => {
       showUserMessage: false,
     })).toEqual([delegation]);
     expect(turns).toMatchObject([{
-      work: [{ id: "delegation-1", kind: "activity", activity: "delegation" }],
+      work: [{ id: "delegation-1", kind: "activity", activity }],
       answers: [{ id: "answer-1" }],
       live: false,
     }]);

@@ -11,6 +11,22 @@ import {
 } from "./chat-rich-content.js";
 
 describe("Chat rich content", () => {
+  it("renders angle-delimited local references without losing spaces or parentheses", () => {
+    const source = "[Output file](</tmp/task (final) output.txt>)";
+    expect(parseChatRichText(source)).toMatchObject({
+      source,
+      blocks: [{ kind: "paragraph", inlines: [{ kind: "local-reference", text: "Output file", href: "/tmp/task (final) output.txt" }] }],
+    });
+  });
+  it.each([
+    "[bad](<javascript:alert(1)>)",
+    "[bad](<file:///tmp/private.txt>)",
+    "[bad](</tmp/file.txt)",
+    "[bad](</tmp/<nested>.txt>)",
+    "[bad](<relative/file.txt>)",
+  ])("keeps unsafe or malformed angle-delimited links literal", (source) => {
+    expect(parseChatRichInline(source)).toEqual([{ kind: "text", text: source }]);
+  });
   it("keeps block structure and fenced language metadata", () => {
     const document = parseChatRichText(
       "# Result\n\n- **ok**\n- ~~old~~\n\n```typescript\nconst answer = 42;\n```\n\n$$\nx^2\n$$",

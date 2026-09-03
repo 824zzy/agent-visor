@@ -12,6 +12,7 @@ const rendererTrust = rendererLocation(path.resolve(directory, "../../app/dist/i
 const token = "chat-accessibility-test-token-000000000000000000000";
 const validImageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const validImageDataURI = `data:image/png;base64,${validImageBase64}`;
+const visibilityCitation = "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[fixture source]\n</citation_entries>\n<rollout_ids>\n00000000-0000-4000-8000-000000000001\n</rollout_ids>\n</oai-mem-citation>";
 // Keep this fixture in provider-record form so the Electron check exercises
 // the same parser/classification boundary as a real Codex transcript.
 const visibilityTranscript = [
@@ -41,7 +42,7 @@ const visibilityTranscript = [
       type: "message",
       id: "visibility-answer",
       role: "assistant",
-      content: [{ type: "output_text", text: "The quoted example and image were preserved." }],
+      content: [{ type: "output_text", text: `The quoted example and image were preserved.\n\n::inbox-item{title="Visibility check" summary="Ready for review"}\n\n${visibilityCitation}` }],
     },
   }),
   JSON.stringify({
@@ -53,7 +54,7 @@ const visibilityTranscript = [
       role: "user",
       content: [{
         type: "input_text",
-        text: "<subagent_notification>\n{\"agent_path\":\"fixture-agent\",\"status\":{\"completed\":\"Review finished.\"}}\n</subagent_notification>",
+        text: `<subagent_notification>${JSON.stringify({ agent_path: "fixture-agent", status: { completed: `Review finished.\n\n${visibilityCitation}` } })}</subagent_notification>`,
       }],
       internal_chat_message_metadata_passthrough: {
         content_item_kinds: ["multi_agent.subagent_notification"],
@@ -62,6 +63,12 @@ const visibilityTranscript = [
   }),
 ];
 const visibilityItems = parseChatLines("codex", visibilityTranscript);
+const claudeVisibilityItems = parseChatLines("claude_code", [
+  JSON.stringify({ type: "user", uuid: "claude-visible-prompt", message: { role: "user", content: "Run the background check." } }),
+  JSON.stringify({ type: "assistant", uuid: "claude-visible-answer", message: { role: "assistant", content: [{ type: "text", text: "The background check has finished." }] } }),
+  JSON.stringify({ type: "user", uuid: "claude-background", message: { role: "user", content: "<task-notification><task-id>task-1</task-id><tool-use-id>tool-1</tool-use-id><output-file>/tmp/task-output.txt</output-file><status>completed</status><summary>Background command finished.</summary></task-notification>" } }),
+  JSON.stringify({ type: "user", uuid: "claude-command", message: { role: "user", content: "<local-command-stdout>Local settings reloaded.</local-command-stdout>" } }),
+]);
 const externalURLs = [];
 const expectedFixtureContent = {
   "chat-item-user-1": ["Fix it"],
@@ -113,6 +120,12 @@ const claudeModeSession = {
   subtitle: "Agent is working",
   section: "working",
   updatedAt: "2026-08-22T09:15:00.000Z",
+};
+const claudeVisibilitySession = {
+  ...claudeModeSession,
+  id: "claude-chat-visibility",
+  title: "Claude Chat Visibility",
+  section: "ready",
 };
 const workingSession = {
   ...session,
@@ -195,7 +208,7 @@ const invalidSlashSession = {
   subtitle: "Protocol error",
   updatedAt: "2026-08-19T09:00:00.000Z",
 };
-const fixtureSessions = [session, visibilitySession, codexUsageSession, claudeModeSession, workingSession, deliverySession, startupRaceSession, terminalEvidenceSession, scopedExpirySession, recoveryWorkingSession, tailSession, secondSession, endedSession, invalidPageSession, invalidSlashSession];
+const fixtureSessions = [session, visibilitySession, claudeVisibilitySession, codexUsageSession, claudeModeSession, workingSession, deliverySession, startupRaceSession, terminalEvidenceSession, scopedExpirySession, recoveryWorkingSession, tailSession, secondSession, endedSession, invalidPageSession, invalidSlashSession];
 const tailFixture = {
   // ponytail: keep this fixture larger than the initial renderer window so the
   // E2E check proves bounded DOM history rather than a short-list accident.
@@ -334,11 +347,11 @@ async function run() {
           pendingAction: null,
         };
       }
-      if (requested.id === visibilitySession.id) {
+      if (requested.id === visibilitySession.id || requested.id === claudeVisibilitySession.id) {
         return {
           type: "chat_page",
           sessionId,
-          items: visibilityItems,
+          items: requested.id === visibilitySession.id ? visibilityItems : claudeVisibilityItems,
           hasMoreBefore: false,
           capabilities: capabilities(requested),
           pendingAction: null,
@@ -577,6 +590,11 @@ async function run() {
             question: "Which strategy?",
             choices: ["Minimal", "Complete"],
             multiple: false,
+          }, {
+            id: "Targets",
+            question: "Which targets?",
+            choices: ["API", "UI"],
+            multiple: true,
           }],
         } : null,
       };
@@ -835,19 +853,31 @@ async function run() {
       rawNotificationUser: Boolean(document.querySelector('[aria-label*="subagent_notification"]')),
       activityResult: Boolean(document.querySelector('[aria-label^="Subagent activity result:"]')),
       mainRunWorking: document.body.textContent.includes('Working…'),
+      rawCitation: document.body.textContent.includes('<oai-mem-citation>')
+        || [...document.querySelectorAll('[aria-label], [aria-live]')].some(element =>
+          (element.getAttribute('aria-label') || element.textContent).includes('MEMORY.md:1-2')),
+      readableDirective: document.body.textContent.includes('Visibility check')
+        && document.body.textContent.includes('Ready for review')
+        && !document.body.textContent.includes('::inbox-item'),
+      workCollapsed: document.querySelector('[aria-label="Show 1 work item"]')?.getAttribute('aria-expanded') === 'false',
     }))()`);
     assert(
       visibilityCollapsed.quotedPrompt
         && visibilityCollapsed.preservedImage
         && !visibilityCollapsed.rawNotificationUser
         && !visibilityCollapsed.activityResult
-        && !visibilityCollapsed.mainRunWorking,
+        && !visibilityCollapsed.mainRunWorking
+        && !visibilityCollapsed.rawCitation
+        && visibilityCollapsed.readableDirective
+        && visibilityCollapsed.workCollapsed,
       `Codex activity history keeps prompt/image/quote content, hides internal user bubbles, and stays non-live while collapsed (${JSON.stringify(visibilityCollapsed)})`,
     );
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show 1 work item"]')?.click()`);
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Show result for Subagent activity: Subagent completed"]'))`);
     assert(
-      await window.webContents.executeJavaScript(`!document.querySelector('[aria-label^="Subagent activity result:"]')`),
+      await window.webContents.executeJavaScript(`!document.querySelector('[aria-label^="Subagent activity result:"]')
+        && document.querySelector('[aria-label="Hide 1 work item"]')?.getAttribute('aria-expanded') === 'true'
+        && document.querySelector('[aria-label="Show result for Subagent activity: Subagent completed"]')?.getAttribute('aria-expanded') === 'false'`),
       "expanded work disclosure keeps the activity result collapsed until its own control is activated",
     );
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show result for Subagent activity: Subagent completed"]')?.click()`);
@@ -855,9 +885,27 @@ async function run() {
     assert(
       await window.webContents.executeJavaScript(`Boolean(document.querySelector('[aria-label="Subagent activity result: Review finished."]'))
         && document.body.textContent.includes('Review finished.')
+        && document.querySelector('[aria-label="Hide result for Subagent activity: Subagent completed"]')?.getAttribute('aria-expanded') === 'true'
+        && !document.body.textContent.includes('<oai-mem-citation>')
         && !document.body.textContent.includes('Working…')`),
       "the labeled subagent activity expands to a meaningful result without presenting the main turn as working",
     );
+
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Back to Sessions"]')?.click()`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Open Chat for Claude Chat Visibility"]'))`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Open Chat for Claude Chat Visibility"]')?.click()`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Show 1 work item"]'))`);
+    assert(await window.webContents.executeJavaScript(`document.querySelectorAll('[aria-label^="User message:"]').length === 1
+      && !/<task-notification>|<local-command-stdout>/.test(document.body.textContent)
+      && Boolean(document.querySelector('[aria-label="Command output: Local settings reloaded."]'))`),
+    "Claude task notifications and command output do not create user turns or expose transport XML");
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show 1 work item"]')?.click()`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Show result for Background task activity: Background task completed"]'))`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show result for Background task activity: Background task completed"]')?.click()`);
+    await waitFor(window, `document.body.textContent.includes('Background command finished.')`);
+    assert(await window.webContents.executeJavaScript(`!document.body.textContent.includes('Working…')
+      && Boolean(document.querySelector('[aria-label="Local file reference: /tmp/task-output.txt"]'))`),
+    "background-task results retain their output-file reference without making the completed turn live");
 
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Back to Sessions"]')?.click()`);
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Open Chat for Codex Usage Chat"]'))`);
@@ -1010,6 +1058,17 @@ async function run() {
     assert(anchorBefore?.top !== undefined && anchorAfter !== undefined
       && Math.abs(anchorAfter.top - anchorBefore.top) <= 2,
       `earlier-page prepend preserves the reader viewport (${JSON.stringify(anchorBefore)} → ${JSON.stringify(anchorAfter)})`);
+    const settledAnchor = await window.webContents.executeJavaScript(`new Promise(resolve => {
+      let frames = 16;
+      const settle = () => {
+        if (--frames > 0) { requestAnimationFrame(settle); return; }
+        const row = document.getElementById(${JSON.stringify(anchorBefore.id)});
+        resolve(row?.getBoundingClientRect().top);
+      };
+      requestAnimationFrame(settle);
+    })`);
+    assert(settledAnchor !== undefined && Math.abs(settledAnchor - anchorBefore.top) <= 2,
+      `an earlier-page reader stays anchored after queued stream and layout frames settle (${anchorBefore.top} → ${settledAnchor})`);
 
     await window.webContents.executeJavaScript(`(() => {
       const timeline = document.querySelector('[aria-label="Chat timeline"]');
@@ -1864,7 +1923,10 @@ async function run() {
 
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show 2 work items"]')?.click()`);
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Show details for Bash"]'))`);
+    assert(await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show details for Bash"]')?.getAttribute('aria-expanded') === 'false'`),
+      "tool details expose their collapsed state");
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show details for Bash"]')?.click()`);
+    await waitFor(window, `document.querySelector('[aria-label="Hide details for Bash"]')?.getAttribute('aria-expanded') === 'true'`);
     await waitFor(window, `document.body.textContent.includes('45 passed')`);
     const actionsAreIndependent = await window.webContents.executeJavaScript(`(() => {
       const back = document.querySelector('[aria-label="Back to Sessions"]').getBoundingClientRect();
@@ -1991,9 +2053,23 @@ async function run() {
     await window.setSize(960, 760);
     await waitFor(window, `window.innerWidth <= 1_000`);
     assertRailGeometry(await measureRails(window, true), "narrow question Chat");
+    assert(await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Select Minimal"]')?.getAttribute('role') === 'radio'
+      && document.querySelector('[aria-label="Select Minimal"]')?.getAttribute('aria-checked') === 'false'
+      && document.querySelector('[aria-label="Select API"]')?.getAttribute('role') === 'checkbox'
+      && document.querySelector('[aria-label="Select API"]')?.getAttribute('aria-checked') === 'false'`),
+    "question choices expose unchecked radio and checkbox states before selection");
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Select Minimal"]')?.click()`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Select API"]')?.click()`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Select UI"]')?.click()`);
+    await waitFor(window, `document.querySelector('[aria-label="Selected Minimal"]')?.getAttribute('aria-checked') === 'true'
+      && document.querySelector('[aria-label="Selected API"]')?.getAttribute('aria-checked') === 'true'
+      && document.querySelector('[aria-label="Selected UI"]')?.getAttribute('aria-checked') === 'true'
+      && document.querySelector('[aria-label="Select Complete"]')?.getAttribute('aria-checked') === 'false'`);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Submit answers"]')?.click()`);
     await waitUntil(() => actions.some((action) => action.type === "respond_chat" && action.decision === "answer"));
+    const questionAnswer = actions.find((action) => action.type === "respond_chat" && action.decision === "answer");
+    assert(JSON.stringify(questionAnswer.answers) === JSON.stringify({ Strategy: "Minimal", Targets: ["API", "UI"] }),
+      "single and multiple selections retain the exact provider answer payload");
 
     mode = "question";
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Back to Sessions"]')?.click()`);

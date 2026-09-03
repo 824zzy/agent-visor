@@ -1,40 +1,45 @@
 # Chat feature parity
 
-Status: the transcript visibility, near-tail scrolling, and local-file-reference
-accessibility repairs in `codex/restore-recent-pill-parity` pass the required
-local gates as of 2026-09-02. The full exported-Electron Chat fixture passes,
-including composer behavior, approvals/questions, rich content, and 250%
-scaling. The combined diff remains uncommitted for Cursor review. The running
-app has not been replaced with these changes.
+Status: the approved visibility/scrolling repair is commit `0c3a5d4` on
+`codex/restore-recent-pill-parity`. A follow-up audit on 2026-09-02 reproduced
+the raw memory-citation footer in the running candidate and found additional
+transport, rich-link, accessibility, and earlier-page scrolling gaps. The new follow-up diff remains
+uncommitted for Cursor review.
 
 This document is the behavior contract for the Electron Chat migration. The
 approved target is parity with the released Swift Chat behavior. Electron may
-use React Native Web and Electron-native controls, but a different
-implementation must preserve the same user-visible result, interaction, and
-provider capability rules. Pixel identity is not required.
+use React Native Web and Electron-native controls, but must preserve the same
+user-visible result, interaction, and provider capability rules. Pixel
+identity is not required. The local checks below do not establish universal
+Swift parity or live control of every provider.
 
-Current verification — 2026-09-02: 596 JavaScript tests across 49 files, all
+Current verification — 2026-09-02: 650 JavaScript tests across 50 files, all
 four workspace typechecks, build/export, and the full Electron Chat E2E pass.
-The final Electron run uses the unchanged production build from the preceding
-root `npm run test:chat` invocation; only a test readiness wait changed before
-that final run. The earlier `quotedPrompt` underscore-loss and near-tail
-scrolling failures are covered by the preserved-content and scrolling checks.
+The E2E covers provider-form Codex/Claude visibility records, work/activity/tool
+disclosure states, single- and multiple-choice roles and selected states,
+exact answer payloads, composer behavior, approvals, cancellation, scrolling,
+images, rich content, read-only controls, and 250% scaling.
 
-Local file references now supply `tabIndex: 0` and `aria-expanded`, since the
-installed web Text renderer filters the aggregate `accessibilityState`
-property. The Electron check verifies the expanded state after Enter and
-Space, and tests initial composer focus before moving focus to the reference.
-The final scaling check waits for question dismissal to restore the composer;
-request receipt alone does not establish that the response has rendered.
-A focused reproduction confirmed the original missing attributes, and a
-separate question-dismissal probe confirmed that the restored composer has
-14 px text and scales to 250%.
+The follow-up removes validated Codex memory-citation metadata from answers
+and completed agent results, presents known native review/task directives as
+readable text, classifies Claude background notifications and command output,
+and removes terminal presentation controls from results. Quoted, malformed,
+unknown, and ambiguous content remains visible. Angle-delimited Markdown
+file references now preserve paths with spaces and parentheses. Disclosure
+and question controls use explicit ARIA state attributes supported by the
+installed web renderer. Loading earlier history cancels queued tail settling,
+and anchor restoration refreshes its height/offset measurements together. This
+prevents a transient virtualized height from incorrectly repinning a far reader.
 
-These are local source and exported-renderer results. They do not establish
-that an installed bundle includes the repair or that every provider's live
-transcripts and interactions have been verified. Cursor/Pi visibility coverage
-remains based on sanitized fixtures; Codex/Claude real-record coverage remains
-bounded as described in the visibility audit.
+A paired replay compared the prior packaged parser with the revised parser
+on 97 transcript files: 67 recent Codex transcripts and ten historical
+interactive transcripts each from Claude, Pi, and Cursor. Reads were capped
+at the last 16 MiB per file; 14 files reached that cap. The exact screenshot
+answer was found and retained without its raw citation footer. The sample
+retained 601 genuine user messages, nine images, and all unrelated canonical
+metadata, with no unexpected differences. No recent interactive Claude, Pi,
+or Cursor sessions were available in this sample, so their coverage combines
+historical records and controlled Electron fixtures, not live provider actions.
 
 The Swift implementation is the source of truth for the released Chat
 interaction and rendering contract:
@@ -70,7 +75,7 @@ and conservative legacy recognition remain authoritative for this boundary.
 | --- | --- | --- |
 | Shell and rail | Chat replaces the browser in the same window. Header, conversation, composer, and status content use one centered rail with the established maximum width. | Shared rail alignment is implemented. Other header and footer details remain under review. |
 | Transcript | Provider parsers retain canonical text and images. Chat is lazy, bounded, and read-only when control metadata is not verified. | Claude Code, Codex, Pi, and Cursor pages render through the daemon with canonical provider text preserved and provider-neutral presentation transforms. |
-| Transcript visibility and provenance | Known provider-internal setup is absent from conversational turns; genuine prompts, quoted XML/code, images, files, and actionable status remain available. Agent work is labeled separately from user/assistant roles. | The daemon classifies aligned Codex content origins before creating `ChatItem`s, maps subagent/delegation records to typed activity, and conservatively preserves unknown or ambiguous content. Renderer display filters remain separate from this ingestion rule. |
+| Transcript visibility and provenance | Known provider-internal setup is absent from conversational turns; genuine prompts, quoted XML/code, images, files, and actionable status remain available. Agent work is labeled separately from user/assistant roles. | The daemon classifies aligned Codex content origins before creating `ChatItem`s, maps subagent/delegation/background-task records to typed activity, and conservatively preserves unknown or ambiguous content. Renderer display filters remain separate from this ingestion rule. |
 | Turn presentation | User prompts, assistant answers, thinking, tools, system rows, durations, recaps, compact boundaries, and provider grouping follow the visibility rules. | Turn grouping, thinking/tool/system rows, durations, recaps, compact boundaries, and provider-neutral rich presentation are implemented and covered by pure and Electron checks. |
 | Composer state | Draft and attachments are per session. Focus, multiline growth, Enter/Shift-Enter, Escape, slash completion, paste, and removal follow the Swift interaction contract. | The current pass uses one rounded enclosure for attachment previews, the multiline textarea, and the bottom toolbar. The enclosure shares the Chat and Sessions canvas fill and relies on its border for separation. Add image and Send expose 44 px targets; Send's visible face is 32 px. Model/effort and truthful permission context stay near the draft, while context/usage/provider/path diagnostics remain in Details. Text and image capabilities remain independent, with eight-line measured growth and internal scrolling. The full exported-Electron Chat gate passes. |
 | Send and cancel | Sends use the provider route, show an optimistic echo, reconcile or remove it safely, restore canceled input, and report failures. | The daemon re-checks the live working section and provider/image capabilities before every send. The shared action area keeps Send and Stop capability-correct: Stop requires an identity-bound active cancellable delivery, can occupy the primary position with no sendable draft, and remains beside Send when both are legitimate. Repeat cancellation is disabled and drafts remain recoverable. The full exported-Electron Chat gate passes. |
@@ -107,7 +112,7 @@ they can be called parity.
 7. [Complete] Add the provider-aware status bar and permission modes.
 8. [Scoped pass; overall blocked] Complete read-only states, accessibility, theme,
    scaling, and composer visual review.
-9. [Blocked] Run the complete local gates, leave the exact worktree uncommitted, and
+9. [Local gates pass; review pending] Run the complete local gates, leave the exact worktree uncommitted, and
    open it in Cursor for review before any commit.
 
 Phase 1 delivered the rail alignment and thinking Markdown improvement. The
@@ -120,7 +125,7 @@ cap, virtualized visible cells, and session-scoped frame cleanup. Phases 5
 through 8 now own the completed rich presentation, action surfaces,
 provider-aware status/modes, and read-only/accessibility/theme/scale behavior
 described in the contract. The 2026-08-31 composer enclosure pass refines the
-existing composer/action seams and remains in verification.
+existing composer/action seams; the current local gate results are recorded above.
 
 ## Public test seams
 

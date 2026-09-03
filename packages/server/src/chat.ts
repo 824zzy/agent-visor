@@ -13,6 +13,8 @@ import {
   type ChatPage,
 } from "@agent-visor/protocol";
 import { summaryWork } from "./machine.js";
+import { normalizeCodexAssistantText } from "./codex-assistant-text.js";
+import { terminalOutputText } from "./terminal-output-text.js";
 import type { DiscoveredProviderSession, ProviderID } from "./sessions.js";
 import { isVerifiableProcessInstanceToken } from "./providers/shared.js";
 
@@ -386,7 +388,7 @@ function parseClaude(
     } else if (subtype === "compact_boundary") {
       addSystem(items, id, "compact_boundary", "Context compacted", timestamp, "compact");
     } else if (subtype === "local_command") {
-      const output = text(value.content)
+      const output = terminalOutputText(text(value.content))
         .replace(/^<local-command-(?:stdout|stderr)>/, "")
         .replace(/<\/local-command-(?:stdout|stderr)>$/, "")
         .trim();
@@ -404,6 +406,8 @@ function parseClaude(
   const timestamp = iso(value.timestamp);
   if (role === "user") {
     if (typeof content === "string") {
+      const transported = claudeTransportItems(content, id, timestamp);
+      if (transported) { items.push(...transported); return; }
       const body = normalizeClaudeUserText(content);
       if (body.trim().startsWith("[Request interrupted by user")) {
         addSystem(items, id, "interrupted", body.trim(), timestamp, "error");
@@ -426,6 +430,8 @@ function parseClaude(
         if (image) images.push({ name: `image-${images.length + 1}`, ...image });
       }
     }
+    const transported = images.length === 0 ? claudeTransportItems(userText, id, timestamp) : undefined;
+    if (transported) { items.push(...transported); return; }
     userText = normalizeClaudeUserText(userText);
     if (userText.trim().startsWith("[Request interrupted by user")) {
       addSystem(items, id, "interrupted", userText.trim(), timestamp, "error");
@@ -447,6 +453,39 @@ function parseClaude(
       addTool(items, tools, text(block.id) || blockID, text(block.name) || "Tool", input(block.input), timestamp);
     }
   }
+}
+
+function claudeTransportItems(body: string, id: string, timestamp?: string): ChatItem[] | undefined {
+  for (const stream of ["stdout", "stderr"] as const) {
+    const tag = `local-command-${stream}`;
+    const output = completeTaggedBody(body, tag);
+    if (new RegExp(`^\\s*<${tag}>\\s*</${tag}>\\s*$`).test(body)) return [];
+    if (output !== undefined) return [{
+      id, kind: "system", category: "local_command_output", text: terminalOutputText(output) || "No command output.",
+      tone: stream === "stderr" ? "error" : "neutral", timestamp,
+    }];
+  }
+  const notification = completeTaggedBody(body, "task-notification");
+  if (!notification) return undefined;
+  const taskID = taggedField(notification, "task-id");
+  const status = taggedField(notification, "status");
+  const summary = taggedField(notification, "summary");
+  if (!taskID || !status || !["completed", "failed", "killed"].includes(status) || !summary) return undefined;
+  // Require a complete known field sequence, so surrounding authored prose
+  // and unknown/nested wrappers cannot be silently discarded.
+  if (!isCompleteTaggedSequence(notification, ["task-id", "tool-use-id", "output-file", "status", "summary"])) return undefined;
+  for (const tag of ["task-id", "tool-use-id", "output-file", "status", "summary"]) {
+    if (notification.split(`<${tag}>`).length > 2 || notification.split(`</${tag}>`).length > 2) return undefined;
+  }
+  const output = taggedField(notification, "output-file");
+  const outputReference = output?.startsWith("/") && !/[<>()\r\n]/.test(output)
+    ? `[Output file](<${output}>)` : output ? `Output: ${output}` : undefined;
+  return [{
+    id, kind: "activity", activity: "background_task",
+    title: `Background task ${status}`,
+    text: outputReference ? `${summary}\n\n${outputReference}` : summary,
+    timestamp,
+  }];
 }
 
 /**
@@ -557,7 +596,7 @@ function parseCodex(
     });
     const body = role === "user"
       ? normalizeCodexUserText(rawBody, images.length > 0, attachmentEnvelopeBlocks.size > 0)
-      : rawBody;
+      : normalizeCodexAssistantText(rawBody);
     if (role === "user" && (body.trim() || images.length)) {
       items.push(user(id, body, images, timestamp, chatIdentity(value, payload)));
     }
@@ -669,7 +708,7 @@ function codexSubagentActivity(
     kind: "activity",
     activity: "subagent",
     title,
-    text: detail,
+    text: normalizeCodexAssistantText(detail) || "Subagent activity",
     timestamp,
   };
 }
@@ -681,9 +720,12 @@ function codexDelegationActivity(
   timestamp?: string,
 ): Extract<ChatItem, { kind: "activity" }> {
   const envelope = completeTaggedBody(body, "codex_delegation");
-  const detail = ["output", "result", "message", "input", "prompt"]
+  const result = ["output", "result", "message"]
     .map((tag) => envelope ? taggedField(envelope, tag) : undefined)
-    .find((value): value is string => Boolean(value)) || "Delegation activity";
+    .find((value): value is string => Boolean(value));
+  const detail = result !== undefined ? normalizeCodexAssistantText(result) || "Delegation activity"
+    : ["input", "prompt"].map((tag) => envelope ? taggedField(envelope, tag) : undefined)
+      .find((value): value is string => Boolean(value)) || "Delegation activity";
   return {
     id: activityID(sourceID, blockIndex),
     kind: "activity",
@@ -1043,7 +1085,8 @@ function finishTool(
   const item = items[index];
   if (!item || item.kind !== "tool") return;
   item.status = failed ? "error" : "success";
-  if (result) item.result = result;
+  const visibleResult = terminalOutputText(result);
+  if (visibleResult) item.result = visibleResult;
 }
 
 type ChatUserIdentity = Pick<Extract<ChatItem, { kind: "user" }>,

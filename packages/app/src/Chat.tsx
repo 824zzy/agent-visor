@@ -250,6 +250,7 @@ export function Chat({
   };
 
   const scheduleTailPin = () => {
+    if (pendingPrepend.current?.sessionID === session.id) return;
     const targetSessionID = session.id;
     const token = ++tailPinToken.current;
     tailPinInProgress.current = true;
@@ -273,6 +274,10 @@ export function Chat({
 
   const capturePrependAnchor = () => {
     const targetSessionID = session.id;
+    // Loading older context supersedes any tail settle queued by the last
+    // stream/layout update, even if it was queued after the reader gesture.
+    tailPinToken.current += 1;
+    tailPinInProgress.current = false;
     const element = timelineElement(targetSessionID);
     const rows = element
       ? [...element.querySelectorAll<HTMLElement>('[id^="chat-item-"]')]
@@ -317,6 +322,15 @@ export function Chat({
       }
       return;
     }
+    const finishPrepend = () => {
+      // Virtualization can briefly report only its mounted cells. Once the
+      // anchor is restored, pair the new offset with the current full height;
+      // a stale short height would make a far reader look past the bottom.
+      contentHeight.current = element.scrollHeight;
+      scrollTop.current = element.scrollTop;
+      distanceFromBottom.current = element.scrollHeight - (element.scrollTop + element.clientHeight);
+      pendingPrepend.current = undefined;
+    };
     const measuredHeight = element.scrollHeight;
     if (pending.scrollHeight !== undefined
       && measuredHeight <= pending.scrollHeight + 0.5
@@ -350,7 +364,7 @@ export function Chat({
         element.scrollTop = nextOffset;
         scroll.current?.scrollToOffset({ animated: false, offset: nextOffset });
       }
-      pendingPrepend.current = undefined;
+      finishPrepend();
       return;
     }
     if (pending.scrollHeight !== undefined && measuredHeight > pending.scrollHeight + 0.5) {
@@ -358,7 +372,7 @@ export function Chat({
       const nextOffset = Math.max(0, element.scrollTop + delta);
       element.scrollTop = nextOffset;
       scroll.current?.scrollToOffset({ animated: false, offset: nextOffset });
-      pendingPrepend.current = undefined;
+      finishPrepend();
       return;
     }
     // FlatList measures variable-height cells over several layout passes. Keep
@@ -376,7 +390,7 @@ export function Chat({
       element.scrollTop = nextOffset;
       scroll.current?.scrollToOffset({ animated: false, offset: nextOffset });
     }
-    pendingPrepend.current = undefined;
+    finishPrepend();
   };
 
   const sendChat = (text: string, images: ChatImage[]): boolean | void => {
@@ -718,6 +732,8 @@ function renderChatTimelineRow(
         <View style={[styles.rail, styles.work]}>
           <Pressable
             accessibilityLabel={`${row.expanded ? "Hide" : "Show"} ${workCountLabel(row.count)}`}
+            accessibilityRole="button"
+            aria-expanded={row.expanded}
             onPress={() => onToggleWork(row.turnID, !row.expanded)}
             style={styles.workHeader}
           >
@@ -1000,7 +1016,7 @@ function Tool({ item, styles }: { item: Extract<ChatItem, { kind: "tool" }>; sty
   const presentation = chatToolPresentation(item);
   return (
     <View accessibilityLabel={`Tool ${item.name}: ${item.status}`} nativeID={messageNativeID(item.id)} style={styles.tool}>
-      <Pressable accessibilityLabel={`${expanded ? "Hide" : "Show"} details for ${item.name}`} onPress={() => setExpanded((value) => !value)} style={styles.toolHeader}>
+      <Pressable accessibilityLabel={`${expanded ? "Hide" : "Show"} details for ${item.name}`} accessibilityRole="button" aria-expanded={expanded} onPress={() => setExpanded((value) => !value)} style={styles.toolHeader}>
         <Text style={[styles.toolStatus, item.status === "error" && styles.errorText]}>{toolGlyph(item.status)}</Text>
         <Text style={styles.toolName}>{item.name}</Text>
         <Text numberOfLines={1} style={styles.toolSummary}>{toolSummary(item.input)}</Text>
@@ -1019,10 +1035,10 @@ function Activity({ item, styles }: { item: Extract<ChatItem, { kind: "activity"
   return (
     <View nativeID={messageNativeID(item.id)} style={styles.activity}>
       <Pressable
-        accessibilityHint="Expands to show the delegated agent result."
+        accessibilityHint="Expands to show the activity result."
         accessibilityLabel={`${expanded ? "Hide" : "Show"} result for ${label}: ${item.title}`}
         accessibilityRole="button"
-        accessibilityState={{ expanded }}
+        aria-expanded={expanded}
         onPress={() => setExpanded((value) => !value)}
         style={styles.activityHeader}
       >
@@ -1041,6 +1057,7 @@ function Activity({ item, styles }: { item: Extract<ChatItem, { kind: "activity"
 }
 
 function activityKindLabel(activity: Extract<ChatItem, { kind: "activity" }>["activity"]): string {
+  if (activity === "background_task") return "Background task activity";
   return activity === "subagent" ? "Subagent activity" : "Delegation activity";
 }
 
@@ -1405,8 +1422,9 @@ function QuestionAction({
             return (
               <Pressable
                 accessibilityLabel={`${selected ? "Selected" : "Select"} ${choice}`}
-                accessibilityRole="radio"
-                accessibilityState={{ checked: selected, disabled: !enabled }}
+                accessibilityRole={question.multiple ? "checkbox" : "radio"}
+                aria-checked={Boolean(selected)}
+                aria-disabled={!enabled}
                 disabled={!enabled}
                 key={choice}
                 onPress={() => {

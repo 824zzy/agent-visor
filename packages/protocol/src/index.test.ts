@@ -167,7 +167,7 @@ describe("session snapshot protocol", () => {
     expect(chatPageSchema.safeParse({ ...page, unexpected: true }).success).toBe(false);
   });
 
-  it("validates labeled subagent and delegation activity items", () => {
+  it("validates labeled subagent, delegation, and background-task activity items", () => {
     const activity = {
       kind: "activity" as const,
       activity: "subagent" as const,
@@ -181,6 +181,10 @@ describe("session snapshot protocol", () => {
     expect(chatItemSchema.parse({ ...activity, activity: "delegation" })).toMatchObject({
       kind: "activity", activity: "delegation",
     });
+    expect(chatItemSchema.parse({ ...activity, activity: "background_task" })).toMatchObject({
+      kind: "activity", activity: "background_task",
+    });
+    expect(chatItemSchema.safeParse({ ...activity, activity: "unknown" }).success).toBe(false);
     expect(chatItemSchema.safeParse({ ...activity, title: "" }).success).toBe(false);
     expect(chatItemSchema.safeParse({ ...activity, text: "" }).success).toBe(false);
   });

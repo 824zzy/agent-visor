@@ -58,7 +58,7 @@ content block. A known `multi_agent.subagent_notification` becomes a typed
 `activity` item rather than a user message or raw JSON dump.
 
 The typed activity contract is `{ kind: "activity", activity: "subagent" |
-"delegation", id, title, text, timestamp? }`. Titles are short status labels;
+"delegation" | "background_task", id, title, text, timestamp? }`. Titles are short status labels;
 the text contains only bounded, meaningful status/result fields. Complete
 legacy `codex_delegation` envelopes become delegation activities, and complete
 allow-listed legacy context/browser wrappers are excluded using conservative
@@ -71,9 +71,29 @@ fallback: known legacy cases may be recognized, but mixed, quoted, incomplete,
 or otherwise uncertain authored content remains visible. `user.text` is a
 legacy label, not proof that content was typed by a person. Shared text
 normalization trims surrounding whitespace only, so literal XML and other
-quoted examples remain exact. Assistant messages, tools, approvals, questions,
-actionable errors, interruptions, and compaction boundaries retain their
-existing presentation.
+quoted examples remain exact.
+
+Codex assistant output has a separate normalization boundary. Recognized
+`oai-mem-citation` blocks with citation-entry and rollout-ID sections are
+removed from the displayed answer and from completed subagent/delegation
+results. Valid prefixes after the complete opening tag are also recognized
+while a trailer is being written. Fenced, inline-code, indented, blockquoted,
+malformed, and unknown markup is preserved. User-authored examples and
+delegation inputs do not pass through assistant normalization. A metadata-only
+answer creates no empty row. Normal source links in the answer are unchanged.
+Complete Codex `code-comment` and `inbox-item` directives with validated
+attributes become readable review findings or task summaries. Their text and
+location/priority fields remain available. This never invokes an app action;
+quoted, incomplete, unknown, and duplicate-attribute directives stay literal.
+
+Claude user-role transport is classified separately: a complete, validated
+`task-notification` becomes a background-task activity with its summary and
+output-file reference. Complete local-command stdout/stderr envelopes become
+command-output system rows; empty output creates no row. Mixed prose, images,
+duplicate fields, and ambiguous envelopes remain user content. ANSI/OSC
+terminal presentation controls are removed from tool and command output,
+preserving visible text and literal escaped-code examples. Approvals,
+questions, errors, interruptions, and compaction boundaries remain available.
 
 Excluded records do not become user turns or delivery evidence and do not
 consume the history page's visible-item budget. Activity records remain

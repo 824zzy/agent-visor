@@ -490,11 +490,18 @@ function parseLink(source: string, start: number): { inline: ChatRichInline; nex
   if (source[start] !== "[") return undefined;
   const closeLabel = source.indexOf("](", start + 1);
   if (closeLabel < 0) return undefined;
-  const closeURL = source.indexOf(")", closeLabel + 2);
+  const destinationStart = closeLabel + 2;
+  const angleDelimited = source[destinationStart] === "<";
+  const closeAngle = angleDelimited ? source.indexOf(">", destinationStart + 1) : -1;
+  const closeURL = angleDelimited ? closeAngle + 1 : source.indexOf(")", destinationStart);
   if (closeURL < 0) return undefined;
+  if (angleDelimited && (closeAngle < 0 || source[closeURL] !== ")")) return undefined;
   const label = source.slice(start + 1, closeLabel);
   if (!label) return undefined;
-  const authoredHref = source.slice(closeLabel + 2, closeURL);
+  const authoredHref = angleDelimited
+    ? source.slice(destinationStart + 1, closeAngle)
+    : source.slice(destinationStart, closeURL);
+  if (angleDelimited && /[<>\r\n]/.test(authoredHref)) return undefined;
   const href = safeChatLink(authoredHref);
   if (href) {
     return { inline: { kind: "link", text: stripInlineMarkers(label), href }, nextIndex: closeURL + 1 };
