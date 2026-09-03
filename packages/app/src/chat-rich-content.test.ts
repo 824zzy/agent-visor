@@ -62,6 +62,20 @@ describe("Chat rich content", () => {
     expect(safeChatLink("https://example.com/docs")).toBe("https://example.com/docs");
   });
 
+  it("preserves intraword underscores in literal markup text", () => {
+    const source = "Please preserve this quoted XML:\n<environment_context>user-authored example</environment_context>";
+    expect(parseChatRichText(source).blocks).toEqual([{
+      kind: "paragraph",
+      inlines: [{ kind: "text", text: source }],
+    }]);
+    const doubleRun = "foo__bar__baz";
+    expect(parseChatRichInline(doubleRun)).toEqual([{ kind: "text", text: doubleRun }]);
+    expect(parseChatRichInline("_emphasis_")).toEqual([{ kind: "emphasis", text: "emphasis" }]);
+    expect(parseChatRichInline("__strong__")).toEqual([{ kind: "strong", text: "strong" }]);
+    const longRun = `prefix${"_".repeat(10_000)}suffix`;
+    expect(parseChatRichInline(longRun)).toEqual([{ kind: "text", text: longRun }]);
+  });
+
   it("retains table cells and renders malformed links as text", () => {
     const blocks = parseChatRichText("| Name | Value |\n| --- | --- |\n| **a** | `1` |").blocks;
     expect(blocks).toEqual([{

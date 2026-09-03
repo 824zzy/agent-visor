@@ -216,6 +216,16 @@ export function parseChatRichInline(source: string): ChatRichInline[] {
       continue;
     }
 
+    // Intraword underscore runs are literal text. Skip the complete run so
+    // the boundary check stays linear even for very long authored identifiers.
+    if (source[index] === "_" && (index === 0 || source[index - 1] !== "_")) {
+      const runEnd = underscoreRunEnd(source, index);
+      if (isIntrawordUnderscoreRun(source, index, runEnd)) {
+        index = runEnd;
+        continue;
+      }
+    }
+
     const delimiter = delimiterAt(source, index);
     if (delimiter) {
       const end = source.indexOf(delimiter.marker, index + delimiter.marker.length);
@@ -508,14 +518,29 @@ function findMathEnd(source: string, start: number): { openLength: number; close
 }
 
 function delimiterAt(source: string, index: number): { marker: string; kind: "strong" | "emphasis" | "strike" } | undefined {
-  if (source.startsWith("**", index) || source.startsWith("__", index)) {
-    return { marker: source.slice(index, index + 2), kind: "strong" };
+  if (source.startsWith("**", index)) {
+    return { marker: "**", kind: "strong" };
+  }
+  if (source.startsWith("__", index)) {
+    return { marker: "__", kind: "strong" };
   }
   if (source.startsWith("~~", index)) return { marker: "~~", kind: "strike" };
   if (source[index] === "*" || source[index] === "_") {
     return { marker: source[index]!, kind: "emphasis" };
   }
   return undefined;
+}
+
+function underscoreRunEnd(source: string, index: number): number {
+  let runEnd = index;
+  while (runEnd < source.length && source[runEnd] === "_") runEnd += 1;
+  return runEnd;
+}
+
+function isIntrawordUnderscoreRun(source: string, index: number, runEnd: number): boolean {
+  const previous = source[index - 1];
+  const next = source[runEnd];
+  return Boolean(previous && next && /[\p{L}\p{N}]/u.test(previous) && /[\p{L}\p{N}]/u.test(next));
 }
 
 function appendInline(result: ChatRichInline[], inline: ChatRichInline): void {

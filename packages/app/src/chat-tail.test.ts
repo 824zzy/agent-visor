@@ -40,6 +40,13 @@ describe("Chat tail policy", () => {
     expect(chatTailAction({ type: "composer-resize", distanceFromBottom: 81 })).toBe("preserve");
   });
 
+  it("repins after virtualized content remeasurement only when the prior layout was near the tail", () => {
+    expect(chatTailAction({ type: "content-resize", distanceFromBottom: 80 })).toBe("pin-to-tail");
+    expect(chatTailAction({ type: "content-resize", distanceFromBottom: 80.01 })).toBe("preserve");
+    expect(chatTailAction({ type: "content-resize", distanceFromBottom: 81 })).toBe("preserve");
+    expect(chatTailAction({ type: "content-resize", distanceFromBottom: 334 })).toBe("preserve");
+  });
+
   it("classifies page changes by their public row identity", () => {
     expect(classifyChatItemsChange({ previousIDs: [], nextIDs: ["one"], contentChanged: true })).toBe("initial");
     expect(classifyChatItemsChange({ previousIDs: ["one"], nextIDs: ["one", "two"], contentChanged: true })).toBe("tail-insert");

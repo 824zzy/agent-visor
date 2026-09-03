@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { app, BrowserWindow, ipcMain } from "electron";
+import { parseChatLines } from "../../server/dist/chat.js";
 import { startServer } from "../../server/dist/server.js";
 import { rendererLocation, rendererURLAllowed, safeExternalURL } from "../dist/desktop-contract.js";
 import { readImageFileURL } from "../dist/image-file-reader.js";
@@ -11,6 +12,56 @@ const rendererTrust = rendererLocation(path.resolve(directory, "../../app/dist/i
 const token = "chat-accessibility-test-token-000000000000000000000";
 const validImageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const validImageDataURI = `data:image/png;base64,${validImageBase64}`;
+// Keep this fixture in provider-record form so the Electron check exercises
+// the same parser/classification boundary as a real Codex transcript.
+const visibilityTranscript = [
+  JSON.stringify({
+    type: "response_item",
+    timestamp: "2026-09-02T07:42:00.000Z",
+    payload: {
+      type: "message",
+      id: "visibility-prompt",
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: "Please preserve this quoted XML:\n<environment_context>user-authored example</environment_context>",
+        },
+        { type: "input_image", image_url: validImageDataURI },
+      ],
+      internal_chat_message_metadata_passthrough: {
+        content_item_kinds: ["user.text", "user.image"],
+      },
+    },
+  }),
+  JSON.stringify({
+    type: "response_item",
+    timestamp: "2026-09-02T07:42:01.000Z",
+    payload: {
+      type: "message",
+      id: "visibility-answer",
+      role: "assistant",
+      content: [{ type: "output_text", text: "The quoted example and image were preserved." }],
+    },
+  }),
+  JSON.stringify({
+    type: "response_item",
+    timestamp: "2026-09-02T07:42:02.000Z",
+    payload: {
+      type: "message",
+      id: "visibility-activity",
+      role: "user",
+      content: [{
+        type: "input_text",
+        text: "<subagent_notification>\n{\"agent_path\":\"fixture-agent\",\"status\":{\"completed\":\"Review finished.\"}}\n</subagent_notification>",
+      }],
+      internal_chat_message_metadata_passthrough: {
+        content_item_kinds: ["multi_agent.subagent_notification"],
+      },
+    },
+  }),
+];
+const visibilityItems = parseChatLines("codex", visibilityTranscript);
 const externalURLs = [];
 const expectedFixtureContent = {
   "chat-item-user-1": ["Fix it"],
@@ -43,6 +94,15 @@ const codexUsageSession = {
   owner: "Codex",
   subtitle: "Ready",
   updatedAt: "2026-08-22T09:30:00.000Z",
+};
+const visibilitySession = {
+  ...session,
+  id: "codex-chat-visibility",
+  title: "Codex Chat Visibility",
+  source: "Codex",
+  owner: "Codex",
+  subtitle: "Activity visibility fixture",
+  updatedAt: "2026-08-22T09:45:00.000Z",
 };
 const claudeModeSession = {
   ...session,
@@ -135,7 +195,7 @@ const invalidSlashSession = {
   subtitle: "Protocol error",
   updatedAt: "2026-08-19T09:00:00.000Z",
 };
-const fixtureSessions = [session, codexUsageSession, claudeModeSession, workingSession, deliverySession, startupRaceSession, terminalEvidenceSession, scopedExpirySession, recoveryWorkingSession, tailSession, secondSession, endedSession, invalidPageSession, invalidSlashSession];
+const fixtureSessions = [session, visibilitySession, codexUsageSession, claudeModeSession, workingSession, deliverySession, startupRaceSession, terminalEvidenceSession, scopedExpirySession, recoveryWorkingSession, tailSession, secondSession, endedSession, invalidPageSession, invalidSlashSession];
 const tailFixture = {
   // ponytail: keep this fixture larger than the initial renderer window so the
   // E2E check proves bounded DOM history rather than a short-list accident.
@@ -269,6 +329,16 @@ async function run() {
           type: "chat_page",
           sessionId,
           items: [{ id: "ended-answer", kind: "assistant", text: "This session is complete." }],
+          hasMoreBefore: false,
+          capabilities: capabilities(requested),
+          pendingAction: null,
+        };
+      }
+      if (requested.id === visibilitySession.id) {
+        return {
+          type: "chat_page",
+          sessionId,
+          items: visibilityItems,
           hasMoreBefore: false,
           capabilities: capabilities(requested),
           pendingAction: null,
@@ -755,6 +825,41 @@ async function run() {
     );
 
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Back to Sessions"]')?.click()`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Open Chat for Codex Chat Visibility"]'))`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Open Chat for Codex Chat Visibility"]')?.click()`);
+    await waitFor(window, `document.body.textContent.includes('The quoted example and image were preserved.')`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Show 1 work item"]'))`);
+    const visibilityCollapsed = await window.webContents.executeJavaScript(`(() => ({
+      quotedPrompt: document.body.textContent.includes('<environment_context>user-authored example</environment_context>'),
+      preservedImage: Boolean(document.querySelector('[aria-label="image-2"]')),
+      rawNotificationUser: Boolean(document.querySelector('[aria-label*="subagent_notification"]')),
+      activityResult: Boolean(document.querySelector('[aria-label^="Subagent activity result:"]')),
+      mainRunWorking: document.body.textContent.includes('Working…'),
+    }))()`);
+    assert(
+      visibilityCollapsed.quotedPrompt
+        && visibilityCollapsed.preservedImage
+        && !visibilityCollapsed.rawNotificationUser
+        && !visibilityCollapsed.activityResult
+        && !visibilityCollapsed.mainRunWorking,
+      `Codex activity history keeps prompt/image/quote content, hides internal user bubbles, and stays non-live while collapsed (${JSON.stringify(visibilityCollapsed)})`,
+    );
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show 1 work item"]')?.click()`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Show result for Subagent activity: Subagent completed"]'))`);
+    assert(
+      await window.webContents.executeJavaScript(`!document.querySelector('[aria-label^="Subagent activity result:"]')`),
+      "expanded work disclosure keeps the activity result collapsed until its own control is activated",
+    );
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show result for Subagent activity: Subagent completed"]')?.click()`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label^="Subagent activity result:"]'))`);
+    assert(
+      await window.webContents.executeJavaScript(`Boolean(document.querySelector('[aria-label="Subagent activity result: Review finished."]'))
+        && document.body.textContent.includes('Review finished.')
+        && !document.body.textContent.includes('Working…')`),
+      "the labeled subagent activity expands to a meaningful result without presenting the main turn as working",
+    );
+
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Back to Sessions"]')?.click()`);
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Open Chat for Codex Usage Chat"]'))`);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Open Chat for Codex Usage Chat"]')?.click()`);
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Chat Details"]'))`);
@@ -954,6 +1059,11 @@ async function run() {
         .find((candidate) => candidate.textContent?.includes('Local tail send'));
       const input = document.querySelector('[aria-label="Chat message"]');
       return Boolean(row && input && input.value === '');
+    })()`);
+    await waitFor(window, `(() => {
+      const timeline = document.querySelector('[aria-label="Chat timeline"]');
+      return Boolean(timeline && timeline.scrollHeight > timeline.clientHeight
+        && timeline.scrollHeight - (timeline.scrollTop + timeline.clientHeight) <= 2);
     })()`);
     const afterLocalSend = await measureTimeline(window);
     assert(afterLocalSend.distanceFromBottom <= 2,
@@ -1538,6 +1648,10 @@ async function run() {
     await window.setSize(1_040, 760);
     await waitFor(window, `window.innerWidth >= 1_000 && window.innerWidth <= 1_100`);
     await waitForMixedFlowLayout(window);
+    assert(
+      await window.webContents.executeJavaScript(`document.activeElement?.getAttribute('aria-label') === 'Chat message'`),
+      "writable Chat focuses its composer when it opens",
+    );
     const localReferencePath = "/Users/zhengyuanz/Codes/.scratch/service-investigation-20260830/investigation.md:27";
     const localReferenceSelector = "[aria-label=\"Local file reference: " + localReferencePath + "\"]";
     const localReferenceProbe = await window.webContents.executeJavaScript([
@@ -1575,7 +1689,8 @@ async function run() {
       "})()",
     ].join("\n"));
     await waitFor(window,
-      "document.querySelector(" + JSON.stringify(localReferenceSelector) + ")?.textContent === " + JSON.stringify(localReferencePath),
+      "document.querySelector(" + JSON.stringify(localReferenceSelector) + ")?.textContent === " + JSON.stringify(localReferencePath)
+        + " && document.querySelector(" + JSON.stringify(localReferenceSelector) + ")?.getAttribute('aria-expanded') === 'true'",
     );
     assert(localReferenceEnter.defaultPrevented && localReferenceEnter.focused,
       "Enter reveals the selectable full local evidence path");
@@ -1591,7 +1706,8 @@ async function run() {
       "})()",
     ].join("\n"));
     await waitFor(window,
-      "document.querySelector(" + JSON.stringify(localReferenceSelector) + ")?.textContent === " + JSON.stringify("Request evidence"),
+      "document.querySelector(" + JSON.stringify(localReferenceSelector) + ")?.textContent === " + JSON.stringify("Request evidence")
+        + " && document.querySelector(" + JSON.stringify(localReferenceSelector) + ")?.getAttribute('aria-expanded') === 'false'",
     );
     assert(localReferenceSpace.defaultPrevented,
       "Space hides the full local evidence path without opening a file URL");
@@ -1601,10 +1717,6 @@ async function run() {
       && document.body.textContent.includes('Done')`),
       "safe Chat links stay in the external-link IPC path instead of navigating the renderer");
 
-    assert(
-      await window.webContents.executeJavaScript(`document.activeElement?.getAttribute('aria-label') === 'Chat message'`),
-      "writable Chat focuses its composer when it opens",
-    );
     await setInput(window, "Chat message", "/");
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Slash command suggestions"]'))`);
     assert(
@@ -1901,6 +2013,9 @@ async function run() {
     await waitUntil(() => actions.some((action) => action.type === "respond_chat" && action.decision === "deny" && action.approvalId === "question-1"));
     assert(questionEscape.defaultPrevented && questionEscape.back,
       "question Escape denies the exact pending action without navigating back");
+    // Request receipt precedes the response/page update that restores the composer.
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Chat composer"] [aria-label="Chat message"]'))
+      && !document.querySelector('[aria-label="Question question-1"]')`);
 
     await window.setSize(960, 760);
     await waitFor(window, `window.innerWidth <= 1_000`);

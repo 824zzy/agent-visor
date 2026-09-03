@@ -47,22 +47,46 @@ The renderer groups reasoning and tool work under each prompt. Final assistant p
 
 ## Visibility
 
-Before Chat items are created, the Codex parser excludes user-role text blocks
-that consist entirely of a known injected context wrapper: `environment_context`,
-`developer_context`, `permissions instructions`, `app-context`, or
-`skills_instructions`. These match the Swift context categories. Only complete
-context-only blocks are hidden; quoted examples, mixed prose, incomplete or
-unknown wrappers, sibling prompt text, and attachments remain visible. Assistant
-messages and other providers are unchanged. This is a display convention, not a
-security boundary: the rollout does not distinguish a user's verbatim standalone
-copy of these wrappers from injected context.
+Provider-origin classification happens before canonical `ChatItem` creation and
+is separate from renderer visibility settings. For Codex user messages, the
+parser uses `internal_chat_message_metadata_passthrough.content_item_kinds`
+only when it is a string array aligned one-for-one with `payload.content`.
+Known internal origins (`environments.environment_context`,
+`skills.selected_skill_instructions`, `goal.internal_context`,
+`plugins.recommendations`, and `agents_md.instructions`) are excluded per
+content block. A known `multi_agent.subagent_notification` becomes a typed
+`activity` item rather than a user message or raw JSON dump.
 
-Hidden blocks are not user turns or delivery evidence and do not consume the
-history page's visible-item budget. Structured model, usage, and permission
-metadata still comes from the separate metadata parser. Source transcripts are
-never modified.
+The typed activity contract is `{ kind: "activity", activity: "subagent" |
+"delegation", id, title, text, timestamp? }`. Titles are short status labels;
+the text contains only bounded, meaningful status/result fields. Complete
+legacy `codex_delegation` envelopes become delegation activities, and complete
+allow-listed legacy context/browser wrappers are excluded using conservative
+recognition. The observed Codex image-tag scaffold is normalized only when its
+validated image block is present; a file preamble without an image keeps its
+recognized path reference, preserving the actual request and attachment data.
 
-Chat settings filter only rendered rows. Canonical transcript items remain unchanged.
+Missing, malformed, misaligned, or unknown origin metadata uses a conservative
+fallback: known legacy cases may be recognized, but mixed, quoted, incomplete,
+or otherwise uncertain authored content remains visible. `user.text` is a
+legacy label, not proof that content was typed by a person. Shared text
+normalization trims surrounding whitespace only, so literal XML and other
+quoted examples remain exact. Assistant messages, tools, approvals, questions,
+actionable errors, interruptions, and compaction boundaries retain their
+existing presentation.
+
+Excluded records do not become user turns or delivery evidence and do not
+consume the history page's visible-item budget. Activity records remain
+available as collapsed work disclosure, but do not by themselves make a
+transcript authoritative or imply that the main task is still live. Structured
+model, usage, and permission metadata still comes from the separate metadata
+parser. Source transcripts are never modified.
+
+Renderer Chat settings filter canonical rendered rows; they do not change
+provider-origin classification or transcript authority. Swift visibility rules
+are a reference for the shared interaction contract, not a complete Codex
+provenance policy. This boundary is a presentation/classification safeguard,
+not DLP or a guarantee that user-authored content contains no sensitive data.
 
 All categories are visible by default. Users can independently control provider turn grouping, user and assistant messages, thinking, known tool families, MCP tools, unknown tools, interruptions, durations, recaps, compact boundaries, and local command output.
 

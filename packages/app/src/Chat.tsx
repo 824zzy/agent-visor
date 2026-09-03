@@ -514,11 +514,31 @@ export function Chat({
             contentContainerStyle={styles.timeline}
             nativeID={chatTimelineNativeID(session.id)}
             onContentSizeChange={(_width, height) => {
+              const element = timelineElement(session.id);
+              const previousHeight = contentHeight.current;
+              // RN Web can report the new DOM height before this callback. Use
+              // the previous measured height with the current offset to
+              // reconstruct the reader's previous-layout distance; measuring
+              // against the new height would mistake a near-tail reader for a
+              // far reader after virtualization remeasurement.
+              const previousDistanceFromBottom = element && previousHeight !== undefined
+                ? previousHeight - (element.scrollTop + element.clientHeight)
+                : undefined;
+              const shouldPreserveTail = didInitialScroll.current
+                && previousHeight !== undefined
+                && height !== previousHeight
+                && pendingPrepend.current?.sessionID !== session.id
+                && previousDistanceFromBottom !== undefined
+                && chatTailAction({
+                  type: "content-resize",
+                  distanceFromBottom: previousDistanceFromBottom,
+                }) === "pin-to-tail";
               contentHeight.current = height;
               if (pendingPrepend.current?.sessionID === session.id) {
                 scheduleAnimationFrame(() => restorePrependAnchor(session.id), session.id);
                 return;
               }
+              if (shouldPreserveTail) scheduleTailPin();
               if (!didInitialScroll.current) {
                 didInitialScroll.current = true;
                 scheduleTailPin();
@@ -697,11 +717,11 @@ function renderChatTimelineRow(
       return (
         <View style={[styles.rail, styles.work]}>
           <Pressable
-            accessibilityLabel={`${row.expanded ? "Hide" : "Show"} ${row.count} work items`}
+            accessibilityLabel={`${row.expanded ? "Hide" : "Show"} ${workCountLabel(row.count)}`}
             onPress={() => onToggleWork(row.turnID, !row.expanded)}
             style={styles.workHeader}
           >
-            <Text style={styles.workLabel}>{row.expanded ? "⌄" : "›"} {row.live ? "Working…" : `Worked · ${row.count} steps`}</Text>
+            <Text style={styles.workLabel}>{row.expanded ? "⌄" : "›"} {row.live ? "Working…" : `Worked · ${row.count} step${row.count === 1 ? "" : "s"}`}</Text>
           </Pressable>
         </View>
       );
@@ -758,6 +778,8 @@ function chatTimelineUpdateSignal(items: ChatItem[]): string {
   if (!latest) return `count:${items.length};latest:none`;
   const content = latest.kind === "tool"
     ? `${latest.name}:${latest.status}:${latest.result ?? ""}`
+    : latest.kind === "activity"
+      ? `${activityKindLabel(latest.activity)}: ${latest.title}. ${latest.text}`
     : latest.text;
   // ponytail: keep the live-region payload bounded; the retained transcript is
   // already available through the virtualized rows and count status.
@@ -782,6 +804,7 @@ function Message({ item, styles }: { item: ChatItem; styles: ChatStyles }) {
     );
   }
   if (item.kind === "tool") return <Tool item={item} styles={styles} />;
+  if (item.kind === "activity") return <Activity item={item} styles={styles} />;
   if (item.kind === "thinking") {
     return (
       <View
@@ -990,6 +1013,41 @@ function Tool({ item, styles }: { item: Extract<ChatItem, { kind: "tool" }>; sty
   );
 }
 
+function Activity({ item, styles }: { item: Extract<ChatItem, { kind: "activity" }>; styles: ChatStyles }) {
+  const [expanded, setExpanded] = useState(false);
+  const label = activityKindLabel(item.activity);
+  return (
+    <View nativeID={messageNativeID(item.id)} style={styles.activity}>
+      <Pressable
+        accessibilityHint="Expands to show the delegated agent result."
+        accessibilityLabel={`${expanded ? "Hide" : "Show"} result for ${label}: ${item.title}`}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        onPress={() => setExpanded((value) => !value)}
+        style={styles.activityHeader}
+      >
+        <Text style={styles.activityLabel}>{expanded ? "⌄" : "›"} {label}: {item.title}</Text>
+      </Pressable>
+      {expanded ? (
+        <View
+          accessibilityLabel={`${label} result: ${accessibleActivityText(item.text)}`}
+          style={styles.activityResult}
+        >
+          <RichMessageText styles={styles} text={item.text} />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function activityKindLabel(activity: Extract<ChatItem, { kind: "activity" }>["activity"]): string {
+  return activity === "subagent" ? "Subagent activity" : "Delegation activity";
+}
+
+function accessibleActivityText(text: string): string {
+  return accessibleThinkingText(text) || "Result available";
+}
+
 function ToolDetail({
   item,
   presentation,
@@ -1065,7 +1123,8 @@ function LocalReference({
     accessibilityHint: revealed ? "Press to hide the full local path." : "Press to reveal the full local path; the revealed text can be copied.",
     accessibilityLabel: "Local file reference: " + path,
     accessibilityRole: "button",
-    accessibilityState: { expanded: revealed },
+    "aria-expanded": revealed,
+    tabIndex: 0,
     onKeyDown: (event: { key: string; preventDefault(): void }) => {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
@@ -1141,6 +1200,12 @@ function chatItemContentChanged(previous: ChatItem, next: ChatItem): boolean {
     return previous.name !== next.name
       || previous.status !== next.status
       || previous.result !== next.result;
+  }
+  if (previous.kind === "activity" && next.kind === "activity") {
+    return previous.activity !== next.activity
+      || previous.title !== next.title
+      || previous.text !== next.text
+      || previous.timestamp !== next.timestamp;
   }
   if ("text" in previous && "text" in next) return previous.text !== next.text;
   return false;
@@ -2085,6 +2150,10 @@ function toolGlyph(status: Extract<ChatItem, { kind: "tool" }>["status"]): strin
   return { running: "●", waiting: "!", success: "✓", error: "×", interrupted: "■" }[status];
 }
 
+function workCountLabel(count: number): string {
+  return `${count} work item${count === 1 ? "" : "s"}`;
+}
+
 function sectionLabel(section: SessionSummary["section"]): string {
   return { needs_you: "Needs you", ready: "Ready", working: "In progress", history: "History" }[section];
 }
@@ -2128,6 +2197,10 @@ function createStyles(palette: Palette, scale: number) {
     workItem: { paddingTop: 6 },
     workHeader: { alignSelf: "flex-start", minHeight: 30, paddingVertical: 6 },
     workLabel: { color: palette.tertiary, fontSize: font(11), fontWeight: "600" },
+    activity: { maxWidth: "100%", minWidth: 0 },
+    activityHeader: { alignSelf: "flex-start", minHeight: 30, paddingVertical: 6 },
+    activityLabel: { color: palette.muted, fontSize: font(11), fontWeight: "600" },
+    activityResult: { borderLeftColor: palette.border, borderLeftWidth: 2, maxWidth: "100%", minWidth: 0, paddingLeft: 10, paddingTop: 3 },
     userRow: { alignItems: "flex-end", paddingLeft: 60 },
     userBubble: { backgroundColor: palette.foreground + "12", borderRadius: 15, gap: 8, maxWidth: "82%", minWidth: 0, paddingHorizontal: 14, paddingVertical: 10 },
     assistant: { alignItems: "flex-start", maxWidth: "100%", minWidth: 0 },

@@ -18,6 +18,7 @@ export type ChatTailEvent =
   | { type: "head-prepend"; distanceFromBottom: number }
   | { type: "tail-insert"; distanceFromBottom: number; threshold?: number }
   | { type: "stream-growth"; distanceFromBottom: number; threshold?: number }
+  | { type: "content-resize"; distanceFromBottom: number; threshold?: number }
   | { type: "composer-resize"; distanceFromBottom: number; threshold?: number }
   | { type: "local-send"; distanceFromBottom?: number };
 
@@ -133,6 +134,10 @@ export function chatTailAction(event: ChatTailEvent): ChatTailScrollAction {
         insertedAtTail: true,
       }) ? "pin-to-tail" : "preserve";
     case "stream-growth":
+      return shouldStreamPin(event.distanceFromBottom, event.threshold)
+        ? "pin-to-tail"
+        : "preserve";
+    case "content-resize":
       return shouldStreamPin(event.distanceFromBottom, event.threshold)
         ? "pin-to-tail"
         : "preserve";

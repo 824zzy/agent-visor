@@ -279,6 +279,19 @@ export const chatItemSchema = z.discriminatedUnion("kind", [
     ]).optional(),
     timestamp: chatTimestamp,
   }).strict(),
+  // Agent activity is provider work disclosure, not a conversational role.
+  // Keep its label and details within the existing ChatItem identity/text
+  // bounds so it cannot become an unbounded transport dump.
+  // ponytail: if activity details need more than the existing ChatItem text
+  // ceiling, add a paged activity protocol before raising this bound.
+  z.object({
+    id: z.string().min(1).max(512),
+    kind: z.literal("activity"),
+    activity: z.enum(["subagent", "delegation"]),
+    title: z.string().min(1).max(512),
+    text: z.string().min(1).max(20_000_000),
+    timestamp: chatTimestamp,
+  }).strict(),
 ]);
 
 const macFunctionKeyCodes = new Set([

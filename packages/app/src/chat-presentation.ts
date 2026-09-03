@@ -251,6 +251,9 @@ export function filterChatItems(items: ChatItem[], rules: ChatVisibility): ChatI
     if (item.kind === "assistant") return rules.showAssistantMessage;
     if (item.kind === "thinking") return rules.showThinking;
     if (item.kind === "tool") return rules[toolVisibilitySetting(item)];
+    // Agent activity follows the shared Tasks and subagents setting, while
+    // remaining independent of the user-message visibility setting.
+    if (item.kind === "activity") return rules.showTask;
     const setting = systemVisibilitySetting(item.category);
     return setting ? rules[setting] : true;
   });
@@ -334,21 +337,28 @@ export function groupChatTurns(items: ChatItem[]): ChatTurn[] {
 
   const flush = () => {
     if (!prompt && !body.length) return;
-    let lastWork = -1;
+    // Only native work (thinking/tool) determines which assistant fragments
+    // belong in the disclosure. Activity can arrive after a final answer and
+    // must not pull that answer back into work.
+    let lastNativeWork = -1;
     for (let index = 0; index < body.length; index += 1) {
-      if (["thinking", "tool"].includes(body[index]!.kind)) lastWork = index;
+      if (["thinking", "tool"].includes(body[index]!.kind)) lastNativeWork = index;
     }
     const work = body.filter((item, index) =>
-      item.kind === "thinking" || item.kind === "tool"
-      || (item.kind === "assistant" && index <= lastWork));
+      item.kind === "thinking" || item.kind === "tool" || item.kind === "activity"
+      || (item.kind === "assistant" && index <= lastNativeWork));
     const answers = body.filter((item, index) =>
-      (item.kind === "assistant" && index > lastWork) || item.kind === "system");
+      (item.kind === "assistant" && index > lastNativeWork) || item.kind === "system");
+    // Activity records describe delegated/subagent work that has already been
+    // classified by the daemon. They are not evidence that the main turn is
+    // still running, including when they are the only retained history.
+    const hasNativeWork = body.some((item) => item.kind === "thinking" || item.kind === "tool");
     turns.push({
       id: prompt?.id ?? body[0]!.id,
       ...(prompt ? { prompt } : {}),
       work,
       answers,
-      live: body.length > 0 && answers.length === 0,
+      live: hasNativeWork && answers.length === 0,
     });
     prompt = undefined;
     body = [];

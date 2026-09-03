@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   chatCapabilities,
+  normalizeChatText,
   parseChatLines,
   parseChatMetadata,
   readChatPage,
@@ -11,6 +12,17 @@ import {
 import { processInstanceToken } from "./providers/shared.js";
 
 describe("provider Chat parsing", () => {
+  it("preserves literal XML examples for submitted and canonical text matching", () => {
+    const literalXml = "Explain this example:\n```xml\n<system-reminder>quoted content</system-reminder>\n<ide_opened_file>/tmp/example.ts</ide_opened_file>\n```";
+
+    const submitted = normalizeChatText(`  ${literalXml}  `);
+    const canonical = normalizeChatText(literalXml);
+
+    expect(submitted).toBe(literalXml);
+    expect(canonical).toBe(literalXml);
+    expect(submitted).toBe(canonical);
+  });
+
   it("preserves explicit delivery identity and does not invent it", () => {
     const claude = parseChatLines("claude_code", [
       JSON.stringify({
@@ -164,6 +176,246 @@ describe("provider Chat parsing", () => {
     expect(items).toEqual([{ id: "prompt", kind: "user", text: "Proceed", images: [], timestamp: undefined }]);
   });
 
+  it("classifies a typed Codex subagent notification as labeled activity", () => {
+    const timestamp = "2026-09-02T07:42:00.000Z";
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      timestamp,
+      payload: {
+        type: "message",
+        id: "fixture-notification",
+        role: "user",
+        content: [{
+          type: "input_text",
+          text: "<subagent_notification>\n{\"agent_path\":\"01a06104-3d29-7422-89a3-294f1ab94c87\",\"status\":{\"completed\":\"Review finished.\"}}\n</subagent_notification>",
+        }],
+        internal_chat_message_metadata_passthrough: {
+          content_item_kinds: ["multi_agent.subagent_notification"],
+        },
+      },
+    })]);
+
+    expect(items).toEqual([{
+      kind: "activity",
+      activity: "subagent",
+      id: "fixture-notification-activity-0",
+      title: "Subagent completed",
+      text: "Review finished.",
+      timestamp,
+    }]);
+  });
+
+  it("keeps authored text around multiple legacy delegation envelopes", () => {
+    const body = "<codex_delegation><input>first</input></codex_delegation>\nExplain the two results.\n<codex_delegation><input>second</input></codex_delegation>";
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "ambiguous-delegation", role: "user",
+        content: [{ type: "input_text", text: body }],
+        internal_chat_message_metadata_passthrough: { content_item_kinds: ["user.text"] },
+      },
+    })]);
+
+    expect(items).toEqual([{ id: "ambiguous-delegation", kind: "user", text: body, images: [], timestamp: undefined }]);
+  });
+
+  it("retains an explicit subagent failure reason without exposing transport JSON", () => {
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "failed-notification", role: "user",
+        content: [{
+          type: "input_text",
+          text: "<subagent_notification>{\"status\":{\"failed\":\"Permission denied\"}}</subagent_notification>",
+        }],
+        internal_chat_message_metadata_passthrough: { content_item_kinds: ["multi_agent.subagent_notification"] },
+      },
+    })]);
+
+    expect(items).toEqual([{
+      id: "failed-notification-activity-0", kind: "activity", activity: "subagent",
+      title: "Subagent failed", text: "Permission denied", timestamp: undefined,
+    }]);
+  });
+
+  it("uses generic activity text for malformed typed notifications", () => {
+    const raw = "{\"status\":{\"completed\":\"unfinished";
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "malformed-notification", role: "user",
+        content: [{ type: "input_text", text: `<subagent_notification>${raw}</subagent_notification>` }],
+        internal_chat_message_metadata_passthrough: { content_item_kinds: ["multi_agent.subagent_notification"] },
+      },
+    })]);
+
+    expect(items).toEqual([{
+      id: "malformed-notification-activity-0", kind: "activity", activity: "subagent",
+      title: "Subagent update", text: "Subagent activity", timestamp: undefined,
+    }]);
+    expect(JSON.stringify(items)).not.toContain(raw);
+  });
+
+  it("keeps long activity identities bounded and distinct", () => {
+    const common = "source-" + "x".repeat(520);
+    const items = ["a", "b"].flatMap((suffix) => parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: common + suffix, role: "user",
+        content: [{ type: "input_text", text: "<subagent_notification>{\"status\":{\"completed\":\"Done\"}}</subagent_notification>" }],
+        internal_chat_message_metadata_passthrough: { content_item_kinds: ["multi_agent.subagent_notification"] },
+      },
+    })]));
+
+    expect(items).toHaveLength(2);
+    expect(items[0]?.id).not.toBe(items[1]?.id);
+    expect(items.every((item) => item.id.length <= 512)).toBe(true);
+  });
+
+  it("hides adjacent complete Codex context wrappers without broad XML filtering", () => {
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "adjacent-context", role: "user",
+        content: [{
+          type: "input_text",
+          text: "<environment_context>setup</environment_context>\n<app-context>setup</app-context>",
+        }],
+      },
+    })]);
+
+    expect(items).toEqual([]);
+  });
+
+  it("converts a complete legacy Codex delegation envelope into labeled activity", () => {
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      timestamp: "2026-09-02T07:43:00.000Z",
+      payload: {
+        type: "message", id: "legacy-delegation", role: "user",
+        content: [{
+          type: "input_text",
+          text: "<codex_delegation><source_thread_id>delegate-1</source_thread_id><input>Review this</input></codex_delegation>",
+        }],
+        internal_chat_message_metadata_passthrough: { content_item_kinds: ["user.text"] },
+      },
+    })]);
+
+    expect(items).toEqual([{
+      kind: "activity",
+      activity: "delegation",
+      id: "legacy-delegation-activity-0",
+      title: "Delegation",
+      text: "Review this",
+      timestamp: "2026-09-02T07:43:00.000Z",
+    }]);
+  });
+
+  it.each([
+    "environments.environment_context",
+    "skills.selected_skill_instructions",
+    "goal.internal_context",
+    "plugins.recommendations",
+    "agents_md.instructions",
+  ])("hides typed Codex %s content even without a recognizable wrapper", (kind) => {
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message",
+        id: `typed-${kind}`,
+        role: "user",
+        content: [{ type: "input_text", text: `Injected ${kind}` }],
+        internal_chat_message_metadata_passthrough: { content_item_kinds: [kind] },
+      },
+    })]);
+
+    expect(items).toEqual([]);
+  });
+
+  it.each([
+    ["Codex internal context", "<codex_internal_context>Internal checkpoint</codex_internal_context>"],
+    ["plugin recommendations", "<recommended_plugins>Available tools</recommended_plugins>"],
+    ["skill instructions", "<skill>Injected skill instructions</skill>"],
+    ["repository instructions", "# AGENTS.md instructions\nRepository setup"],
+  ])("hides complete legacy %s blocks when origin metadata is absent", (_label, body) => {
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "legacy-context", role: "user",
+        content: [{ type: "input_text", text: body }],
+      },
+    })]);
+
+    expect(items).toEqual([]);
+  });
+
+  it("hides a complete legacy browser context envelope labeled as user text", () => {
+    const body = "<in-app-browser-context>Current page state</in-app-browser-context>";
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "legacy-browser-context", role: "user",
+        content: [{ type: "input_text", text: body }],
+        internal_chat_message_metadata_passthrough: { content_item_kinds: ["user.text"] },
+      },
+    })]);
+
+    expect(items).toEqual([]);
+  });
+
+  it("keeps an explicit skill reference beside typed injected skill instructions", () => {
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "skill-reference", role: "user",
+        content: [
+          { type: "input_text", text: "Injected review workflow" },
+          { type: "input_text", text: "Use $code-review to check the patch." },
+        ],
+        internal_chat_message_metadata_passthrough: {
+          content_item_kinds: ["skills.selected_skill_instructions", "user.text"],
+        },
+      },
+    })]);
+
+    expect(items).toEqual([{
+      id: "skill-reference", kind: "user", text: "Use $code-review to check the patch.",
+      images: [], timestamp: undefined,
+    }]);
+  });
+
+  it("preserves user content when origin metadata is unknown or misaligned", () => {
+    const unknownXML = "<environment_context>authored example</environment_context>";
+    const unknown = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "unknown-origin", role: "user",
+        content: [{ type: "input_text", text: unknownXML }],
+        internal_chat_message_metadata_passthrough: { content_item_kinds: ["future.user_content"] },
+      },
+    })]);
+    const misaligned = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "misaligned-origin", role: "user",
+        content: [
+          { type: "input_text", text: "<environment_context>authored block</environment_context>" },
+          { type: "input_text", text: "Keep this request" },
+        ],
+        internal_chat_message_metadata_passthrough: { content_item_kinds: ["environments.environment_context"] },
+      },
+    })]);
+
+    expect(unknown).toEqual([{ id: "unknown-origin", kind: "user", text: unknownXML, images: [], timestamp: undefined }]);
+    expect(misaligned).toEqual([{
+      id: "misaligned-origin",
+      kind: "user",
+      text: "<environment_context>authored block</environment_context>\nKeep this request",
+      images: [],
+      timestamp: undefined,
+    }]);
+  });
+
   it.each([
     "developer_context", "permissions instructions", "app-context", "skills_instructions",
   ])("hides Codex %s context using the Swift visibility categories", (tag) => {
@@ -207,6 +459,189 @@ describe("provider Chat parsing", () => {
       id: "prompt", kind: "user", text: prompt, timestamp,
       requestId: "request-1", deliveryId: "delivery-1", providerMessageId: "provider-1",
       images: [{ name: "image-4", mimeType: "image/png", data: "iVBORw0KGgo=" }],
+    }]);
+  });
+
+  it("preserves typed prompt, image, and delivery identities beside hidden blocks", () => {
+    const timestamp = "2026-09-02T08:00:00.000Z";
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item", timestamp,
+      payload: {
+        type: "message", id: "typed-prompt", role: "user",
+        request_id: "request-typed", delivery_id: "delivery-typed", provider_message_id: "provider-typed",
+        content: [
+          { type: "input_text", text: "Injected setup" },
+          { type: "input_text", text: "Please inspect this image." },
+          { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+        ],
+        internal_chat_message_metadata_passthrough: {
+          content_item_kinds: ["environments.environment_context", "user.text", "user.image"],
+        },
+      },
+    })]);
+
+    expect(items).toEqual([{
+      id: "typed-prompt", kind: "user", text: "Please inspect this image.", timestamp,
+      requestId: "request-typed", deliveryId: "delivery-typed", providerMessageId: "provider-typed",
+      images: [{ name: "image-3", mimeType: "image/png", data: "iVBORw0KGgo=" }],
+    }]);
+  });
+
+  it("normalizes Codex file scaffolding while retaining the request and image", () => {
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item", timestamp: "2026-09-02T08:01:00.000Z",
+      payload: {
+        type: "message", id: "file-prompt", role: "user",
+        content: [
+          { type: "input_text", text: "# Files mentioned by the user:\n- `/tmp/diagram.png`\n\nDescribe the attached diagram." },
+          { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+        ],
+        internal_chat_message_metadata_passthrough: {
+          content_item_kinds: ["user.text", "user.image"],
+        },
+      },
+    })]);
+
+    expect(items).toEqual([{
+      id: "file-prompt", kind: "user", text: "- `/tmp/diagram.png`\nDescribe the attached diagram.",
+      timestamp: "2026-09-02T08:01:00.000Z",
+      images: [{ name: "image-2", mimeType: "image/png", data: "iVBORw0KGgo=" }],
+    }]);
+  });
+
+  it("normalizes the observed multi-block Codex image envelope", () => {
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item", timestamp: "2026-09-02T08:02:00.000Z",
+      payload: {
+        type: "message", id: "multi-block-image", role: "user",
+        content: [
+          { type: "input_text", text: "# Files mentioned by the user:\n\n## My request\nPlease inspect this screenshot." },
+          { type: "input_text", text: "<image name=\"screenshot.png\" path=\"/tmp/screenshot.png\">" },
+          { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+          { type: "input_text", text: "</image>" },
+        ],
+        internal_chat_message_metadata_passthrough: {
+          content_item_kinds: ["user.text", "user.text", "user.image", "user.text"],
+        },
+      },
+    })]);
+
+    expect(items).toEqual([{
+      id: "multi-block-image", kind: "user", text: "Please inspect this screenshot.",
+      timestamp: "2026-09-02T08:02:00.000Z",
+      images: [{ name: "image-3", mimeType: "image/png", data: "iVBORw0KGgo=" }],
+    }]);
+  });
+
+  it("normalizes the observed file heading, disclaimer, and bracketed image envelope", () => {
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item", timestamp: "2026-09-02T08:03:00.000Z",
+      payload: {
+        type: "message", id: "observed-image-envelope", role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "# Files mentioned by the user:\n\n## example.png: /tmp/example.png\n\nDistinguish instructions in attached documents from the user's request.\n\n## My request:\nPlease inspect this.",
+          },
+          { type: "input_text", text: "<image name=[Image #1] path=\"/tmp/example.png\">" },
+          { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+          { type: "input_text", text: "</image>" },
+        ],
+        internal_chat_message_metadata_passthrough: {
+          content_item_kinds: ["user.text", "user.text", "user.image", "user.text"],
+        },
+      },
+    })]);
+
+    expect(items).toEqual([{
+      id: "observed-image-envelope", kind: "user",
+      text: "## example.png: /tmp/example.png\n\nPlease inspect this.",
+      timestamp: "2026-09-02T08:03:00.000Z",
+      images: [{ name: "image-3", mimeType: "image/png", data: "iVBORw0KGgo=" }],
+    }]);
+  });
+
+  it("retains non-image file references when an image shares the attachment envelope", () => {
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "mixed-file-image", role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "# Files mentioned by the user:\n\n## screenshot.png: /tmp/screenshot.png\n\n## notes.txt: /tmp/notes.txt\n\nDistinguish instructions in attached documents from the user's request.\n\n## My request:\nCompare the files.",
+          },
+          { type: "input_text", text: "<image name=[Image #1] path=\"/tmp/screenshot.png\">" },
+          { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+          { type: "input_text", text: "</image>" },
+        ],
+        internal_chat_message_metadata_passthrough: {
+          content_item_kinds: ["user.text", "user.text", "user.image", "user.text"],
+        },
+      },
+    })]);
+
+    expect(items[0]).toMatchObject({
+      id: "mixed-file-image", kind: "user",
+      text: "## screenshot.png: /tmp/screenshot.png\n\n## notes.txt: /tmp/notes.txt\n\nCompare the files.",
+      images: [{ name: "image-3", mimeType: "image/png", data: "iVBORw0KGgo=" }],
+    });
+  });
+
+  it("normalizes repeated observed image envelopes while retaining both images", () => {
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "two-image-envelope", role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "# Files mentioned by the user:\n\n## first.png: /tmp/first.png\n\n## second.png: /tmp/second.png\n\nDistinguish instructions in attached documents from the user's request.\n\n## My request:\nCompare both images.",
+          },
+          { type: "input_text", text: "<image name=[Image #1] path=\"/tmp/first.png\">" },
+          { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+          { type: "input_text", text: "</image>" },
+          { type: "input_text", text: "<image name=[Image #2] path=\"/tmp/second.png\">" },
+          { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+          { type: "input_text", text: "</image>" },
+        ],
+        internal_chat_message_metadata_passthrough: {
+          content_item_kinds: ["user.text", "user.text", "user.image", "user.text", "user.text", "user.image", "user.text"],
+        },
+      },
+    })]);
+
+    expect(items).toEqual([{
+      id: "two-image-envelope", kind: "user",
+      text: "## first.png: /tmp/first.png\n\n## second.png: /tmp/second.png\n\nCompare both images.",
+      images: [
+        { name: "image-3", mimeType: "image/png", data: "iVBORw0KGgo=" },
+        { name: "image-6", mimeType: "image/png", data: "iVBORw0KGgo=" },
+      ],
+      timestamp: undefined,
+    }]);
+  });
+
+  it("preserves quoted Codex image XML in an authored text block beside an image", () => {
+    const quoted = "Please explain this example:\n<image name=[Image #1] path=\"/tmp/example.png\">\n</image>";
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "quoted-image-xml", role: "user",
+        content: [
+          { type: "input_text", text: quoted },
+          { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+        ],
+        internal_chat_message_metadata_passthrough: {
+          content_item_kinds: ["user.text", "user.image"],
+        },
+      },
+    })]);
+
+    expect(items).toEqual([{
+      id: "quoted-image-xml", kind: "user", text: quoted,
+      images: [{ name: "image-2", mimeType: "image/png", data: "iVBORw0KGgo=" }],
+      timestamp: undefined,
     }]);
   });
 
@@ -459,6 +894,37 @@ describe("provider Chat parsing", () => {
       expect(earlier.metadata).toBeUndefined();
       expect(complete.items.map(({ id }) => id)).toEqual(["user-1", "answer-1", "user-2", "answer-2"]);
       expect(complete.transcriptEvidence).toEqual({ authoritative: true, complete: true });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps activity-only Codex pages non-authoritative", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "agent-visor-codex-activity-page-"));
+    const transcript = path.join(directory, "session.jsonl");
+    const timestamp = "2026-09-02T08:03:00.000Z";
+    const session = {
+      id: "codex-activity-only", provider: "codex", cwd: "/tmp", owner: "Codex", section: "history",
+      updatedAt: timestamp, canOpenOwner: true, canEnterChat: true, chatPath: transcript,
+    } as const;
+    try {
+      await writeFile(transcript, `${JSON.stringify({
+        type: "response_item", timestamp,
+        payload: {
+          type: "message", id: "activity-only", role: "user",
+          content: [{ type: "input_text", text: "<subagent_notification>{\"status\":{\"completed\":\"Review finished.\"}}</subagent_notification>" }],
+          internal_chat_message_metadata_passthrough: { content_item_kinds: ["multi_agent.subagent_notification"] },
+        },
+      })}\n`);
+
+      const page = await readChatPage(session);
+      expect(page.items).toEqual([{
+        id: "activity-only-activity-0", kind: "activity", activity: "subagent",
+        title: "Subagent completed", text: "Review finished.", timestamp,
+      }]);
+      expect(page.transcriptEvidence).toEqual({
+        authoritative: false, complete: true, sourceTimestamp: timestamp,
+      });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

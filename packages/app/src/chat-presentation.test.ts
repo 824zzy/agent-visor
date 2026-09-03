@@ -18,10 +18,18 @@ import {
   shouldGroupChatTurns,
 } from "./chat-presentation.js";
 
-const item = (id: string, kind: ChatItem["kind"], text = id): ChatItem => {
+const item = (
+  id: string,
+  kind: ChatItem["kind"],
+  text = id,
+  activity: Extract<ChatItem, { kind: "activity" }>["activity"] = "subagent",
+): ChatItem => {
   if (kind === "user") return { id, kind, text, images: [] };
   if (kind === "tool") return { id, kind, name: "Bash", input: {}, status: "success" };
   if (kind === "system") return { id, kind, text, tone: "neutral" };
+  if (kind === "activity") {
+    return { id, kind, activity, title: "Review agent", text };
+  }
   return { id, kind, text };
 };
 
@@ -127,6 +135,84 @@ describe("Chat presentation", () => {
       { id: "user-1", prompt: { id: "user-1" }, work: [{ id: "thinking-1" }, { id: "tool-1" }], answers: [{ id: "answer-1" }], live: false },
       { id: "user-2", prompt: { id: "user-2" }, work: [{ id: "working-2" }], answers: [], live: true },
     ]);
+  });
+
+  it("keeps structured agent activity visible when user messages are hidden", () => {
+    const activity = item("activity-1", "activity", "Review finished.");
+    const turns = filterChatTurns(groupChatTurns([
+      item("prompt-1", "user", "Please review this"),
+      activity,
+      item("answer-1", "assistant", "The review is complete."),
+    ]), { ...defaultChatVisibility, showUserMessage: false });
+
+    expect(filterChatItems([activity], {
+      ...defaultChatVisibility,
+      showTask: false,
+      showUserMessage: true,
+    })).toEqual([]);
+    expect(filterChatItems([activity], {
+      ...defaultChatVisibility,
+      showTask: false,
+      showUserMessage: false,
+    })).toEqual([]);
+    expect(filterChatItems([activity], {
+      ...defaultChatVisibility,
+      showTask: true,
+      showUserMessage: false,
+    })).toEqual([activity]);
+    expect(turns).toMatchObject([{
+      prompt: undefined,
+      work: [{ id: "activity-1", kind: "activity" }],
+      answers: [{ id: "answer-1" }],
+      live: false,
+    }]);
+  });
+
+  it("keeps both structured activity variants in the work disclosure", () => {
+    const delegation = item("delegation-1", "activity", "Delegation finished.", "delegation");
+    const turns = groupChatTurns([
+      item("prompt-1", "user"),
+      delegation,
+      item("answer-1", "assistant", "The delegated work is complete."),
+    ]);
+
+    expect(filterChatItems([delegation], {
+      ...defaultChatVisibility,
+      showTask: true,
+      showUserMessage: false,
+    })).toEqual([delegation]);
+    expect(turns).toMatchObject([{
+      work: [{ id: "delegation-1", kind: "activity", activity: "delegation" }],
+      answers: [{ id: "answer-1" }],
+      live: false,
+    }]);
+  });
+
+  it("keeps agent activity in work without moving a genuine answer into work", () => {
+    const turns = groupChatTurns([
+      item("prompt-1", "user"),
+      item("thinking-1", "thinking"),
+      item("answer-1", "assistant", "The main answer."),
+      item("activity-1", "activity", "The delegated review finished."),
+    ]);
+
+    expect(turns).toMatchObject([{
+      work: [{ id: "thinking-1" }, { id: "activity-1", kind: "activity" }],
+      answers: [{ id: "answer-1" }],
+      live: false,
+    }]);
+  });
+
+  it("does not present activity-only history as an actively running turn", () => {
+    const turns = groupChatTurns([
+      item("activity-1", "activity", "Delegation completed."),
+    ]);
+
+    expect(turns).toMatchObject([{
+      work: [{ id: "activity-1", kind: "activity" }],
+      answers: [],
+      live: false,
+    }]);
   });
 
   it("applies every supported Chat visibility rule at render time", () => {

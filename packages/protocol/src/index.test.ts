@@ -22,6 +22,7 @@ import {
   NATIVE_HELPER_MAX_TEXT_BYTES,
   PROTOCOL_VERSION,
   chatCommandsSchema,
+  chatItemSchema,
   chatPageSchema,
   defaultChatVisibility,
   daemonErrorSchema,
@@ -164,6 +165,38 @@ describe("session snapshot protocol", () => {
     };
     expect(chatPageSchema.parse(page)).toEqual(page);
     expect(chatPageSchema.safeParse({ ...page, unexpected: true }).success).toBe(false);
+  });
+
+  it("validates labeled subagent and delegation activity items", () => {
+    const activity = {
+      kind: "activity" as const,
+      activity: "subagent" as const,
+      id: "fixture-notification",
+      title: "fixture-agent",
+      text: "Review finished.",
+      timestamp: "2026-09-02T07:42:00.000Z",
+    };
+
+    expect(chatItemSchema.parse(activity)).toEqual(activity);
+    expect(chatItemSchema.parse({ ...activity, activity: "delegation" })).toMatchObject({
+      kind: "activity", activity: "delegation",
+    });
+    expect(chatItemSchema.safeParse({ ...activity, title: "" }).success).toBe(false);
+    expect(chatItemSchema.safeParse({ ...activity, text: "" }).success).toBe(false);
+  });
+
+  it("keeps activity identity and labels within existing chat item bounds", () => {
+    const activity = {
+      kind: "activity" as const,
+      activity: "delegation" as const,
+      id: "i".repeat(512),
+      title: "t".repeat(512),
+      text: "Delegation complete",
+    };
+
+    expect(chatItemSchema.safeParse(activity).success).toBe(true);
+    expect(chatItemSchema.safeParse({ ...activity, id: `${activity.id}x` }).success).toBe(false);
+    expect(chatItemSchema.safeParse({ ...activity, title: `${activity.title}x` }).success).toBe(false);
   });
 
   it("validates settings, permission, and update messages", () => {

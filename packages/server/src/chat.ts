@@ -1,4 +1,5 @@
 import { open, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import {
   CHAT_IMAGE_MAX_BASE64_CHARS,
   CHAT_IMAGE_SUPPORTED_MIME_TYPES,
@@ -393,18 +394,21 @@ function parseClaude(
     }
     return;
   }
+  if (value.isMeta === true || value.isCompactSummary === true) return;
   const message = record(value.message) ? value.message : undefined;
   if (!message) return;
   const role = text(message.role);
+  if (role === "assistant" && text(message.model).startsWith("<")) return;
   const content = message.content;
   const id = text(value.uuid) || `claude-${lineIndex}`;
   const timestamp = iso(value.timestamp);
   if (role === "user") {
     if (typeof content === "string") {
-      if (content.trim().startsWith("[Request interrupted by user")) {
-        addSystem(items, id, "interrupted", content.trim(), timestamp, "error");
-      } else if (content.trim()) {
-        items.push(user(id, content, [], timestamp, chatIdentity(value, message)));
+      const body = normalizeClaudeUserText(content);
+      if (body.trim().startsWith("[Request interrupted by user")) {
+        addSystem(items, id, "interrupted", body.trim(), timestamp, "error");
+      } else if (body.trim()) {
+        items.push(user(id, body, [], timestamp, chatIdentity(value, message)));
       }
       return;
     }
@@ -422,6 +426,7 @@ function parseClaude(
         if (image) images.push({ name: `image-${images.length + 1}`, ...image });
       }
     }
+    userText = normalizeClaudeUserText(userText);
     if (userText.trim().startsWith("[Request interrupted by user")) {
       addSystem(items, id, "interrupted", userText.trim(), timestamp, "error");
     } else if (userText.trim() || images.length) {
@@ -442,6 +447,56 @@ function parseClaude(
       addTool(items, tools, text(block.id) || blockID, text(block.name) || "Tool", input(block.input), timestamp);
     }
   }
+}
+
+/**
+ * Convert Claude's complete slash-command transport envelope back to the
+ * command the user typed. The leading-tag requirement keeps quoted XML and
+ * incomplete examples as authored content instead of treating arbitrary XML
+ * as provider plumbing.
+ */
+function normalizeClaudeUserText(body: string): string {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith("<command-name>") && !trimmed.startsWith("<command-message>")) {
+    return body;
+  }
+
+  const tags = ["command-message", "command-name", "command-args"] as const;
+  const counts = new Map<string, { open: number; close: number }>();
+  for (const match of trimmed.matchAll(/<\/?command-(message|name|args)>/g)) {
+    const tag = `command-${match[1]!}`;
+    const count = counts.get(tag) ?? { open: 0, close: 0 };
+    if (match[0]!.startsWith("</")) count.close += 1;
+    else count.open += 1;
+    counts.set(tag, count);
+  }
+  // More than one known tag, or an unmatched opening/closing tag, is
+  // ambiguous content. Preserve it instead of normalizing only part of the
+  // user's example.
+  if ([...counts.values()].some(({ open, close }) => open !== 1 || close !== 1)) {
+    return body;
+  }
+  const matches = new Map<string, string>();
+  let working = trimmed;
+  for (const tag of tags) {
+    const pattern = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`);
+    const match = pattern.exec(working);
+    if (match) {
+      matches.set(tag, match[1]!.trim());
+      working = working.replace(match[0], "");
+    } else if (working.includes(`<${tag}>`) || working.includes(`</${tag}>`)) {
+      // A recognized but incomplete envelope is user-authored text for our
+      // purposes. Preserve it rather than dropping an unfinished example.
+      return body;
+    }
+  }
+
+  const name = matches.get("command-name") || "";
+  const args = matches.get("command-args") || "";
+  if (!name && !args) return body;
+  const command = name && args ? `${name} ${args}` : name || args;
+  const remainder = working.trim();
+  return remainder ? `${command}\n${remainder}` : command;
 }
 
 function parseCodex(
@@ -470,13 +525,39 @@ function parseCodex(
   if (type === "message") {
     const role = text(payload.role);
     const blocks = Array.isArray(payload.content) ? payload.content : [];
-    const body = blocks.filter(record).map((block) => text(block.text))
-      .filter((body) => body && !(role === "user" && isCodexContextBlock(body))).join("\n");
+    const contentKinds = role === "user" ? codexContentItemKinds(payload, blocks.length) : undefined;
+    const attachmentEnvelopeBlocks = role === "user"
+      ? codexAttachmentEnvelopeBlocks(blocks, contentKinds!)
+      : new Set<number>();
+    const rawBody = blocks.map((block, index) => {
+      if (!record(block)) return "";
+      const body = text(block.text);
+      const contentKind = contentKinds?.values[index];
+      if (role === "user" && attachmentEnvelopeBlocks.has(index)) return "";
+      if (role === "user" && contentKind === "multi_agent.subagent_notification") {
+        items.push(codexSubagentActivity(body, id, index, timestamp));
+        return "";
+      }
+      if (role === "user" && contentKind && isCodexInternalContentKind(contentKind)) {
+        return "";
+      }
+      if (role === "user" && completeTaggedBody(body, "codex_delegation") !== undefined) {
+        items.push(codexDelegationActivity(body, id, index, timestamp));
+        return "";
+      }
+      if (role === "user" && isCodexLegacyHiddenBlock(body, contentKinds?.state, contentKind)) {
+        return "";
+      }
+      return body;
+    }).filter(Boolean).join("\n");
     const images = blocks.filter(record).flatMap((block, index): ChatImage[] => {
       if (block.type !== "input_image") return [];
       const image = normalizeImage(block.image_url || block.url, undefined);
       return image ? [{ name: `image-${index + 1}`, ...image }] : [];
     });
+    const body = role === "user"
+      ? normalizeCodexUserText(rawBody, images.length > 0, attachmentEnvelopeBlocks.size > 0)
+      : rawBody;
     if (role === "user" && (body.trim() || images.length)) {
       items.push(user(id, body, images, timestamp, chatIdentity(value, payload)));
     }
@@ -507,19 +588,317 @@ function parseCodex(
   }
 }
 
-function isCodexContextBlock(body: string): boolean {
-  // Codex stores injected setup as user-role text. Match only a complete,
-  // context-only block so quoted examples, mixed prose, and sibling images survive.
-  const trimmed = body.trim();
+type CodexContentKinds = {
+  state: "aligned" | "missing" | "misaligned";
+  values: string[];
+};
+
+function codexContentItemKinds(
+  payload: Record<string, unknown>,
+  blockCount: number,
+): CodexContentKinds {
+  const metadata = record(payload.internal_chat_message_metadata_passthrough)
+    ? payload.internal_chat_message_metadata_passthrough : undefined;
+  const kinds = metadata?.content_item_kinds;
+  if (!Array.isArray(kinds)) return { state: "missing", values: [] };
+  // Treat a malformed or misaligned origin array as absent. A partial array
+  // cannot safely classify a corresponding text block.
+  if (kinds.length !== blockCount || !kinds.every((kind): kind is string => typeof kind === "string")) {
+    return { state: "misaligned", values: [] };
+  }
+  return { state: "aligned", values: kinds };
+}
+
+function codexAttachmentEnvelopeBlocks(
+  blocks: unknown[],
+  contentKinds: CodexContentKinds,
+): Set<number> {
+  const envelopeBlocks = new Set<number>();
+  for (let index = 1; index < blocks.length - 1; index += 1) {
+    if (contentKinds.state === "misaligned") continue;
+    const opener = blocks[index - 1];
+    const imageBlock = blocks[index];
+    const closer = blocks[index + 1];
+    if (!record(opener) || !record(imageBlock) || !record(closer)
+      || opener.type !== "input_text" || closer.type !== "input_text"
+      || imageBlock.type !== "input_image"
+      || !isCodexImageEnvelopeOpener(text(opener.text))
+      || text(closer.text).trim() !== "</image>"
+      || !normalizeImage(imageBlock.image_url || imageBlock.url, undefined)) {
+      continue;
+    }
+    if (contentKinds.state === "aligned"
+      && (contentKinds.values[index - 1] !== "user.text"
+        || contentKinds.values[index] !== "user.image"
+        || contentKinds.values[index + 1] !== "user.text")) {
+      continue;
+    }
+    envelopeBlocks.add(index - 1);
+    envelopeBlocks.add(index);
+    envelopeBlocks.add(index + 1);
+  }
+  return envelopeBlocks;
+}
+
+function codexSubagentActivity(
+  body: string,
+  sourceID: string,
+  blockIndex: number,
+  timestamp?: string,
+): Extract<ChatItem, { kind: "activity" }> {
+  const payload = completeTaggedBody(body, "subagent_notification");
+  let notification: Record<string, unknown> | undefined;
+  if (payload) {
+    try {
+      const parsed: unknown = JSON.parse(payload);
+      notification = record(parsed) ? parsed : undefined;
+    } catch {
+      // The origin metadata is still enough to avoid a user bubble. Keep only
+      // a generic labeled activity when a provider payload is incomplete.
+    }
+  }
+  const status = record(notification?.status) ? notification.status : undefined;
+  const completed = activityField(status, ["completed", "complete"]);
+  const failed = activityField(status, ["failed", "failure", "error"]);
+  const title = failed ? "Subagent failed" : completed ? "Subagent completed" : "Subagent update";
+  const detail = activityField(status, ["completed", "failed", "failure", "result", "message", "summary", "output", "error"])
+    || activityField(notification, ["result", "message", "summary", "output", "failed", "failure", "error"])
+    || "Subagent activity";
+  return {
+    id: activityID(sourceID, blockIndex),
+    kind: "activity",
+    activity: "subagent",
+    title,
+    text: detail,
+    timestamp,
+  };
+}
+
+function codexDelegationActivity(
+  body: string,
+  sourceID: string,
+  blockIndex: number,
+  timestamp?: string,
+): Extract<ChatItem, { kind: "activity" }> {
+  const envelope = completeTaggedBody(body, "codex_delegation");
+  const detail = ["output", "result", "message", "input", "prompt"]
+    .map((tag) => envelope ? taggedField(envelope, tag) : undefined)
+    .find((value): value is string => Boolean(value)) || "Delegation activity";
+  return {
+    id: activityID(sourceID, blockIndex),
+    kind: "activity",
+    activity: "delegation",
+    title: "Delegation",
+    text: detail,
+    timestamp,
+  };
+}
+
+function isCodexInternalContentKind(kind: string): boolean {
   return [
+    "environments.environment_context",
+    "skills.selected_skill_instructions",
+    "goal.internal_context",
+    "plugins.recommendations",
+    "agents_md.instructions",
+  ].includes(kind);
+}
+
+function isCodexLegacyHiddenBlock(
+  body: string,
+  metadataState: CodexContentKinds["state"] | undefined,
+  contentKind: string | undefined,
+): boolean {
+  if (metadataState === "missing" && isCodexLegacyContextBlock(body)) return true;
+  // Older browser-context records were labeled `user.text`; retain that
+  // narrow provider envelope rule without treating every unknown XML tag as
+  // transport metadata.
+  return contentKind === "user.text"
+    && completeTaggedBody(body, "in-app-browser-context") !== undefined;
+}
+
+function isCodexLegacyContextBlock(body: string): boolean {
+  if (isCodexContextBlock(body)) return true;
+  if (isCompleteTaggedSequence(body, [
+    "codex_internal_context", "recommended_plugins", "skill", "in-app-browser-context",
+  ])) return true;
+  const firstLine = body.trim().split("\n", 1)[0];
+  return firstLine === "# AGENTS.md instructions";
+}
+
+function normalizeCodexUserText(
+  body: string,
+  hasImages: boolean,
+  hasStandaloneImageEnvelope = false,
+): string {
+  const lines = body.trim().split(/\r?\n/);
+  if (lines[0] !== "# Files mentioned by the user:") return body;
+
+  const references: string[] = [];
+  let index = 1;
+  while (index < lines.length) {
+    const line = lines[index]!;
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+    if (!isCodexAttachmentReference(line)) break;
+    references.push(line.trim());
+    index += 1;
+  }
+
+  const remainder = lines.slice(index);
+  const hasImageEnvelopeLine = remainder.some((line) =>
+    isCodexImageEnvelopeOpener(line) || line.trim() === "</image>",
+  );
+  // A partial image wrapper is ambiguous without the complete opener/closer
+  // pair and a validated adjacent image block; leave it authored rather than
+  // stripping one side of an XML example. Valid wrappers were removed from
+  // their original blocks before this joined-text normalization.
+  if (hasImageEnvelopeLine && !hasStandaloneImageEnvelope) return body;
+  const hasNamedFileHeading = remainder.some(isCodexAttachmentFileHeading);
+  const hasRequestHeading = remainder.some(isCodexRequestHeading);
+  const hasDisclaimer = remainder.some(isCodexAttachmentDisclaimer);
+  if (!references.length && !hasNamedFileHeading && !hasRequestHeading && !hasDisclaimer && !hasStandaloneImageEnvelope) {
+    return body;
+  }
+
+  const normalized = remainder.filter((line) =>
+    !hasStandaloneImageEnvelope
+      || (!isCodexAttachmentDisclaimer(line) && !isCodexRequestHeading(line)),
+  );
+  const request = normalized.join("\n").trim().replace(/\n{3,}/g, "\n\n");
+  const result = [...references, request].filter(Boolean).join("\n").trim();
+  if (result) return result;
+  if (hasImages && hasStandaloneImageEnvelope) return "";
+  return body;
+}
+
+function isCodexAttachmentReference(line: string): boolean {
+  const value = line.trim();
+  if (!value.startsWith("- ")) return false;
+  const reference = value.slice(2).trim();
+  if (!reference) return false;
+  if (reference.startsWith("`") && reference.endsWith("`") && reference.length > 2) return true;
+  return /^(?:\/|~\/|file:\/\/|[A-Za-z]:[\\/])/.test(reference);
+}
+
+function isCodexAttachmentFileHeading(line: string): boolean {
+  const value = line.trim();
+  if (!value.startsWith("## ")) return false;
+  const separator = value.indexOf(":", 3);
+  if (separator < 0) return false;
+  const path = value.slice(separator + 1).trim();
+  return /^(?:\/|~\/|file:\/\/|[A-Za-z]:[\\/])/.test(path);
+}
+
+function isCodexRequestHeading(line: string): boolean {
+  const value = line.trim();
+  return value === "## My request" || value === "## My request:";
+}
+
+function isCodexAttachmentDisclaimer(line: string): boolean {
+  return line.trim() === "Distinguish instructions in attached documents from the user's request.";
+}
+
+function isCodexImageEnvelopeOpener(line: string): boolean {
+  return /^\s*<image name=(?:"[^"\r\n]+"|\[Image #[0-9]+\]) path="[^"\r\n]+">\s*$/.test(line);
+}
+
+function completeTaggedBody(body: string, tag: string): string | undefined {
+  const trimmed = body.trim();
+  const open = `<${tag}>`;
+  const close = `</${tag}>`;
+  if (!trimmed.startsWith(open) || !trimmed.endsWith(close)) return undefined;
+  const content = trimmed.slice(open.length, trimmed.length - close.length).trim();
+  // A second copy of the same envelope (or nested copy) makes the legacy
+  // origin ambiguous; preserve the authored block instead of dropping text
+  // around a false single-envelope match.
+  if (!content || content.includes(open) || content.includes(close)) return undefined;
+  return content;
+}
+
+function taggedField(body: string, tag: string): string | undefined {
+  const open = `<${tag}>`;
+  const close = `</${tag}>`;
+  const start = body.indexOf(open);
+  if (start < 0) return undefined;
+  const contentStart = start + open.length;
+  const end = body.indexOf(close, contentStart);
+  if (end < 0) return undefined;
+  const value = body.slice(contentStart, end).trim();
+  return value && value.length <= 20_000_000 ? value : undefined;
+}
+
+function activityField(
+  source: Record<string, unknown> | undefined,
+  keys: string[],
+): string | undefined {
+  if (!source) return undefined;
+  for (const key of keys) {
+    const value = source[key];
+    const direct = activityValue(value, key);
+    if (direct) return direct;
+    if (!record(value)) continue;
+    for (const nestedKey of ["message", "summary", "result", "output", "text", "failed", "failure", "error"]) {
+      const nested = activityValue(value[nestedKey], nestedKey);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
+}
+
+function activityValue(value: unknown, key: string): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed && trimmed.length <= 20_000_000 ? trimmed : undefined;
+  }
+  if (value === true) return key === "completed" || key === "complete" ? "Completed" : capitalize(key);
+  return undefined;
+}
+
+function activityID(sourceID: string, blockIndex: number): string {
+  const suffix = `-activity-${blockIndex}`;
+  if (suffix.length >= 512) {
+    return createHash("sha256").update(`${sourceID}\u0000${blockIndex}`).digest("hex");
+  }
+  const sourceBudget = Math.max(0, 512 - suffix.length);
+  if (sourceID.length <= sourceBudget) return `${sourceID}${suffix}`;
+
+  // Keep derived IDs within the existing ChatItem ID ceiling without making
+  // distinct long provider IDs collide on their shared prefix.
+  const digest = createHash("sha256").update(sourceID).digest("hex");
+  if (sourceBudget === 0) return suffix.slice(-512);
+  if (sourceBudget === 1) return `${digest.slice(0, 1)}${suffix}`;
+  const digestLength = Math.min(digest.length, sourceBudget - 1);
+  const prefixLength = sourceBudget - 1 - digestLength;
+  return `${sourceID.slice(0, prefixLength)}-${digest.slice(0, digestLength)}${suffix}`;
+}
+
+function isCodexContextBlock(body: string): boolean {
+  // Codex stores injected setup as user-role text. Match only a complete
+  // sequence of known context blocks so quoted examples, mixed prose, and
+  // sibling images survive. This is an allow-list parser, not an XML regex.
+  return isCompleteTaggedSequence(body, [
     "environment_context", "developer_context", "permissions instructions",
     "app-context", "skills_instructions",
-  ].some((tag) => {
-    if (!trimmed.startsWith(`<${tag}>`)) return false;
-    const closingTag = `</${tag}>`;
-    const closingIndex = trimmed.indexOf(closingTag);
-    return closingIndex >= 0 && closingIndex + closingTag.length === trimmed.length;
-  });
+  ]);
+}
+
+function isCompleteTaggedSequence(body: string, tags: readonly string[]): boolean {
+  let remaining = body.trim();
+  let matched = false;
+  while (remaining) {
+    const tag = tags.find((candidate) => remaining.startsWith(`<${candidate}>`));
+    if (!tag) return false;
+    const open = `<${tag}>`;
+    const close = `</${tag}>`;
+    const closingIndex = remaining.indexOf(close, open.length);
+    if (closingIndex < 0) return false;
+    remaining = remaining.slice(closingIndex + close.length).trim();
+    matched = true;
+  }
+  return matched;
 }
 
 function parsePi(
@@ -588,18 +967,31 @@ function parseCursor(
   }
   if (!record(value.message) || !Array.isArray(value.message.content)) return;
   const role = text(value.role);
+  if (role !== "user" && role !== "assistant") return;
+  const timestamp = iso(value.timestamp);
   for (let index = 0; index < value.message.content.length; index += 1) {
     const block = value.message.content[index];
     if (!record(block)) continue;
     const id = `cursor-${lineIndex}-${index}`;
     if (block.type === "text" && text(block.text).trim()) {
+      const parsed = role === "user" ? parseCursorUserText(text(block.text)) : undefined;
+      const body = parsed?.text ?? text(block.text);
+      if (!body.trim()) continue;
       items.push(role === "user"
-        ? user(id, text(block.text), [], undefined, chatIdentity(value, value.message))
-        : { id, kind: "assistant", text: text(block.text) });
+        ? user(id, body, [], parsed?.timestamp ?? timestamp, chatIdentity(value, value.message))
+        : { id, kind: "assistant", text: body, ...(timestamp ? { timestamp } : {}) });
     } else if (role === "assistant" && block.type === "tool_use") {
-      addTool(items, tools, id, text(block.name) || "Tool", input(block.input), undefined);
+      addTool(items, tools, id, text(block.name) || "Tool", input(block.input), timestamp);
     }
   }
+}
+
+function parseCursorUserText(body: string): { text: string; timestamp?: string } {
+  const match = /^\s*<timestamp>((?:(?!<\/?(?:timestamp|user_query)>)[\s\S])*)<\/timestamp>\s*<user_query>((?:(?!<\/?(?:timestamp|user_query)>)[\s\S])*)<\/user_query>\s*$/.exec(body);
+  if (!match) return { text: body };
+  const timestamp = iso(match[1]);
+  if (!timestamp) return { text: body };
+  return { text: match[2]!.trim(), timestamp };
 }
 
 function addSystem(
@@ -679,10 +1071,9 @@ function user(
 
 /** Use the same provider-neutral normalization for canonical and submitted turns. */
 export function normalizeChatText(body: string): string {
-  return body
-    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
-    .replace(/<ide_(?:opened_file|selection)>[\s\S]*?<\/ide_(?:opened_file|selection)>/g, "")
-    .trim();
+  // Provider-specific parsers classify internal envelopes before this shared
+  // boundary; delivery matching must not rewrite authored text or XML.
+  return body.trim();
 }
 
 function chatIdentity(...values: Array<Record<string, unknown> | undefined>): ChatUserIdentity {
