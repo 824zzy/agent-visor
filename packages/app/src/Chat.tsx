@@ -923,7 +923,7 @@ function RichBlockView({ block, styles, tone }: {
       <View style={styles.list}>
         {block.items.map((parts, index) => (
           <View key={index} style={styles.listItem}>
-            <Text style={styles.listMarker}>{block.ordered ? `${index + 1}.` : "•"}</Text>
+            <Text style={[styles.listMarker, block.ordered && styles.orderedListMarker]}>{block.ordered ? `${index + 1}.` : "•"}</Text>
             <RichInlineText parts={parts} styles={styles} tone={tone} />
           </View>
         ))}
@@ -2237,7 +2237,8 @@ function createStyles(palette: Palette, scale: number) {
     blockquote: { borderLeftColor: palette.border, borderLeftWidth: 3, paddingLeft: 10 },
     list: { gap: 6, paddingLeft: 2 },
     listItem: { alignItems: "flex-start", flexDirection: "row", gap: 8, maxWidth: "100%", minWidth: 0 },
-    listMarker: { color: palette.tertiary, fontSize: font(14), lineHeight: font(22), minWidth: 22 },
+    listMarker: { color: palette.tertiary, flexShrink: 0, fontSize: font(14), lineHeight: font(22) },
+    orderedListMarker: { minWidth: 22 },
     thinking: { paddingLeft: 0 },
     thinkingText: { color: palette.tertiary, fontSize: font(12), fontStyle: "italic", lineHeight: font(18) },
     systemRow: { maxWidth: "100%", width: "100%" },

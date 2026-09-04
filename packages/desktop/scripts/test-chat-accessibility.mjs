@@ -554,7 +554,7 @@ async function run() {
           ] },
           { id: "thinking-1", kind: "thinking", text: "Inspecting ```text\nfiles\n```" },
           { id: "tool-1", kind: "tool", name: "Bash", input: { command: "npm test" }, status: "success", result: "45 passed" },
-          { id: "answer-1", kind: "assistant", text: "**Done**\n\n[Open the docs](https://example.com/docs)\n\n1. **Your request reached an old API pod** (`8821978`) because [Request evidence](/Users/zhengyuanz/Codes/.scratch/service-investigation-20260830/investigation.md:27)\n2. **The replacement API pod** loaded the corrected configuration.\n\n~~old~~ *new* and $x^2$\n\n| Check | Result |\n| --- | --- |\n| Tests | **all 45 tests passed** (`packages/server`) |\n\n```text\nAll checks passed\n```" },
+          { id: "answer-1", kind: "assistant", text: "**Done**\n\n[Open the docs](https://example.com/docs)\n\n- A short bullet.\n- A longer bullet that wraps onto multiple lines so every continuation starts under the first word. This text checks that the marker stays beside the first line and that the full sentence remains inside the conversation rail when the text size is enlarged.\n\n1. **Your request reached an old API pod** (`8821978`) because [Request evidence](/Users/zhengyuanz/Codes/.scratch/service-investigation-20260830/investigation.md:27)\n2. **The replacement API pod** loaded the corrected configuration.\n\n~~old~~ *new* and $x^2$\n\n| Check | Result |\n| --- | --- |\n| Tests | **all 45 tests passed** (`packages/server`) |\n\n```text\nAll checks passed\n```" },
         ],
         hasMoreBefore: true,
         nextBefore: 100,
@@ -1675,6 +1675,7 @@ async function run() {
       "rich Chat content preserves code language, links, tables, formulas, and emphasis",
     );
     await waitForMixedFlowLayout(window);
+    await assertListLayout(window, "normal text");
     const mixedFlowProbe = await measureMixedFlow(window);
     assert(
       mixedFlowIsContinuous(mixedFlowProbe)
@@ -2106,6 +2107,7 @@ async function run() {
     await new Promise((resolve) => setTimeout(resolve, 100));
     const scaledChat = await measureRails(window);
     assertRailGeometry(scaledChat, "250% Chat", { checkFixtures: false });
+    await assertListLayout(window, "250% text");
     const scaleRatio = scaledChat.scaleProbeFontSize / unscaledChat.scaleProbeFontSize;
     assert(scaleRatio >= 2.45 && scaleRatio <= 2.55,
       `keyboard scaling applies a 250% computed text size (observed ${scaleRatio.toFixed(2)}x)`);
@@ -2191,6 +2193,53 @@ async function measureRails(window, includeAction = false) {
       }
     }
   })()`);
+}
+
+async function assertListLayout(window, label) {
+  const rows = await window.webContents.executeJavaScript(`(() => {
+    const answer = document.getElementById('chat-item-answer-1');
+    const markers = [...answer.querySelectorAll('*')].filter(element =>
+      element.children.length === 0 && (element.textContent === '•' || /^\\d+\\.$/.test(element.textContent)));
+    return markers.map(marker => {
+      const body = marker.nextElementSibling;
+      const markerRect = marker.getBoundingClientRect();
+      const bodyRect = body.getBoundingClientRect();
+      const rowRect = marker.parentElement.getBoundingClientRect();
+      const glyph = document.createRange();
+      glyph.selectNodeContents(marker);
+      const content = document.createRange();
+      content.selectNodeContents(body);
+      const lineStarts = new Map();
+      for (const rect of content.getClientRects()) {
+        const top = Math.round(rect.top * 2) / 2;
+        lineStarts.set(top, Math.min(lineStarts.get(top) ?? Infinity, rect.left));
+      }
+      return {
+        marker: marker.textContent,
+        markerWidth: markerRect.width,
+        glyphGap: bodyRect.left - glyph.getBoundingClientRect().right,
+        columnGap: bodyRect.left - markerRect.right,
+        topDelta: bodyRect.top - markerRect.top,
+        markerFont: parseFloat(getComputedStyle(marker).fontSize),
+        bodyFont: parseFloat(getComputedStyle(body).fontSize),
+        bodyWidth: bodyRect.width,
+        insideRail: bodyRect.right <= rowRect.right + 0.5,
+        lines: [...lineStarts].map(([top, left]) => ({ left, top })),
+      };
+    });
+  })()`);
+  const bullets = rows.filter(row => row.marker === "•");
+  const numbers = rows.filter(row => row.marker !== "•");
+  assert(bullets.length === 2 && numbers.length === 2, `${label}: both list kinds are present`);
+  assert(bullets.every(row => Math.abs(row.glyphGap - 8) <= 0.5),
+    `${label}: bullets have an 8px gap after the glyph (${JSON.stringify(bullets)})`);
+  assert(numbers.every(row => row.markerWidth >= 22 && Math.abs(row.columnGap - 8) <= 0.5),
+    `${label}: numbered markers retain enough room without overlapping their text`);
+  assert(rows.every(row => Math.abs(row.topDelta) <= 0.5 && row.markerFont === row.bodyFont
+    && row.bodyWidth > 0 && row.insideRail), `${label}: markers align with the first line at the body scale`);
+  const wrapped = bullets[1].lines;
+  assert(wrapped.length > 1 && wrapped.every(line => Math.abs(line.left - wrapped[0].left) <= 0.5),
+    `${label}: wrapped bullet lines align under the first word (${JSON.stringify(wrapped)})`);
 }
 
 async function measureMixedFlow(window) {
