@@ -56,9 +56,8 @@ final class NativeMenuSessionHoverStateTests: XCTestCase {
         )
         var state = NativeMenuSessionHoverState()
         state.pointerEntered("session-1", at: 10)
-        let date = try Date(
-            "2026-08-22T21:02:30.000Z",
-            strategy: .iso8601
+        let date = try XCTUnwrap(
+            NativeHelperTimestamp.parse("2026-08-22T21:02:30.000Z")
         )
 
         XCTAssertEqual(

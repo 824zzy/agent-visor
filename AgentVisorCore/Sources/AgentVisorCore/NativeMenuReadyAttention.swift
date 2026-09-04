@@ -42,7 +42,7 @@ public struct NativeMenuReadyAttention {
 
     public func statusStaleness(pill: NativeHelperPill, now: Date) -> Double {
         let activityAt = pill.inspector.flatMap {
-            try? Date($0.activityAt, strategy: .iso8601)
+            NativeHelperTimestamp.parse($0.activityAt)
         }
         return ReadyAttentionPolicy.statusStaleness(
             isReady: pill.phase == .ready,

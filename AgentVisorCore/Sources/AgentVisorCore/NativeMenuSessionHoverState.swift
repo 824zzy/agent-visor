@@ -111,7 +111,7 @@ public struct NativeMenuSessionHoverState: Sendable {
     }
 
     private func activityLabel(from value: String, at date: Date) -> String {
-        guard let activity = try? Date(value, strategy: .iso8601) else { return value }
+        guard let activity = NativeHelperTimestamp.parse(value) else { return value }
         let seconds = max(0, Int(date.timeIntervalSince(activity)))
         if seconds < 5 { return "Just now" }
         if seconds < 60 { return "\(seconds)s ago" }
