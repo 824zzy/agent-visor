@@ -172,6 +172,31 @@ describe("Chat session recovery integration", () => {
     });
   });
 
+  it("restores the snapshot when a retried send fails before its guarded clear", () => {
+    const controller = controllerWith();
+    const generation = setup(controller);
+    const draft = submittedDraft("retry before clear");
+    controller.noteComposerDraft(generation, { text: "", images: [] });
+    const initial = controller.beginDelivery(generation, draft)!;
+    controller.receive(generation, sendAck(initial.requestId, initial.deliveryId, generation), transport);
+
+    const firstRecovery = controller.currentState().recovery![0]!;
+    controller.noteComposerDraft(generation, draft);
+    const retry = controller.retryRecovery(generation, firstRecovery.id)!;
+    expect(retry.clearComposer).toBe(true);
+    // The retry result can arrive before React applies the clear command.
+    controller.receive(generation, sendAck(retry.requestId, retry.deliveryId, generation), transport);
+
+    expect(controller.currentState().recovery).toMatchObject([{
+      status: "failed",
+      draft,
+    }]);
+    expect(controller.currentState().recoveryCommand).toMatchObject({
+      type: "restore",
+      draft,
+    });
+  });
+
   it("preserves newer text and attachments instead of restoring over it", () => {
     const controller = controllerWith();
     const generation = setup(controller);

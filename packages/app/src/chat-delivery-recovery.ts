@@ -447,6 +447,19 @@ export function createChatDeliveryRecoveryStore(
         expectedRevision: expectedComposer.revision,
       };
     }
+    // A retry may fail before the renderer applies its guarded clear command.
+    // The composer still contains the exact submitted snapshot in that race;
+    // emit a restore command anyway so it supersedes the queued clear.
+    if (chatSubmittedDraftsEqual(currentComposer.draft, record.draft)) {
+      record.restored = true;
+      return {
+        status: "restored",
+        recoveryId: record.id,
+        draft: cloneDraft(record.draft),
+        expectedComposer,
+        expectedRevision: expectedComposer.revision,
+      };
+    }
     return {
       status: "preserved",
       recoveryId: record.id,
