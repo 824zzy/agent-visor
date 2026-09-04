@@ -369,10 +369,15 @@ describe("filesystem slash-command catalog", () => {
     await symlink(linked, path.join(userSkills, "linked"), "dir");
     const commandsDirectory = path.join(userSkills, "noise");
     await mkdir(commandsDirectory, { recursive: true });
-    await Promise.all(Array.from({ length: 17_000 }, (_, index) => writeFile(
-      path.join(commandsDirectory, `noise-${String(index).padStart(5, "0")}.md`),
-      "---\nname: noise\n---\nNoise\n",
-    )));
+    for (let start = 0; start < 17_000; start += 128) {
+      await Promise.all(Array.from({ length: Math.min(128, 17_000 - start) }, (_, offset) => {
+        const index = start + offset;
+        return writeFile(
+          path.join(commandsDirectory, `noise-${String(index).padStart(5, "0")}.md`),
+          "---\nname: noise\n---\nNoise\n",
+        );
+      }));
+    }
 
     const catalog = await loadSlashCommandCatalog(project, home);
 
