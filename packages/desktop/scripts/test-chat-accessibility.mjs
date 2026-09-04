@@ -982,6 +982,11 @@ async function run() {
     })()`);
     tailFixture.bumpStream();
     await waitFor(window, `document.querySelector('[aria-label="Chat timeline update"]')?.textContent.includes('stream tick 2')`);
+    await waitFor(window, `(() => {
+      const timeline = document.querySelector('[aria-label="Chat timeline"]');
+      return Boolean(timeline && timeline.scrollHeight > timeline.clientHeight
+        && timeline.scrollHeight - (timeline.scrollTop + timeline.clientHeight) <= 2);
+    })()`);
     const nearAfterStream = await measureTimeline(window);
     assert(nearAfterStream.distanceFromBottom <= 2,
       `stream growth keeps a near-tail reader pinned (${JSON.stringify(nearAfterStream)})`);
