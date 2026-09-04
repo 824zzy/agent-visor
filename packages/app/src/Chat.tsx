@@ -2313,7 +2313,7 @@ function createStyles(palette: Palette, scale: number) {
     composerSurface: { paddingHorizontal: CONTENT_RAIL_INSET, paddingVertical: 8 },
     composerRailContainer: contentRailStyle(),
     composerRail: { ...contentRailStyle(), backgroundColor: palette.background, borderColor: palette.border, borderRadius: 22, borderWidth: 1, gap: 4, paddingBottom: 5, paddingHorizontal: 10, paddingTop: 8 },
-    composerInput: { backgroundColor: "transparent", borderColor: "transparent", borderRadius: 4, borderWidth: 0, color: palette.foreground, fontSize: font(14), lineHeight: font(22), maxHeight: 180, minHeight: 42, paddingHorizontal: 7, paddingTop: 2, paddingBottom: 6, width: "100%" },
+    composerInput: { backgroundColor: "transparent", borderColor: "transparent", borderRadius: 4, borderWidth: 0, color: palette.foreground, fontSize: font(14), lineHeight: font(22), maxHeight: 180, minHeight: 42, outlineColor: "transparent", outlineStyle: "solid", outlineWidth: 0, paddingHorizontal: 7, paddingTop: 2, paddingBottom: 6, width: "100%" },
     composerToolbar: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 4, minHeight: 44 },
     composerLeadingActions: { alignItems: "center", flexDirection: "row", flexShrink: 1, gap: 4, minHeight: 44, minWidth: 0 },
     composerToolbarSpacer: { flex: 1, minWidth: 8 },

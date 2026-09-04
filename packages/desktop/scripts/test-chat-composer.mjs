@@ -287,7 +287,21 @@ async function run() {
   await window.loadFile(path.resolve(directory, "../../app/dist/index.html"));
 
   await openChat(mainSession);
+  await waitFor("document.activeElement?.getAttribute('aria-label') === 'Chat message'");
+  window.webContents.debugger.attach("1.3");
+  await window.webContents.debugger.sendCommand("DOM.enable");
+  await window.webContents.debugger.sendCommand("CSS.enable");
+  const { root: documentNode } = await window.webContents.debugger.sendCommand("DOM.getDocument");
+  const { nodeId: composerInputNodeId } = await window.webContents.debugger.sendCommand("DOM.querySelector", {
+    nodeId: documentNode.nodeId,
+    selector: '[aria-label="Chat message"]',
+  });
+  await window.webContents.debugger.sendCommand("CSS.forcePseudoState", {
+    nodeId: composerInputNodeId,
+    forcedPseudoClasses: ["focus-visible"],
+  });
   const emptyProbe = await probeComposer();
+  window.webContents.debugger.detach();
   assert(emptyProbe.outer && emptyProbe.rail, `integrated composer exposes one public enclosure and rail (${JSON.stringify(emptyProbe)})`);
   assert(emptyProbe.surfaceBackground === emptyProbe.canvasBackground,
     `composer enclosure shares the light Chat canvas (${emptyProbe.canvasBackground} → ${emptyProbe.surfaceBackground})`);
@@ -295,6 +309,8 @@ async function run() {
     `composer enclosure uses the neutral 1px 20-22px surface (${JSON.stringify(emptyProbe)})`);
   assert(emptyProbe.inputBorderWidth === "0px" && emptyProbe.inputBackground === "rgba(0, 0, 0, 0)",
     `composer input is transparent and unboxed (${JSON.stringify(emptyProbe)})`);
+  assert(emptyProbe.inputOutlineWidth === "0px" || emptyProbe.inputOutlineStyle === "none",
+    `focused composer input has no browser focus frame (${JSON.stringify(emptyProbe)})`);
   assert(emptyProbe.outerHeight >= 100 && emptyProbe.outerHeight <= 112,
     `empty composer keeps the compact 100-112px target range (${JSON.stringify(emptyProbe)})`);
   assert(emptyProbe.plusWidth >= 44 && emptyProbe.plusHeight >= 44,
@@ -304,7 +320,6 @@ async function run() {
     && emptyProbe.sendGlyphContained,
     `composer action glyphs keep the approved optical sizes (${JSON.stringify(emptyProbe)})`);
   assert(emptyProbe.sendDisabled, "empty composer disables Send");
-  await waitFor("document.activeElement?.getAttribute('aria-label') === 'Chat message'");
   const contextProbe = await window.webContents.executeJavaScript(`(() => {
     const context = document.querySelector('[aria-label="Composer model and effort"]');
     return {
@@ -630,6 +645,9 @@ async function probeComposer() {
       outerWidth: outerRect?.width ?? 0, outerHeight: outerRect?.height ?? 0,
       borderWidth: style?.borderWidth ?? "", borderRadius: Number.parseFloat(style?.borderRadius ?? "0"),
       inputBorderWidth: inputStyle?.borderWidth ?? "", inputBackground: inputStyle?.backgroundColor ?? "",
+      inputOutlineWidth: inputStyle?.outlineWidth ?? "", inputOutlineStyle: inputStyle?.outlineStyle ?? "",
+      inputOutlineColor: inputStyle?.outlineColor ?? "", inputBoxShadow: inputStyle?.boxShadow ?? "",
+      inputFocusVisible: input?.matches(':focus-visible') ?? false,
       inputFontSize: Number.parseFloat(inputStyle?.fontSize ?? "0"),
       inputLineHeight: Number.parseFloat(inputStyle?.lineHeight ?? "0"),
       inputHeight: input?.getBoundingClientRect().height ?? 0,
