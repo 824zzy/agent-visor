@@ -97,6 +97,27 @@ func find(_ element: AXUIElement, containing text: String, remaining: inout Int)
     return nil
 }
 
+func frame(_ element: AXUIElement) -> CGRect? {
+    guard let positionValue = attribute(element, kAXPositionAttribute as CFString),
+          let sizeValue = attribute(element, kAXSizeAttribute as CFString),
+          CFGetTypeID(positionValue) == AXValueGetTypeID(),
+          CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
+    var position = CGPoint.zero
+    var size = CGSize.zero
+    guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
+          AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { return nil }
+    return CGRect(origin: position, size: size)
+}
+
+func usageButton(pid: Int32) -> AXUIElement? {
+    var remaining = 1_000
+    return find(
+        AXUIElementCreateApplication(pid),
+        containing: "Codex usage",
+        remaining: &remaining
+    )
+}
+
 func labels(_ element: AXUIElement, remaining: inout Int) -> [String] {
     guard remaining > 0 else { return [] }
     remaining -= 1
@@ -121,7 +142,8 @@ let usageWindows = helperWindows.filter {
 
 switch command {
 case "click-usage", "double-click-usage":
-    guard let panel = usageWindows.first else { exit(3) }
+    guard let button = usageButton(pid: pid),
+          let panel = frame(button) else { exit(3) }
     let point = CGPoint(x: panel.midX, y: panel.midY)
     click(point)
     if command == "double-click-usage" {
@@ -171,12 +193,8 @@ case "count-popovers":
 case "frontmost":
     print(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)
 case "press-usage":
-    var remaining = 1_000
-    guard let element = find(
-        AXUIElementCreateApplication(pid),
-        containing: "Codex usage",
-        remaining: &remaining
-    ), AXUIElementPerformAction(element, kAXPressAction as CFString) == .success else { exit(4) }
+    guard let button = usageButton(pid: pid),
+          AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else { exit(4) }
 case "labels":
     var remaining = 1_000
     print(Array(Set(labels(AXUIElementCreateApplication(pid), remaining: &remaining))).sorted().joined(separator: "\n"))
