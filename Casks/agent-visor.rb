@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 cask "agent-visor" do
-  version "2.6.1"
-  sha256 "676e82d217f22e723eb27b6d1b6749ab6ffc199112cf4c4a51871a1c7f6611fb"
+  version "2.7.0"
+  sha256 "f454d721bc8689298e16510c8c409e4601d1a55582256af34c9b759165c76063"
 
   url "https://github.com/824zzy/agent-visor/releases/download/v#{version}/AgentVisor-v#{version}.zip"
   name "Agent Visor"
@@ -35,6 +35,11 @@ cask "agent-visor" do
   # remove the hook should delete the file manually and clean up any
   # agent-visor-state.py entries in ~/.claude/settings.json.
   zap trash: [
+    # Staging profile imported once by the cutover.
+    "~/Library/Application Support/Agent Visor Next",
+    # Stable Electron profile.
+    "~/Library/Application Support/Agent Visor",
+    # Legacy Swift profile.
     "~/Library/Application Support/agent-visor",
     "~/Library/Caches/com.824zzy.AgentVisor",
     "~/Library/HTTPStorages/com.824zzy.AgentVisor",

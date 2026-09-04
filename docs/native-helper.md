@@ -15,7 +15,7 @@ The helper creates its parent directory with mode `0700` and its socket with mod
 Start it with:
 
 ```sh
-AgentVisorNativeHelper --socket /absolute/private/path/helper.sock
+AgentVisorNativeHelper --socket "$AGENT_VISOR_HELPER_SOCKET"
 ```
 
 ## Protocol

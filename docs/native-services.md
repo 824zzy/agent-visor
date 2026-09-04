@@ -1,6 +1,8 @@
 # Native services
 
-Electron, the TypeScript daemon, and the signed Swift helper divide macOS work by trust boundary.
+In the 2.7.0 stable Electron cutover, Electron, the TypeScript daemon, and the
+signed Swift helper divide macOS work by trust boundary. The Swift v2.6.1
+application remains the exact rollback target.
 
 ## Settings
 
@@ -8,9 +10,19 @@ The daemon stores settings in Electron’s private application data directory as
 
 The directory uses mode `0700`. The file uses mode `0600` and is replaced through an atomic rename.
 
-On first start, the daemon exports the released Swift application’s `UserDefaults` domain.
+On first start, the daemon may export the released Swift application’s
+`UserDefaults` domain.
 
-Known values migrate into typed settings. The complete source property list is also retained as base64, including unknown and future values.
+Known Agent Visor preferences migrate into typed settings. The complete source
+property list is also retained as base64, including unknown and future values.
+If the production Electron profile at
+`~/Library/Application Support/Agent Visor` does not exist, Electron copies
+the staging profile at `~/Library/Application Support/Agent Visor Next` once.
+If staging is live,
+import waits and the source remains untouched. The copy excludes transient
+Electron lock markers. Provider transcripts, SQLite databases, hooks, and live
+session records are outside this profile operation and are always read in
+place.
 
 A malformed existing settings file stops startup. Agent Visor does not overwrite it with defaults.
 
@@ -81,15 +93,43 @@ The Notifications settings action requests access and opens macOS Notification s
 
 The daemon checks the public appcast at startup and every six hours.
 
-It accepts only three-part versions, HTTPS assets from the public Agent Visor GitHub release path, and structurally valid Ed25519 signatures.
+It accepts only a newer three-part version with an HTTPS ZIP URL on the public
+Agent Visor GitHub release path and an Ed25519 signature field with the expected
+metadata shape. The Electron updater does not cryptographically verify ZIP bytes
+before opening GitHub. Sparkle Ed25519 signing still protects published archive
+metadata for compatible consumers.
 
 A version must be newer than the running version. Equal or older entries are never offered, which prevents rollback.
 
-The replacement does not perform an automatic in-place install. It opens the verified public release tag.
+The Electron release does not perform an automatic in-place install. It opens
+the matching public release tag so the user can review and install the update
+manually.
 
 Existing release scripts remain responsible for archive signing, notarization, public identity continuity, hashes, and rollback-safe publication.
 
-`scripts/package-electron.sh` prepares a separate release-signed 2.7.0 candidate. It does not change the public appcast or cask.
+`scripts/package-electron.sh` prepares the release-signed 2.7.0 Electron
+archive. `scripts/create-release.sh` is Electron-aware and owns the controlled
+signing, appcast, cask, and publication sequence. The staging workflow leaves
+the public appcast and cask version/hash unchanged; publication must update
+those surfaces together with the reviewed archive.
+
+## Rollback
+
+The exact rollback target is the public Swift Agent Visor v2.6.1 build 53. Quit
+the Electron application, install the verified
+[v2.6.1 ZIP](https://github.com/824zzy/agent-visor/releases/download/v2.6.1/AgentVisor-v2.6.1.zip), and launch it from `/Applications`. Keep the production
+Electron profile at `~/Library/Application Support/Agent Visor` for diagnosis;
+the staging source at `~/Library/Application Support/Agent Visor Next` remains
+untouched. Do not run `brew uninstall --zap` while retaining diagnostic profiles,
+because zap removes the application data paths. The rollback does not move or
+rewrite provider-owned live sources.
+
+## Physical reboot acceptance
+
+Same-boot and exact-runtime checks pass. Restoration after an actual macOS
+reboot remains a required pre-release acceptance item and is not a shipped
+capability until that check passes. Remove this provisional note only after the
+physical-reboot gate passes.
 
 ## Lifecycle
 

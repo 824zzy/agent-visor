@@ -1,17 +1,24 @@
 # macOS cutover parity
 
 The released Swift baseline was checked on 2026-08-24 against Agent Visor
-2.6.1. Electron migration rows were checked separately on 2026-08-27 in the
-local migration worktree; they are not production-release evidence.
+2.6.1. The Electron rows were checked again for the 2.7.0 cutover on
+2026-09-03. Agent Visor 2.7.0 is the first stable Electron release; the public
+Swift 2.6.1 build 53 remains the exact rollback artifact during the cutover
+window.
 
-`Pass` means the replacement matches the released behavior or uses a verified safer route.
+`Pass` means the Electron release matches the released behavior or uses a
+verified safer route. `Partial` identifies an explicit first-release boundary
+or a capability that remains provider-dependent. It is a release scope label,
+not permission to claim an unverified behavior.
 
-The 2026-08-24 source audit corrected earlier broad Pass claims. `Partial` names a working subset with released behavior still missing.
+The 2026-08-24 source audit corrected earlier broad Pass claims. Historical
+evidence remains below so later reviews can distinguish a completed check from
+an intentional Electron difference.
 
 Chat-specific behavior is tracked in [Chat feature parity](chat-feature-parity.md).
-The Chat rows below stay `Partial` until the Electron surface matches the
-Swift composer, streaming, rich-content, action, status, and accessibility
-contracts. A passing focused check is evidence for that check only.
+The first stable Electron release preserves the provider and read-only
+boundaries described there instead of claiming pixel or control parity with
+Swift. A passing focused check is evidence for that check only.
 
 ## Product surfaces
 
@@ -23,26 +30,26 @@ contracts. A passing focused check is evidence for that check only.
 | Chat action | Separate action when supported | Fixed Chat column and separate pointer target | Pass |
 | Keyboard use | Search, arrows, Return, Shift-Return, Command-number, Settings, Back, global pills, and scale | Pure checks, Electron checks, and Computer Use verification | Pass |
 | Browser retention | Preserve search, cursor, and viewport through Chat | Mounted hidden browser and Electron check | Pass |
-| Session management | Inspect, hide, and unhide Sessions rows | Owner and Chat actions work; Inspect and hidden-session controls remain absent | Partial |
+| Session management | Inspect, hide, and unhide Sessions rows | Owner and Chat actions work; Inspect and hidden-session controls are intentionally deferred from 2.7.0 | Partial |
 | Responsive layout | Compact widths and large text | One responsive row module from 80% through 250% | Pass |
 | Appearance | Released accessible Catppuccin light, dark, and system modes | Exact semantic sRGB tokens, persisted settings, and Computer Use screenshots | Pass |
 | Sessions accessibility | Named Sessions controls, stable actions, and hidden retained browser content | Sessions Electron accessibility checks; Chat has its own partial parity row below | Pass |
-| Chat history | Grouped turns, reasoning, tools, images, and paging | Provider parsers and bounded Chat Electron check; full Swift rich rendering and streaming behavior remain | Partial |
-| Chat actions | Approvals, persistent approvals, denial, questions, and provider details | Basic Electron responses and details; Swift composer, cancellation, and provider-specific controls remain | Partial |
-| Text delivery | Send to verified active providers | Daemon routes are present; Swift composer keyboard, draft, failure, and cancel behavior remains | Partial |
-| Image delivery | Claude, Pi, and Codex supported image routes | Basic file-picker and local-image routes are present; Swift paste, removal, and draft behavior remains | Partial |
+| Chat history | Grouped turns, reasoning, tools, images, and paging | Provider parsers, bounded history, rich content, and Electron checks are shipped; provider-specific rendering remains capability-dependent | Partial |
+| Chat actions | Approvals, persistent approvals, denial, questions, and provider details | Verified action identities, responses, and Details are shipped; unsupported providers remain read-only | Partial |
+| Text delivery | Send to verified active providers | Daemon routes and provider/image capability checks are shipped; unverified and historical rows remain read-only | Partial |
+| Image delivery | Claude, Pi, and Codex supported image routes | File-picker and local-image routes are shipped; provider-specific image support remains capability-dependent | Partial |
 | Menu pills | Released active-first, 42-hour observed recent shortcuts, capsules, colors, actions, keycaps, hover inspectors, and attention order | Source-backed History is restored as dimmed recent candidates; `+N` counts omitted default-overflow-eligible navigator rows while excluding automation; the `Pill Settings...` menu remains absent | Partial |
 | Menu packing | App-menu, tray, display, notch, usage, and overflow constraints | Shared packer and click-sized AppKit panels | Pass |
 | Display policy | User-selected pill display and released full-screen visibility policy | Migrated display selection, screen-specific full-screen detection, all three visibility choices, intent reveal, and hidden hit testing | Pass |
 | Global shortcuts | Configurable visible-session and Sessions shortcuts with modifier reveal | Signed helper registration, frozen snapshots, keycap screenshot, and footer checks | Pass |
-| Usage | Codex and Claude limits with retained last valid values and click detail | Codex reading and the shared click detail popover work; Claude usage remains absent | Partial |
-| Settings | Native category layout, controls, shortcuts, integrations, and preservation | Core settings, display, full-screen, Chat visibility, and agent connections persist; hidden sessions and custom recording are intentionally omitted | Partial |
+| Usage | Codex and Claude limits with retained last valid values and click detail | Codex reading and the shared click detail popover ship; Claude usage remains intentionally absent | Partial |
+| Settings | Native category layout, controls, shortcuts, integrations, and preservation | Core settings, display, full-screen, Chat visibility, and agent connections persist; hidden sessions and custom recording are intentionally omitted from 2.7.0 | Partial |
 | Accessibility repair | Stable signed identity and macOS repair destination | Release-signed helper and live trusted state | Pass |
 | Notifications | Native status transitions, exact session action, approval actions, and Dock badge | Modern helper notices, exact Chat clicks, exact Approve and Deny responses, resolved removal, and live badge counts | Pass |
-| Updates | Signed public release with downgrade prevention | Validated appcast and manual verified release link; automatic installation remains intentionally disabled | Partial |
+| Updates | Public release metadata with version, URL, and signature checks plus downgrade prevention | Newer entries with valid version, HTTPS release URL, and signature metadata shape are opened at the matching GitHub release page; automatic installation remains intentionally disabled | Partial |
 | Lifecycle | Close-to-hide, Dock reopen, launch at login, and quit owned processes only | Window lifecycle and owned-process shutdown checks | Pass |
 | Agent integrations | Detect and install or remove hook-based integrations | Fresh profiles connect Claude Code, Auggie, and Codex; Pi connects automatically; Cursor remains read-only | Pass |
-| Pi restoration | Relaunch exact eligible prior-boot Ghostty sessions | Same-boot exact navigation survives daemon restarts. Atomic prior-boot restoration passes automated checks; a physical reboot remains | Partial |
+| Pi restoration | Relaunch exact eligible prior-boot Ghostty sessions | Same-boot exact navigation survives daemon restarts and atomic runtime-link checks pass; physical-reboot restoration remains a required pre-release acceptance item | Partial |
 
 ## Provider matrix
 
@@ -59,7 +66,7 @@ contracts. A passing focused check is evidence for that check only.
 | Historical Pi | Bounded history | No invented active target | Read-only history | Partial |
 | Cursor CLI in a terminal | Cursor-owned transcript parser | Exact TTY focus | Basic read-only history | Partial |
 | Historical Cursor | Bounded history | Strict Cursor application fallback | Basic read-only history | Partial |
-| Zed-hosted agents | Zed database has title authority | Signed Zed application focus without the released verified thread reveal | Read-only history | Partial |
+| Zed-hosted agents | Zed database has title authority | Signed Zed application focus; exact thread reveal remains best effort | Read-only history | Partial |
 | Auggie | Authenticated hook lifecycle | Strict owner fallback | Observe-only history, matching the released integration | Pass |
 
 Zed documents `zed:///agent/thread/<id>` but reports that it does not select the referenced thread.
@@ -67,6 +74,20 @@ Zed documents `zed:///agent/thread/<id>` but reports that it does not select the
 Agent Visor therefore uses verified application focus instead of claiming an exact Zed thread route.
 
 Source: [Zed discussion 48083](https://github.com/zed-industries/zed/discussions/48083).
+
+## Stable cutover evidence
+
+The 2.7.0 cutover evidence covers the packaged Electron renderer, Sessions,
+native services, clean-profile isolation, signed archive inspection, provider
+fixtures, and the Swift helper boundary. The focused checks establish the
+behaviors they exercise; they do not migrate or rewrite live provider sources.
+
+The first release keeps the intentional boundaries in this document: provider
+dependent Chat controls, read-only Cursor and Zed Chat, observe-only Auggie,
+absent Claude usage, deferred Inspect and hidden-session controls, manual
+update installation, and the required physical-reboot Pi acceptance item.
+Detailed dated test history, including prior failures and their follow-up checks,
+stays in [Chat feature parity](chat-feature-parity.md).
 
 ## Clean profile
 
@@ -99,7 +120,9 @@ The candidate uses:
 - Existing `AgentVisor Release` certificate.
 - Version 2.7.0 and build 54 by default.
 - Hardened runtime entitlements required by Electron.
-- A metadata-clean ZIP with SHA-256 `3cb9228b35e213b67e8e8abd3eb1406614470c65e253d42a3a8ac2e30a39f50f`.
+- The staged metadata-clean ZIP passed the archive and signature checks. Its
+  candidate hash is historical and intentionally omitted; insert the final
+  public SHA-256 after the release publication dry-run.
 
 Checks cover strict nested signatures, archive extraction, disabled application sandbox, library validation, and Homebrew ad-hoc re-signing.
 
@@ -109,29 +132,56 @@ The public 2.6.1 ZIP hash matches the cask and its identity matches the installe
 
 ## Update and rollback
 
-The replacement opens only a newer, signed, public Agent Visor release entry.
+The Electron updater checks the public appcast at startup and every six hours.
+It accepts only a newer three-part version with a matching HTTPS GitHub release
+ZIP URL and an Ed25519 signature field with the expected metadata shape. It
+then opens the matching GitHub release tag. The Electron updater does not
+cryptographically verify ZIP bytes before opening GitHub. Sparkle Ed25519
+signing still protects published archive metadata for compatible consumers, and
+the Electron app does not perform an automatic in-place install.
 
-It does not perform an automatic in-place install.
+The release scripts still own signing, notarization, appcast publication, cask
+publication, hashes, and public checks. The 2.7.0 staging change leaves the
+existing appcast and cask version/hash untouched; publication must switch those
+metadata surfaces together with the reviewed Electron archive.
+`scripts/create-release.sh` is Electron-aware and validates, packages, and
+publishes the reviewed Electron candidate in that controlled sequence.
 
-The existing release scripts still own signing, notarization, appcast publication, cask publication, hashes, and public checks.
+### Mandatory publication flow
 
-No release script, appcast, or cask points to the Electron candidate yet.
+1. Build the candidate, then run `AV_RELEASE_DRY_RUN=1 scripts/create-release.sh`.
+   Review the generated archive, cask, and appcast locally; the dry run skips
+   remote GitHub and tap publication.
+2. Review and commit the cask and appcast updates, together with the release
+   notes, from the release worktree.
+3. Run `scripts/create-release.sh` without the dry-run flag from that clean
+   release commit. The script verifies that generated cask and appcast metadata
+   match the committed files before it performs publication.
 
-Rollback remains the public Swift release:
+The exact rollback target is the public Swift **v2.6.1 build 53**:
 
-1. Quit the Electron release.
-2. Install the previous public cask or verified public ZIP.
-3. Start the Swift application with the same signing identity.
-4. Keep `Agent Visor Next/settings.json` for diagnosis or remove it after rollback approval.
+1. Quit Agent Visor 2.7.0.
+2. Install [Agent Visor v2.6.1](https://github.com/824zzy/agent-visor/releases/download/v2.6.1/AgentVisor-v2.6.1.zip), or the v2.6.1 cask while the public cask points to that version.
+3. Move the app to `/Applications` and open it. Use macOS **Open Anyway** if the direct ZIP is blocked.
+4. Grant Accessibility only if macOS asks for the exact running app.
+5. Keep `~/Library/Application Support/Agent Visor` while diagnosing the cutover; the staging source at `~/Library/Application Support/Agent Visor Next` remains untouched. Do not run `brew uninstall --zap` while retaining these diagnostic profiles because zap removes the application data paths. Remove either profile only after the rollback issue is understood.
 
-The raw migrated Swift property list remains in the private settings file. It does not mean every released control or behavior is implemented.
+The cutover copies only the Agent Visor staging profile into the production
+Electron profile. The raw migrated Swift property list remains in the private
+settings file. Provider transcripts, databases, hooks, and live session records
+are outside this operation and are always read in place. A live staging profile
+makes import wait; its source remains untouched and transient Electron lock
+markers are omitted from the copied profile.
 
-The [historical, superseded source audit](/Users/zhengyuanz/Codes/.scratch/agent-visor-electron-parity-audit/report.md)
-is retained for provenance only. It predates this contract and must not be
-used as current parity or release evidence.
+This is a provisional pre-release acceptance note: remove it only after the
+physical-reboot Pi gate passes.
 
-## Removal decision
+The historical, superseded source audit is retained outside the repository for
+provenance only. It predates this contract and must not be used as current
+parity or release evidence.
 
-Do not remove the Swift production application in this change.
+## Legacy Swift retention
 
-Remove it only after one approved Electron production release succeeds and its rollback window closes.
+Retain the signed Swift v2.6.1 application and its public download while the
+2.7.0 cutover rollback window is open. Remove the rollback artifact only after
+the stable Electron release has completed its approved rollback review.

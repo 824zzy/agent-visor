@@ -7,194 +7,326 @@
 <style>
   :root {
     color-scheme: light;
-    --ink: #555b78;
-    --muted: #8f95aa;
-    --line: #d8dce7;
+    --ink: #26324a;
+    --muted: #6e7890;
+    --tertiary: #929aae;
+    --line: #dce1eb;
     --surface: #f4f6fb;
-    --selected: #dce4f7;
-    --green: #58b66b;
-    --orange: #e06b35;
-    --yellow: #e8ad35;
-    --recent: #73798f;
+    --card: #ffffff;
+    --selected: #e7edff;
+    --accent: #4d73d8;
+    --ready: #42a95c;
+    --working: #db713e;
+    --attention: #d79727;
+    --history: #8490a4;
   }
+
   * { box-sizing: border-box; }
-  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
     color: var(--ink);
     background: var(--surface);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  #menubar, #browser { display: none; }
-  body.menubar #menubar, body.browser #browser { display: block; }
+  button { font: inherit; }
+  /* Every surface starts hidden. The bootstrap script marks exactly one
+     surface, and the selector below makes that rule visible after parsing. */
+  .surface { display: none !important; width: 100%; height: 100%; }
+  .surface[data-fixture-visible="true"] { display: block !important; }
+  #chat.surface[data-fixture-visible="true"] { display: flex !important; }
 
+  /* Menu bar ------------------------------------------------------------- */
   #menubar {
     height: 84px;
-    padding: 0 22px;
-    color: #f7f7f8;
-    background: linear-gradient(180deg, #656666 0%, #565757 100%);
-    font-size: 17px;
-    font-weight: 600;
+    color: #f7f8fb;
+    background: linear-gradient(180deg, #626875 0%, #4f5562 100%);
   }
-  .menu-row { height: 84px; display: grid; grid-template-columns: 1fr 420px 1fr; align-items: start; }
-  .menu-left, .menu-right { height: 54px; display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .menu-left { justify-content: flex-end; padding-right: 16px; }
-  .menu-right { justify-content: flex-start; padding-left: 16px; }
-  .notch { width: 420px; height: 74px; border-radius: 0 0 24px 24px; background: #050505; }
-  .menu-app { position: absolute; left: 22px; height: 54px; display: flex; align-items: center; gap: 18px; }
-  .menu-app span:first-child { font-size: 19px; }
-  .pill {
-    height: 31px;
-    max-width: 188px;
-    padding: 0 13px;
-    display: flex;
+  .menubar-row {
+    display: grid;
+    grid-template-columns: 330px minmax(0, 1fr) 330px;
     align-items: center;
-    gap: 7px;
+    gap: 18px;
+    height: 84px;
+    padding: 0 24px;
+  }
+  .menu-brand, .menu-right, .menu-pills { display: flex; align-items: center; min-width: 0; }
+  .menu-brand { gap: 17px; white-space: nowrap; }
+  .menu-brand-name { color: #fff; font-size: 19px; font-weight: 720; letter-spacing: -.2px; }
+  .menu-link { color: rgba(255,255,255,.72); font-size: 14px; font-weight: 600; }
+  .menu-pills { justify-content: center; gap: 10px; overflow: hidden; }
+  .menu-right { justify-content: flex-end; gap: 12px; white-space: nowrap; }
+  .menu-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-width: 190px;
+    height: 32px;
+    padding: 0 13px;
     overflow: hidden;
-    white-space: nowrap;
-    border-radius: 16px;
-    background: rgba(30, 31, 31, .58);
-    box-shadow: inset 0 1px rgba(255,255,255,.06);
-    font-size: 15px;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 17px;
+    background: rgba(26, 30, 39, .5);
+    box-shadow: inset 0 1px rgba(255,255,255,.07);
+    font-size: 14px;
     font-weight: 650;
   }
-  .pill.utility { max-width: none; color: #e1e2e5; font-size: 13px; font-variant-numeric: tabular-nums; }
-  .pill.overflow { min-width: 46px; justify-content: center; }
-  .dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--recent); }
-  .dot.ready { background: #79cf86; }
-  .dot.working { background: #ed7b4b; }
-  .dot.attention { background: #eabd50; }
-  .pill-label { overflow: hidden; text-overflow: ellipsis; }
+  .menu-pill-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .menu-pill.more { min-width: 45px; justify-content: center; color: #e4e8f2; }
+  .menu-pill.utility { max-width: none; color: rgba(255,255,255,.76); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .state-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--history); }
+  .state-dot.attention { background: #efbd58; }
+  .state-dot.ready { background: #7bda8c; }
+  .state-dot.working { background: #ef8556; }
 
-  #browser { width: 100%; height: 100%; background: #f1f3f9; }
-  .window-dots { position: absolute; top: 22px; left: 24px; display: flex; gap: 10px; }
-  .window-dots i { width: 16px; height: 16px; border-radius: 50%; display: block; }
+  /* Sessions ------------------------------------------------------------- */
+  #sessions { background: #f2f4f9; }
+  .sessions-scale { --content-scale: 1; display: flex; flex-direction: column; height: 100%; }
+  body[data-scale="250"] .sessions-scale { --content-scale: 2.5; }
+  .window-chrome { position: relative; height: 34px; flex: 0 0 auto; border-bottom: 1px solid var(--line); background: #edf0f6; }
+  .window-dots { position: absolute; top: 10px; left: 24px; display: flex; gap: 8px; }
+  .window-dots i { width: 12px; height: 12px; border-radius: 50%; }
   .window-dots i:nth-child(1) { background: #ff5f57; }
   .window-dots i:nth-child(2) { background: #febc2e; }
   .window-dots i:nth-child(3) { background: #28c840; }
-  .browser-header { padding: 48px 46px 18px; border-bottom: 1px solid var(--line); }
-  .settings {
-    width: 45px; height: 45px; display: grid; place-items: center;
-    border-radius: 12px; background: #dde1eb; color: #727991; font-size: 23px;
-  }
-  .toolbar { display: flex; gap: 18px; align-items: center; }
+  .browser-header { flex: 0 0 auto; padding: 13px 46px 14px; border-bottom: 1px solid var(--line); background: #f2f4f9; }
+  .toolbar { display: flex; align-items: center; gap: 16px; }
   .search {
-    flex: 1; height: 54px; display: flex; align-items: center; gap: 14px;
-    border: 2px solid #5f83e8; border-radius: 14px; padding: 0 18px;
-    background: #e4e7ef; color: #777d91; font-size: 19px;
+    display: flex;
+    min-width: 0;
+    min-height: 54px;
+    flex: 1;
+    align-items: center;
+    gap: calc(12px * var(--content-scale));
+    padding: 0 calc(17px * var(--content-scale));
+    border: 2px solid #6183e2;
+    border-radius: 13px;
+    background: #e5e9f1;
+    color: #747e95;
+    font-size: calc(18px * var(--content-scale));
+    line-height: 1.2;
   }
-  .search-icon { color: #3370d6; font-size: 23px; }
-  .shortcut { margin-left: auto; padding: 4px 8px; border-radius: 8px; background: #d5d9e3; font-size: 13px; }
-  .browser-list { height: calc(100% - 166px); padding: 14px 46px 50px; overflow: hidden; }
-  .scroll-track { position: absolute; top: 132px; right: 13px; width: 7px; height: 810px; border-radius: 4px; background: rgba(119,125,146,.08); }
-  .scroll-thumb { width: 7px; height: 320px; border-radius: 4px; background: rgba(94,100,118,.58); }
-  .section-title { height: 37px; display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: #6e748b; }
-  .count { min-width: 25px; height: 25px; padding: 0 7px; display: inline-flex; align-items: center; justify-content: center; border-radius: 13px; background: #d9dde7; }
-  .session-row {
-    height: 68px; display: grid; grid-template-columns: 14px 42px minmax(0, 1fr) 72px 30px;
-    align-items: center; gap: 13px; padding: 0 14px; border: 1px solid transparent; border-radius: 13px;
-  }
-  .session-row.selected { background: var(--selected); border-color: #86a5ef; }
-  .status-bar { width: 9px; height: 9px; border-radius: 50%; background: var(--recent); }
-  .status-bar.attention { background: var(--yellow); }
-  .status-bar.ready { background: var(--green); }
-  .status-bar.working { background: var(--orange); }
-  .brand {
-    width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center;
-    background: white; box-shadow: 0 1px 3px rgba(31,37,57,.18); overflow: hidden;
-  }
-  .brand img { width: 32px; height: 32px; object-fit: contain; }
+  .search-icon { color: #3d6fd4; font-size: calc(23px * var(--content-scale)); line-height: 1; }
+  .search-hint { margin-left: auto; padding: calc(4px * var(--content-scale)) calc(8px * var(--content-scale)); border-radius: 7px; background: #d6dce8; color: #67728a; font-size: calc(12px * var(--content-scale)); white-space: nowrap; }
+  .settings-button { display: grid; width: 48px; height: 48px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 11px; background: #dce1eb; color: #69748b; font-size: 22px; }
+  .session-list { position: relative; flex: 1 1 auto; min-height: 0; padding: 10px 46px 24px; overflow: hidden; }
+  .session-groups { max-width: 1500px; margin: 0 auto; }
+  .section-header { display: flex; min-height: 35px; align-items: center; gap: calc(8px * var(--content-scale)); padding: calc(7px * var(--content-scale)) calc(10px * var(--content-scale)) calc(4px * var(--content-scale)); color: #6b748b; font-size: calc(14px * var(--content-scale)); font-weight: 720; }
+  .count { display: inline-flex; min-width: calc(24px * var(--content-scale)); min-height: calc(23px * var(--content-scale)); align-items: center; justify-content: center; padding: 0 calc(7px * var(--content-scale)); border-radius: calc(12px * var(--content-scale)); background: #dce1eb; color: #69748b; font-size: calc(11px * var(--content-scale)); font-variant-numeric: tabular-nums; }
+  .session-row { display: grid; grid-template-columns: 12px 38px minmax(0, 1fr) 54px 38px 153px 132px; align-items: center; gap: 12px; min-height: 70px; padding: 8px 14px; border: 1px solid transparent; border-radius: 12px; }
+  .session-row.selected { border-color: #8fa9ec; background: var(--selected); }
+  .session-row + .session-row { margin-top: 2px; }
+  .status-mark { width: 9px; height: 9px; border-radius: 50%; background: var(--history); }
+  .status-mark.attention { background: var(--attention); }
+  .status-mark.ready { background: var(--ready); }
+  .status-mark.working { background: var(--working); }
+  .brand-mark { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid rgba(82, 97, 132, .12); border-radius: 9px; background: #fff; box-shadow: 0 1px 3px rgba(42, 52, 76, .14); color: #536fcb; font-size: 15px; font-weight: 800; }
+  .brand-mark.claude { color: #986756; }
+  .brand-mark.cursor { color: #536a95; }
+  .brand-mark.pi { color: #7f61b4; }
   .session-copy { min-width: 0; }
-  .session-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
-  .session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18px; font-weight: 700; color: #515773; }
-  .chip { height: 23px; padding: 0 9px; display: inline-flex; align-items: center; border-radius: 12px; background: #e0e7fb; color: #6381df; font-size: 13px; font-weight: 650; }
-  .chip.project { background: #d9dde8; color: #73798e; }
-  .chip.claude { background: #f4e5e1; color: #8b625b; }
-  .chip.cursor { background: #e3e8f6; color: #65738f; }
-  .preview { margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #7d839a; font-size: 15px; }
-  .age { justify-self: end; color: #777d92; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .info { justify-self: center; color: #6e748b; font-size: 20px; }
-  .browser-footer {
-    position: absolute; left: 0; right: 0; bottom: 0; height: 46px;
-    padding: 0 46px; display: flex; align-items: center; justify-content: space-between;
-    border-top: 1px solid var(--line); background: #f1f3f9;
-    color: #777d92; font-size: 13px; font-weight: 600;
+  .session-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .session-title { min-width: 0; overflow: hidden; color: #4c5873; font-size: calc(16px * var(--content-scale)); font-weight: 720; line-height: calc(21px * var(--content-scale)); text-overflow: ellipsis; }
+  .chip { display: inline-flex; min-height: calc(22px * var(--content-scale)); flex: 0 0 auto; align-items: center; padding: 0 calc(8px * var(--content-scale)); border-radius: calc(11px * var(--content-scale)); background: #e1e8ff; color: #5d79ce; font-size: calc(11px * var(--content-scale)); font-weight: 650; white-space: nowrap; }
+  .chip.project { background: #e0e4ec; color: #737d93; }
+  .chip.claude { background: #f3e5e0; color: #8b6257; }
+  .chip.cursor { background: #e3e8f4; color: #62718f; }
+  .chip.pi { background: #ede5f8; color: #765ca3; }
+  .session-subtitle { margin-top: 3px; overflow: hidden; color: #7c869a; font-size: calc(13px * var(--content-scale)); line-height: calc(18px * var(--content-scale)); text-overflow: ellipsis; white-space: nowrap; }
+  .age, .hotkey { color: #7c869b; font-size: calc(12px * var(--content-scale)); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .hotkey { color: #63708a; text-align: center; }
+  .owner-action, .chat-action { display: flex; min-width: 0; min-height: 34px; align-items: center; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: #64718b; font-size: calc(13px * var(--content-scale)); font-weight: 650; text-align: left; white-space: nowrap; }
+  .chat-action { padding: 0 10px; color: #68738a; }
+  .owner-action:hover, .chat-action:hover { background: rgba(77,115,216,.11); color: var(--accent); }
+  .browser-footer { display: flex; min-height: 52px; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 18px; padding: 8px 46px; border-top: 1px solid var(--line); background: #f2f4f9; color: #727d94; font-size: calc(12px * var(--content-scale)); font-weight: 600; }
+  .footer-group { display: flex; flex-wrap: wrap; align-items: center; gap: calc(17px * var(--content-scale)); }
+  .footer-keys { color: #606c84; font-variant-numeric: tabular-nums; }
+
+  /* Chat ----------------------------------------------------------------- */
+  #chat { flex-direction: column; background: #f6f7fb; }
+  .chat-header { display: flex; height: 58px; flex: 0 0 auto; align-items: center; border-bottom: 1px solid var(--line); background: #f6f7fb; }
+  .chat-header-rail { display: flex; width: min(1180px, calc(100% - 72px)); height: 100%; margin: 0 auto; align-items: center; gap: 16px; }
+  .back-link, .chat-owner, .chat-details { border: 0; background: transparent; color: #5678cf; font-size: 14px; font-weight: 650; white-space: nowrap; }
+  .chat-owner { margin-left: auto; color: #6b768d; font-weight: 600; }
+  .chat-details { color: #7a849a; font-size: 18px; letter-spacing: 1px; }
+  .chat-status { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--ready); }
+  .chat-title { max-width: 320px; overflow: hidden; color: #4c5872; font-size: 16px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-content-scale { --content-scale: 1; display: flex; min-height: 0; flex: 1; flex-direction: column; }
+  body[data-scale="250"] .chat-content-scale { --content-scale: 2.5; }
+  .chat-scroll { min-height: 0; flex: 1; overflow: hidden; }
+  .chat-stream { width: min(1000px, calc(100% - 88px)); height: 100%; margin: 0 auto; padding: 24px 0 30px; overflow: hidden; }
+  .chat-history-label { margin-bottom: 16px; color: #8791a5; font-size: calc(12px * var(--content-scale)); font-weight: 650; letter-spacing: .02em; }
+  .chat-message { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; margin-bottom: 16px; }
+  .message-avatar { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 9px; background: #dfe6fb; color: #5571c8; font-size: 12px; font-weight: 800; }
+  .message-avatar.user { background: #e7e9ee; color: #687389; }
+  .message-card { min-width: 0; padding: calc(16px * var(--content-scale)); border: 1px solid var(--line); border-radius: 13px; background: var(--card); box-shadow: 0 2px 6px rgba(42, 52, 76, .035); }
+  .message-card.user { background: #eef1f7; box-shadow: none; }
+  .message-label { display: flex; align-items: center; gap: 10px; margin-bottom: calc(10px * var(--content-scale)); color: #61708d; font-size: calc(12px * var(--content-scale)); font-weight: 700; }
+  .ready-chip { padding: 3px 8px; border-radius: 9px; background: #e3f3e6; color: #42975a; font-size: calc(10px * var(--content-scale)); }
+  .rich-content { color: #3f4b64; font-size: calc(16px * var(--content-scale)); line-height: calc(24px * var(--content-scale)); }
+  .rich-content p { margin: 0 0 calc(14px * var(--content-scale)); }
+  .rich-content p:last-child { margin-bottom: 0; }
+  .rich-content h2 { margin: 0 0 calc(8px * var(--content-scale)); color: #3d4963; font-size: calc(19px * var(--content-scale)); line-height: calc(27px * var(--content-scale)); }
+  .rich-content code { padding: 2px 5px; border-radius: 4px; background: #eef1f6; color: #566988; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em; }
+  .rich-list { display: grid; gap: calc(8px * var(--content-scale)); margin: calc(10px * var(--content-scale)) 0 calc(16px * var(--content-scale)); padding: 0; list-style: none; }
+  .rich-item { display: grid; grid-template-columns: calc(24px * var(--content-scale)) minmax(0, 1fr); column-gap: calc(10px * var(--content-scale)); align-items: start; }
+  .rich-marker { color: #76839b; font-weight: 700; line-height: calc(24px * var(--content-scale)); text-align: center; }
+  .rich-marker.ordered { padding-right: 3px; text-align: right; }
+  .rich-item-text { min-width: 0; }
+  .code-card { margin: calc(13px * var(--content-scale)) 0 calc(16px * var(--content-scale)); padding: calc(12px * var(--content-scale)) calc(14px * var(--content-scale)); overflow: hidden; border: 1px solid #d8deeb; border-radius: 9px; background: #f0f3f8; }
+  .code-language { display: block; margin-bottom: calc(6px * var(--content-scale)); color: #5875c8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: calc(11px * var(--content-scale)); font-weight: 700; }
+  .code-card pre { margin: 0; overflow: hidden; color: #4d5c76; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: calc(12px * var(--content-scale)); line-height: calc(18px * var(--content-scale)); white-space: pre-wrap; }
+  .work-row { display: flex; width: max-content; max-width: 100%; align-items: center; gap: 8px; margin: 3px 0 0 46px; padding: 8px 12px; border-radius: 8px; background: #edf0f5; color: #6d7890; font-size: calc(12px * var(--content-scale)); font-weight: 650; }
+  .composer { display: flex; min-height: 82px; flex: 0 0 auto; align-items: center; border-top: 1px solid var(--line); background: #f6f7fb; }
+  .composer-rail { display: flex; width: min(1000px, calc(100% - 88px)); margin: 0 auto; align-items: center; gap: 12px; }
+  .composer-shell { display: flex; min-height: 48px; flex: 1; align-items: center; gap: 10px; padding: 0 12px; border: 1px solid #d7dce7; border-radius: 12px; background: #fff; }
+  .composer-plus { color: #6a7690; font-size: 21px; }
+  .composer-placeholder { color: #9099aa; font-size: calc(14px * var(--content-scale)); }
+  .send-button { min-width: 66px; min-height: 38px; border: 0; border-radius: 9px; background: #dfe6fa; color: #5e77c4; font-size: calc(13px * var(--content-scale)); font-weight: 700; }
+
+  /* Settings ------------------------------------------------------------- */
+  #settings { background: #f5f6fa; }
+  .settings-shell { display: flex; height: 100%; }
+  .settings-sidebar { width: 242px; flex: 0 0 auto; padding: 28px 14px; border-right: 1px solid var(--line); background: #eef1f6; }
+  .settings-back { display: block; margin: 0 10px 20px; color: #5576ce; font-size: 13px; font-weight: 650; }
+  .settings-category { display: block; width: 100%; margin: 2px 0; padding: 10px 12px; border: 0; border-radius: 8px; background: transparent; color: #707b91; font-size: 14px; font-weight: 650; text-align: left; }
+  .settings-category.selected { background: #e0e8fc; color: #4e70c9; }
+  .settings-content { width: min(930px, calc(100% - 70px)); margin: 0 auto; padding: 34px 0 22px; overflow: hidden; }
+  .settings-heading { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+  .settings-title { color: #3f4b63; font-size: 25px; font-weight: 760; letter-spacing: -.3px; }
+  .settings-version { color: #8892a5; font-size: 12px; font-weight: 600; }
+  .settings-subtitle { margin: 0 0 22px; color: #7d879a; font-size: 13px; }
+  .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+  .settings-card { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: #fff; box-shadow: 0 8px 24px rgba(42, 52, 76, .08); }
+  .settings-card.wide { grid-column: 1 / -1; }
+  .settings-card-heading { padding: 16px 18px 8px; color: #43506a; font-size: 17px; font-weight: 720; }
+  .settings-card-subtitle { padding: 0 18px 10px; color: #8892a5; font-size: 12px; }
+  .setting-row { display: flex; min-height: 52px; align-items: center; justify-content: space-between; gap: 16px; padding: 9px 18px; border-top: 1px solid #edf0f5; }
+  .setting-label { min-width: 0; color: #4b5870; font-size: 13px; font-weight: 650; }
+  .setting-detail { min-width: 0; overflow: hidden; color: #7a8599; font-size: 12px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+  .setting-detail.allowed, .setting-detail.connected { color: #3d9b59; font-weight: 700; }
+  .setting-detail.observed { color: #6579b5; font-weight: 650; }
+  .setting-control { display: inline-flex; align-items: center; gap: 7px; }
+  .control-pill { padding: 5px 9px; border-radius: 7px; background: #e9edf5; color: #66728a; font-size: 11px; font-weight: 650; }
+  .control-pill.active { background: #e1e9ff; color: #5675cf; }
+  .settings-note { margin-top: 18px; color: #8c95a7; font-size: 12px; }
+
+  @media (max-width: 1120px) {
+    .menubar-row { grid-template-columns: 250px minmax(0, 1fr) 210px; }
+    .menu-brand .menu-link { display: none; }
+    .session-row { grid-template-columns: 12px 38px minmax(0, 1fr) 50px 34px 130px 112px; gap: 8px; }
+    .session-title, .session-subtitle { white-space: normal; }
+    .settings-sidebar { width: 205px; }
   }
-  .footer-group { display: flex; align-items: center; gap: 18px; }
-  .footer-keys { color: #656b82; font-variant-numeric: tabular-nums; }
+  @media (max-width: 840px) {
+    .menubar-row { grid-template-columns: 1fr; }
+    .menu-brand, .menu-right { display: none; }
+    .session-row { grid-template-columns: 12px 34px minmax(0, 1fr) 45px 100px; }
+    .hotkey, .owner-action { display: none; }
+    .browser-footer { align-items: flex-start; flex-direction: column; }
+    .settings-sidebar { width: 170px; }
+    .settings-grid { grid-template-columns: 1fr; }
+    .settings-card.wide { grid-column: auto; }
+  }
 </style>
 </head>
 <body>
-  <section id="menubar">
-    <div class="menu-app"><span>Agent Visor</span><span>File</span><span>Edit</span></div>
-    <div class="menu-row">
-      <div class="menu-left">
-        <div class="pill"><i class="dot attention"></i><span class="pill-label">Review checkout permissions</span></div>
-        <div class="pill"><i class="dot ready"></i><span class="pill-label">API migration plan</span></div>
+  <section id="menubar" class="surface" aria-label="Menu bar">
+    <div class="menubar-row">
+      <div class="menu-brand">
+        <span class="menu-brand-name">Agent Visor</span><span class="menu-link">File</span><span class="menu-link">Edit</span><span class="menu-link">View</span>
       </div>
-      <div class="notch"></div>
-      <div class="menu-right">
-        <div class="pill"><i class="dot working"></i><span class="pill-label">Trace flaky tests</span></div>
-        <div class="pill"><i class="dot"></i><span class="pill-label">Update launch checklist</span></div>
-        <div class="pill overflow">+5</div>
-        <div class="pill utility">5h 62% <span style="opacity:.45">|</span> 7d 81%</div>
+      <div class="menu-pills">
+        <div class="menu-pill"><i class="state-dot attention"></i><span class="menu-pill-label">Review changes</span></div>
+        <div class="menu-pill"><i class="state-dot ready"></i><span class="menu-pill-label">Build handoff</span></div>
+        <div class="menu-pill"><i class="state-dot working"></i><span class="menu-pill-label">Run local checks</span></div>
+        <div class="menu-pill"><i class="state-dot ready"></i><span class="menu-pill-label">Plan next step</span></div>
+        <div class="menu-pill more">+4</div>
       </div>
+      <div class="menu-right"><div class="menu-pill utility">Sessions&nbsp; 8</div><div class="menu-pill utility">⌘, Settings</div></div>
     </div>
   </section>
 
-  <main id="browser">
-    <div class="window-dots"><i></i><i></i><i></i></div>
-    <div class="scroll-track"><div class="scroll-thumb"></div></div>
-    <header class="browser-header">
-      <div class="toolbar">
-        <div class="search"><span class="search-icon">&#8981;</span><span>Search all sessions</span><span class="shortcut">&#8984;F</span></div>
-        <div class="settings">&#9881;</div>
-      </div>
-    </header>
-    <div class="browser-list">
-      <div class="section-title">Needs you <span class="count">1</span></div>
-      <div class="session-row">
-        <i class="status-bar attention"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCodex.imageset/AgentCodex@3x.png"></span>
-        <div class="session-copy"><div class="session-heading"><span class="session-title">Review checkout permissions</span><span class="chip">Codex</span><span class="chip project">sample-store</span></div><div class="preview">Approval required before running the deployment command.</div></div><span class="age">1m</span><span class="info">&#9432;</span>
-      </div>
-      <div class="section-title">Ready to continue <span class="count">3</span></div>
-      <div class="session-row selected">
-        <i class="status-bar ready"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCodex.imageset/AgentCodex@3x.png"></span>
-        <div class="session-copy"><div class="session-heading"><span class="session-title">API migration plan</span><span class="chip">Codex</span><span class="chip project">api-service</span></div><div class="preview">The rollout plan is ready for review, including fallback steps.</div></div><span class="age">3m</span><span class="info">&#9432;</span>
-      </div>
-      <div class="session-row">
-        <i class="status-bar ready"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentClaude.imageset/AgentClaude@3x.png"></span>
-        <div class="session-copy"><div class="session-heading"><span class="session-title">Fix onboarding test</span><span class="chip claude">Claude Code</span><span class="chip project">web-app</span></div><div class="preview">All focused tests pass after updating the fixture lifecycle.</div></div><span class="age">5m</span><span class="info">&#9432;</span>
-      </div>
-      <div class="session-row">
-        <i class="status-bar ready"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCursor.imageset/AgentCursor@3x.png"></span>
-        <div class="session-copy"><div class="session-heading"><span class="session-title">Update schema documentation</span><span class="chip cursor">Cursor</span><span class="chip project">docs-site</span></div><div class="preview">The generated examples now match the current API response.</div></div><span class="age">9m</span><span class="info">&#9432;</span>
-      </div>
-      <div class="section-title">In progress <span class="count">2</span></div>
-      <div class="session-row">
-        <i class="status-bar working"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCursor.imageset/AgentCursor@3x.png"></span>
-        <div class="session-copy"><div class="session-heading"><span class="session-title">Trace flaky integration test</span><span class="chip cursor">Cursor</span><span class="chip project">sample-store</span></div><div class="preview">Comparing the two failing CI traces and local timing evidence...</div></div><span class="age">now</span><span class="info">&#9432;</span>
-      </div>
-      <div class="session-row">
-        <i class="status-bar working"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentClaude.imageset/AgentClaude@3x.png"></span>
-        <div class="session-copy"><div class="session-heading"><span class="session-title">Refactor billing webhook</span><span class="chip claude">Claude Code</span><span class="chip project">api-service</span></div><div class="preview">Running the contract tests before applying the final cleanup.</div></div><span class="age">2m</span><span class="info">&#9432;</span>
-      </div>
-      <div class="section-title">History <span class="count">5</span></div>
-      <div class="session-row">
-        <i class="status-bar"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCodex.imageset/AgentCodex@3x.png"></span>
-        <div class="session-copy"><div class="session-heading"><span class="session-title">Update launch checklist</span><span class="chip">Codex</span><span class="chip project">docs-site</span></div><div class="preview">Release checks and owner handoff notes are complete.</div></div><span class="age">42m</span><span class="info">&#9432;</span>
-      </div>
-      <div class="session-row">
-        <i class="status-bar"></i><span class="brand"><img src="../../AgentVisor/Assets.xcassets/AgentBrand/AgentCodex.imageset/AgentCodex@3x.png"></span>
-        <div class="session-copy"><div class="session-heading"><span class="session-title">Investigate cache regression</span><span class="chip">Codex</span><span class="chip project">desktop-app</span></div><div class="preview">The issue was isolated to stale metadata after wake.</div></div><span class="age">2h</span><span class="info">&#9432;</span>
-      </div>
+  <main id="sessions" class="surface" aria-label="Sessions">
+    <div class="sessions-scale">
+      <div class="window-chrome"><div class="window-dots"><i></i><i></i><i></i></div></div>
+      <header class="browser-header"><div class="toolbar"><div class="search" role="searchbox"><span class="search-icon">⌕</span><span>Search all sessions</span><span class="search-hint">⌘F</span></div><button class="settings-button" aria-label="Settings">⚙</button></div></header>
+      <div class="session-list"><div class="session-groups">
+        <div class="section-header">Needs you <span class="count">1</span></div>
+        <div class="session-row"><i class="status-mark attention"></i><span class="brand-mark">C</span><div class="session-copy"><div class="session-heading"><span class="session-title">Review changes</span><span class="chip">Codex</span><span class="chip project">Demo</span></div><div class="session-subtitle">Approval needed before continuing.</div></div><span class="age">1m</span><span class="hotkey">⌘1</span><button class="owner-action">↗ Open in Codex</button><button class="chat-action">▢ Open Chat</button></div>
+
+        <div class="section-header">Ready to continue <span class="count">2</span></div>
+        <div class="session-row selected"><i class="status-mark ready"></i><span class="brand-mark">C</span><div class="session-copy"><div class="session-heading"><span class="session-title">Build handoff</span><span class="chip">Codex</span><span class="chip project">Sample</span></div><div class="session-subtitle">The release checklist is ready for review.</div></div><span class="age">3m</span><span class="hotkey">⌘2</span><button class="owner-action">↗ Open in Codex</button><button class="chat-action">▢ Open Chat</button></div>
+        <div class="session-row"><i class="status-mark ready"></i><span class="brand-mark claude">C</span><div class="session-copy"><div class="session-heading"><span class="session-title">Refresh examples</span><span class="chip claude">Claude Code</span><span class="chip project">Fixture</span></div><div class="session-subtitle">The examples match the current response shape.</div></div><span class="age">6m</span><span class="hotkey">⌘3</span><button class="owner-action">↗ Open in Claude Code</button><button class="chat-action">▢ Open Chat</button></div>
+
+        <div class="section-header">In progress <span class="count">2</span></div>
+        <div class="session-row"><i class="status-mark working"></i><span class="brand-mark cursor">C</span><div class="session-copy"><div class="session-heading"><span class="session-title">Trace integration</span><span class="chip cursor">Cursor</span><span class="chip project">Demo</span></div><div class="session-subtitle">Comparing two timing signals now…</div></div><span class="age">now</span><span class="hotkey">⌘4</span><button class="owner-action">↗ Open in Cursor</button><button class="chat-action">▢ Open Chat</button></div>
+        <div class="session-row"><i class="status-mark working"></i><span class="brand-mark pi">P</span><div class="session-copy"><div class="session-heading"><span class="session-title">Run local checks</span><span class="chip pi">Pi</span><span class="chip project">Sample</span></div><div class="session-subtitle">The focused checks are still running.</div></div><span class="age">2m</span><span class="hotkey">⌘5</span><button class="owner-action">↗ Open in Pi</button><button class="chat-action">▢ Open Chat</button></div>
+
+        <div class="section-header">History <span class="count">2</span></div>
+        <div class="session-row"><i class="status-mark"></i><span class="brand-mark">C</span><div class="session-copy"><div class="session-heading"><span class="session-title">Plan next step</span><span class="chip">Codex</span><span class="chip project">Fixture</span></div><div class="session-subtitle">A short handoff is available in Chat.</div></div><span class="age">42m</span><span class="hotkey">⌘6</span><button class="owner-action">↗ Open in Codex</button><button class="chat-action">▢ Open Chat</button></div>
+        <div class="session-row"><i class="status-mark"></i><span class="brand-mark cursor">C</span><div class="session-copy"><div class="session-heading"><span class="session-title">Review test notes</span><span class="chip cursor">Cursor</span><span class="chip project">Demo</span></div><div class="session-subtitle">The investigation is saved for later.</div></div><span class="age">2h</span><span class="hotkey">⌘7</span><button class="owner-action">↗ Open in Cursor</button><button class="chat-action">▢ Open Chat</button></div>
+      </div></div>
+      <footer class="browser-footer"><div class="footer-group"><span>↑↓ Navigate</span><span>↩ Open source app</span><span>⇧↩ Open Chat</span></div><div class="footer-group footer-keys"><span>⌥⌘1-9&nbsp; Switch sessions</span><span>⌥⌘0&nbsp; Session menu</span></div></footer>
     </div>
-    <footer class="browser-footer">
-      <div class="footer-group"><span>&uarr;&darr; Navigate</span><span>&#8629; Open original</span><span>&#8997;&#8629; Inspect</span></div>
-      <div class="footer-group footer-keys"><span>⌥⌘1-9&nbsp; Open pills</span><span>⌥⌘0&nbsp; More sessions</span></div>
-    </footer>
   </main>
-<script>
-  document.body.className = location.hash === "#menubar" ? "menubar" : "browser";
-</script>
+
+  <main id="chat" class="surface" aria-label="Agent Visor Chat">
+    <header class="chat-header"><div class="chat-header-rail"><button class="back-link">‹ Back to Sessions</button><i class="chat-status"></i><span class="chat-title">Build handoff</span><button class="chat-owner">↗ Open in Codex</button><button class="chat-details" aria-label="Chat Details">•••</button></div></header>
+    <div class="chat-content-scale"><div class="chat-scroll"><div class="chat-stream">
+      <div class="chat-history-label">Live Chat&nbsp; · &nbsp;Ready</div>
+      <div class="chat-message"><div class="message-avatar user">You</div><div class="message-card user rich-content"><p>Review the release checklist and call out anything that still needs attention.</p></div></div>
+      <div class="chat-message"><div class="message-avatar">AV</div><div class="message-card rich-content">
+        <div class="message-label"><span>Agent Visor</span><span class="ready-chip">Ready</span></div>
+        <p>The checklist is ready. The next handoff can stay small and easy to verify.</p>
+        <h2>Release snapshot</h2>
+        <ul class="rich-list">
+          <li class="rich-item"><span class="rich-marker">•</span><span class="rich-item-text">Build output is present and the local checks are green.</span></li>
+          <li class="rich-item"><span class="rich-marker">•</span><span class="rich-item-text">The owner action remains available beside <code>Open Chat</code>.</span></li>
+          <li class="rich-item"><span class="rich-marker">•</span><span class="rich-item-text">Settings show the required permissions and provider state.</span></li>
+        </ul>
+        <div class="code-card"><span class="code-language">summary</span><pre>surface: ready
+checks: 3 passed
+handoff: clear</pre></div>
+        <p>Suggested order:</p>
+        <ol class="rich-list">
+          <li class="rich-item"><span class="rich-marker ordered">1.</span><span class="rich-item-text">Open the owner when source context is needed.</span></li>
+          <li class="rich-item"><span class="rich-marker ordered">2.</span><span class="rich-item-text">Use Chat for a quick read of the handoff.</span></li>
+          <li class="rich-item"><span class="rich-marker ordered">3.</span><span class="rich-item-text">Return to Sessions to choose another surface.</span></li>
+        </ol>
+      </div></div>
+      <div class="work-row">⌄&nbsp; Worked · 3 steps</div>
+    </div></div>
+    <div class="composer"><div class="composer-rail"><div class="composer-shell"><span class="composer-plus">+</span><span class="composer-placeholder">Message agent…</span></div><button class="send-button">Send</button></div></div>
+    </div>
+  </main>
+
+  <main id="settings" class="surface" aria-label="Settings">
+    <div class="settings-shell"><aside class="settings-sidebar"><div class="settings-back">← Back to app</div><button class="settings-category selected">General</button><button class="settings-category">Appearance</button><button class="settings-category">Chat</button><button class="settings-category">Pills</button><button class="settings-category">Notifications</button><button class="settings-category">Agents</button></aside>
+      <section class="settings-content"><div class="settings-heading"><span class="settings-title">Settings</span><span class="settings-version">Agent Visor 2.7.0</span></div><p class="settings-subtitle">How Agent Visor starts up and stays accessible</p>
+        <div class="settings-grid">
+          <div class="settings-card"><div class="settings-card-heading">Permissions</div><div class="settings-card-subtitle">Required for native focus and alerts</div><div class="setting-row"><span class="setting-label">Accessibility</span><span class="setting-detail allowed">Allowed</span></div><div class="setting-row"><span class="setting-label">Notifications</span><span class="setting-detail allowed">Allowed</span></div><div class="setting-row"><span class="setting-label">Updates</span><span class="setting-detail">Agent Visor is up to date</span></div></div>
+          <div class="settings-card"><div class="settings-card-heading">Agents</div><div class="settings-card-subtitle">Connect agents for exact live status and approvals</div><div class="setting-row"><span class="setting-label">Codex</span><span class="setting-detail connected">Connected automatically</span></div><div class="setting-row"><span class="setting-label">Claude Code</span><span class="setting-detail connected">Connected</span></div><div class="setting-row"><span class="setting-label">Cursor</span><span class="setting-detail observed">Observed automatically</span></div><div class="setting-row"><span class="setting-label">Pi</span><span class="setting-detail observed">Observed automatically</span></div></div>
+          <div class="settings-card wide"><div class="settings-card-heading">Appearance</div><div class="settings-card-subtitle">How the app looks across content sizes</div><div class="setting-row"><span class="setting-label">Theme</span><span class="setting-control"><span class="control-pill active">System</span><span class="control-pill">Dark</span><span class="control-pill">Light</span></span></div><div class="setting-row"><span class="setting-label">Content size</span><span class="setting-control"><span class="control-pill">−</span><span class="setting-detail">100%</span><span class="control-pill">+</span></span></div></div>
+        </div>
+        <div class="settings-note">Synthetic release fixture · local state only</div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const requested = location.hash.slice(1).split("-")[0] || "sessions";
+    const surface = requested === "browser" ? "sessions" : requested;
+    const knownSurfaces = ["menubar", "sessions", "chat", "settings"];
+    const valid = knownSurfaces.includes(surface);
+    const surfaces = [...document.querySelectorAll(".surface")];
+    for (const element of surfaces) element.dataset.fixtureVisible = String(valid && element.id === surface);
+    document.body.dataset.surface = surface;
+    document.body.dataset.scale = location.hash.includes("-250") ? "250" : "100";
+    const visible = surfaces.filter((element) => element.dataset.fixtureVisible === "true");
+    document.documentElement.dataset.fixtureVisibleCount = String(visible.length);
+    document.documentElement.dataset.fixtureAssertion = valid && visible.length === 1 ? `ok:${surface}` : "error";
+  </script>
 </body>
 </html>

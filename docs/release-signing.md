@@ -139,6 +139,28 @@ Sparkle metadata before external publication.
 CI continues to run `scripts/build.sh` without credentials. That produces an
 ad-hoc validation artifact, not a publishable release.
 
+### Mandatory Publication Flow
+
+1. Build the release candidate, then run `AV_RELEASE_DRY_RUN=1
+   scripts/create-release.sh`. Review the generated ZIP, cask, appcast, and
+   release notes locally; dry-run mode skips remote GitHub and tap publication.
+2. Review and commit the cask and appcast updates together with the release
+   notes from the release worktree.
+3. Run `scripts/create-release.sh` without dry-run from that clean release
+   commit. The script verifies that generated cask and appcast metadata match
+   the committed files before publication.
+
+### Electron Update Behavior
+
+The Electron updater accepts only a newer three-part appcast version with a
+matching HTTPS GitHub release ZIP URL and an Ed25519 signature field with the
+expected metadata shape. It then opens the matching GitHub Releases page so the
+user can download and install the release manually. Electron does not
+cryptographically verify ZIP bytes before opening GitHub, and it does not
+install updates in place. Sparkle Ed25519 signing still protects published
+archive metadata for compatible consumers. The publisher must sign the appcast
+enclosure and create the GitHub asset before the appcast branch is pushed.
+
 ### Optional Developer ID Flow
 
 ```bash
@@ -199,6 +221,8 @@ recovery guidance.
 - Archive tests select the same mode from the extracted app and rerun the
   appropriate distribution checks.
 - Wiring audits prove candidate validation runs before publication mutations.
+- Dry-run publication tests use a dirty isolated worktree to prove cask and
+  appcast metadata can be generated locally without a remote tap preflight.
 - CI builds and validates the supported ad-hoc Release artifact without Apple
   credentials.
 

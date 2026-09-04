@@ -557,7 +557,17 @@ The captured regression is Pi session `019fb500` (donut-failure-mode) resumed in
 
 Status: implemented on 2026-08-02 to close a latent discovery/ownership gap observed live.
 
-The captured regression is one Pi process (PID `70934`, `ttys012`, `/Users/zhengyuanz/Codes`) started at `22:34:52`, whose startup transcript `019fc61e-2ab1-769a-82c0-0b570eae1751` was created 1.6 seconds later and then abandoned after an in-process `/resume wayfinder`. The process continued in the pre-existing `wayfinder` session `019fbe8b-bd10-74d6-8e73-661c799ca465`, which is tracked through hooks. Fallback creation-time discovery kept re-matching PID `70934` to the abandoned startup transcript. Every ~30-second rediscovery re-inserted a nameless `Codes` row, inferred a false `waitingForInput` for it, emitted Ready attention, and briefly caused `wayfinder` heartbeats to be ignored, before the ~3-second prune removed the duplicate PID row. Across the sampled window this produced 54 flicker cycles at roughly 36-second spacing.
+The captured regression involved one Pi process whose startup transcript was
+abandoned after an in-process `/resume`. The process continued in a pre-existing
+session that was tracked through hooks. Fallback creation-time discovery kept
+re-matching the process to the abandoned startup transcript. Each roughly
+30-second rediscovery reinserted a nameless row, inferred a false
+`waitingForInput` state, emitted Ready attention, and briefly caused the valid
+session's heartbeats to be ignored before the roughly three-second prune removed
+the duplicate row. Across the sampled window this produced 54 flicker cycles at
+roughly 36-second spacing. The detailed capture is retained as private
+provenance; this document records only the behavior needed to reproduce and
+verify the fix.
 
 ### Slice 1 — Pure discovery ownership
 

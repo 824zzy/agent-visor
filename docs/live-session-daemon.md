@@ -2,7 +2,16 @@
 
 The TypeScript daemon now owns session discovery, normalized session summaries, hook phases, snapshot revisions, and local event delivery.
 
-The Swift release remains production until the complete parity checklist passes.
+For the 2.7.0 stable Electron cutover, the daemon is the user-facing session
+source for the Electron shell. The signed Swift helper remains the native
+macOS boundary. The Swift v2.6.1 application is retained as the exact rollback
+target.
+
+The daemon always reads provider-owned transcripts, SQLite databases, hooks,
+and session records in place. They are outside Electron profile migration.
+Only the Agent Visor staging Electron profile can be copied into the stable
+Electron profile. If staging is live, import waits, the source remains
+untouched, and transient Electron lock markers are excluded from the copy.
 
 ## Provider boundaries
 
@@ -77,13 +86,37 @@ Scheduled work reports rejected operations without terminating the daemon or its
 
 ## Hook socket
 
-The daemon can own `/tmp/agent-visor.sock`, which preserves the released hook path.
+The daemon owns `/tmp/agent-visor.sock` in the stable Electron release, which
+preserves the released hook path.
 
 The socket has mode `0600`, validates payload size and shape, and refuses to unlink another active owner.
 
-During parallel development, set `AGENT_VISOR_HOOK_SOCKET` to a separate path. The Swift release continues owning the public hook socket.
+During parallel development, set `AGENT_VISOR_HOOK_SOCKET` to a separate path.
+The Swift v2.6.1 rollback application uses the same public hook path after the
+Electron process has exited.
 
-Permission responses remain with the Swift release until Chat parity moves approval handling. The Electron application is not a production replacement before then.
+Permission responses continue through the signed Swift helper. Electron owns
+the daemon route and the user-facing Chat action in 2.7.0; provider-specific
+capability checks still fail closed when an exact route is unavailable.
+
+## Rollback
+
+The exact rollback artifact is Agent Visor v2.6.1 build 53. Quit the Electron
+application, install the verified
+[v2.6.1 ZIP](https://github.com/824zzy/agent-visor/releases/download/v2.6.1/AgentVisor-v2.6.1.zip), and launch the Swift application from
+`/Applications`. Keep the production Electron profile
+(`~/Library/Application Support/Agent Visor`) for diagnosis; the staging
+source (`~/Library/Application Support/Agent Visor Next`) remains untouched.
+Do not run `brew uninstall --zap` while retaining diagnostic profiles, because
+zap removes the application data paths. The rollback does not require moving
+provider-owned live sources.
+
+## Physical reboot acceptance
+
+Same-boot and exact-runtime checks pass. Restoration after an actual macOS
+reboot remains a required pre-release acceptance item and is not a shipped
+capability until that check passes. Remove this provisional note only after the
+physical-reboot gate passes.
 
 ## Checks
 

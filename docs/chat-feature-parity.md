@@ -1,24 +1,45 @@
 # Chat feature parity
 
-Status: the approved visibility/scrolling repair is commit `0c3a5d4` on
-`codex/restore-recent-pill-parity`. A follow-up audit on 2026-09-02 reproduced
-the raw memory-citation footer in the running candidate and found additional
-transport, rich-link, accessibility, and earlier-page scrolling gaps. The new follow-up diff remains
-uncommitted for Cursor review.
+Status: Agent Visor 2.7.0 is the first stable Electron cutover. The approved
+visibility/scrolling repair landed in commits `0c3a5d4`, `d793c72`, and
+`e3a5199` on `codex/restore-recent-pill-parity`. The public Swift v2.6.1 build
+53 remains the exact rollback target.
 
-This document is the behavior contract for the Electron Chat migration. The
-approved target is parity with the released Swift Chat behavior. Electron may
-use React Native Web and Electron-native controls, but must preserve the same
-user-visible result, interaction, and provider capability rules. Pixel
-identity is not required. The local checks below do not establish universal
-Swift parity or live control of every provider.
+This document retains the dated repair and failure history below. A `Partial`
+row describes an intentional first-release boundary or provider-dependent
+capability; it is not a claim of full Swift parity. Provider transcripts,
+databases, hooks, and live session records are outside profile migration and are
+always read in place. Only the Agent Visor staging profile can be copied into
+the stable Electron profile.
 
-Current verification — 2026-09-02: 650 JavaScript tests across 50 files, all
-four workspace typechecks, build/export, and the full Electron Chat E2E pass.
-The E2E covers provider-form Codex/Claude visibility records, work/activity/tool
-disclosure states, single- and multiple-choice roles and selected states,
-exact answer payloads, composer behavior, approvals, cancellation, scrolling,
-images, rich content, read-only controls, and 250% scaling.
+This document is the behavior contract for the Electron Chat surface. Swift
+remains the historical behavior reference, while 2.7.0 ships the bounded
+Electron contract described here. Electron may use React Native Web and
+Electron-native controls, but must preserve the same user-visible ownership,
+read-only, and provider-capability rules. Pixel identity is not required. The
+local checks below do not establish live control of every provider.
+
+Current verification record — 2026-09-03: the cross-stack release gate is green
+with 657 JavaScript tests and 2,284 Swift/Core tests passed. The Chat
+accessibility retry evidence passed 10 consecutive fresh runs, including
+provider failure, cancellation recovery, retry identity, stale-generation
+isolation, and the A-to-B startup-gap cases. The earlier red results remain
+below as dated historical evidence and are resolved; they do not describe the
+current verification state.
+
+## Cutover boundary and rollback
+
+The stable Electron Chat surface reads provider-owned live sources in place.
+They are outside profile migration. The cutover copies only the Agent Visor
+staging profile into the stable Electron profile; if staging is live, import
+waits, the source stays untouched, and transient Electron lock markers are
+omitted from the copy.
+
+The exact rollback target is the public Swift Agent Visor v2.6.1 build 53. Quit
+Electron, install the verified
+[v2.6.1 ZIP](https://github.com/824zzy/agent-visor/releases/download/v2.6.1/AgentVisor-v2.6.1.zip), and launch it from `/Applications`. Keep the Electron
+settings directory during diagnosis. Provider source locations do not change
+when the rollback starts.
 
 The follow-up removes validated Codex memory-citation metadata from answers
 and completed agent results, presents known native review/task directives as
@@ -41,8 +62,23 @@ metadata, with no unexpected differences. No recent interactive Claude, Pi,
 or Cursor sessions were available in this sample, so their coverage combines
 historical records and controlled Electron fixtures, not live provider actions.
 
-The Swift implementation is the source of truth for the released Chat
-interaction and rendering contract:
+The Swift implementation remains the historical source of truth for the
+released Chat interaction and rendering contract. The Electron 2.7.0 contract
+deliberately records its shipped differences below:
+
+- Inspect, hide/unhide, and custom-recording controls are deferred.
+- Claude usage remains absent without an authoritative credential route.
+- Cursor and Zed-hosted Chat are read-only; Auggie is observe-only.
+- Physical-reboot Pi restoration remains a required pre-release acceptance item;
+  automated same-boot evidence does not mark it shipped. Remove this provisional
+  note only after the physical-reboot gate passes.
+- Updates accept a newer three-part version with a matching HTTPS GitHub release
+  ZIP URL and an Ed25519 signature field with the expected metadata shape, then
+  open its release page. Electron does not cryptographically verify ZIP bytes
+  before opening GitHub; it does not install updates in place. Sparkle Ed25519
+  signing still protects published archive metadata for compatible consumers.
+
+The Swift implementation owns the historical reference files:
 
 - `AgentVisor/UI/Window/SessionWorkspaceDetail.swift` and
   `AgentVisor/UI/Window/ChatViewHost.swift` own the Chat destination and its
@@ -74,16 +110,16 @@ and conservative legacy recognition remain authoritative for this boundary.
 | Surface | Swift behavior that Electron must match | Current Electron baseline |
 | --- | --- | --- |
 | Shell and rail | Chat replaces the browser in the same window. Header, conversation, composer, and status content use one centered rail with the established maximum width. | Shared rail alignment is implemented. Other header and footer details remain under review. |
-| Transcript | Provider parsers retain canonical text and images. Chat is lazy, bounded, and read-only when control metadata is not verified. | Claude Code, Codex, Pi, and Cursor pages render through the daemon with canonical provider text preserved and provider-neutral presentation transforms. |
+| Transcript | Provider parsers retain canonical text and images. Chat is lazy, bounded, and read-only when control metadata is not verified. | Claude Code, Codex, Pi, and Cursor pages render through the daemon with canonical provider text preserved and provider-neutral presentation transforms. Zed-hosted history is read-only. |
 | Transcript visibility and provenance | Known provider-internal setup is absent from conversational turns; genuine prompts, quoted XML/code, images, files, and actionable status remain available. Agent work is labeled separately from user/assistant roles. | The daemon classifies aligned Codex content origins before creating `ChatItem`s, maps subagent/delegation/background-task records to typed activity, and conservatively preserves unknown or ambiguous content. Renderer display filters remain separate from this ingestion rule. |
 | Turn presentation | User prompts, assistant answers, thinking, tools, system rows, durations, recaps, compact boundaries, and provider grouping follow the visibility rules. | Turn grouping, thinking/tool/system rows, durations, recaps, compact boundaries, and provider-neutral rich presentation are implemented and covered by pure and Electron checks. |
 | Composer state | Draft and attachments are per session. Focus, multiline growth, Enter/Shift-Enter, Escape, slash completion, paste, and removal follow the Swift interaction contract. | The current pass uses one rounded enclosure for attachment previews, the multiline textarea, and the bottom toolbar. The enclosure shares the Chat and Sessions canvas fill and relies on its border for separation. Add image and Send expose 44 px targets; Send's visible face is 32 px. Model/effort and truthful permission context stay near the draft, while context/usage/provider/path diagnostics remain in Details. Text and image capabilities remain independent, with eight-line measured growth and internal scrolling. The full exported-Electron Chat gate passes. |
-| Send and cancel | Sends use the provider route, show an optimistic echo, reconcile or remove it safely, restore canceled input, and report failures. | The daemon re-checks the live working section and provider/image capabilities before every send. The shared action area keeps Send and Stop capability-correct: Stop requires an identity-bound active cancellable delivery, can occupy the primary position with no sendable draft, and remains beside Send when both are legitimate. Repeat cancellation is disabled and drafts remain recoverable. The full exported-Electron Chat gate passes. |
+| Send and cancel | Sends use the provider route, show an optimistic echo, reconcile or remove it safely, restore canceled input, and report failures. | The daemon re-checks the live working section and provider/image capabilities before every send. The shared action area keeps Send and Stop capability-correct: Stop requires an identity-bound active cancellable delivery, can occupy the primary position with no sendable draft, and remains beside Send when both are legitimate. Repeat cancellation is disabled and drafts remain recoverable. The exported-Electron Chat gate covers this route; unsupported and historical rows remain read-only. |
 | Scrolling and scale | Initial history is bounded. Streaming follows the tail only when the user is near it. Loading earlier rows preserves the reading position. Content scale does not create horizontal overflow. | The daemon requests an initial 100 rows. Turn-aligned pages may exceed that request up to the protocol cap. The client keeps at most 4,000 retained rows and shows a visible history-limit status. FlatList renders grouped turns as virtualized cells. The exact 80 px near-tail policy preserves far-reader position, while local sends always pin and composer resize pins only near the tail. Earlier paging is single-flight with a stable anchor, and a latest no-overlap response inserts one visible history-gap row. Tail frames are session-scoped and canceled on session change or unmount. |
 | Rich content | Markdown includes block structure, links, code, tables, emphasis, strike-through, syntax highlighting, LaTeX, images, tools, plans, and edit hunks. | Provider-neutral block/inline Markdown, safe links, bounded syntax-token presentation, MathML with literal fallback, tables, images/placeholders, tools, plans, edit hunks, and thinking/recap rows are implemented without rewriting canonical text. |
 | Approvals and questions | Controls show provider context, validate answers, support keyboard use and cancellation, and send the exact provider response. | Exact action identity, provider context, validation, multiple choice/text answers, disabled/responding state, keyboard actions, Escape cancellation, and exact provider responses are implemented. |
 | Status and modes | The footer shows resolved model and effort, context and usage, project, and provider-gated permission modes. | Model/effort and provider-truthful permission context now sit beside the draft in the composer; context/usage/provider/path diagnostics remain in Details. No fake model selector is introduced. Existing provider-aware usage and Claude permission action seams remain in force. |
-| Accessibility and read-only | Labels, focus order, keyboard actions, state announcements, theme, scaling, and ended-session behavior remain usable and truthful. | Chat labels, focus order, live state announcements, keyboard actions, read-only/ended controls, light/dark palette, 250% scaling, and no-overflow rail geometry remain in scope. Read-only shows one reason and the supported source action without a dead composer shell; text and image capability gates stay independent. The full exported-Electron Chat gate passes. |
+| Accessibility and read-only | Labels, focus order, keyboard actions, state announcements, theme, scaling, and ended-session behavior remain usable and truthful. | Chat labels, focus order, live state announcements, keyboard actions, read-only/ended controls, light/dark palette, 250% scaling, and no-overflow rail geometry ship in Electron. Read-only shows one reason and the supported source action without a dead composer shell; text and image capability gates stay independent. The exported-Electron Chat gate covers this route. |
 | Large history | The renderer uses bounded visible rows and safe pagination without freezing during stream updates or repeated expansion. | Initial daemon requests use 100 rows, with turn alignment allowed to return a larger page up to the protocol cap. Earlier requests are single-flight and preserve the reader's anchor. The client retains at most 4,000 rows, reports when that limit is reached, and uses FlatList virtualization, including flattened cells for grouped turns. Replayed or out-of-order earlier responses are rejected, and a latest page with no overlap does not erase loaded history. |
 
 The daemon may remove a validated provider-internal record or transport
@@ -110,22 +146,31 @@ they can be called parity.
    presentation.
 6. [Complete] Complete approval and question controls.
 7. [Complete] Add the provider-aware status bar and permission modes.
-8. [Scoped pass; overall blocked] Complete read-only states, accessibility, theme,
-   scaling, and composer visual review.
-9. [Local gates pass; review pending] Run the complete local gates, leave the exact worktree uncommitted, and
-   open it in Cursor for review before any commit.
+8. [Complete for 2.7.0 scope] Ship read-only states, accessibility, theme,
+   scaling, and composer visual behavior. Swift-only Inspect, hidden-session,
+   and custom-recording controls remain intentionally deferred.
+9. [Complete for 2.7.0 cutover] Preserve the reviewed Electron archive,
+   document the exact v2.6.1 rollback, and preserve the staging-profile import
+   boundary while keeping provider sources outside profile migration.
+
+## Physical reboot acceptance
+
+Same-boot exact runtime recovery is covered by current checks. Actual reboot
+restoration remains a required pre-release acceptance item; the 2.7.0 public
+release claim must stay silent until it passes.
 
 Phase 1 delivered the rail alignment and thinking Markdown improvement. The
 stable rail accessibility labels are test hooks with no visible style change.
-Phase 2 owns the composer behavior described above. Phase 3 owns the
-provider cancellation route, Stop state, request-scoped delivery identity,
-optimistic echo reconciliation, bounded expiry, and failed-send/cancel
-recovery. Phase 4 owns the exact tail policy, safe paging, retained-history
-cap, virtualized visible cells, and session-scoped frame cleanup. Phases 5
-through 8 now own the completed rich presentation, action surfaces,
-provider-aware status/modes, and read-only/accessibility/theme/scale behavior
-described in the contract. The 2026-08-31 composer enclosure pass refines the
-existing composer/action seams; the current local gate results are recorded above.
+Phase 2 owns the composer behavior described above. Phase 3 owns the provider
+cancellation route, Stop state, request-scoped delivery identity, optimistic
+echo reconciliation, bounded expiry, and failed-send/cancel recovery. Phase 4
+owns the exact tail policy, safe paging, retained-history cap, virtualized
+visible cells, and session-scoped frame cleanup. Phases 5 through 8 own the
+completed rich presentation, action surfaces, provider-aware status/modes, and
+read-only/accessibility/theme/scale behavior described in the contract. The
+2026-08-31 composer enclosure pass refines the existing composer/action seams.
+The 2.7.0 release carries the intentional boundaries listed above; future
+parity work must update this contract before changing the public scope.
 
 ## Public test seams
 
@@ -667,7 +712,7 @@ Focused evidence on 2026-08-28:
   and stale session delivery isolation. It also passed the existing metadata,
   paging, image, action, approval, question, geometry, scale, and composer
   accessibility checks.
-- The current cross-stack acceptance gate passed: 433 JavaScript tests across
+- Historical cross-stack acceptance gate (2026-08-28) passed: 433 JavaScript tests across
   42 source files (protocol 21, server 236, app 159, desktop 17),
   protocol/server/app/desktop typechecks and emit builds, Expo web export and
   exported-renderer validation, and 2,279 Swift/Core tests. `AgentVisorNativeHelper`
@@ -787,23 +832,16 @@ provider/status accents, Swift behavior, security rules, and all
 send/cancel/draft/scroll semantics remain in scope; these are product defaults,
 not pixel measurements of another product.
 
-The focused fixture evidence is kept outside the repository in
-`.scratch/agent-visor-chat-polish.uqx1lx/`: `screenshots-before/` contains the
-installed-renderer baseline, while `screenshots-final/` contains the worktree
-light wide, light narrow, light 250% scaled, dark wide, and read-only captures.
-The same fixture exercises a compact local evidence reference with keyboard
-reveal and selectable full path, plus one visible read-only reason in the
-status footer. The renderer check now measures the actual mixed-list item and
-table cell at wide and narrow widths, including body font/line-height
-inheritance and no horizontal overflow. The isolated worktree fixture passed
-the painted 250% scale and keyboard probes. The full Chat E2E remains
-unresolved: the worktree invocation stopped at the local-send tail-pin check
-(`scrollTop=0`, `distanceFromBottom=13024`, `scrollHeight=13586`,
-`clientHeight=562`) before reaching mixed-flow, while a byte-for-byte baseline
-run using the installed renderer and preload stopped earlier at near-tail
-insertion (`scrollTop=10288`, `distanceFromBottom=564`, `scrollHeight=11414`,
-`clientHeight=562`). These outcomes are recorded as open E2E failures, not
-classified as pre-existing or timing-only.
+The focused fixture evidence is retained outside the repository as provenance;
+its baseline and final captures cover light, dark, narrow, 250% scaled, and
+read-only states. The same fixture exercises a compact local evidence
+reference with keyboard reveal and selectable full path, plus one visible
+read-only reason in the status footer. The renderer check now measures the
+actual mixed-list item and table cell at wide and narrow widths, including body
+font/line-height inheritance and no horizontal overflow. The isolated worktree
+fixture passed the painted 250% scale and keyboard probes. Earlier unresolved
+Chat E2E results are historical and were resolved by the current 10-run green
+retry evidence recorded at the top of this document.
 
 Old coverage gap closed by this pass: the previous DOM probe could select the
 whole answer instead of a table cell and had no narrow/scaled mixed Markdown
@@ -850,23 +888,25 @@ Evidence status:
   covers keyboard/paste, approval draft text and image restoration,
   no-authority Stop absence, capability-gated permission, deferred cancellation
   without duplicate requests, newer-draft preservation, real image-only send,
-  focus, growth/shrink, and light/dark/narrow/250% captures in
-  `.scratch/agent-visor-composer-implementation.50yAcf/screenshots-final/`.
-  The scoped visual presentation was inspected and accepted.
-- Full `npm test` is not green: server 274/275, with
+  focus, growth/shrink, and light/dark/narrow/250% captures; final captures are
+  retained outside the repository. The scoped visual presentation was
+  inspected and accepted.
+- Historical red result (2026-08-31, resolved by the current green gate): full
+  `npm test` was not green in that run: server 274/275, with
   `slash-commands.test.ts:359` (`marks a bounded remaining-source probe unknown
   when a symlinked directory hides a candidate`) timing out at 5,000 ms and its
   `afterEach` hook timing out at 10,000 ms. An isolated retry of that 20-test
   file reproduced the same 19/20 failure without source changes.
-- One full Chat E2E run is not green. `test-chat-accessibility.mjs:833`,
+- Historical red result (2026-08-31, resolved by the current 10-run green gate):
+  one full Chat E2E run was not green. `test-chat-accessibility.mjs:833`,
   `stream growth keeps a near-tail reader pinned`, failed with
   `scrollTop=557.5`, `distanceFromBottom=576.5`, `scrollHeight=1666`, and
-  `clientHeight=532`. This is a different current failing point from the prior
-  caveats; keep it open and do not call it pre-existing or timing-only.
-- The candidate bundle index is
-  `f5ac6a3ff67e47b8117179d71520e7d9.js`. At the review checkpoint, overall
-  verification remained blocked and the diff was left uncommitted; this
-  section did not make a final-pass or commit-ready claim.
+  `clientHeight=532`. It was retained as historical failure evidence and did
+  not represent the current gate after the retry repair.
+- Historical candidate bundle index from the 2026-08-31 review checkpoint:
+  `f5ac6a3ff67e47b8117179d71520e7d9.js`. It is not a current release
+  identifier; the final public archive hash is inserted after release dry-run
+  generation.
 
 ## Phase 9 prior gate evidence (2026-08-29)
 
