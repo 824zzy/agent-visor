@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_SCRIPT="$SCRIPT_DIR/build.sh"
 PACKAGER_SCRIPT="$SCRIPT_DIR/package-electron.sh"
+ARCHIVER_SCRIPT="$SCRIPT_DIR/create-release-archive.sh"
 BUNDLE_VALIDATOR="$SCRIPT_DIR/test-release-bundle.sh"
 LEGACY_SCRIPT="$SCRIPT_DIR/build-swift-legacy.sh"
 
@@ -43,6 +44,11 @@ require_source 'AgentVisor-release.zip' \
 
 if [[ ! -x "$PACKAGER_SCRIPT" ]]; then
     echo "ERROR: Electron release packager is missing or not executable" >&2
+    exit 1
+fi
+if [[ ! -x "$ARCHIVER_SCRIPT" ]] \
+    || ! grep -Fq 'create-release-archive.sh' "$PACKAGER_SCRIPT"; then
+    echo "ERROR: Electron packager does not use the deterministic release archiver" >&2
     exit 1
 fi
 for required_source in \

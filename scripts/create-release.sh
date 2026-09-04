@@ -436,12 +436,7 @@ echo "=== Step 2: Creating Release ZIP ==="
 mkdir -p "$RELEASE_DIR"
 ZIP_PATH="$RELEASE_DIR/$ARTIFACT_NAME-v$VERSION.zip"
 
-if [ -f "$ZIP_PATH" ]; then
-    echo "Removing existing ZIP..."
-    rm -f "$ZIP_PATH"
-fi
-
-COPYFILE_DISABLE=1 ditto -c -k --keepParent --norsrc --noextattr --noqtn "$APP_PATH" "$ZIP_PATH"
+"$SCRIPT_DIR/create-release-archive.sh" "$APP_PATH" "$ZIP_PATH"
 "$SCRIPT_DIR/test-release-archive.sh" "$ZIP_PATH"
 ZIP_SIZE=$(stat -f%z "$ZIP_PATH")
 ZIP_SHA=$(shasum -a 256 "$ZIP_PATH" | awk '{print $1}')

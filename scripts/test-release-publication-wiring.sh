@@ -37,6 +37,8 @@ require_source 'release_assert_coordinates "$PROJECT_DIR" "$APP_VERSION" "$APP_B
     "create-release.sh does not reject artifact/version coordinate drift"
 require_source 'validate-release-candidate.sh' \
     "create-release.sh does not validate the signed and notarized candidate"
+require_source 'create-release-archive.sh' \
+    "create-release.sh does not use the deterministic release archiver"
 require_source 'release_distribution_mode_is_publishable' \
     "create-release.sh does not reject non-public ad-hoc candidates"
 require_source 'AV_ALLOW_ADHOC_BRIDGE_RELEASE' \

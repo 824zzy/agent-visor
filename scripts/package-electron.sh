@@ -255,7 +255,7 @@ codesign --force --deep --options runtime "${CODESIGN_TIMESTAMP[@]}" \
     --entitlements "$ENTITLEMENTS" --sign "$CODESIGN_IDENTITY" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
-COPYFILE_DISABLE=1 /usr/bin/ditto -c -k --norsrc --noextattr --noacl --keepParent \
+"$ROOT/scripts/create-release-archive.sh" \
     "$APP" "$OUTPUT/AgentVisor-v$VERSION.zip"
 shasum -a 256 "$OUTPUT/AgentVisor-v$VERSION.zip" > "$OUTPUT/AgentVisor-v$VERSION.zip.sha256"
 ln "$OUTPUT/AgentVisor-v$VERSION.zip" "$OUTPUT/AgentVisor-release.zip"

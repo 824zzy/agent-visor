@@ -65,6 +65,7 @@ jobs:
           scripts/test-release-helper-signing-policy.sh
           scripts/test-release-bundle-negative.sh
           scripts/test-release-archive-negative.sh
+          scripts/test-release-archive-determinism.sh
           scripts/test-release-signing-policy.sh
           scripts/test-release-signing-integration.sh
           scripts/test-release-identity-continuity-policy.sh

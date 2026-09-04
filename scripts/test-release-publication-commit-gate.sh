@@ -38,6 +38,7 @@ mkdir -p \
 
 for relative_path in \
     scripts/create-release.sh \
+    scripts/create-release-archive.sh \
     scripts/lib/release-publication.sh \
     scripts/lib/release-version.sh \
     scripts/lib/release-signing.sh \

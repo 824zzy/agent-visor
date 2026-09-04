@@ -12,6 +12,7 @@ for test_script in \
     test-release-helper-signing-policy.sh \
     test-release-bundle-negative.sh \
     test-release-archive-negative.sh \
+    test-release-archive-determinism.sh \
     test-release-signing-policy.sh \
     test-release-signing-integration.sh \
     test-release-identity-continuity-policy.sh \
