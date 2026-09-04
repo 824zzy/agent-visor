@@ -209,7 +209,8 @@ async function exchange(socketPath, messages) {
       const size = buffer.readUInt32BE(0);
       if (buffer.length < size + 4) return;
       const value = JSON.parse(buffer.subarray(4, size + 4).toString("utf8"));
-      responses.push(nativeHelperResponseSchema.parse(value));
+      const message = nativeHelperResponseSchema.parse(value);
+      if ("id" in message) responses.push(message);
       buffer = buffer.subarray(size + 4);
     }
   });
