@@ -457,14 +457,20 @@ export function Chat({
     }
     if (change === "unchanged" || change === "initial") return;
     const element = timelineElement(session.id);
-    const liveDistanceFromBottom = element
-      ? element.scrollHeight - (element.scrollTop + element.clientHeight)
-      : distanceFromBottom.current;
+    const previousHeight = contentHeight.current;
+    // The DOM may already include the changed row during this layout effect.
+    // Reconstruct the pre-change distance from the last measured height and the
+    // current offset so neither new content nor a fresh reader scroll skews it.
+    const previousDistanceFromBottom = tailPinInProgress.current
+      ? 0
+      : element && previousHeight !== undefined
+        ? previousHeight - (element.scrollTop + element.clientHeight)
+        : distanceFromBottom.current;
     const action: ChatTailScrollAction = pendingLocalSend.current
       ? "pin-to-tail"
       : chatTailAction({
         type: change === "stream-growth" ? "stream-growth" : "tail-insert",
-        distanceFromBottom: liveDistanceFromBottom,
+        distanceFromBottom: previousDistanceFromBottom,
       });
     pendingLocalSend.current = false;
     if (action === "pin-to-tail") scheduleTailPin();
