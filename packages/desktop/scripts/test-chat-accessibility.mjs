@@ -1097,6 +1097,11 @@ async function run() {
     const nearBeforeInsert = await measureTimeline(window);
     tailFixture.appendTail();
     await waitFor(window, `document.body.textContent.includes('Showing 422 retained messages')`);
+    await waitFor(window, `(() => {
+      const timeline = document.querySelector('[aria-label="Chat timeline"]');
+      return Boolean(timeline && timeline.scrollHeight > timeline.clientHeight
+        && timeline.scrollHeight - (timeline.scrollTop + timeline.clientHeight) <= 2);
+    })()`);
     const nearAfterInsert = await measureTimeline(window);
     assert(nearAfterInsert.distanceFromBottom <= 2,
       `tail insert keeps a near-tail reader pinned (${JSON.stringify(nearAfterInsert)})`);
