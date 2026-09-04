@@ -16,6 +16,24 @@ public enum NativeHelperWireLimits {
 public let nativeHelperMaximumTerminalTextBytes = NativeHelperWireLimits.maxTerminalTextBytes
 public let nativeHelperMaximumPayloadBytes = NativeHelperWireLimits.maxFramePayloadBytes
 
+public enum NativeHelperTimestamp {
+    public static func parse(_ value: String) -> Date? {
+        fractional.date(from: value) ?? internet.date(from: value)
+    }
+
+    private static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let internet: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+}
+
 public enum NativeHelperWireError: Error, Equatable {
     case invalidRequest
     case frameTooLarge
@@ -1059,7 +1077,7 @@ private extension NativeHelperSessionInspector {
             }
             && !projectPath.isEmpty && projectPath.count <= 4_096
             && activityAt.count <= 64
-            && (try? Date(activityAt, strategy: .iso8601)) != nil
+            && NativeHelperTimestamp.parse(activityAt) != nil
             && (context?.isValid ?? true)
     }
 }
@@ -1077,7 +1095,7 @@ private extension NativeHelperUsageWindow {
         !title.isEmpty && title.count <= 64
             && (0...100).contains(remainingPercent)
             && (resetsAt.map {
-                $0.count <= 64 && (try? Date($0, strategy: .iso8601)) != nil
+                $0.count <= 64 && NativeHelperTimestamp.parse($0) != nil
             } ?? true)
     }
 }
@@ -1091,7 +1109,7 @@ private extension NativeHelperUsageGlance {
             && !detail.isEmpty && detail.count <= 512
             && !accessibilityLabel.isEmpty && accessibilityLabel.count <= 512
             && (observedAt.map {
-                $0.count <= 64 && (try? Date($0, strategy: .iso8601)) != nil
+                $0.count <= 64 && NativeHelperTimestamp.parse($0) != nil
             } ?? true)
             && (windows?.count ?? 0) <= 2
             && (windows ?? []).allSatisfy(\.isValid)

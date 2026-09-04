@@ -331,7 +331,7 @@ private struct NativeMenuUsageView: View {
     }
 
     private func date(_ value: String?) -> Date? {
-        value.flatMap { try? Date($0, strategy: .iso8601) }
+        value.flatMap(NativeHelperTimestamp.parse)
     }
 
     private func relative(_ date: Date, now: Date) -> String {

@@ -2,6 +2,12 @@ import XCTest
 @testable import AgentVisorCore
 
 final class NativeHelperWireProtocolTests: XCTestCase {
+    func testParsesWireTimestampsWithAndWithoutFractionalSeconds() {
+        XCTAssertNotNil(NativeHelperTimestamp.parse("2026-08-24T12:00:00.000Z"))
+        XCTAssertNotNil(NativeHelperTimestamp.parse("2026-08-24T12:00:00Z"))
+        XCTAssertNil(NativeHelperTimestamp.parse("August 24, 2026"))
+    }
+
     func testNativeHelperLimitsUseTheSharedWireContract() {
         XCTAssertEqual(NativeHelperWireLimits.maxTerminalTextBytes, 65_536)
         XCTAssertEqual(NativeHelperWireLimits.maxFramePayloadBytes, 1_048_576)
