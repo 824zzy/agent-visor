@@ -218,15 +218,12 @@ Visor opens its matching GitHub release page. User-invoked provider operations
 follow the provider's local transport; Agent Visor does not add product
 analytics.
 
-> **Pre-release acceptance item:** Physical-reboot Pi restoration is still
-> pending the actual macOS reboot gate. It is not a shipped 2.7.0 capability.
-> Remove this note only after that gate passes.
-
 ## Known limitations
 
 - Session management controls for Inspect, hide, unhide, and custom recording are not included in the first Electron release.
 - Claude usage remains unavailable until a provider-authoritative credential route exists.
 - Cursor Chat is read-only. Zed-hosted Chat is read-only and exact sidebar/thread reveal is best effort. Auggie remains observe-only.
+- Automatic Pi session restoration after a physical macOS reboot has not completed real-machine acceptance and is outside the verified 2.7.0 release scope.
 - Historical, ended, and unsupported sessions are read-only. Chat sending and approval controls require a verified provider route for the current session.
 - Update installation is manual. Agent Visor validates the newer version, HTTPS
   GitHub release URL, and signature metadata shape, then opens its release page;

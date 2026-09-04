@@ -29,8 +29,8 @@ The first stable release intentionally omits Swift-only Inspect, hide/unhide,
 and custom-recording controls. Claude usage is omitted without an
 authoritative credential route. Cursor and Zed Chat are read-only, Auggie is
 observe-only, and same-boot Pi recovery is verified. Restoration after an
-actual macOS reboot remains a required pre-release acceptance item documented
-in [macOS cutover parity](cutover-parity.md).
+actual macOS reboot has not completed real-machine acceptance and is deferred
+from the verified 2.7.0 scope documented in [macOS cutover parity](cutover-parity.md).
 
 ## First stack slice
 
@@ -112,9 +112,9 @@ fixture checks. Fixture and clean-profile evidence does not claim that every
 Swift-only control exists in Electron. Provider-owned live sources are always
 read in place and are outside the profile migration.
 
-Physical-reboot Pi restoration remains a required pre-release acceptance item.
-This document does not mark physical-reboot behavior as shipped. Remove this
-provisional note only after the physical-reboot gate passes.
+Physical-reboot Pi restoration has not completed real-machine acceptance. It is
+deferred from the verified 2.7.0 release scope and remains documented for a
+future acceptance run.
 
 ## Packages
 

@@ -69,9 +69,8 @@ deliberately records its shipped differences below:
 - Inspect, hide/unhide, and custom-recording controls are deferred.
 - Claude usage remains absent without an authoritative credential route.
 - Cursor and Zed-hosted Chat are read-only; Auggie is observe-only.
-- Physical-reboot Pi restoration remains a required pre-release acceptance item;
-  automated same-boot evidence does not mark it shipped. Remove this provisional
-  note only after the physical-reboot gate passes.
+- Physical-reboot Pi restoration has not completed real-machine acceptance and
+  is deferred from the verified 2.7.0 release scope.
 - Updates accept a newer three-part version with a matching HTTPS GitHub release
   ZIP URL and an Ed25519 signature field with the expected metadata shape, then
   open its release page. Electron does not cryptographically verify ZIP bytes
@@ -156,8 +155,8 @@ they can be called parity.
 ## Physical reboot acceptance
 
 Same-boot exact runtime recovery is covered by current checks. Actual reboot
-restoration remains a required pre-release acceptance item; the 2.7.0 public
-release claim must stay silent until it passes.
+restoration has not completed real-machine acceptance and is deferred from the
+verified 2.7.0 release scope.
 
 Phase 1 delivered the rail alignment and thinking Markdown improvement. The
 stable rail accessibility labels are test hooks with no visible style change.

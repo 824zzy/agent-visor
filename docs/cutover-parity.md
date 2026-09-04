@@ -49,7 +49,7 @@ Swift. A passing focused check is evidence for that check only.
 | Updates | Public release metadata with version, URL, and signature checks plus downgrade prevention | Newer entries with valid version, HTTPS release URL, and signature metadata shape are opened at the matching GitHub release page; automatic installation remains intentionally disabled | Partial |
 | Lifecycle | Close-to-hide, Dock reopen, launch at login, and quit owned processes only | Window lifecycle and owned-process shutdown checks | Pass |
 | Agent integrations | Detect and install or remove hook-based integrations | Fresh profiles connect Claude Code, Auggie, and Codex; Pi connects automatically; Cursor remains read-only | Pass |
-| Pi restoration | Relaunch exact eligible prior-boot Ghostty sessions | Same-boot exact navigation survives daemon restarts and atomic runtime-link checks pass; physical-reboot restoration remains a required pre-release acceptance item | Partial |
+| Pi restoration | Relaunch exact eligible prior-boot Ghostty sessions | Same-boot exact navigation survives daemon restarts and atomic runtime-link checks pass; real physical-reboot acceptance is deferred from 2.7.0 | Partial |
 
 ## Provider matrix
 
@@ -85,7 +85,8 @@ behaviors they exercise; they do not migrate or rewrite live provider sources.
 The first release keeps the intentional boundaries in this document: provider
 dependent Chat controls, read-only Cursor and Zed Chat, observe-only Auggie,
 absent Claude usage, deferred Inspect and hidden-session controls, manual
-update installation, and the required physical-reboot Pi acceptance item.
+update installation, and physical-reboot Pi restoration outside the verified
+2.7.0 release scope.
 Detailed dated test history, including prior failures and their follow-up checks,
 stays in [Chat feature parity](chat-feature-parity.md).
 
@@ -173,8 +174,9 @@ are outside this operation and are always read in place. A live staging profile
 makes import wait; its source remains untouched and transient Electron lock
 markers are omitted from the copied profile.
 
-This is a provisional pre-release acceptance note: remove it only after the
-physical-reboot Pi gate passes.
+Physical-reboot Pi restoration is deferred from the 2.7.0 acceptance matrix.
+Its design and remaining real-machine test stay documented in
+[Pi Integration](pi-integration.md#reboot-restoration).
 
 The historical, superseded source audit is retained outside the repository for
 provenance only. It predates this contract and must not be used as current

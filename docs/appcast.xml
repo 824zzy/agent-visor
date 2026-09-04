@@ -13,7 +13,6 @@
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <sparkle:minimumUpdateVersion>48</sparkle:minimumUpdateVersion>
       <description><![CDATA[<h2>v2.7.0</h2>
-<p><strong>Pre-release acceptance item:</strong> Physical-reboot Pi restoration is still pending the actual macOS reboot gate. It is not a shipped 2.7.0 capability. Remove this note only after that gate passes.</p>
 <h3>What’s new</h3>
 <ul>
   <li><strong>One searchable session workspace.</strong> Browse Needs you, Ready to continue, In progress, and History sessions with ranked search, keyboard navigation, responsive rows, and preserved browser state.</li>
@@ -36,6 +35,7 @@
   <li>Inspect, hide, unhide, and custom-recording controls are deferred from the first Electron release.</li>
   <li>Claude usage is hidden until a provider-authoritative credential route exists.</li>
   <li>Cursor Chat is read-only. Zed-hosted Chat is read-only and exact sidebar/thread reveal is best effort. Auggie remains observe-only.</li>
+  <li>Automatic Pi session restoration after a physical macOS reboot has not completed real-machine acceptance and is outside the verified 2.7.0 release scope.</li>
   <li>Historical, ended, and unsupported sessions are read-only. Sending and approval controls require a verified provider route for the current session.</li>
   <li>Updates validate a newer three-part version, matching HTTPS GitHub ZIP URL, and expected Ed25519 signature metadata shape before opening its GitHub release page for manual installation. The Electron updater does not cryptographically verify ZIP bytes; Sparkle Ed25519 signing still protects published archive metadata for compatible consumers. The app does not install updates in place.</li>
   <li>The cutover copies only the staging Electron profile (<code>~/Library/Application Support/Agent Visor Next</code>) into the production profile (<code>~/Library/Application Support/Agent Visor</code>) when the source is not live. A live source defers import, leaves that source untouched, and excludes transient Electron lock markers from the copy. Provider transcripts, databases, hooks, and live session records remain in place and are outside this profile operation.</li>

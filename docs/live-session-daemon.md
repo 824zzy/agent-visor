@@ -114,9 +114,8 @@ provider-owned live sources.
 ## Physical reboot acceptance
 
 Same-boot and exact-runtime checks pass. Restoration after an actual macOS
-reboot remains a required pre-release acceptance item and is not a shipped
-capability until that check passes. Remove this provisional note only after the
-physical-reboot gate passes.
+reboot has not completed real-machine acceptance and is deferred from the
+verified 2.7.0 release scope.
 
 ## Checks
 
