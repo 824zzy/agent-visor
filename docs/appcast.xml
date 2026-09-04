@@ -7,7 +7,7 @@
     <language>en</language>
     <item>
       <title>v2.7.0</title>
-      <pubDate>Fri, 04 Sep 2026 06:45:25 +0000</pubDate>
+      <pubDate>Fri, 04 Sep 2026 16:05:53 +0000</pubDate>
       <sparkle:version>54</sparkle:version>
       <sparkle:shortVersionString>2.7.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -45,8 +45,8 @@
       <enclosure
         url="https://github.com/824zzy/agent-visor/releases/download/v2.7.0/AgentVisor-v2.7.0.zip"
         type="application/octet-stream"
-        sparkle:edSignature="MMVm6k/V0WTvbKGnHSZTZ6Ac37iqsW2TGX+FD6eL8agDAluRkZw1e6YFxp3Ycaz5OcSJYsJVlRjGvYESVSq6Aw=="
-        length="122463692"
+        sparkle:edSignature="uscq/NoSGeAXMyVvdC4q1aJk/e2XK0NKpzUN//AKfTXXgzEeyC86TjsAay9ZQwBuC2YKC1RvuvH1DmEH3+rzAA=="
+        length="122565953"
       />
     </item>
     <item>

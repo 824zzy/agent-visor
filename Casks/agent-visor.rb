@@ -2,7 +2,7 @@
 
 cask "agent-visor" do
   version "2.7.0"
-  sha256 "f454d721bc8689298e16510c8c409e4601d1a55582256af34c9b759165c76063"
+  sha256 "85e70368c3ddeb9a575db78b67693e6a1c0972ac8720862a5f2648a08c4c290c"
 
   url "https://github.com/824zzy/agent-visor/releases/download/v#{version}/AgentVisor-v#{version}.zip"
   name "Agent Visor"
