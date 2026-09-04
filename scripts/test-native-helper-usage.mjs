@@ -189,6 +189,8 @@ try {
   await waitFor(() => Number(run("count-popovers")) === 0);
   const overflowCloseCount = Number(run("count-popovers"));
 
+  run("move-top");
+  await waitFor(() => run("usage-visible") === "true");
   const firstOpenCount = await toggleTo(1);
   const refreshEvent = await waitFor(() =>
     messages.find((message) => message.event === "refresh_usage"));
