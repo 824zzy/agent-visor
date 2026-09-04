@@ -130,7 +130,7 @@ try {
     throw new Error("Pi restoration reconciliation was not accepted");
   }
   if (responses[5]?.ok !== true || responses[5].result.type !== "accepted") {
-    throw new Error("pill presentation was not accepted");
+    throw new Error(`pill presentation was not accepted: ${JSON.stringify(responses[5])}`);
   }
   if (responses[6]?.ok !== false || responses[6].error.code !== "invalid_request") {
     throw new Error("invalid helper request was accepted");
@@ -228,7 +228,12 @@ async function exchange(socketPath, messages) {
   if (responses.length !== messages.length) {
     throw new Error(`expected ${messages.length} responses, received ${responses.length}`);
   }
-  return responses;
+  const responsesByID = new Map(responses.map((response) => [response.id, response]));
+  return messages.map((message) => {
+    const response = responsesByID.get(message.id);
+    if (!response) throw new Error(`native helper omitted response ${message.id}`);
+    return response;
+  });
 }
 
 function frame(value) {
