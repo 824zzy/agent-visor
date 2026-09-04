@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,6 +6,7 @@ import {
   daemonUrlFromArguments,
   daemonUrlFromReadyMessage,
   electronDataName,
+  electronStagingDataName,
   integrationResourcesPath,
   nativeActionFromDaemonMessage,
   nativeEffectFromDaemonMessage,
@@ -16,6 +17,8 @@ import {
   safeExternalURL,
   windowCloseAction,
 } from "./desktop-contract.js";
+import { migrateElectronDataDirectory } from "./electron-data-migration.js";
+import { runIfSingleInstance } from "./single-instance.js";
 
 const daemonUrl = "ws://127.0.0.1:49152?token=secret";
 
@@ -31,9 +34,183 @@ describe("desktop launch contract", () => {
     }
   });
 
-  it("keeps Electron data separate while preserving the product name", () => {
-    expect(electronDataName).toBe("Agent Visor Next");
+  it("uses the stable Electron profile name while preserving the product name", () => {
+    expect(electronDataName).toBe("Agent Visor");
     expect(productName).toBe("Agent Visor");
+  });
+
+  it("copies the staging profile once and preserves settings, images, and Pi state", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-data-migration-"));
+    try {
+      const staging = path.join(root, electronStagingDataName);
+      await mkdir(path.join(staging, "chat-images", "delivery-1"), { recursive: true });
+      await writeFile(path.join(staging, "settings.json"), "staging-settings");
+      await writeFile(path.join(staging, "chat-images", "delivery-1", "image.png"), "image");
+      await writeFile(path.join(staging, "pi-runtime-links.json"), "pi-links");
+
+      await expect(migrateElectronDataDirectory(root)).resolves.toEqual({
+        status: "migrated", entryCount: 3,
+      });
+
+      const stable = path.join(root, electronDataName);
+      await expect(readFile(path.join(stable, "settings.json"), "utf8"))
+        .resolves.toBe("staging-settings");
+      await expect(readFile(path.join(stable, "chat-images", "delivery-1", "image.png"), "utf8"))
+        .resolves.toBe("image");
+      await expect(readFile(path.join(stable, "pi-runtime-links.json"), "utf8"))
+        .resolves.toBe("pi-links");
+      await expect(readFile(path.join(staging, "settings.json"), "utf8"))
+        .resolves.toBe("staging-settings");
+
+      await writeFile(path.join(staging, "added-after-migration.json"), "staging-only");
+      await expect(migrateElectronDataDirectory(root)).resolves.toEqual({
+        status: "already_present",
+      });
+      await expect(readFile(path.join(stable, "added-after-migration.json"), "utf8"))
+        .rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("imports staging data when Electron pre-creates an empty stable directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-data-migration-empty-stable-"));
+    try {
+      const stable = path.join(root, electronDataName);
+      const staging = path.join(root, electronStagingDataName);
+      await mkdir(stable, { recursive: true });
+      await writeFile(path.join(stable, "Local State"), "electron-bootstrap");
+      await mkdir(staging, { recursive: true });
+      await writeFile(path.join(staging, "settings.json"), "staging-settings");
+
+      await expect(migrateElectronDataDirectory(root)).resolves.toEqual({
+        status: "migrated", entryCount: 1,
+      });
+      await expect(readFile(path.join(stable, "settings.json"), "utf8"))
+        .resolves.toBe("staging-settings");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not overwrite a stable profile with staging data", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-data-migration-"));
+    try {
+      const stable = path.join(root, electronDataName);
+      const staging = path.join(root, electronStagingDataName);
+      await mkdir(stable, { recursive: true });
+      await mkdir(staging, { recursive: true });
+      await writeFile(path.join(stable, "settings.json"), "newer-stable-settings");
+      await writeFile(path.join(staging, "settings.json"), "older-staging-settings");
+
+      await expect(migrateElectronDataDirectory(root)).resolves.toEqual({
+        status: "already_present",
+      });
+      await expect(readFile(path.join(stable, "settings.json"), "utf8"))
+        .resolves.toBe("newer-stable-settings");
+      await expect(readFile(path.join(staging, "settings.json"), "utf8"))
+        .resolves.toBe("older-staging-settings");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("defers migration while Chromium holds the staging profile lock", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-data-migration-live-"));
+    const staging = path.join(root, electronStagingDataName);
+    const lockPath = path.join(staging, "Local Storage", "leveldb", "LOCK");
+    try {
+      // Electron may bootstrap the stable directory before main.ts redirects
+      // userData to the single-instance path.
+      const stable = path.join(root, electronDataName);
+      await mkdir(stable, { recursive: true });
+      await writeFile(path.join(stable, "Local State"), "electron-bootstrap");
+      await mkdir(path.dirname(lockPath), { recursive: true });
+      await writeFile(path.join(staging, "settings.json"), "live-staging-settings");
+      const lock = await open(lockPath, "w");
+      try {
+        await expect(migrateElectronDataDirectory(root)).resolves.toEqual({
+          status: "source_live",
+        });
+        await expect(readFile(path.join(staging, "settings.json"), "utf8"))
+          .resolves.toBe("live-staging-settings");
+        await expect(readFile(path.join(root, electronDataName, "settings.json"), "utf8"))
+          .rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await lock.close();
+      }
+      await expect(migrateElectronDataDirectory(root)).resolves.toEqual({
+        status: "migrated", entryCount: 2,
+      });
+      await expect(readFile(path.join(stable, "settings.json"), "utf8"))
+        .resolves.toBe("live-staging-settings");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("omits stale Chromium lock markers while preserving the staging source", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-data-migration-stale-"));
+    const staging = path.join(root, electronStagingDataName);
+    const staleMarkers = [
+      "SingletonLock",
+      "SingletonCookie",
+      path.join("Local Storage", "leveldb", "LOCK"),
+      path.join("Session Storage", "LOCK"),
+      path.join("Session Storage", "leveldb", "LOCK"),
+      path.join("IndexedDB", "https_example", "leveldb", "LOCK"),
+    ];
+    try {
+      await mkdir(staging, { recursive: true });
+      await writeFile(path.join(staging, "settings.json"), "staging-settings");
+      await writeFile(path.join(staging, "SingletonLock"), "stale");
+      await writeFile(path.join(staging, "SingletonCookie"), "stale");
+      for (const relativePath of staleMarkers.slice(2)) {
+        await mkdir(path.dirname(path.join(staging, relativePath)), { recursive: true });
+        await writeFile(path.join(staging, relativePath), "stale");
+      }
+      await writeFile(path.join(staging, "Local Storage", "leveldb", "CURRENT"), "current");
+
+      await expect(migrateElectronDataDirectory(root)).resolves.toEqual({
+        status: "migrated", entryCount: 4,
+      });
+
+      const stable = path.join(root, electronDataName);
+      await expect(readFile(path.join(stable, "settings.json"), "utf8"))
+        .resolves.toBe("staging-settings");
+      await expect(readFile(path.join(stable, "Local Storage", "leveldb", "CURRENT"), "utf8"))
+        .resolves.toBe("current");
+      for (const relativePath of staleMarkers) {
+        await expect(readFile(path.join(stable, relativePath), "utf8"))
+          .rejects.toMatchObject({ code: "ENOENT" });
+        await expect(readFile(path.join(staging, relativePath), "utf8"))
+          .resolves.toBe("stale");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not start migration or services in a second instance", async () => {
+    const calls: string[] = [];
+    let lockHeld = false;
+    const launch = () => runIfSingleInstance(
+      () => {
+        calls.push("lock");
+        if (lockHeld) return false;
+        lockHeld = true;
+        return true;
+      },
+      async () => {
+        calls.push("migration", "daemon", "helper");
+        return "started";
+      },
+      () => calls.push("quit"),
+    );
+
+    await expect(launch()).resolves.toBe("started");
+    await expect(launch()).resolves.toBeUndefined();
+    expect(calls).toEqual(["lock", "migration", "daemon", "helper", "lock", "quit"]);
   });
 
   it("hides the main window unless the application is quitting", () => {

@@ -1,15 +1,20 @@
 #!/bin/bash
-# Create an Agent Visor release: zip the app, sign with Sparkle, upload to
-# GitHub, and print the appcast item.
+# Create an Agent Visor release: package the Electron app, sign its archive
+# for the Sparkle Ed25519 appcast, upload it to GitHub, and print the appcast
+# item. The Electron updater validates the appcast version, HTTPS release URL,
+# and signature metadata shape, then opens the matching GitHub Releases page for
+# manual installation. It does not cryptographically verify ZIP bytes first.
 # Non-dry runs are tag-first: run from a clean local release commit before
 # pushing the Pages branch. The script pushes tag vX.Y.Z, creates the GitHub
 # release asset, then pushes the branch so Sparkle never sees an asset URL
 # before the asset exists.
 #
 # Requires:
-#   - scripts/build.sh already run (produces $EXPORT_PATH/Agent Visor.app)
+#   - scripts/build.sh already run (produces the Electron app at
+#     $EXPORT_PATH/Agent Visor.app)
 #   - for Developer ID candidates only, scripts/notarize-release.sh already run
-#   - A Sparkle EdDSA private key at $PROJECT_DIR/.sparkle-keys/eddsa_private_key
+#   - A Sparkle Ed25519 (EdDSA) private key at
+#     $PROJECT_DIR/.sparkle-keys/eddsa_private_key
 #   - gh CLI authenticated against 824zzy/agent-visor
 set -e
 
@@ -43,9 +48,13 @@ TAP_CLONE_DIR=""
 RELEASE_NOTES_HTML=""
 RELEASE_NOTES_MARKDOWN=""
 GITHUB_NOTES_PATH=""
+RELEASE_METADATA_DIR=""
+RELEASE_CASK_PATHS=()
+APPCAST_WORK_PATH=""
 APPCAST_ITEM_INSERTED=false
 APPCAST_ALREADY_CONTAINS=false
 APPCAST_ITEM_REPLACED=false
+APPCAST_METADATA_MATCH=false
 RELEASE_HEAD_SHA=""
 REMOTE_HEAD_SHA=""
 BRANCH_PUSH_NEEDED=false
@@ -53,17 +62,23 @@ BRANCH_PUSHED=false
 TAG_PUSHED=false
 
 source "$SCRIPT_DIR/lib/release-publication.sh"
+source "$SCRIPT_DIR/lib/release-version.sh"
 source "$PROJECT_DIR/config/release-signing.env"
+release_load_version_config "$PROJECT_DIR"
 
 if [ "$#" -ne 0 ]; then
     echo "ERROR: create-release.sh does not accept a version argument."
-    echo "       Update AgentVisor/Info.plist, run scripts/build.sh, then run scripts/create-release.sh."
+    echo "       Update package.json and config/release-version.env, run scripts/build.sh,"
+    echo "       then run scripts/create-release.sh."
     exit 1
 fi
 
 cleanup() {
     if [ -n "$TAP_CLONE_DIR" ] && [ -d "$TAP_CLONE_DIR" ]; then
         rm -rf "$TAP_CLONE_DIR"
+    fi
+    if [ -n "$RELEASE_METADATA_DIR" ] && [ -d "$RELEASE_METADATA_DIR" ]; then
+        rm -rf "$RELEASE_METADATA_DIR"
     fi
 }
 trap cleanup EXIT
@@ -188,6 +203,53 @@ require_clean_release_tree() {
     fi
 }
 
+require_committed_release_metadata() {
+    if [ "$DRY_RUN" = "1" ]; then
+        return
+    fi
+
+    local mismatch=0
+    local index
+    local generated_cask
+    local committed_cask
+    local generated_appcast_normalized
+    local committed_appcast_normalized
+
+    for index in "${!LOCAL_CASKS[@]}"; do
+        generated_cask="${RELEASE_CASK_PATHS[$index]}"
+        committed_cask="${LOCAL_CASKS[$index]}"
+        if ! cmp -s "$generated_cask" "$committed_cask"; then
+            echo "ERROR: generated cask metadata does not match the committed cask:"
+            echo "       $committed_cask"
+            diff -u "$committed_cask" "$generated_cask" || true
+            mismatch=1
+        fi
+    done
+
+    # pubDate is generated at run time and is intentionally excluded from this
+    # comparison. Every release URL, version, build, platform floor, update
+    # floor, signature, size, and release note must still match the committed
+    # appcast before any remote publication step.
+    generated_appcast_normalized="$(mktemp -t av-appcast-generated-commit.XXXXXX)"
+    committed_appcast_normalized="$(mktemp -t av-appcast-committed.XXXXXX)"
+    sed '/<pubDate>/d' "$APPCAST_WORK_PATH" > "$generated_appcast_normalized"
+    sed '/<pubDate>/d' "$APPCAST_PATH" > "$committed_appcast_normalized"
+    if ! cmp -s "$generated_appcast_normalized" "$committed_appcast_normalized"; then
+        echo "ERROR: generated appcast metadata does not match the committed appcast:"
+        echo "       $APPCAST_PATH"
+        diff -u "$committed_appcast_normalized" "$generated_appcast_normalized" || true
+        mismatch=1
+    fi
+    rm -f "$generated_appcast_normalized" "$committed_appcast_normalized"
+
+    if [ "$mismatch" -ne 0 ]; then
+        echo "       Run a dry run, review the generated cask/appcast, commit the"
+        echo "       matching metadata, then rerun real publication."
+        exit 1
+    fi
+    APPCAST_METADATA_MATCH=true
+}
+
 prepare_release_git_publication() {
     if [ "$DRY_RUN" = "1" ] || [ "${AV_ALLOW_UNPUSHED_RELEASE:-0}" = "1" ]; then
         return
@@ -282,9 +344,18 @@ if [ ! -d "$APP_PATH" ]; then
     exit 1
 fi
 
-# Get version from app
-VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
-BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
+# Resolve the release coordinates from the tracked Electron release config and
+# require the exported app to carry the same coordinates. The app remains the
+# candidate under test, while package.json/config/release-version.env are the
+# release source of truth.
+APP_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
+APP_BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
+COORDINATES="$(release_assert_coordinates "$PROJECT_DIR" "$APP_VERSION" "$APP_BUILD")"
+IFS=$'\t' read -r VERSION BUILD <<<"$COORDINATES"
+if [[ -z "${AGENT_VISOR_MIN_MACOS:-}" ]]; then
+    echo "ERROR: AGENT_VISOR_MIN_MACOS is missing from config/release-version.env."
+    exit 1
+fi
 GITHUB_DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/v$VERSION/$ARTIFACT_NAME-v$VERSION.zip"
 
 echo "Version: $VERSION (build $BUILD)"
@@ -308,19 +379,18 @@ release_distribution_mode_is_publishable \
 echo "Public distribution mode: $RELEASE_DISTRIBUTION_MODE"
 echo ""
 
+# Check the source tree before any release-local files are created or tracked
+# metadata is edited. Dry runs intentionally skip this publication-only guard
+# so an isolated worktree can generate cask/appcast output for review.
+require_clean_release_tree
+prepare_release_git_publication
+
 mkdir -p "$BUILD_DIR" "$RELEASE_DIR"
-
+APPCAST_WORK_PATH="$APPCAST_PATH"
 if [ "$DRY_RUN" != "1" ]; then
-    resolve_github_release_token
-fi
-
-if [ "$DRY_RUN" != "1" ] && gh_release release view "v$VERSION" --repo "$GITHUB_REPO" &>/dev/null; then
-    if [ "${AV_ALLOW_EXISTING_RELEASE_UPLOAD:-0}" != "1" ]; then
-        echo "ERROR: GitHub release v$VERSION already exists in $GITHUB_REPO."
-        echo "       Bump MARKETING_VERSION / CURRENT_PROJECT_VERSION before releasing,"
-        echo "       or set AV_ALLOW_EXISTING_RELEASE_UPLOAD=1 to intentionally replace the asset."
-        exit 1
-    fi
+    RELEASE_METADATA_DIR="$(mktemp -d -t av-release-metadata.XXXXXX)"
+    APPCAST_WORK_PATH="$RELEASE_METADATA_DIR/appcast.xml"
+    cp "$APPCAST_PATH" "$APPCAST_WORK_PATH"
 fi
 
 load_release_notes
@@ -342,8 +412,14 @@ brew install --cask 824zzy/agent-visor/agent-visor
 2. Unzip and drag Agent Visor.app to /Applications
 3. Launch Agent Visor from /Applications
 
-### Auto-updates
-Sparkle will check for updates in the background and prompt you to install.
+### Updates
+The Electron updater accepts a newer three-part version with a matching HTTPS
+GitHub release ZIP URL and an Ed25519 signature field with the expected metadata
+shape, then opens the matching GitHub Releases page when a newer release is
+available. It does not cryptographically verify ZIP bytes before opening
+GitHub. Sparkle Ed25519 signing still protects published archive metadata for
+compatible consumers. Download and install the release manually from that page;
+updates are not installed automatically.
 EOF
 } > "$GITHUB_NOTES_PATH"
 
@@ -383,9 +459,15 @@ for local_cask in "${LOCAL_CASKS[@]}"; do
         echo "ERROR: local cask not found at $local_cask."
         exit 1
     fi
-    sed -i '' -E "s/^  version \".*\"/  version \"$VERSION\"/" "$local_cask"
-    sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"$ZIP_SHA\"/" "$local_cask"
-    echo "Updated $(basename "$local_cask") to v$VERSION ($ZIP_SHA)"
+    cask_path="$local_cask"
+    if [ "$DRY_RUN" != "1" ]; then
+        cask_path="$RELEASE_METADATA_DIR/$(basename "$local_cask")"
+        cp "$local_cask" "$cask_path"
+    fi
+    sed -i '' -E "s/^  version \".*\"/  version \"$VERSION\"/" "$cask_path"
+    sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"$ZIP_SHA\"/" "$cask_path"
+    RELEASE_CASK_PATHS+=("$cask_path")
+    echo "Generated $(basename "$local_cask") metadata for v$VERSION ($ZIP_SHA)"
 done
 
 echo ""
@@ -458,21 +540,21 @@ GITHUB_RELEASE_DONE=false
 TAP_SYNC_READY=false
 TAP_HAS_CHANGES=false
 
-for local_cask in "${LOCAL_CASKS[@]}"; do
-    if [ ! -f "$local_cask" ]; then
-        echo "ERROR: local cask not found at $local_cask."
+for cask_path in "${RELEASE_CASK_PATHS[@]}"; do
+    if [ ! -f "$cask_path" ]; then
+        echo "ERROR: generated cask not found at $cask_path."
         exit 1
     fi
-    LOCAL_CASK_VERSION=$(grep -E '^\s*version\s+"' "$local_cask" | head -1 | sed -E 's/.*version "([^"]+)".*/\1/')
+    LOCAL_CASK_VERSION=$(grep -E '^\s*version\s+"' "$cask_path" | head -1 | sed -E 's/.*version "([^"]+)".*/\1/')
     if [ "$LOCAL_CASK_VERSION" != "$VERSION" ]; then
-        echo "ERROR: $(basename "$local_cask") pinned to v$LOCAL_CASK_VERSION, expected v$VERSION."
+        echo "ERROR: $(basename "$cask_path") pinned to v$LOCAL_CASK_VERSION, expected v$VERSION."
         echo "       The automatic cask update failed; inspect Casks/ before publishing."
         exit 1
     fi
 
-    LOCAL_CASK_SHA=$(grep -E '^\s*sha256\s+"' "$local_cask" | head -1 | sed -E 's/.*sha256 "([^"]+)".*/\1/')
+    LOCAL_CASK_SHA=$(grep -E '^\s*sha256\s+"' "$cask_path" | head -1 | sed -E 's/.*sha256 "([^"]+)".*/\1/')
     if [ "$LOCAL_CASK_SHA" != "$ZIP_SHA" ]; then
-        echo "ERROR: $(basename "$local_cask") sha256 does not match the built zip."
+        echo "ERROR: $(basename "$cask_path") sha256 does not match the built zip."
         echo "       cask:  $LOCAL_CASK_SHA"
         echo "       zip:   $ZIP_SHA"
         echo "       zip path: $ZIP_PATH"
@@ -486,49 +568,12 @@ echo "All local cask versions and sha256 values match the built zip."
 echo ""
 
 # ============================================
-# Step 6: Preflight Homebrew Tap Push
-# ============================================
-# Clone the tap, stage the cask update, and run a dry-run push before creating
-# the GitHub release. This catches missing push auth or commit config before a
-# public release exists.
-echo "=== Step 6: Preflighting Homebrew Tap Push ==="
-
-if [ "$CASK_PREFLIGHT_OK" != true ]; then
-    echo "Skipping tap preflight because cask preflight did not run."
-elif [[ "$RELEASE_GIT_SSH_COMMAND" == *"id_ed25519_personal_github"* ]] && [ ! -f "$HOME/.ssh/id_ed25519_personal_github" ]; then
-    echo "ERROR: personal GitHub SSH key not found at ~/.ssh/id_ed25519_personal_github."
-    echo "       Provide AV_RELEASE_GIT_SSH_COMMAND if using a different key."
-    exit 1
-else
-    TAP_CLONE_DIR="$(mktemp -d -t av-tap.XXXXXX)"
-    echo "Cloning $TAP_REPO into $TAP_CLONE_DIR..."
-    GIT_SSH_COMMAND="$RELEASE_GIT_SSH_COMMAND" git clone "$TAP_REPO_SSH" "$TAP_CLONE_DIR" --quiet
-    mkdir -p "$TAP_CLONE_DIR/Casks"
-    for local_cask in "${LOCAL_CASKS[@]}"; do
-        cp "$local_cask" "$TAP_CLONE_DIR/Casks/$(basename "$local_cask")"
-    done
-    if [ -z "$(git -C "$TAP_CLONE_DIR" status --porcelain -- Casks/agent-visor.rb)" ]; then
-        echo "Tap cask already at v$VERSION — no tap push needed."
-        TAP_SYNC_READY=true
-    else
-        git -C "$TAP_CLONE_DIR" add Casks/agent-visor.rb
-        git -C "$TAP_CLONE_DIR" commit -m "chore: sync casks to v$VERSION" --quiet
-        GIT_SSH_COMMAND="$RELEASE_GIT_SSH_COMMAND" git -C "$TAP_CLONE_DIR" push --dry-run --quiet
-        echo "Tap push dry-run succeeded."
-        TAP_SYNC_READY=true
-        TAP_HAS_CHANGES=true
-    fi
-fi
-
-echo ""
-
-# ============================================
-# Step 7: Update Appcast
+# Step 6: Update Appcast
 # ============================================
 # Insert the newest item immediately after <language>. This keeps the release
 # feed sorted newest-first and fails before any public release if the XML shape
 # is not what we expect.
-echo "=== Step 7: Updating Appcast ==="
+echo "=== Step 6: Updating Appcast ==="
 
 PUBDATE=$(date -u "+%a, %d %b %Y %H:%M:%S +0000")
 APPCAST_ITEM_PATH="$BUILD_DIR/appcast-item-v$VERSION.xml"
@@ -544,7 +589,7 @@ cat > "$APPCAST_ITEM_PATH" <<EOF
       <pubDate>$PUBDATE</pubDate>
       <sparkle:version>$BUILD</sparkle:version>
       <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumSystemVersion>$AGENT_VISOR_MIN_MACOS</sparkle:minimumSystemVersion>
 $MINIMUM_UPDATE_VERSION_XML
       <description><![CDATA[<h2>v$VERSION</h2>
 $RELEASE_NOTES_HTML
@@ -558,12 +603,12 @@ $RELEASE_NOTES_HTML
     </item>
 EOF
 
-if [ ! -f "$APPCAST_PATH" ]; then
+if [ ! -f "$APPCAST_WORK_PATH" ]; then
     echo "ERROR: appcast not found at $APPCAST_PATH."
     exit 1
 fi
 
-if grep -q "<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>" "$APPCAST_PATH"; then
+if grep -q "<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>" "$APPCAST_WORK_PATH"; then
     APPCAST_ALREADY_CONTAINS=true
     APPCAST_EXISTING_ITEM_PATH="$BUILD_DIR/appcast-existing-item-v$VERSION.xml"
     if ! awk -v version="$VERSION" '
@@ -585,7 +630,7 @@ if grep -q "<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>" "
             }
         }
         END { if (!found) exit 42 }
-    ' "$APPCAST_PATH" > "$APPCAST_EXISTING_ITEM_PATH"; then
+    ' "$APPCAST_WORK_PATH" > "$APPCAST_EXISTING_ITEM_PATH"; then
         echo "ERROR: appcast claims to contain v$VERSION, but the matching <item> could not be extracted."
         exit 1
     fi
@@ -633,12 +678,12 @@ if grep -q "<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>" "
             }
             { print }
             END { if (!replaced) exit 42 }
-        ' "$APPCAST_PATH" > "$TMP_APPCAST"; then
+        ' "$APPCAST_WORK_PATH" > "$TMP_APPCAST"; then
             rm -f "$TMP_APPCAST"
             echo "ERROR: could not replace v$VERSION item in $APPCAST_PATH."
             exit 1
         fi
-        mv "$TMP_APPCAST" "$APPCAST_PATH"
+        mv "$TMP_APPCAST" "$APPCAST_WORK_PATH"
         APPCAST_ITEM_REPLACED=true
         echo "Replaced existing v$VERSION item in $APPCAST_PATH."
     fi
@@ -656,24 +701,76 @@ else
             }
         }
         END { if (!inserted) exit 42 }
-    ' "$APPCAST_PATH" > "$TMP_APPCAST"; then
+    ' "$APPCAST_WORK_PATH" > "$TMP_APPCAST"; then
         rm -f "$TMP_APPCAST"
         echo "ERROR: could not insert appcast item after <language> in $APPCAST_PATH."
         exit 1
     fi
-    mv "$TMP_APPCAST" "$APPCAST_PATH"
+    mv "$TMP_APPCAST" "$APPCAST_WORK_PATH"
     APPCAST_ITEM_INSERTED=true
     echo "Inserted v$VERSION into $APPCAST_PATH."
 fi
 
 if command -v xmllint &>/dev/null; then
-    xmllint --noout "$APPCAST_PATH"
+    xmllint --noout "$APPCAST_WORK_PATH"
 fi
 
 echo ""
 
-require_clean_release_tree
-prepare_release_git_publication
+require_committed_release_metadata
+
+# ============================================
+# Step 7: Preflight Homebrew Tap Push
+# ============================================
+# Clone the tap, stage the cask update, and run a dry-run push only after the
+# generated cask and appcast have matched the committed release tree. This
+# catches missing push auth or commit config before creating the GitHub
+# release. A dry run stays local and therefore skips the remote tap clone.
+echo "=== Step 7: Preflighting Homebrew Tap Push ==="
+
+if [ "$DRY_RUN" = "1" ]; then
+    echo "DRY-RUN: skipping Homebrew tap clone and push preflight."
+elif [ "$CASK_PREFLIGHT_OK" != true ]; then
+    echo "Skipping tap preflight because cask preflight did not run."
+elif [[ "$RELEASE_GIT_SSH_COMMAND" == *"id_ed25519_personal_github"* ]] && [ ! -f "$HOME/.ssh/id_ed25519_personal_github" ]; then
+    echo "ERROR: personal GitHub SSH key not found at ~/.ssh/id_ed25519_personal_github."
+    echo "       Provide AV_RELEASE_GIT_SSH_COMMAND if using a different key."
+    exit 1
+else
+    TAP_CLONE_DIR="$(mktemp -d -t av-tap.XXXXXX)"
+    echo "Cloning $TAP_REPO into $TAP_CLONE_DIR..."
+    GIT_SSH_COMMAND="$RELEASE_GIT_SSH_COMMAND" git clone "$TAP_REPO_SSH" "$TAP_CLONE_DIR" --quiet
+    mkdir -p "$TAP_CLONE_DIR/Casks"
+    for cask_path in "${RELEASE_CASK_PATHS[@]}"; do
+        cp "$cask_path" "$TAP_CLONE_DIR/Casks/$(basename "$cask_path")"
+    done
+    if [ -z "$(git -C "$TAP_CLONE_DIR" status --porcelain -- Casks/agent-visor.rb)" ]; then
+        echo "Tap cask already at v$VERSION — no tap push needed."
+        TAP_SYNC_READY=true
+    else
+        git -C "$TAP_CLONE_DIR" add Casks/agent-visor.rb
+        git -C "$TAP_CLONE_DIR" commit -m "chore: sync casks to v$VERSION" --quiet
+        GIT_SSH_COMMAND="$RELEASE_GIT_SSH_COMMAND" git -C "$TAP_CLONE_DIR" push --dry-run --quiet
+        echo "Tap push dry-run succeeded."
+        TAP_SYNC_READY=true
+        TAP_HAS_CHANGES=true
+    fi
+fi
+
+echo ""
+
+if [ "$DRY_RUN" != "1" ]; then
+    resolve_github_release_token
+fi
+
+if [ "$DRY_RUN" != "1" ] && gh_release release view "v$VERSION" --repo "$GITHUB_REPO" &>/dev/null; then
+    if [ "${AV_ALLOW_EXISTING_RELEASE_UPLOAD:-0}" != "1" ]; then
+        echo "ERROR: GitHub release v$VERSION already exists in $GITHUB_REPO."
+        echo "       Bump the configured release version before releasing,"
+        echo "       or set AV_ALLOW_EXISTING_RELEASE_UPLOAD=1 to intentionally replace the asset."
+        exit 1
+    fi
+fi
 
 # ============================================
 # Step 8: Create GitHub Release
@@ -717,7 +814,9 @@ echo ""
 # ============================================
 echo "=== Step 9: Appcast Item ==="
 echo ""
-if [ "$APPCAST_ITEM_INSERTED" = true ]; then
+if [ "$DRY_RUN" != "1" ] && [ "$APPCAST_METADATA_MATCH" = true ]; then
+    echo "Generated appcast item for v$VERSION matches committed $APPCAST_PATH:"
+elif [ "$APPCAST_ITEM_INSERTED" = true ]; then
     echo "Appcast item inserted into $APPCAST_PATH:"
 elif [ "$APPCAST_ITEM_REPLACED" = true ]; then
     echo "Appcast item replaced in $APPCAST_PATH:"
@@ -749,13 +848,13 @@ echo "=== Step 10: Sync Cask to Homebrew Tap ==="
 
 if [ "$CASK_PREFLIGHT_OK" != true ]; then
     echo "Skipping tap sync because cask preflight did not run."
+elif [ "$DRY_RUN" = "1" ]; then
+    echo "DRY-RUN: tap clone and push skipped after local cask validation."
 elif [ "$TAP_SYNC_READY" != true ]; then
     echo "ERROR: tap push was not preflighted; refusing to sync tap after release."
     exit 1
 elif [ "$TAP_HAS_CHANGES" != true ]; then
     echo "Tap cask already at v$VERSION — nothing to push."
-elif [ "$DRY_RUN" = "1" ]; then
-    echo "DRY-RUN: tap push skipped after successful dry-run preflight."
 else
     GIT_SSH_COMMAND="$RELEASE_GIT_SSH_COMMAND" git -C "$TAP_CLONE_DIR" push --quiet
     echo "Pushed v$VERSION cask to https://github.com/$TAP_REPO"
@@ -779,7 +878,9 @@ fi
 if [ "$BRANCH_PUSHED" = true ]; then
     echo "  - Branch: pushed $RELEASE_BRANCH after GitHub release creation"
 fi
-if [ "$APPCAST_ITEM_INSERTED" = true ]; then
+if [ "$DRY_RUN" != "1" ] && [ "$APPCAST_METADATA_MATCH" = true ]; then
+    echo "  - Appcast: generated metadata matches committed $APPCAST_PATH"
+elif [ "$APPCAST_ITEM_INSERTED" = true ]; then
     echo "  - Appcast: updated $APPCAST_PATH"
 elif [ "$APPCAST_ITEM_REPLACED" = true ]; then
     echo "  - Appcast: replaced v$VERSION in $APPCAST_PATH"

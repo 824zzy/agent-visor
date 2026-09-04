@@ -232,7 +232,7 @@ describe("session snapshot protocol", () => {
       pillScreens: [{
         displayId: 1, name: "Built-in Retina Display", isBuiltIn: true, isMain: true,
       }],
-      update: { status: "up_to_date", currentVersion: "2.6.2" },
+      update: { status: "up_to_date", currentVersion: "2.7.0" },
     };
     expect(nativeServicesStateSchema.parse(state)).toEqual(state);
     expect(clientMessageSchema.safeParse({ type: "get_native_services" }).success).toBe(true);

@@ -15,11 +15,14 @@ import {
 
 const roots: string[] = [];
 const originalBinary = process.env.CODEX_BINARY;
+const originalVersion = process.env.AGENT_VISOR_VERSION;
 
 afterEach(async () => {
   stopCodexTurns();
   if (originalBinary === undefined) delete process.env.CODEX_BINARY;
   else process.env.CODEX_BINARY = originalBinary;
+  if (originalVersion === undefined) delete process.env.AGENT_VISOR_VERSION;
+  else process.env.AGENT_VISOR_VERSION = originalVersion;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -125,6 +128,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     await chmod(executable, 0o700);
     process.env.CODEX_BINARY = executable;
     process.env.AGENT_VISOR_CODEX_TEST_LOG = log;
+    process.env.AGENT_VISOR_VERSION = "2.7.0";
 
     await sendCodexTurn("019f3931-ec11-7f31-8400-1c8624aa9e4d", "Fix it", ["/tmp/pixel.png"]);
 
@@ -132,6 +136,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     expect(messages.map((message) => message.method)).toEqual([
       "initialize", "initialized", "thread/resume", "turn/start",
     ]);
+    expect(messages[0].params.clientInfo).toEqual({ name: "agent-visor", version: "2.7.0" });
     expect(messages[2].params.threadId).toBe("019f3931-ec11-7f31-8400-1c8624aa9e4d");
     expect(messages[3].params.input).toEqual([
       { type: "text", text: "Fix it" },

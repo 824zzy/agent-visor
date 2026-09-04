@@ -310,9 +310,23 @@ final class ReleaseBuildHardeningAuditTests: XCTestCase {
         let verifier = try source(
             at: root.appendingPathComponent("scripts/test-release-bundle.sh")
         )
+        let releaseConfig = try source(
+            at: root.appendingPathComponent("config/release-version.env")
+        )
 
         XCTAssertTrue(verifier.contains("LSMinimumSystemVersion"))
-        XCTAssertTrue(verifier.contains("14.0"))
+        XCTAssertTrue(
+            releaseConfig.contains("AGENT_VISOR_MIN_MACOS="),
+            "The platform floor must come from the canonical release configuration."
+        )
+        XCTAssertTrue(
+            verifier.contains("release_load_version_config \"$PROJECT_DIR\""),
+            "The release verifier must load the canonical release configuration."
+        )
+        XCTAssertTrue(
+            verifier.contains("LSMinimumSystemVersion \"$AGENT_VISOR_MIN_MACOS\""),
+            "The release verifier must compare the bundle floor with the configured value."
+        )
         XCTAssertTrue(verifier.contains("file \"$EXECUTABLE\""))
         XCTAssertTrue(verifier.contains("Mach-O 64-bit executable arm64"))
         XCTAssertTrue(verifier.contains("flags=.*runtime"))

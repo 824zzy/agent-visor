@@ -7,22 +7,22 @@ function appcast(version: string, signature = Buffer.alloc(64, 7).toString("base
 
 describe("update appcast policy", () => {
   it("accepts only a newer signed public release", () => {
-    expect(updateFromAppcast(appcast("2.6.3"), "2.6.2")).toEqual({
+    expect(updateFromAppcast(appcast("2.7.1"), "2.7.0")).toEqual({
       status: "available",
-      currentVersion: "2.6.2",
-      availableVersion: "2.6.3",
-      releaseUrl: "https://github.com/824zzy/agent-visor/releases/tag/v2.6.3",
+      currentVersion: "2.7.0",
+      availableVersion: "2.7.1",
+      releaseUrl: "https://github.com/824zzy/agent-visor/releases/tag/v2.7.1",
     });
   });
 
   it("refuses rollback and unsigned update entries", () => {
-    expect(updateFromAppcast(appcast("2.6.1"), "2.6.2")).toEqual({
+    expect(updateFromAppcast(appcast("2.6.1"), "2.7.0")).toEqual({
       status: "up_to_date",
-      currentVersion: "2.6.2",
+      currentVersion: "2.7.0",
     });
-    expect(updateFromAppcast(appcast("2.6.3", ""), "2.6.2")).toMatchObject({
+    expect(updateFromAppcast(appcast("2.7.1", ""), "2.7.0")).toMatchObject({
       status: "error",
-      currentVersion: "2.6.2",
+      currentVersion: "2.7.0",
     });
   });
 });

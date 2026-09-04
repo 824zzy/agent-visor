@@ -41,7 +41,7 @@ describe("native services messages", () => {
       pillScreens: [{
         displayId: 1, name: "Built-in Retina Display", isBuiltIn: true, isMain: true,
       }],
-      update: { status: "idle", currentVersion: "2.6.2" },
+      update: { status: "idle", currentVersion: "2.7.0" },
     };
     expect(nativeServicesFromServerData(JSON.stringify(state))).toEqual(state);
     expect(nativeServicesFromServerData(JSON.stringify({ ...state, unknown: true })))

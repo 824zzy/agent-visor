@@ -20,7 +20,7 @@ const child = spawn(process.execPath, [path.resolve(directory, "../../server/dis
     AGENT_VISOR_PORT: "0",
     AGENT_VISOR_SETTINGS_DOMAIN: "com.824zzy.AgentVisor.CleanProfileTest",
     AGENT_VISOR_TOKEN: token,
-    AGENT_VISOR_VERSION: "2.6.2",
+    AGENT_VISOR_VERSION: "2.7.0",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });

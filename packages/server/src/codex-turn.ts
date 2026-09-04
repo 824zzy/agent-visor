@@ -4,6 +4,7 @@ import { constants } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import type { ChatPendingAction, ClientMessage } from "@agent-visor/protocol";
+import { agentVisorVersion } from "./runtime-version.js";
 
 export type CodexActionRegistrar = (
   sessionId: string,
@@ -191,7 +192,7 @@ export async function sendCodexTurn(
     write({
       id: 1,
       method: "initialize",
-      params: { clientInfo: { name: "agent-visor", version: "2.7.0" } },
+      params: { clientInfo: { name: "agent-visor", version: agentVisorVersion() } },
     });
 
     function countOutput(chunk: Buffer): void {

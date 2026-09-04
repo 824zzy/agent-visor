@@ -1,7 +1,51 @@
-import { describe, expect, it } from "vitest";
-import { chatUsageGlanceFromNative, codexUsageGlance } from "./usage.js";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { chatUsageGlanceFromNative, codexUsageGlance, readCodexUsage } from "./usage.js";
+
+const roots: string[] = [];
+const originalBinary = process.env.CODEX_BINARY;
+const originalLog = process.env.AGENT_VISOR_USAGE_TEST_LOG;
+const originalVersion = process.env.AGENT_VISOR_VERSION;
+
+afterEach(async () => {
+  if (originalBinary === undefined) delete process.env.CODEX_BINARY;
+  else process.env.CODEX_BINARY = originalBinary;
+  if (originalLog === undefined) delete process.env.AGENT_VISOR_USAGE_TEST_LOG;
+  else process.env.AGENT_VISOR_USAGE_TEST_LOG = originalLog;
+  if (originalVersion === undefined) delete process.env.AGENT_VISOR_VERSION;
+  else process.env.AGENT_VISOR_VERSION = originalVersion;
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 describe("Codex usage glance", () => {
+  it("passes the packaged version to the Codex usage client", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-usage-client-"));
+    roots.push(root);
+    const log = path.join(root, "requests.jsonl");
+    const executable = path.join(root, "codex.cjs");
+    await writeFile(executable, `#!/usr/bin/env node
+const fs=require('node:fs'),readline=require('node:readline');
+const log=process.env.AGENT_VISOR_USAGE_TEST_LOG;
+readline.createInterface({input:process.stdin}).on('line',line=>{
+  fs.appendFileSync(log,line+'\\n');
+  const m=JSON.parse(line);
+  if(m.id===1) process.stdout.write(JSON.stringify({id:1,result:{}})+'\\n');
+  if(m.id===2) process.stdout.write(JSON.stringify({id:2,result:{rateLimits:{primary:{usedPercent:18,windowDurationMins:300}}}})+'\\n');
+});
+`, { mode: 0o700 });
+    await chmod(executable, 0o700);
+    process.env.CODEX_BINARY = executable;
+    process.env.AGENT_VISOR_USAGE_TEST_LOG = log;
+    process.env.AGENT_VISOR_VERSION = "2.7.0";
+
+    await expect(readCodexUsage()).resolves.toMatchObject({ id: "codex" });
+    const messages = (await readFile(log, "utf8")).trim().split("\n")
+      .map((line) => JSON.parse(line));
+    expect(messages[0].params.clientInfo).toEqual({ name: "agent-visor", version: "2.7.0" });
+  });
+
   it("presents five-hour and weekly remaining limits with the strongest tone", () => {
     expect(codexUsageGlance({
       rateLimits: {

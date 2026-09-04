@@ -522,7 +522,7 @@ describe("Agent Visor daemon", () => {
       pillScreens: [{
         displayId: 1, name: "Built-in Retina Display", isBuiltIn: true, isMain: true,
       }],
-      update: { status: "idle" as const, currentVersion: "2.6.2" },
+      update: { status: "idle" as const, currentVersion: "2.7.0" },
     };
     const actions: unknown[] = [];
     const nativeServices = {

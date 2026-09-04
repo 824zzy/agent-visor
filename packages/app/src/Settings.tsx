@@ -146,7 +146,7 @@ export function Settings({
   const pillScreenValues = ["automatic", ...state.pillScreens.map(({ displayId }) => String(displayId))];
   if (!pillScreenValues.includes(selectedPillScreen)) pillScreenValues.push(selectedPillScreen);
   const updateText = state.update.status === "available"
-    ? `Version ${state.update.availableVersion} is available`
+    ? `Version ${state.update.availableVersion} is available on GitHub Releases`
     : state.update.status === "up_to_date" ? "Agent Visor is up to date"
       : state.update.status === "checking" ? "Checking for updates…"
         : state.update.status === "error" ? state.update.error ?? "Update check failed"
@@ -214,7 +214,7 @@ export function Settings({
           <ActionRow
             label="Updates"
             detail={updateText}
-            action={state.update.status === "available" ? "Open update" : "Check now"}
+            action={state.update.status === "available" ? "Open release page" : "Check now"}
             onPress={() => act(state.update.status === "available" ? "open_update" : "check_updates")}
             styles={styles}
           />

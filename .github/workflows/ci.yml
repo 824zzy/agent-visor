@@ -21,16 +21,50 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.20.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install Node dependencies
+        run: npm ci
       - name: Toolchain
-        run: xcodebuild -version
-      - name: Core tests
+        run: |
+          node --version
+          npm --version
+          xcodebuild -version
+      - name: TypeScript build
+        run: npm run build
+      - name: Typecheck
+        run: npm run typecheck
+      - name: JavaScript unit tests
+        run: npm test
+      - name: Sessions E2E
+        run: npm run test:sessions
+      - name: Chat E2E
+        run: npm run test:chat
+      - name: Clean profile and native services
+        run: npm run test:clean-profile
+      - name: Native services E2E
+        run: npm run test:native-services
+      - name: Native helper wire tests
+        run: npm run test:native-helper
+      - name: Native helper usage tests
+        run: npm run test:native-helper-usage
+      - name: Swift Core tests
         run: swift test --package-path AgentVisorCore
       - name: Homebrew cask style
         run: brew style Casks/agent-visor.rb
       - name: Release policy tests
         run: |
+          scripts/test-release-version-policy.sh
           scripts/test-release-build-mode.sh
           scripts/test-release-build-wiring.sh
+          scripts/test-release-swift-legacy.sh
+          scripts/test-release-helper-signing-policy.sh
+          scripts/test-release-bundle-negative.sh
+          scripts/test-release-archive-negative.sh
           scripts/test-release-signing-policy.sh
           scripts/test-release-signing-integration.sh
           scripts/test-release-identity-continuity-policy.sh
@@ -41,6 +75,17 @@ jobs:
           scripts/test-release-publication-policy.sh
           scripts/test-release-candidate-integration.sh
           scripts/test-release-publication-wiring.sh
+          scripts/test-release-dry-run.sh
+          scripts/test-release-publication-commit-gate.sh
           scripts/test-ci-release-policy-wiring.sh
-      - name: Release build
+      - name: Electron ad-hoc release build
         run: AV_RELEASE_DERIVED="$RUNNER_TEMP/av-release-build" scripts/build.sh
+      - name: Upload tested Electron candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentVisor-${{ github.sha }}
+          path: |
+            build/export/AgentVisor-release.zip
+            build/export/AgentVisor-release.zip.sha256
+          if-no-files-found: error
+          retention-days: 7

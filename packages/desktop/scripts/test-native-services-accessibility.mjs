@@ -43,7 +43,7 @@ async function run() {
       { displayId: 1, name: "Built-in Retina Display", isBuiltIn: true, isMain: true },
       { displayId: 5, name: "XZ322QU V3", isBuiltIn: false, isMain: false },
     ],
-    update: { status: "idle", currentVersion: "2.6.2" },
+    update: { status: "idle", currentVersion: "2.7.0" },
   };
   const subscribers = new Set();
   const actions = [];

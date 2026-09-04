@@ -3,7 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const productName = "Agent Visor";
-export const electronDataName = "Agent Visor Next";
+export const electronDataName = "Agent Visor";
+export const electronStagingDataName = "Agent Visor Next";
 
 export function integrationResourcesPath(resourcesPath: string, sourcePath: string): string {
   const bundled = path.join(resourcesPath, "AgentIntegrations");

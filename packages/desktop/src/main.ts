@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -24,7 +25,9 @@ import {
   safeExternalURL,
   windowCloseAction,
 } from "./desktop-contract.js";
+import { migrateElectronDataDirectory } from "./electron-data-migration.js";
 import { readImageFileURL } from "./image-file-reader.js";
+import { runIfSingleInstance } from "./single-instance.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererBase = process.env.AGENT_VISOR_RENDERER_URL
@@ -32,12 +35,14 @@ const rendererBase = process.env.AGENT_VISOR_RENDERER_URL
 const rendererTrust = rendererLocation(rendererBase);
 let daemon: ChildProcess | undefined;
 let mainWindow: BrowserWindow | undefined;
+let secondInstancePending = false;
 let nativeActionQueue = Promise.resolve();
 let quitting = false;
 
-// Keep Electron data separate from the Swift rollback application without exposing its directory name.
-app.setPath("userData", path.join(app.getPath("appData"), electronDataName));
 app.setName(productName);
+const appDataPath = app.getPath("appData");
+const userDataPath = path.join(appDataPath, electronDataName);
+const singleInstanceDataPath = path.join(appDataPath, ".agent-visor-single-instance");
 
 app.on("before-quit", () => {
   quitting = true;
@@ -72,14 +77,55 @@ ipcMain.handle("chat:open-external", async (event, value: unknown) => {
   }
 });
 
-void app.whenReady()
-  .then(async () => {
+void runIfSingleInstance(
+  async () => {
+    // Keep Electron's lock separate from both the stable and staging profile.
+    // The directory is fixed across launches, and it is created before the
+    // lock request so Electron cannot fall back to its default profile path.
+    await mkdir(singleInstanceDataPath, { recursive: true, mode: 0o700 });
+    await chmod(singleInstanceDataPath, 0o700);
+    app.setPath("userData", singleInstanceDataPath);
+    const acquired = app.requestSingleInstanceLock();
+    if (acquired) {
+      app.on("second-instance", () => {
+        if (!mainWindow) {
+          secondInstancePending = true;
+          return;
+        }
+        focusMainWindow();
+      });
+    }
+    return acquired;
+  },
+  async () => {
+    // Electron requires an overridden path to exist. Wait for migration before
+    // creating the clean stable directory so a live staging profile can defer
+    // safely without leaving an empty stable marker behind.
+    const migration = await migrateElectronDataDirectory(appDataPath);
+    if (migration.status === "source_live") {
+      throw new Error("Agent Visor staging profile is currently in use.");
+    }
+    await mkdir(userDataPath, { recursive: true, mode: 0o700 });
+    await chmod(userDataPath, 0o700);
+    app.setPath("userData", userDataPath);
+    await app.whenReady();
+    if (migration.status === "migrated") {
+      console.info(`Agent Visor data migration completed (${migration.entryCount} entries).`);
+    }
     const daemonResult = await startDaemon();
     daemon = daemonResult.process;
     mainWindow = await createMainWindow(daemonResult.url);
+    if (secondInstancePending) focusMainWindow();
     configureApplicationMenu();
-  })
+  },
+  () => app.quit(),
+)
   .catch((error: unknown) => {
+    if (error instanceof Error && error.message === "Agent Visor staging profile is currently in use.") {
+      console.warn("Agent Visor data migration deferred; quit the older Agent Visor and retry.");
+    } else {
+      console.warn("Agent Visor data migration failed; staging data was left untouched.");
+    }
     console.error(error);
     app.quit();
   });
@@ -233,9 +279,15 @@ type RendererNavigation =
 
 function navigateRenderer(action: RendererNavigation): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.show();
-  mainWindow.focus();
+  focusMainWindow();
   mainWindow.webContents.send("app:navigate", action);
+}
+
+function focusMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
 }
 
 function configureApplicationMenu(): void {

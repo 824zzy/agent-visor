@@ -23,12 +23,13 @@ import { NativeSessionControls } from "./session-controls.js";
 import { readLegacyDefaults, SettingsRepository } from "./settings.js";
 import { chatUsageGlanceFromNative, readCodexUsage } from "./usage.js";
 import { checkForUpdates } from "./updates.js";
+import { agentVisorVersion } from "./runtime-version.js";
 
 const requestedPort = Number.parseInt(process.env.AGENT_VISOR_PORT ?? "0", 10);
 const token = process.env.AGENT_VISOR_TOKEN ?? randomBytes(32).toString("base64url");
-const currentVersion = process.env.AGENT_VISOR_VERSION ?? "0.0.0";
+const currentVersion = agentVisorVersion();
 const dataRoot = process.env.AGENT_VISOR_DATA_DIR
-  ?? path.join(os.homedir(), "Library/Application Support/Agent Visor Next");
+  ?? path.join(os.homedir(), "Library/Application Support/Agent Visor");
 const settingsDomain = process.env.AGENT_VISOR_SETTINGS_DOMAIN ?? "com.824zzy.AgentVisor.Dev";
 const integrationResources = process.env.AGENT_VISOR_INTEGRATIONS_DIR ?? path.resolve(
   path.dirname(fileURLToPath(import.meta.url)), "../../../AgentVisor/Resources",

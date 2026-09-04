@@ -153,12 +153,12 @@ describe("native services", () => {
       connections: new AgentConnectionsRepository({
         home: path.join(root, "home"), resources: path.join(root, "resources"),
       }),
-      currentVersion: "2.6.2",
+      currentVersion: "2.7.0",
       checkUpdates: async () => ({
         status: "available",
-        currentVersion: "2.6.2",
-        availableVersion: "2.6.3",
-        releaseUrl: "https://github.com/824zzy/agent-visor/releases/tag/v2.6.3",
+        currentVersion: "2.7.0",
+        availableVersion: "2.7.1",
+        releaseUrl: "https://github.com/824zzy/agent-visor/releases/tag/v2.7.1",
       }),
       emitDesktop: (effect) => effects.push(effect),
     });
@@ -203,7 +203,7 @@ describe("native services", () => {
     });
     expect(effects).toContainEqual({
       action: "open_update",
-      url: "https://github.com/824zzy/agent-visor/releases/tag/v2.6.3",
+      url: "https://github.com/824zzy/agent-visor/releases/tag/v2.7.1",
     });
   });
 

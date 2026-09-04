@@ -3,6 +3,7 @@ import { access } from "node:fs/promises";
 import { constants } from "node:fs";
 import os from "node:os";
 import type { ChatUsageGlance, NativeHelperUsageGlance } from "@agent-visor/protocol";
+import { agentVisorVersion } from "./runtime-version.js";
 
 /**
  * Project the existing provider-authoritative native usage record into the
@@ -116,7 +117,7 @@ export async function readCodexUsage(): Promise<NativeHelperUsageGlance | undefi
     write({
       id: 1,
       method: "initialize",
-      params: { clientInfo: { name: "agent-visor", version: "2.6.2" } },
+      params: { clientInfo: { name: "agent-visor", version: agentVisorVersion() } },
     });
 
     function write(message: unknown): void {
