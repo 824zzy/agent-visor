@@ -6,7 +6,7 @@ import Foundation
 /// across claude-code releases; run `scripts/sync-claude-builtins.sh`
 /// before each agent-visor release and reconcile.
 ///
-/// Snapshot taken from claude-code 2.1.128.
+/// Snapshot taken from claude-code 2.1.237.
 ///
 /// Hidden commands (isHidden: true) stay reachable by exact-name query
 /// but don't appear in the empty-query browse list. We hide TUI-only
@@ -31,18 +31,34 @@ public enum SlashCommandBuiltins {
             opensInTerminalDialog: true
         ),
         SlashCommand(
+            name: "branch",
+            description: "Create a branch of the current conversation at this point",
+            argumentHint: "[name]",
+            source: .builtin
+        ),
+        SlashCommand(
             name: "btw",
-            description: "Send a side-channel question while Claude works",
+            description: "Ask a quick side question without interrupting the main conversation",
+            argumentHint: "[question]",
             source: .builtin
         ),
         SlashCommand(
             name: "bug",
-            description: "Report a bug to Anthropic",
+            aliases: ["share"],
+            description: "Report a bug or share your conversation",
+            argumentHint: "[report]",
+            source: .builtin
+        ),
+        SlashCommand(
+            name: "claude-api",
+            description: "Build and debug apps that use the Claude API",
             source: .builtin
         ),
         SlashCommand(
             name: "clear",
-            description: "Free up context by clearing the conversation",
+            aliases: ["reset", "new"],
+            description: "Start a new session with empty context; previous session stays on disk (resumable with /resume)",
+            argumentHint: "[name]",
             source: .builtin
         ),
         SlashCommand(
@@ -57,7 +73,9 @@ public enum SlashCommandBuiltins {
         ),
         SlashCommand(
             name: "config",
-            description: "Open config panel",
+            aliases: ["settings"],
+            description: "Open settings",
+            argumentHint: "[key=value]",
             source: .builtin,
             opensInTerminalDialog: true
         ),
@@ -96,7 +114,14 @@ public enum SlashCommandBuiltins {
         ),
         SlashCommand(
             name: "feedback",
-            description: "Send feedback to Anthropic",
+            description: "Send feedback to Anthropic or report a bug",
+            argumentHint: "[report]",
+            source: .builtin
+        ),
+        SlashCommand(
+            name: "fork",
+            description: "Copy this conversation into a new background session and keep working here",
+            argumentHint: "[prompt]",
             source: .builtin
         ),
         SlashCommand(
@@ -127,6 +152,13 @@ public enum SlashCommandBuiltins {
             opensInTerminalDialog: true
         ),
         SlashCommand(
+            name: "loop",
+            aliases: ["proactive"],
+            description: "Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo, defaults to 10m)",
+            argumentHint: "[interval] <prompt>",
+            source: .builtin
+        ),
+        SlashCommand(
             name: "mcp",
             description: "Configure and manage MCP servers",
             source: .builtin,
@@ -152,7 +184,8 @@ public enum SlashCommandBuiltins {
         ),
         SlashCommand(
             name: "permissions",
-            description: "Manage tool permission rules",
+            aliases: ["allowed-tools"],
+            description: "Manage allow and deny tool permission rules",
             source: .builtin,
             opensInTerminalDialog: true
         ),
@@ -162,13 +195,19 @@ public enum SlashCommandBuiltins {
             source: .builtin
         ),
         SlashCommand(
+            name: "plugin",
+            aliases: ["plugins", "marketplace"],
+            description: "Manage Claude Code plugins",
+            source: .builtin
+        ),
+        SlashCommand(
             name: "pr-comments",
             description: "Fetch GitHub PR comments for the current branch",
             source: .builtin
         ),
         SlashCommand(
             name: "release-notes",
-            description: "Show release notes",
+            description: "View release notes",
             source: .builtin
         ),
         SlashCommand(
@@ -178,8 +217,9 @@ public enum SlashCommandBuiltins {
         ),
         SlashCommand(
             name: "rename",
-            description: "Set a display name for this session",
-            argumentHint: "name",
+            aliases: ["name"],
+            description: "Rename the current conversation",
+            argumentHint: "[name]",
             source: .builtin
         ),
         SlashCommand(
@@ -201,6 +241,11 @@ public enum SlashCommandBuiltins {
             opensInTerminalDialog: true
         ),
         SlashCommand(
+            name: "run",
+            description: "Launch this project’s app to see your change working",
+            source: .builtin
+        ),
+        SlashCommand(
             name: "security-review",
             description: "Run a security review on the pending changes",
             source: .builtin
@@ -220,6 +265,17 @@ public enum SlashCommandBuiltins {
             description: "Configure the status line",
             source: .builtin,
             opensInTerminalDialog: true
+        ),
+        SlashCommand(
+            name: "stop",
+            description: "Stop this background session; transcript and worktree are kept",
+            source: .builtin
+        ),
+        SlashCommand(
+            name: "tasks",
+            aliases: ["bashes"],
+            description: "View and manage everything running in the background",
+            source: .builtin
         ),
         SlashCommand(
             name: "todos",
