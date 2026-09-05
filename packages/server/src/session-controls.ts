@@ -5,6 +5,7 @@ import {
   chatImageBase64Bytes,
   type ChatImage,
   type ChatPage,
+  type ChatSettingsPatch,
   type NativeHelperTerminalTarget,
 } from "@agent-visor/protocol";
 import {
@@ -132,6 +133,7 @@ export class NativeSessionControls implements SessionControls {
     deliveryId?: string,
     evidence?: ChatDeliveryEvidence,
     isCurrent: ChatSendCurrentness = () => true,
+    settings?: ChatSettingsPatch,
   ): Promise<void> {
     const terminalTarget = session.controlTarget?.kind === "terminal"
       ? session.controlTarget.target
@@ -169,7 +171,7 @@ export class NativeSessionControls implements SessionControls {
       try {
         await this.deliver(
           session, text, images, deliveryId, evidence,
-          isSendCurrent,
+          isSendCurrent, settings,
         );
       } catch (error) {
         if (terminalGeneration !== undefined) {
@@ -477,6 +479,7 @@ export class NativeSessionControls implements SessionControls {
     deliveryId?: string,
     evidence?: ChatDeliveryEvidence,
     isCurrent: () => boolean = () => true,
+    settings?: ChatSettingsPatch,
   ): Promise<void> {
     if (!text && !images.length) throw new Error("The message is empty.");
     if (session.section !== "working") {
@@ -496,6 +499,7 @@ export class NativeSessionControls implements SessionControls {
           deliveryId,
           evidence?.requestId,
           evidence?.generation,
+          settings,
         );
         if (!isCurrent()) throw new Error("The session was removed before delivery completed.");
         await this.imageLeases.release(imageLease.scope);

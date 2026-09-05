@@ -8,6 +8,7 @@ import {
   codexResponseFor,
   activeCodexTurnDeliveryId,
   hasActiveCodexTurn,
+  readCodexSettingsCatalog,
   sendCodexTurn,
   stopCodexTurn,
   stopCodexTurns,
@@ -130,18 +131,76 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     process.env.AGENT_VISOR_CODEX_TEST_LOG = log;
     process.env.AGENT_VISOR_VERSION = "2.7.0";
 
-    await sendCodexTurn("019f3931-ec11-7f31-8400-1c8624aa9e4d", "Fix it", ["/tmp/pixel.png"]);
+    await sendCodexTurn(
+      "019f3931-ec11-7f31-8400-1c8624aa9e4d",
+      "Fix it",
+      ["/tmp/pixel.png"],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { modelId: "gpt-6-astra", reasoningEffort: "high", permissionProfile: ":workspace" },
+    );
 
     const messages = (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
     expect(messages.map((message) => message.method)).toEqual([
       "initialize", "initialized", "thread/resume", "turn/start",
     ]);
     expect(messages[0].params.clientInfo).toEqual({ name: "agent-visor", version: "2.7.0" });
+    expect(messages[0].params.capabilities).toEqual({ experimentalApi: true });
     expect(messages[2].params.threadId).toBe("019f3931-ec11-7f31-8400-1c8624aa9e4d");
     expect(messages[3].params.input).toEqual([
       { type: "text", text: "Fix it" },
       { type: "localImage", path: "/tmp/pixel.png" },
     ]);
+    expect(messages[3].params.model).toBe("gpt-6-astra");
+    expect(messages[3].params.effort).toBe("high");
+    expect(messages[3].params.permissions).toBe(":workspace");
+  });
+
+  it("reads the provider-owned model and permission catalogs through app-server", async () => {
+    const parent = path.resolve("build/test-codex-settings");
+    await mkdir(parent, { recursive: true });
+    const root = await mkdtemp(path.join(parent, "run-"));
+    roots.push(root);
+    const executable = path.join(root, "codex.cjs");
+    await writeFile(executable, `#!/usr/bin/env node
+const readline=require('node:readline');
+readline.createInterface({input:process.stdin}).on('line',line=>{
+  const m=JSON.parse(line);
+  if(m.method==='initialize') process.stdout.write(JSON.stringify({id:m.id,result:{}})+'\\n');
+  if(m.method==='model/list') process.stdout.write(JSON.stringify({id:m.id,result:{data:[{
+    id:'gpt-6-astra',model:'gpt-6-astra',displayName:'GPT-6 Astra',description:'Fast model',isDefault:true,
+    defaultReasoningEffort:'high',supportedReasoningEfforts:[
+      {reasoningEffort:'low',description:'Short'}, {reasoningEffort:'high',description:'Deep'}
+    ],inputModalities:['text','image']
+  }]}})+'\\n');
+  if(m.method==='permissionProfile/list') process.stdout.write(JSON.stringify({id:m.id,result:{data:[
+    {id:':read-only',description:'No writes',allowed:true}, {id:':danger-full-access',allowed:false}
+  ]}})+'\\n');
+});
+`, { mode: 0o700 });
+    await chmod(executable, 0o700);
+    process.env.CODEX_BINARY = executable;
+
+    await expect(readCodexSettingsCatalog("/tmp/agent-visor-test-home", "/tmp/project")).resolves.toEqual({
+      models: [{
+        id: "gpt-6-astra",
+        displayName: "GPT-6 Astra",
+        description: "Fast model",
+        reasoningEfforts: [
+          { value: "low", description: "Short" },
+          { value: "high", description: "Deep" },
+        ],
+        defaultReasoningEffort: "high",
+        supportsImages: true,
+        isDefault: true,
+      }],
+      permissionProfiles: [
+        { id: ":read-only", displayName: "Read only", description: "No writes", allowed: true },
+        { id: ":danger-full-access", displayName: "Full access", allowed: false },
+      ],
+    });
   });
 
   it("interrupts only the daemon-owned turn for the requested thread", async () => {

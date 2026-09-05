@@ -682,7 +682,12 @@ describe("provider Chat parsing", () => {
       JSON.stringify({ type: "turn_context", payload: {
         model: "gpt-5.6-sol", effort: "high", approval_policy: "on-request",
         sandbox_policy: { type: "workspace-write" },
+        active_permission_profile: { id: ":workspace" },
       } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: {
+        model: "gpt-5.6-sol", reasoning_effort: "high",
+        active_permission_profile: { id: ":workspace", type: "workspace-write" },
+      } } }),
       JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: {
         last_token_usage: { total_tokens: 12_000 }, model_context_window: 258_400,
       } } }),
@@ -691,6 +696,7 @@ describe("provider Chat parsing", () => {
         model: "GPT-5.6-Sol", modelId: "gpt-5.6-sol", modelProvider: "openai",
         reasoningEffort: "high",
         sandbox: "workspace-write", approvalPolicy: "on-request",
+        permissionProfile: ":workspace",
         contextTokens: 12_000, contextWindow: 258_400,
       });
 

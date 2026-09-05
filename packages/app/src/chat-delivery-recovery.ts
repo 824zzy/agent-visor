@@ -190,6 +190,7 @@ function cloneDraft(draft: SubmittedChatDraft): SubmittedChatDraft {
   return {
     text: draft.text,
     images: draft.images.map(cloneImage),
+    ...(draft.settings ? { settings: { ...draft.settings } } : {}),
   };
 }
 
@@ -259,7 +260,11 @@ export function chatSubmittedDraftsEqual(
   left: SubmittedChatDraft,
   right: SubmittedChatDraft,
 ): boolean {
-  return left.text === right.text && imagesEqual(left.images, right.images);
+  return left.text === right.text
+    && imagesEqual(left.images, right.images)
+    && left.settings?.modelId === right.settings?.modelId
+    && left.settings?.reasoningEffort === right.settings?.reasoningEffort
+    && left.settings?.permissionProfile === right.settings?.permissionProfile;
 }
 
 function isEmptyDraft(draft: SubmittedChatDraft): boolean {

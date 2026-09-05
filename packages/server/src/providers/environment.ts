@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import { machineWork, runProcess, summaryWork } from "../machine.js";
+import { readCodexSettingsCatalog, type CodexSettingsCatalog } from "../codex-turn.js";
 
 export type ProcessRecord = {
   pid: number;
@@ -36,6 +37,8 @@ export interface ProviderEnvironment {
     startAt?: number,
   ): Promise<number>;
   sqlite(database: string, sql: string): Promise<unknown[]>;
+  /** Optional provider-owned settings catalog used by interactive Codex chat. */
+  codexSettingsCatalog?(cwd: string): Promise<CodexSettingsCatalog | undefined>;
 }
 
 export class LiveProviderEnvironment implements ProviderEnvironment {
@@ -232,6 +235,13 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
         return [];
       }
     });
+  }
+
+  codexSettingsCatalog(cwd: string): Promise<CodexSettingsCatalog | undefined> {
+    // CodexProvider owns the per-CWD TTL and in-flight deduplication. Keep
+    // this environment seam as one uncached live read so two layers cannot
+    // accidentally keep stale model/permission choices beyond that TTL.
+    return readCodexSettingsCatalog(this.home, cwd).catch(() => undefined);
   }
 }
 

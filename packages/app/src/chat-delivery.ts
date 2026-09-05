@@ -1,4 +1,4 @@
-import type { ChatImage, ChatItem } from "@agent-visor/protocol";
+import type { ChatImage, ChatItem, ChatSettingsPatch } from "@agent-visor/protocol";
 import {
   CHAT_DELIVERY_MAX_RECORDS_PER_SCOPE,
   CHAT_DELIVERY_MAX_SCOPES,
@@ -46,6 +46,8 @@ export type ChatUserItem = Extract<ChatItem, { kind: "user" }>;
 export type SubmittedChatDraft = {
   text: string;
   images: ChatImage[];
+  /** Provider settings carried with this delivery for retry fidelity. */
+  settings?: ChatSettingsPatch;
 };
 
 export type PendingChatDeliveryStatus =
@@ -197,6 +199,7 @@ function cloneDraft(draft: SubmittedChatDraft): SubmittedChatDraft {
   return {
     text: draft.text,
     images: draft.images.map(cloneImage),
+    ...(draft.settings ? { settings: { ...draft.settings } } : {}),
   };
 }
 
@@ -206,9 +209,11 @@ export function submittedChatDraftByteSize(draft: SubmittedChatDraft): number {
   const size = (value: string): number => encoder
     ? encoder.encode(value).byteLength
     : unescape(encodeURIComponent(value)).length;
-  return size(draft.text) + draft.images.reduce((total, image) => (
+  return size(draft.text)
+    + (draft.settings ? size(JSON.stringify(draft.settings)) : 0)
+    + draft.images.reduce((total, image) => (
     total + size(image.name) + size(image.mimeType) + size(image.data ?? "") + 16
-  ), 0);
+    ), 0);
 }
 
 function cloneUserItem(item: ChatUserItem): ChatUserItem {

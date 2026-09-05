@@ -80,6 +80,13 @@ unsupported control routes, Zed-hosted sessions, and other rows whose provider
 does not expose a verified send path. Sending and approval actions appear only
 when the current provider capability and session identity allow them.
 
+Active Codex sessions expose provider-backed composer controls for model,
+reasoning effort, and access profile. The compact model and effort control shows
+the catalog values supported by the current session; the access menu keeps
+existing approval settings unchanged. A selection applies from your next
+message until changed, and an unavailable provider option remains unavailable
+rather than being inferred locally.
+
 ### Settings and native services
 
 Settings controls Launch at Login, application and Sessions shortcuts, theme,

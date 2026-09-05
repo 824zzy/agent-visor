@@ -8,6 +8,7 @@ import {
   CHAT_SEND_MAX_TEXT_UTF16_UNITS,
   chatImageBytesMatchMime,
   type ChatImage,
+  type ChatSettingsPatch,
   type ChatSlashCommand,
 } from "@agent-visor/protocol";
 
@@ -24,6 +25,8 @@ export type ComposerAttachment = ChatImage & {
 export type ComposerDraft = {
   text: string;
   images: ComposerAttachment[];
+  /** Provider settings selected for the next message in this session. */
+  settings?: ChatSettingsPatch;
 };
 
 export type ComposerAttachmentCandidate = {
@@ -64,16 +67,19 @@ export type ComposerRecoveryCommand = {
   draft: {
     text: string;
     images: ChatImage[];
+    settings?: ChatSettingsPatch;
   };
   expectedComposer:
     | {
       text: string;
       images: ChatImage[];
+      settings?: ChatSettingsPatch;
     }
     | {
       draft: {
         text: string;
         images: ChatImage[];
+        settings?: ChatSettingsPatch;
       };
       revision?: number;
     };
@@ -129,6 +135,7 @@ function cloneDraft(draft: ComposerDraft): ComposerDraft {
   return {
     text: draft.text,
     images: draft.images.map((image) => ({ ...image })),
+    ...(draft.settings ? { settings: { ...draft.settings } } : {}),
   };
 }
 
@@ -141,7 +148,7 @@ export function createComposerDraftStore(): ComposerDraftStore {
       return draft ? cloneDraft(draft) : emptyDraft();
     },
     save(sessionId, draft) {
-      if (!draft.text && draft.images.length === 0) {
+      if (!draft.text && draft.images.length === 0 && !draft.settings) {
         drafts.delete(sessionId);
         return;
       }
@@ -195,10 +202,12 @@ export function applyComposerRecoveryCommand(
 export function composerDraftToSubmitted(draft: ComposerDraft): {
   text: string;
   images: ChatImage[];
+  settings?: ChatSettingsPatch;
 } {
   return {
     text: draft.text,
     images: draft.images.map(({ id: _id, ...image }) => ({ ...image })),
+    ...(draft.settings ? { settings: { ...draft.settings } } : {}),
   };
 }
 
@@ -206,6 +215,7 @@ export function composerDraftToSubmitted(draft: ComposerDraft): {
 export function composerDraftFromSubmitted(draft: {
   text: string;
   images: ChatImage[];
+  settings?: ChatSettingsPatch;
 }): ComposerDraft {
   return {
     text: draft.text,
@@ -213,26 +223,31 @@ export function composerDraftFromSubmitted(draft: {
       ...image,
       id: `recovered-${index}-${image.name}`,
     })),
+    ...(draft.settings ? { settings: { ...draft.settings } } : {}),
   };
 }
 
 function toComposerDraftSnapshot(snapshot: {
   text?: string;
   images?: ChatImage[];
+  settings?: ChatSettingsPatch;
   draft?: {
     text: string;
     images: ChatImage[];
+    settings?: ChatSettingsPatch;
   };
   revision?: number;
 }): ComposerDraft {
   return composerDraftFromSubmitted(snapshot.draft ?? {
     text: snapshot.text ?? "",
     images: snapshot.images ?? [],
+    ...(snapshot.settings ? { settings: snapshot.settings } : {}),
   });
 }
 
 function composerDraftsEqual(left: ComposerDraft, right: ComposerDraft): boolean {
   if (left.text !== right.text || left.images.length !== right.images.length) return false;
+  if (!settingsEqual(left.settings, right.settings)) return false;
   return left.images.every((image, index) => {
     const other = right.images[index];
     return image.name === other?.name
@@ -240,6 +255,12 @@ function composerDraftsEqual(left: ComposerDraft, right: ComposerDraft): boolean
       && image.data === other.data
       && image.byteLength === other.byteLength;
   });
+}
+
+function settingsEqual(left?: ChatSettingsPatch, right?: ChatSettingsPatch): boolean {
+  return left?.modelId === right?.modelId
+    && left?.reasoningEffort === right?.reasoningEffort
+    && left?.permissionProfile === right?.permissionProfile;
 }
 
 /** The app-lifetime store mirrors Swift DraftStore.shared. */
@@ -529,6 +550,7 @@ export function removeComposerAttachment(
   return {
     text: draft.text,
     images: draft.images.filter((image) => image.id !== attachmentId),
+    ...(draft.settings ? { settings: { ...draft.settings } } : {}),
   };
 }
 

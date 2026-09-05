@@ -12,15 +12,21 @@ export const palettes = {
 };
 
 export type Palette = typeof palettes.light;
+export type ChatPalette = Palette & {
+  composerBorder: string;
+  composerBorderFocused: string;
+};
 
 // ponytail: Chat may tune content layers, but its root canvas must stay equal
 // to Sessions so navigating between the two surfaces does not flash or drift.
-export function createChatPalette(palette: Palette): Palette {
+export function createChatPalette(palette: Palette): ChatPalette {
   const isDark = hexLuminance(palette.background) < 0.2;
   return {
     ...palette,
     background: palette.background,
     border: isDark ? "#3b3d43" : "#e7e7e3",
+    composerBorder: isDark ? "#70706b" : "#888884",
+    composerBorderFocused: isDark ? "#92928d" : "#6c6c68",
     card: isDark ? "#2b2d31" : "#f7f7f5",
     settingsCard: isDark ? "#2b2d31" : "#f7f7f5",
     foreground: isDark ? "#ecece8" : "#2d2d2b",

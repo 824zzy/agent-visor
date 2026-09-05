@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AuggieProvider } from "./auggie.js";
 import { ClaudeProvider } from "./claude.js";
 import { CodexProvider } from "./codex.js";
@@ -14,7 +14,7 @@ import type {
 import { PiProvider } from "./pi.js";
 import { ZedProvider } from "./zed.js";
 import { processInstanceToken } from "./shared.js";
-import { SessionRepository } from "../sessions.js";
+import { SessionRepository, type DiscoveredProviderSession } from "../sessions.js";
 
 const home = "/Users/me";
 const cwd = `${home}/Codes/agent-visor`;
@@ -31,6 +31,7 @@ class FixtureEnvironment implements ProviderEnvironment {
   sqliteRows = new Map<string, unknown[]>();
   cwdByPID = new Map<number, string>();
   starts = new Map<number, Date>();
+  codexSettingsCatalog: ProviderEnvironment["codexSettingsCatalog"];
 
   now(): Date { return now; }
   async processes(): Promise<ProcessRecord[]> { return this.processRows; }
@@ -273,8 +274,17 @@ describe("live provider adapters", () => {
       arguments: "/Applications/Codex.app/Contents/MacOS/Codex",
     }];
 
+    let settingsReads = 0;
+    environment.codexSettingsCatalog = async () => {
+      settingsReads += 1;
+      return { models: [], permissionProfiles: [] };
+    };
     const provider = new CodexProvider(environment);
     const sessions = await provider.discover();
+    expect(settingsReads).toBe(0);
+    await provider.chatSettings(sessions[0]!);
+    await provider.chatSettings(sessions[0]!);
+    expect(settingsReads).toBe(1);
 
     expect(sessions[0]).toMatchObject({
       id: "codex-1",
@@ -314,6 +324,48 @@ describe("live provider adapters", () => {
       size: 100,
     });
     expect((await new CodexProvider(environment).discover())[0]?.canEnterChat).toBe(true);
+  });
+
+  it("bounds and expires the lazy Codex settings CWD cache", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const environment = new FixtureEnvironment();
+      let settingsReads = 0;
+      const catalog = { models: [], permissionProfiles: [] };
+      environment.codexSettingsCatalog = async () => {
+        settingsReads += 1;
+        return catalog;
+      };
+      const provider = new CodexProvider(environment);
+      const session = (cwd: string): DiscoveredProviderSession => ({
+        id: `codex-${cwd}`,
+        provider: "codex",
+        cwd,
+        owner: "Codex",
+        section: "history",
+        updatedAt: now.toISOString(),
+        canOpenOwner: true,
+        canEnterChat: true,
+        chatPath: `${cwd}/rollout.jsonl`,
+        messageTransport: "codex_app_server",
+      });
+
+      await provider.chatSettings(session(`${home}/Codes/expired`));
+      clock.mockReturnValue(61_001);
+      await provider.chatSettings(session(`${home}/Codes/next`));
+      await provider.chatSettings(session(`${home}/Codes/expired`));
+      expect(settingsReads).toBe(3);
+
+      clock.mockReturnValue(62_000);
+      for (let index = 0; index < 65; index += 1) {
+        await provider.chatSettings(session(`${home}/Codes/cache-${index}`));
+      }
+      expect(settingsReads).toBe(68);
+      await provider.chatSettings(session(`${home}/Codes/cache-0`));
+      expect(settingsReads).toBe(69);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it.each([120_000, 121_000, 720_000, 3_600_000, 24 * 3_600_000, 41 * 3_600_000])(

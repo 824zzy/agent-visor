@@ -9,6 +9,7 @@ import {
   type NativeServicesState,
   type ServerMessage,
   type SessionSnapshot,
+  type ChatSettingsUpdate,
 } from "@agent-visor/protocol";
 import type { SessionSnapshotSource } from "./sessions.js";
 import { sendDaemonMessage } from "./outbound.js";
@@ -46,6 +47,7 @@ export async function startServer(options: {
   const source = options.source ?? fixedSource(sessionSnapshotSchema.parse(options.snapshot));
   const subscribers = new Set<WebSocket>();
   const nativeSubscribers = new Set<WebSocket>();
+  const openChats = new Map<WebSocket, { sessionId: string; generation?: number }>();
   const server = new WebSocketServer({
     host: "127.0.0.1",
     port: options.port,
@@ -72,12 +74,25 @@ export async function startServer(options: {
     }
   });
 
+  const unsubscribeChatSettings = source.subscribeChatSettings?.((update: ChatSettingsUpdate) => {
+    for (const [socket, openChat] of openChats) {
+      if (socket.readyState !== WebSocket.OPEN
+        || openChat.sessionId !== update.sessionId
+        || (openChat.generation !== undefined && openChat.generation !== update.generation)) continue;
+      sendDaemonMessage(socket, update, {
+        requestType: "open_chat",
+        sessionId: update.sessionId,
+      });
+    }
+  });
+
   server.on("connection", (socket) => {
     sendDaemonMessage(socket, { type: "hello", protocolVersion: PROTOCOL_VERSION });
     socket.on("error", (error) => handleSocketError(socket, error));
     socket.once("close", () => {
       subscribers.delete(socket);
       nativeSubscribers.delete(socket);
+      openChats.delete(socket);
     });
 
     socket.on("message", (data) => {
@@ -129,6 +144,12 @@ export async function startServer(options: {
           ...(error ? { error } : {}),
         }, { requestType: parsed.data.type, requestId: parsed.data.id });
       } else if (parsed.data.type === "open_chat") {
+        if (parsed.data.before === undefined) {
+          openChats.set(socket, {
+            sessionId: parsed.data.sessionId,
+            ...(parsed.data.generation !== undefined ? { generation: parsed.data.generation } : {}),
+          });
+        }
         if (source.chatPage) {
           try {
             source.acknowledgeReady?.(parsed.data.sessionId);
@@ -244,6 +265,7 @@ export async function startServer(options: {
     close: async () => {
       unsubscribe();
       unsubscribeNative?.();
+      unsubscribeChatSettings?.();
       await closeServer(server);
     },
   };

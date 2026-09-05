@@ -69,6 +69,34 @@ describe("pending chat delivery store", () => {
     expect(delivery?.draft).toEqual(draft());
   });
 
+  it("retains provider settings with the delivery snapshot for retries", () => {
+    const store = createPendingChatDeliveryStore();
+    activate(store);
+    const submitted: SubmittedChatDraft = {
+      text: "Use the selected profile",
+      images: [],
+      settings: {
+        modelId: "gpt-6-astra",
+        reasoningEffort: "max",
+        permissionProfile: ":danger-full-access",
+      },
+    };
+    const delivery = store.begin({
+      sessionId: "session",
+      generation: 1,
+      requestId: "settings-request",
+      deliveryId: "settings-delivery",
+      draft: submitted,
+    });
+    expect(delivery?.draft.settings).toEqual(submitted.settings);
+    submitted.settings!.modelId = "mutated-after-submit";
+    expect(delivery?.draft.settings).toEqual({
+      modelId: "gpt-6-astra",
+      reasoningEffort: "max",
+      permissionProfile: ":danger-full-access",
+    });
+  });
+
   it("reserves request and delivery IDs as one symmetric pair", () => {
     const store = createPendingChatDeliveryStore();
     activate(store);

@@ -719,6 +719,20 @@ export function createChatSessionController(
         }
         return;
       }
+      if (message.type === "chat_settings_update") {
+        if (message.sessionId !== activeSessionId
+          || message.generation !== candidate
+          || !state.page
+          || state.page.sessionId !== activeSessionId) return;
+        // Settings catalogs may arrive after the transcript page. Keep the
+        // page and draft identity intact while replacing only the provider
+        // controls that the composer renders.
+        publishWithRecovery(candidate, {
+          ...state,
+          page: { ...state.page, chatSettings: message.settings },
+        });
+        return;
+      }
       if (message.type === "chat_page" && message.sessionId === activeSessionId) {
         const request = message.requestId ? openChatRequests.get(message.requestId) : undefined;
         if (message.requestId && (!request
@@ -1314,6 +1328,7 @@ function cloneSubmittedDraft(draft: SubmittedChatDraft): SubmittedChatDraft {
   return {
     text: draft.text,
     images: draft.images.map((image) => ({ ...image })),
+    ...(draft.settings ? { settings: { ...draft.settings } } : {}),
   };
 }
 

@@ -68,6 +68,21 @@ describe("composer draft store", () => {
     expect(store.load("session-one").images[0]!.name).toBe("one.png");
   });
 
+  it("keeps a selected provider setting when switching away from an empty draft", () => {
+    const store = createComposerDraftStore();
+    const settings = {
+      modelId: "gpt-6-astra",
+      reasoningEffort: "max",
+      permissionProfile: ":danger-full-access",
+    };
+    store.save("session", { text: "", images: [], settings });
+
+    expect(store.load("session")).toEqual({ text: "", images: [], settings });
+
+    store.save("session", { text: "", images: [] });
+    expect(store.load("session")).toEqual({ text: "", images: [] });
+  });
+
   it("deletes an empty draft so remount restore is deterministic", () => {
     const store = createComposerDraftStore();
     store.save("session", { text: "draft", images: [] });
@@ -96,6 +111,33 @@ describe("composer draft store", () => {
     expect(result.draft.text).toBe("retry me");
     expect(result.draft.images[0]?.id).toBe("recovered-0-diagram.png");
     expect(composerDraftToSubmitted(store.load("session"))).toEqual(submitted);
+  });
+
+  it("restores provider settings together with a failed send snapshot", () => {
+    const store = createComposerDraftStore();
+    const settings = {
+      modelId: "gpt-6-astra",
+      reasoningEffort: "max",
+      permissionProfile: ":danger-full-access",
+    };
+    const current = composerDraftFromSubmitted({ text: "", images: [], settings });
+    store.save("session", current);
+
+    const result = applyComposerRecoveryCommand(store, "session", current, 4, {
+      id: "restore-settings-1",
+      type: "restore",
+      draft: { text: "retry me", images: [], settings },
+      expectedComposer: { draft: { text: "", images: [], settings }, revision: 4 },
+      expectedRevision: 4,
+    });
+
+    expect(result.status).toBe("applied");
+    expect(result.draft.settings).toEqual(settings);
+    expect(composerDraftToSubmitted(store.load("session"))).toEqual({
+      text: "retry me",
+      images: [],
+      settings,
+    });
   });
 
   it("preserves a newer draft and rejects a stale restore revision", () => {

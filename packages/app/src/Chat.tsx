@@ -15,6 +15,8 @@ import type {
   ChatImage,
   ChatItem,
   ChatMetadata,
+  ChatSettings,
+  ChatSettingsPatch,
   ChatPendingAction,
   ChatSlashCommand,
   ChatVisibility,
@@ -47,7 +49,7 @@ import {
   pendingChatActionIdentity,
   validateQuestionAnswers,
 } from "./chat-action-policy";
-import { chatStatusSummary, displayMode } from "./chat-status";
+import { chatStatusSummary } from "./chat-status";
 import {
   appendComposerAttachments,
   applyComposerRecoveryCommand,
@@ -83,7 +85,7 @@ import {
   insertComposerTextAtSelection,
 } from "./chat-paste";
 import { CONTENT_RAIL_INSET, contentRailStyle } from "./content-rail";
-import { createChatPalette, type Palette } from "./theme";
+import { createChatPalette, type ChatPalette, type Palette } from "./theme";
 import { chatCancellationView, type ChatCancellationView } from "./chat-cancellation";
 import type { ChatDeliveryRecoveryRecord } from "./chat-delivery-recovery";
 import { chatRecoveryView } from "./chat-recovery-presentation";
@@ -95,6 +97,14 @@ import {
   type ChatTailScrollAction,
 } from "./chat-tail";
 import { useChat } from "./use-chat";
+import {
+  ChatComposerModelControl,
+  ChatComposerPermissionControl,
+} from "./ChatComposerControls";
+import {
+  canSendImagesForSettings,
+  imageCapabilityMessage,
+} from "./chat-composer-settings";
 
 type ChatTimelineRow =
   | { type: "item"; id: string; item: ChatItem }
@@ -392,9 +402,9 @@ export function Chat({
     finishPrepend();
   };
 
-  const sendChat = (text: string, images: ChatImage[]): boolean | void => {
+  const sendChat = (text: string, images: ChatImage[], settings?: ChatSettingsPatch): boolean | void => {
     pendingLocalSend.current = true;
-    const accepted = chat.send(text, images);
+    const accepted = chat.send(text, images, settings);
     if (accepted === false) {
       pendingLocalSend.current = false;
     } else {
@@ -695,6 +705,8 @@ export function Chat({
             key={session.id}
             canSendImages={chat.page.capabilities.canSendImages}
             canSendText={chat.page.capabilities.canSendText}
+            chatSettings={chat.page.chatSettings}
+            contentScale={contentScale}
             maxTextBytes={chat.page.capabilities.maxTextBytes}
             metadata={chat.page.metadata}
             onDraftChange={chat.noteComposerDraft}
@@ -706,6 +718,7 @@ export function Chat({
             onResize={handleComposerResize}
             onRequestSlashCommands={chat.loadSlashCommands}
             onSend={sendChat}
+            palette={chatSurface}
             permissionModeOverride={chat.optimisticPermissionMode}
             recoveryCommand={chat.recoveryCommand}
             sessionId={session.id}
@@ -1488,7 +1501,9 @@ export function Composer({
   canSendImages,
   canSendText,
   canCyclePermissionMode,
+  chatSettings,
   cancellation,
+  contentScale,
   maxTextBytes,
   metadata,
   onCancel,
@@ -1498,6 +1513,7 @@ export function Composer({
   onResize,
   onRequestSlashCommands,
   onSend,
+  palette,
   permissionModeOverride,
   recoveryCommand,
   sessionId,
@@ -1510,16 +1526,23 @@ export function Composer({
   canSendImages: boolean;
   canSendText: boolean;
   canCyclePermissionMode: boolean;
+  chatSettings?: ChatSettings;
   cancellation: ChatCancellationView;
+  contentScale: number;
   maxTextBytes?: number;
   metadata?: ChatMetadata;
   onCancel(): boolean;
-  onDraftChange?(draft: { text: string; images: ChatImage[] }): void;
+  onDraftChange?(draft: {
+    text: string;
+    images: ChatImage[];
+    settings?: ChatSettingsPatch;
+  }): void;
   onCycleMode?(): boolean;
   cycleModeDisabled?: boolean;
   onResize?(): void;
   onRequestSlashCommands(): void;
-  onSend(text: string, images: ChatImage[]): boolean | void;
+  onSend(text: string, images: ChatImage[], settings?: ChatSettingsPatch): boolean | void;
+  palette: ChatPalette;
   permissionModeOverride?: string;
   recoveryCommand?: ComposerRecoveryCommand;
   sessionId: string;
@@ -1530,6 +1553,7 @@ export function Composer({
   styles: ChatStyles;
 }) {
   const [draft, setDraft] = useState<ComposerDraft>(() => composerDraftStore.load(sessionId));
+  const [inputFocused, setInputFocused] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [layout, setLayout] = useState(() => composerLayoutForContent({
     contentHeight: COMPOSER_MIN_HEIGHT,
@@ -1552,7 +1576,12 @@ export function Composer({
   const composerContext = chatStatusSummary(session, statusMetadata, {
     canSendText,
   });
-
+  const effectiveCanSendImages = canSendImagesForSettings(canSendImages, chatSettings, draft.settings);
+  const selectedModelImageMessage = imageCapabilityMessage(canSendImages, chatSettings, draft.settings);
+  const imageCapabilityError = draft.images.length ? selectedModelImageMessage : undefined;
+  const visibleValidationErrors = imageCapabilityError && !validationErrors.includes(imageCapabilityError)
+    ? [...validationErrors, imageCapabilityError]
+    : validationErrors;
   draftRef.current = draft;
   const commitDraft = (nextOrUpdate: ComposerDraft | ((current: ComposerDraft) => ComposerDraft)) => {
     const next = typeof nextOrUpdate === "function"
@@ -1659,23 +1688,37 @@ export function Composer({
     }
     const submission = draftSubmission(draftRef.current, maxTextBytes);
     if (!submission) return;
-    if ((submission.text && !canSendText) || (submission.images.length && !canSendImages)) {
+    const draftCanSendImages = canSendImagesForSettings(canSendImages, chatSettings, draftRef.current.settings);
+    if ((submission.text && !canSendText) || (submission.images.length && !draftCanSendImages)) {
       setValidationErrors([
         submission.text && !canSendText
           ? "Text messages are unavailable from this Chat surface."
-          : "Image attachments are unavailable from this Chat surface.",
+          : imageCapabilityMessage(canSendImages, chatSettings, draftRef.current.settings)
+            ?? "Image attachments are unavailable from this Chat surface.",
       ]);
       return;
     }
     const previousDraft = {
       text: draftRef.current.text,
       images: draftRef.current.images.map((image) => ({ ...image })),
+      ...(draftRef.current.settings ? { settings: { ...draftRef.current.settings } } : {}),
     };
+    const submittedSettings = draftRef.current.settings
+      ? { ...draftRef.current.settings }
+      : undefined;
     attachmentOperations.cancel(sessionId);
-    commitDraft({ text: "", images: [] });
+    // Keep the selected settings with the empty post-submit draft. Provider
+    // acceptance is asynchronous, and a failure must restore the exact
+    // model/access choice alongside the text and images.
+    commitDraft({
+      text: "",
+      images: [],
+      ...(submittedSettings ? { settings: submittedSettings } : {}),
+    });
     const accepted = onSend(
       submission.text,
       submission.images.map(({ id: _id, ...image }) => image),
+      submittedSettings,
     );
     if (accepted === false) commitDraft(previousDraft);
     setValidationErrors([]);
@@ -1783,7 +1826,7 @@ export function Composer({
       // the browser inserts a newline while retaining the current draft.
     };
     const paste = async (event: ClipboardEvent) => {
-      if (!canSendImages) return;
+      if (!effectiveCanSendImages) return;
       if (!hasComposerPastePayload(event.clipboardData)) return;
       const pasteInput = input as HTMLTextAreaElement;
       const pasteSnapshot = createComposerPasteSnapshot(sessionId, draftRef.current, {
@@ -1840,7 +1883,7 @@ export function Composer({
       input.removeEventListener("keydown", keyDown);
       input.removeEventListener("paste", paste);
     };
-  }, [attachmentOperations, canSendImages, inputId, maxTextBytes, query, sessionId, slashCommandsError, slashCommandsTruncated, slashOpen, slashSuggestions.length]);
+  }, [attachmentOperations, effectiveCanSendImages, inputId, maxTextBytes, query, sessionId, slashCommandsError, slashCommandsTruncated, slashOpen, slashSuggestions.length]);
 
   useEffect(() => {
     if (!canSendText || typeof document === "undefined") return;
@@ -1849,8 +1892,25 @@ export function Composer({
   }, [canSendText, inputId]);
 
   const addPickedImages = () => {
+    if (!effectiveCanSendImages) return;
     const operation = attachmentOperations.begin(sessionId);
     void pickImages().then((files) => appendFiles(files, operation));
+  };
+  const applySettingPatch = (patch: ChatSettingsPatch): boolean => {
+    if (!chatSettings?.canChange) return false;
+    const nextSettings = { ...(draftRef.current.settings ?? {}), ...patch };
+    commitDraft((current) => ({ ...current, settings: nextSettings }));
+    const nextImageMessage = draftRef.current.images.length
+      ? imageCapabilityMessage(canSendImages, chatSettings, nextSettings)
+      : undefined;
+    setValidationErrors((current) => {
+      const withoutImageCapability = current.filter((error) => (
+        !error.startsWith("The selected model does not support image attachments.")
+        && error !== "Image attachments are unavailable from this Chat surface."
+      ));
+      return nextImageMessage ? [...withoutImageCapability, nextImageMessage] : withoutImageCapability;
+    });
+    return true;
   };
 
   if (!canSendText && !canSendImages) {
@@ -1860,12 +1920,12 @@ export function Composer({
   const submission = draftSubmission(draft, maxTextBytes);
   const canSendDraft = Boolean(submission
     && (!submission.text || canSendText)
-    && (!submission.images.length || canSendImages));
+    && (!submission.images.length || effectiveCanSendImages));
 
   return (
     <View onLayout={onResize} style={styles.composerSurface}>
       <View accessibilityLabel="Chat composer rail" style={styles.composerRailContainer}>
-        <View accessibilityLabel="Chat composer" style={styles.composerRail}>
+        <View accessibilityLabel="Chat composer" style={[styles.composerRail, inputFocused && styles.composerRailFocused]}>
         {slashOpen ? (
           <View accessibilityLabel="Slash command suggestions" style={styles.slashPopover}>
             <ScrollView keyboardShouldPersistTaps="handled" style={styles.slashScroller}>
@@ -1910,9 +1970,9 @@ export function Composer({
             ))}
           </ScrollView>
         ) : null}
-        {validationErrors.length ? (
+        {visibleValidationErrors.length ? (
           <View accessibilityLabel="Composer validation errors" accessibilityRole="alert" style={styles.validationErrors}>
-            {validationErrors.map((error, index) => <Text key={`${error}-${index}`} style={styles.validationError}>{error}</Text>)}
+            {visibleValidationErrors.map((error, index) => <Text key={`${error}-${index}`} style={styles.validationError}>{error}</Text>)}
           </View>
         ) : null}
         <TextInput
@@ -1924,6 +1984,8 @@ export function Composer({
           multiline
           maxLength={COMPOSER_MAX_TEXT_LENGTH}
           nativeID={inputId}
+          onBlur={() => setInputFocused(false)}
+          onFocus={() => setInputFocused(true)}
           onChangeText={(value) => {
             const textError = validateComposerText(value, maxTextBytes);
             if (textError) {
@@ -1946,8 +2008,17 @@ export function Composer({
         />
         <View accessibilityLabel="Chat composer actions" style={styles.composerToolbar}>
           <View style={styles.composerLeadingActions}>
-            {canSendImages ? <ComposerIconButton label="Add image" onPress={addPickedImages} styles={styles}>+</ComposerIconButton> : null}
-            {composerContext.permission ? (
+            {effectiveCanSendImages ? <ComposerIconButton label="Add image" onPress={addPickedImages} styles={styles}>+</ComposerIconButton> : null}
+            <ChatComposerModelControl
+              fallbackEffort={composerContext.effort}
+              fallbackModel={chatSettings ? undefined : composerContext.model ?? composerContext.source}
+              onChange={applySettingPatch}
+              palette={palette}
+              scale={contentScale}
+              settings={chatSettings}
+              staged={draft.settings}
+            />
+            {!chatSettings && composerContext.permission ? (
               onCycleMode && canCyclePermissionMode ? (
                 <Pressable
                   accessibilityLabel={`Permission mode: ${composerContext.permission.label}`}
@@ -1969,10 +2040,15 @@ export function Composer({
             ) : null}
           </View>
           <View style={styles.composerToolbarSpacer} />
-          <Text accessibilityLabel="Composer model and effort" numberOfLines={1} style={styles.composerModel}>
-            {composerContext.model ?? composerContext.source}
-            {composerContext.effort ? ` · Reasoning ${displayComposerMode(composerContext.effort)}` : ""}
-          </Text>
+          {chatSettings ? (
+            <ChatComposerPermissionControl
+              onChange={applySettingPatch}
+              palette={palette}
+              scale={contentScale}
+              settings={chatSettings}
+              staged={draft.settings}
+            />
+          ) : null}
           <View style={styles.composerActionCluster}>
             {cancellation.visible ? (
               <CancellationButton
@@ -2121,10 +2197,6 @@ function CancellationButton({
   );
 }
 
-function displayComposerMode(value: string): string {
-  return displayMode(value).replace(/^Extra /, "");
-}
-
 function Centered({ text, styles }: { text: string; styles: ChatStyles }) {
   return <View style={styles.centered}><Text style={styles.muted}>{text}</Text></View>;
 }
@@ -2186,7 +2258,7 @@ function sectionColor(section: SessionSummary["section"], palette: Palette): str
 }
 
 type ChatStyles = ReturnType<typeof createStyles>;
-function createStyles(palette: Palette, scale: number) {
+function createStyles(palette: ChatPalette, scale: number) {
   const font = (size: number) => size * scale;
   return StyleSheet.create({
     app: { backgroundColor: palette.background, flex: 1 },
@@ -2312,7 +2384,8 @@ function createStyles(palette: Palette, scale: number) {
     answerInput: { backgroundColor: palette.background, borderColor: palette.border, borderRadius: 7, borderWidth: 1, color: palette.foreground, fontSize: font(12), minHeight: 38, padding: 8 },
     composerSurface: { paddingHorizontal: CONTENT_RAIL_INSET, paddingVertical: 8 },
     composerRailContainer: contentRailStyle(),
-    composerRail: { ...contentRailStyle(), backgroundColor: palette.background, borderColor: palette.border, borderRadius: 22, borderWidth: 1, gap: 4, paddingBottom: 5, paddingHorizontal: 10, paddingTop: 8 },
+    composerRail: { ...contentRailStyle(), backgroundColor: palette.background, borderColor: palette.composerBorder, borderRadius: 22, borderWidth: 1, gap: 4, paddingBottom: 5, paddingHorizontal: 10, paddingTop: 8 },
+    composerRailFocused: { borderColor: palette.composerBorderFocused },
     composerInput: { backgroundColor: "transparent", borderColor: "transparent", borderRadius: 4, borderWidth: 0, color: palette.foreground, fontSize: font(14), lineHeight: font(22), maxHeight: 180, minHeight: 42, outlineColor: "transparent", outlineStyle: "solid", outlineWidth: 0, paddingHorizontal: 7, paddingTop: 2, paddingBottom: 6, width: "100%" },
     composerToolbar: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 4, minHeight: 44 },
     composerLeadingActions: { alignItems: "center", flexDirection: "row", flexShrink: 1, gap: 4, minHeight: 44, minWidth: 0 },

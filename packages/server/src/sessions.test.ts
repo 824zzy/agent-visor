@@ -1230,6 +1230,264 @@ describe("SessionRepository", () => {
     expect(calls).toEqual(["focus:pi-1", "send:pi-1:Continue"]);
   });
 
+  it("loads Codex settings only when opening Chat and forwards validated next-turn choices", async () => {
+    const catalog = {
+      models: [{
+        id: "gpt-6-astra", displayName: "GPT-6 Astra", description: "Fast model",
+        reasoningEfforts: [
+          { value: "low", description: "Fast" },
+          { value: "high", description: "Deep" },
+        ],
+        defaultReasoningEffort: "high", supportsImages: true, isDefault: true,
+      }, {
+        id: "gpt-5.3-codex-spark", displayName: "GPT-5.3 Codex Spark", description: "Text only",
+        reasoningEfforts: [{ value: "high", description: "Deep" }],
+        defaultReasoningEffort: "high", supportsImages: false, isDefault: false,
+      }],
+      permissionProfiles: [{ id: ":workspace", displayName: "Workspace", allowed: true }],
+    };
+    const codexSession: DiscoveredProviderSession = {
+      ...live,
+      provider: "codex",
+      owner: "Codex",
+      chatPath: "/tmp/codex-settings.jsonl",
+      messageTransport: "codex_app_server",
+    };
+    let discoveries = 0;
+    let settingsReads = 0;
+    let selected: unknown;
+    const provider: ProviderAdapter = {
+      id: "codex",
+      discover: async () => { discoveries += 1; return [structuredClone(codexSession)]; },
+      chatSettings: async () => { settingsReads += 1; return catalog; },
+    };
+    const repository = new SessionRepository([provider], {
+      chatPageReader: async (session) => ({
+        type: "chat_page", sessionId: session.id, items: [], hasMoreBefore: false,
+        metadata: { modelId: "gpt-5.3-codex-spark", reasoningEffort: "high", permissionProfile: ":workspace" },
+        capabilities: {
+          canSendText: true, canSendImages: true, canCancel: false,
+          canApprove: false, canAnswer: false,
+        },
+        pendingAction: null,
+      }),
+    });
+    repository.setControls({
+      focus: async () => undefined,
+      send: async (_session, _text, _images, _delivery, _evidence, _isCurrent, settings) => {
+        selected = settings;
+      },
+    });
+
+    await repository.refresh();
+    expect(discoveries).toBe(1);
+    expect(settingsReads).toBe(0);
+
+    const page = await repository.chatPage(codexSession.id);
+    expect(settingsReads).toBe(1);
+    expect(page.chatSettings).toMatchObject({
+      provider: "codex",
+      current: { modelId: "gpt-5.3-codex-spark", reasoningEffort: "high", permissionProfile: ":workspace" },
+      appliesTo: "next_turn",
+    });
+
+    await repository.refresh();
+    await repository.chatPage(codexSession.id);
+    expect(settingsReads).toBe(1);
+    expect(await repository.chatAction({
+      type: "send_chat", id: "codex-settings-send", sessionId: codexSession.id, generation: 1,
+      deliveryId: "codex-settings-delivery", text: "Continue", images: [],
+      settings: { modelId: "gpt-6-astra", reasoningEffort: "high", permissionProfile: ":workspace" },
+    })).toBeUndefined();
+    expect(selected).toEqual({
+      modelId: "gpt-6-astra", reasoningEffort: "high", permissionProfile: ":workspace",
+    });
+    expect(await repository.chatAction({
+      type: "send_chat", id: "codex-current-reasoning", sessionId: codexSession.id, generation: 1,
+      deliveryId: "codex-current-reasoning-delivery", text: "Do not send", images: [],
+      settings: { reasoningEffort: "low" },
+    })).toContain("unavailable");
+    expect(await repository.chatAction({
+      type: "send_chat", id: "codex-current-image", sessionId: codexSession.id, generation: 1,
+      deliveryId: "codex-current-image-delivery", text: "Image", images: [{
+        name: "pixel.png", mimeType: "image/png", byteLength: 8, data: "iVBORw0KGgo=",
+      }],
+    })).toContain("does not support images");
+    expect(await repository.chatAction({
+      type: "send_chat", id: "codex-invalid-settings", sessionId: codexSession.id, generation: 1,
+      deliveryId: "codex-invalid-delivery", text: "Do not send", images: [],
+      settings: { permissionProfile: ":danger-full-access" },
+    })).toContain("unavailable");
+    expect(selected).toEqual({
+      modelId: "gpt-6-astra", reasoningEffort: "high", permissionProfile: ":workspace",
+    });
+  });
+
+  it("pushes a settings-only update when the lazy Codex catalog misses the first-open bound", async () => {
+    const catalog = {
+      models: [{
+        id: "gpt-6-astra", displayName: "GPT-6 Astra", description: "Fast model",
+        reasoningEfforts: [{ value: "high", description: "Deep" }],
+        defaultReasoningEffort: "high", supportsImages: true, isDefault: true,
+      }],
+      permissionProfiles: [{ id: ":workspace", displayName: "Workspace", allowed: true }],
+    };
+    const codexSession: DiscoveredProviderSession = {
+      ...live,
+      provider: "codex",
+      owner: "Codex",
+      chatPath: "/tmp/codex-lazy-settings.jsonl",
+      messageTransport: "codex_app_server",
+    };
+    let resolveCatalog!: (value: typeof catalog) => void;
+    const catalogPromise = new Promise<typeof catalog>((resolve) => { resolveCatalog = resolve; });
+    const provider: ProviderAdapter = {
+      id: "codex",
+      discover: async () => [structuredClone(codexSession)],
+      chatSettings: async () => catalogPromise,
+    };
+    const repository = new SessionRepository([provider], {
+      chatPageReader: async (session) => ({
+        type: "chat_page", sessionId: session.id, items: [], hasMoreBefore: false,
+        metadata: { modelId: "gpt-6-astra", reasoningEffort: "high" },
+        capabilities: {
+          canSendText: true, canSendImages: true, canCancel: false,
+          canApprove: false, canAnswer: false,
+        },
+        pendingAction: null,
+      }),
+    });
+    const updates: unknown[] = [];
+    repository.subscribeChatSettings?.((update) => updates.push(update));
+    await repository.refresh();
+
+    const firstPage = await repository.chatPage(codexSession.id);
+    expect(firstPage.chatSettings).toBeUndefined();
+
+    resolveCatalog(catalog);
+    await expect.poll(() => updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({
+      type: "chat_settings_update",
+      sessionId: codexSession.id,
+      generation: 1,
+      settings: {
+        current: { modelId: "gpt-6-astra", reasoningEffort: "high" },
+        models: [{ id: "gpt-6-astra" }],
+      },
+    });
+  });
+
+  it("refreshes an expired settings catalog before delivering a staged send", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const catalog = {
+        models: [{
+          id: "gpt-6-astra", displayName: "GPT-6 Astra", description: "Fast model",
+          reasoningEfforts: [{ value: "high", description: "Deep" }],
+          defaultReasoningEffort: "high", supportsImages: true, isDefault: true,
+        }],
+        permissionProfiles: [{ id: ":workspace", displayName: "Workspace", allowed: true }],
+      };
+      const codexSession: DiscoveredProviderSession = {
+        ...live,
+        provider: "codex",
+        owner: "Codex",
+        chatPath: "/tmp/codex-expired-settings.jsonl",
+        messageTransport: "codex_app_server",
+      };
+      let settingsReads = 0;
+      const provider: ProviderAdapter = {
+        id: "codex",
+        discover: async () => [structuredClone(codexSession)],
+        chatSettings: async () => { settingsReads += 1; return catalog; },
+      };
+      let sentSettings: unknown;
+      const repository = new SessionRepository([provider], {
+        chatPageReader: async (session) => ({
+          type: "chat_page", sessionId: session.id, items: [], hasMoreBefore: false,
+          metadata: { modelId: "gpt-6-astra", reasoningEffort: "high" },
+          capabilities: {
+            canSendText: true, canSendImages: true, canCancel: false,
+            canApprove: false, canAnswer: false,
+          },
+          pendingAction: null,
+        }),
+      });
+      repository.setControls({
+        focus: async () => undefined,
+        send: async (_session, _text, _images, _delivery, _evidence, _isCurrent, settings) => {
+          sentSettings = settings;
+        },
+      });
+      await repository.refresh();
+      await repository.chatPage(codexSession.id);
+      expect(settingsReads).toBe(1);
+      now.mockReturnValue(61_001);
+      expect(await repository.chatAction({
+        type: "send_chat", id: "codex-expired-send", sessionId: codexSession.id, generation: 1,
+        deliveryId: "codex-expired-delivery", text: "Continue", images: [],
+        settings: { modelId: "gpt-6-astra", permissionProfile: ":workspace" },
+      })).toBeUndefined();
+      expect(settingsReads).toBe(2);
+      expect(sentSettings).toEqual({ modelId: "gpt-6-astra", permissionProfile: ":workspace" });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("attaches a catalog that finishes during optional usage loading before returning the page", async () => {
+    const catalog = {
+      models: [{
+        id: "gpt-6-astra", displayName: "GPT-6 Astra", description: "Fast model",
+        reasoningEfforts: [{ value: "high", description: "Deep" }],
+        defaultReasoningEffort: "high", supportsImages: true, isDefault: true,
+      }],
+      permissionProfiles: [],
+    };
+    const codexSession: DiscoveredProviderSession = {
+      ...live,
+      provider: "codex",
+      owner: "Codex",
+      chatPath: "/tmp/codex-usage-settings.jsonl",
+      messageTransport: "codex_app_server",
+    };
+    let resolveCatalog!: (value: typeof catalog) => void;
+    let resolveUsage!: (value: undefined) => void;
+    let usageStarted = false;
+    const catalogPromise = new Promise<typeof catalog>((resolve) => { resolveCatalog = resolve; });
+    const usagePromise = new Promise<undefined>((resolve) => { resolveUsage = resolve; });
+    const provider: ProviderAdapter = {
+      id: "codex",
+      discover: async () => [structuredClone(codexSession)],
+      chatSettings: async () => catalogPromise,
+    };
+    const repository = new SessionRepository([provider], {
+      chatPageReader: async (session) => ({
+        type: "chat_page", sessionId: session.id, items: [], hasMoreBefore: false,
+        metadata: { modelId: "gpt-6-astra", reasoningEffort: "high" },
+        capabilities: {
+          canSendText: true, canSendImages: true, canCancel: false,
+          canApprove: false, canAnswer: false,
+        },
+        pendingAction: null,
+      }),
+      chatUsageGlance: async () => {
+        usageStarted = true;
+        return usagePromise;
+      },
+    });
+    await repository.refresh();
+    const pagePromise = repository.chatPage(codexSession.id);
+    await expect.poll(() => usageStarted).toBe(true);
+    resolveCatalog(catalog);
+    resolveUsage(undefined);
+    const page = await pagePromise;
+    expect(page.chatSettings).toMatchObject({
+      current: { modelId: "gpt-6-astra", reasoningEffort: "high" },
+      models: [{ id: "gpt-6-astra" }],
+    });
+  });
+
   it("revalidates the live generation after an async evidence read before writing", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{
