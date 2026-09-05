@@ -31,10 +31,17 @@ where archived = 0
 order by updated_at desc
 limit 200`;
 
+const codexSettingsCatalogTtlMs = 60_000;
+const maxSettingsCatalogCWDs = 64;
+
 export class CodexProvider implements ProviderAdapter {
   readonly id = "codex" as const;
   private lastRows: CodexRow[] = [];
   private readonly modelCatalogCache: ModelCatalogCache = {};
+  private readonly settingsCatalogByCWD = new Map<string, {
+    expiresAt: number;
+    value: Promise<NonNullable<DiscoveredProviderSession["chatSettingsCatalog"]> | undefined>;
+  }>();
   private readonly lifecycleReader = new CodexLifecycleReader();
 
   constructor(private readonly environment: ProviderEnvironment) {}
@@ -141,6 +148,27 @@ export class CodexProvider implements ProviderAdapter {
         ? { kind: "terminal", target: terminalTarget }
         : { kind: "url", url: `codex://threads/${thread.id}` },
     };
+  }
+
+  async chatSettings(session: DiscoveredProviderSession): Promise<NonNullable<DiscoveredProviderSession["chatSettingsCatalog"]> | undefined> {
+    if (!this.environment.codexSettingsCatalog || session.provider !== "codex") return undefined;
+    const now = Date.now();
+    for (const [cwd, cached] of this.settingsCatalogByCWD) {
+      if (cached.expiresAt <= now) this.settingsCatalogByCWD.delete(cwd);
+    }
+    const existing = this.settingsCatalogByCWD.get(session.cwd);
+    if (existing) return existing.value;
+    const value = this.environment.codexSettingsCatalog(session.cwd).catch(() => undefined);
+    this.settingsCatalogByCWD.set(session.cwd, {
+      expiresAt: now + codexSettingsCatalogTtlMs,
+      value,
+    });
+    while (this.settingsCatalogByCWD.size > maxSettingsCatalogCWDs) {
+      const oldest = this.settingsCatalogByCWD.keys().next().value;
+      if (oldest === undefined) break;
+      this.settingsCatalogByCWD.delete(oldest);
+    }
+    return value;
   }
 }
 

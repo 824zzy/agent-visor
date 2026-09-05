@@ -1132,6 +1132,77 @@ describe("Chat session controller", () => {
     expect(slashError).toBeUndefined();
   });
 
+  it("applies only the active session generation's late settings catalog", () => {
+    const controller = createChatSessionController({
+      onState: () => undefined,
+      onSlashCommands: () => undefined,
+      onOpenLatest: () => undefined,
+    });
+    const transport = { close: () => undefined, send: () => true };
+    const firstGeneration = controller.activate("session");
+    controller.requestLatest(firstGeneration, "latest-1");
+    controller.receive(firstGeneration, JSON.stringify({
+      ...page("session", "first"),
+      requestId: "latest-1",
+      mode: "latest",
+    }), transport);
+
+    const secondGeneration = controller.activate("session");
+    controller.requestLatest(secondGeneration, "latest-2");
+    controller.receive(secondGeneration, JSON.stringify({
+      ...page("session", "second"),
+      requestId: "latest-2",
+      mode: "latest",
+    }), transport);
+    const settings = {
+      provider: "codex",
+      current: { modelId: "gpt-6-astra", reasoningEffort: "high" },
+      models: [{
+        id: "gpt-6-astra",
+        displayName: "GPT-6 Astra",
+        description: "Most capable model.",
+        reasoningEfforts: [{ value: "high", description: "Deliberate reasoning." }],
+        defaultReasoningEffort: "high",
+        supportsImages: true,
+        isDefault: true,
+      }],
+      permissionProfiles: [{
+        id: ":workspace",
+        displayName: "Workspace",
+        allowed: true,
+      }],
+      appliesTo: "next_turn",
+      canChange: true,
+    };
+
+    controller.receive(secondGeneration, JSON.stringify({
+      type: "chat_settings_update",
+      sessionId: "session",
+      generation: firstGeneration,
+      settings,
+    }), transport);
+    expect(controller.currentState().page?.chatSettings).toBeUndefined();
+
+    controller.receive(secondGeneration, JSON.stringify({
+      type: "chat_settings_update",
+      sessionId: "other-session",
+      generation: secondGeneration,
+      settings,
+    }), transport);
+    expect(controller.currentState().page?.chatSettings).toBeUndefined();
+
+    controller.receive(secondGeneration, JSON.stringify({
+      type: "chat_settings_update",
+      sessionId: "session",
+      generation: secondGeneration,
+      settings,
+    }), transport);
+    expect(controller.currentState().page?.chatSettings).toMatchObject({
+      current: { modelId: "gpt-6-astra" },
+      models: [{ id: "gpt-6-astra" }],
+    });
+  });
+
   it("bounds expanded history, surfaces the safety cap, and keeps optimistic rows inside it", () => {
     const controller = createChatSessionController({
       onState: () => undefined,

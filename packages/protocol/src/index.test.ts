@@ -298,6 +298,38 @@ describe("session snapshot protocol", () => {
       deliveryId: "delivery-1", text: "Continue", images: [],
     }).success).toBe(true);
     expect(clientMessageSchema.safeParse({
+      type: "send_chat", id: "request-settings", sessionId: "session-1", generation: 3,
+      deliveryId: "delivery-settings", text: "Continue", images: [],
+      settings: {
+        modelId: "gpt-6-astra", reasoningEffort: "high", permissionProfile: ":workspace",
+      },
+    }).success).toBe(true);
+    expect(clientMessageSchema.safeParse({
+      type: "send_chat", id: "request-empty-settings", sessionId: "session-1", generation: 3,
+      deliveryId: "delivery-empty-settings", text: "Continue", images: [], settings: {},
+    }).success).toBe(false);
+    expect(chatPageSchema.safeParse({
+      type: "chat_page", sessionId: "session-1", items: [], hasMoreBefore: false,
+      chatSettings: {
+        provider: "codex",
+        current: { modelId: "gpt-6-astra", reasoningEffort: "high", permissionProfile: ":workspace" },
+        models: [{
+          id: "gpt-6-astra", displayName: "GPT-6 Astra", description: "Fast model",
+          reasoningEfforts: [{ value: "high", description: "Deep" }],
+          defaultReasoningEffort: "high", supportsImages: true, isDefault: true,
+        }],
+        permissionProfiles: [{
+          id: ":workspace", displayName: "Workspace", allowed: true,
+        }],
+        appliesTo: "next_turn", canChange: true,
+      },
+      capabilities: {
+        canSendText: true, canSendImages: true, canCancel: false,
+        canApprove: false, canAnswer: false,
+      },
+      pendingAction: null,
+    }).success).toBe(true);
+    expect(clientMessageSchema.safeParse({
       type: "send_chat", id: "request-1", sessionId: "session-1", text: "Continue", images: [],
     }).success).toBe(false);
     expect(clientMessageSchema.safeParse({

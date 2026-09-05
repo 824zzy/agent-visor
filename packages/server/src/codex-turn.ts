@@ -3,7 +3,12 @@ import { access } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
-import type { ChatPendingAction, ClientMessage } from "@agent-visor/protocol";
+import type {
+  ChatPendingAction,
+  ChatSettings,
+  ChatSettingsPatch,
+  ClientMessage,
+} from "@agent-visor/protocol";
 import { agentVisorVersion } from "./runtime-version.js";
 
 export type CodexActionRegistrar = (
@@ -12,6 +17,9 @@ export type CodexActionRegistrar = (
   respond: (message: Extract<ClientMessage, { type: "respond_chat" }>) => Promise<void>,
   generation?: number,
 ) => () => void;
+
+export type CodexTurnSettings = ChatSettingsPatch;
+export type CodexSettingsCatalog = Pick<ChatSettings, "models" | "permissionProfiles">;
 
 /**
  * The provider's JSON-RPC id is only unique within one app-server process.
@@ -62,6 +70,7 @@ export async function sendCodexTurn(
   deliveryId?: string,
   requestId?: string,
   generation?: number,
+  settings?: CodexTurnSettings,
 ): Promise<void> {
   const executable = await codexExecutable();
   if (!executable) throw new Error("Codex message delivery is unavailable.");
@@ -123,6 +132,9 @@ export async function sendCodexTurn(
             method: "turn/start",
             params: {
               threadId,
+              ...(settings?.modelId ? { model: settings.modelId } : {}),
+              ...(settings?.reasoningEffort ? { effort: settings.reasoningEffort } : {}),
+              ...(settings?.permissionProfile ? { permissions: settings.permissionProfile } : {}),
               input: [
                 ...(text ? [{ type: "text", text }] : []),
                 ...imagePaths.map((path) => ({ type: "localImage", path })),
@@ -192,7 +204,10 @@ export async function sendCodexTurn(
     write({
       id: 1,
       method: "initialize",
-      params: { clientInfo: { name: "agent-visor", version: agentVisorVersion() } },
+      params: {
+        clientInfo: { name: "agent-visor", version: agentVisorVersion() },
+        capabilities: { experimentalApi: true },
+      },
     });
 
     function countOutput(chunk: Buffer): void {
@@ -247,6 +262,145 @@ export async function sendCodexTurn(
       if (!accepted && error) reject(error);
     }
   });
+}
+
+/**
+ * Read the provider-owned model and permission catalogs. These are the
+ * read-only `model/list` and `permissionProfile/list` app-server methods from
+ * the generated Codex schema (`codex app-server generate-json-schema
+ * --experimental`); they are intentionally separate from turn delivery.
+ */
+export async function readCodexSettingsCatalog(
+  home = os.homedir(),
+  cwd?: string,
+): Promise<CodexSettingsCatalog | undefined> {
+  const executable = await codexExecutable(home);
+  if (!executable) return undefined;
+  return new Promise<CodexSettingsCatalog | undefined>((resolve) => {
+    const child = spawn(executable, ["app-server", "--listen", "stdio://"], {
+      detached: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let buffer = "";
+    let outputBytes = 0;
+    let modelList: unknown;
+    let permissionList: unknown;
+    let settled = false;
+    const timer = setTimeout(() => finish(undefined), 10_000);
+    timer.unref?.();
+    child.stderr?.resume();
+
+    child.once("error", () => finish(undefined));
+    child.once("close", () => finish(undefined));
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      outputBytes += chunk.length;
+      if (outputBytes > 1_048_576) return finish(undefined);
+      buffer += chunk.toString("utf8");
+      while (buffer.includes("\n")) {
+        const newline = buffer.indexOf("\n");
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        let message: Record<string, unknown>;
+        try { message = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
+        if (message.error) return finish(undefined);
+        if (message.id === 1) {
+          write({ method: "initialized" });
+          write({ id: 2, method: "model/list", params: { includeHidden: false, limit: 100 } });
+          write({ id: 3, method: "permissionProfile/list", params: { cwd: cwd ?? null, limit: 100 } });
+        } else if (message.id === 2) {
+          modelList = message.result;
+          if (permissionList !== undefined) finish(parseCodexSettingsCatalog(modelList, permissionList));
+        } else if (message.id === 3) {
+          permissionList = message.result;
+          if (modelList !== undefined) finish(parseCodexSettingsCatalog(modelList, permissionList));
+        }
+      }
+    });
+
+    write({
+      id: 1,
+      method: "initialize",
+      params: {
+        clientInfo: { name: "agent-visor", version: agentVisorVersion() },
+        capabilities: { experimentalApi: true },
+      },
+    });
+
+    function write(message: unknown): void {
+      if (!settled) child.stdin.write(`${JSON.stringify(message)}\n`);
+    }
+
+    function finish(value: CodexSettingsCatalog | undefined): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.stdin.destroy();
+      stop(child);
+      resolve(value);
+    }
+  });
+}
+
+function parseCodexSettingsCatalog(
+  modelResult: unknown,
+  permissionResult: unknown,
+): CodexSettingsCatalog | undefined {
+  const modelRows = array(record(modelResult)?.data);
+  const models = modelRows.flatMap((value): ChatSettings["models"] => {
+    const row = record(value);
+    const id = boundedCatalogText(row?.id ?? row?.model, 256);
+    const displayName = boundedCatalogText(row?.displayName, 256);
+    if (!id || !displayName) return [];
+    const reasoningEfforts = array(row?.supportedReasoningEfforts).flatMap((effort) => {
+      const option = record(effort);
+      const value = boundedCatalogText(option?.reasoningEffort, 64);
+      const description = boundedCatalogText(option?.description, 512);
+      return value && description ? [{ value, description }] : [];
+    }).slice(0, 16);
+    const defaultReasoningEffort = boundedCatalogText(row?.defaultReasoningEffort, 64);
+    if (!defaultReasoningEffort || !reasoningEfforts.some(({ value }) => value === defaultReasoningEffort)) return [];
+    const modalities = array(row?.inputModalities);
+    return [{
+      id,
+      displayName,
+      description: boundedCatalogText(row?.description, 2_048),
+      reasoningEfforts,
+      defaultReasoningEffort,
+      supportsImages: modalities.includes("image"),
+      isDefault: row?.isDefault === true,
+    }];
+  });
+  const permissionRows = array(record(permissionResult)?.data);
+  const permissionProfiles = permissionRows.flatMap((value): ChatSettings["permissionProfiles"] => {
+    const row = record(value);
+    const id = boundedCatalogText(row?.id, 256);
+    if (!id || typeof row?.allowed !== "boolean") return [];
+    const description = boundedCatalogText(row?.description, 512);
+    return [{
+      id,
+      displayName: permissionDisplayName(id),
+      ...(description ? { description } : {}),
+      allowed: row.allowed,
+    }];
+  });
+  if (!models.length && !permissionProfiles.length) return undefined;
+  return { models, permissionProfiles };
+}
+
+function permissionDisplayName(id: string): string {
+  if (id === ":danger-full-access") return "Full access";
+  if (id === ":workspace") return "Workspace";
+  if (id === ":read-only") return "Read only";
+  return id.replace(/^:/, "").replace(/[-_]+/g, " ").replace(/\b\w/g, (value) => value.toUpperCase());
+}
+
+function boundedCatalogText(value: unknown, maxLength: number): string {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength ? value : "";
+}
+
+function array(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
 export function stopCodexTurns(): void {
@@ -382,8 +536,7 @@ function codexTurnID(value: unknown): string | undefined {
   return typeof id === "string" && id ? id : undefined;
 }
 
-async function codexExecutable(): Promise<string | undefined> {
-  const home = os.homedir();
+async function codexExecutable(home = os.homedir()): Promise<string | undefined> {
   for (const candidate of [
     process.env.CODEX_BINARY,
     "/opt/homebrew/bin/codex",

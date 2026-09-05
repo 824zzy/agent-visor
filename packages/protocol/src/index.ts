@@ -443,6 +443,62 @@ export const chatCapabilitiesSchema = z.object({
   readOnlyReason: z.string().min(1).max(1_024).optional(),
 }).strict();
 
+const chatReasoningOptionSchema = z.object({
+  value: z.string().min(1).max(64),
+  description: z.string().max(512),
+}).strict();
+
+const chatModelOptionSchema = z.object({
+  id: z.string().min(1).max(256),
+  displayName: z.string().min(1).max(256),
+  description: z.string().max(2_048),
+  reasoningEfforts: z.array(chatReasoningOptionSchema).max(16),
+  defaultReasoningEffort: z.string().min(1).max(64),
+  supportsImages: z.boolean(),
+  isDefault: z.boolean(),
+}).strict();
+
+const chatPermissionProfileSchema = z.object({
+  id: z.string().min(1).max(256),
+  displayName: z.string().min(1).max(256),
+  description: z.string().max(512).optional(),
+  allowed: z.boolean(),
+}).strict();
+
+export const chatSettingsValuesSchema = z.object({
+  modelId: z.string().min(1).max(256).optional(),
+  reasoningEffort: z.string().min(1).max(64).optional(),
+  permissionProfile: z.string().min(1).max(256).optional(),
+}).strict();
+
+export const chatSettingsSchema = z.object({
+  /** Settings are provider-authoritative for the catalog and current values. */
+  provider: z.literal("codex"),
+  current: chatSettingsValuesSchema,
+  models: z.array(chatModelOptionSchema).max(100),
+  permissionProfiles: z.array(chatPermissionProfileSchema).max(100),
+  appliesTo: z.literal("next_turn"),
+  canChange: z.boolean(),
+}).strict();
+
+/**
+ * Sent after an opened Codex chat's settings catalog finishes loading.  This
+ * is deliberately narrower than a transcript page refresh so a slow
+ * app-server handshake cannot delay or replace the prompt history already on
+ * screen.
+ */
+export const chatSettingsUpdateSchema = z.object({
+  type: z.literal("chat_settings_update"),
+  sessionId: z.string().min(1).max(512),
+  generation: z.number().int().positive().max(2_147_483_647),
+  settings: chatSettingsSchema,
+}).strict();
+
+export const chatSettingsPatchSchema = chatSettingsValuesSchema
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "At least one chat setting must be selected.",
+  });
+
 export const chatPendingActionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("approval"),
@@ -540,6 +596,7 @@ export const chatMetadataSchema = z.object({
   permissionMode: z.string().min(1).max(256).optional(),
   sandbox: z.string().min(1).max(256).optional(),
   approvalPolicy: z.string().min(1).max(256).optional(),
+  permissionProfile: z.string().min(1).max(256).optional(),
   contextTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
   contextWindow: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
   /** Optional provider-authoritative usage. Omit when the provider cannot report it. */
@@ -564,6 +621,7 @@ export const chatPageSchema = z.object({
   hasMoreBefore: z.boolean(),
   nextBefore: z.number().int().nonnegative().optional(),
   metadata: chatMetadataSchema.optional(),
+  chatSettings: chatSettingsSchema.optional(),
   transcriptEvidence: chatTranscriptEvidenceSchema.optional(),
   capabilities: chatCapabilitiesSchema,
   pendingAction: chatPendingActionSchema.nullable(),
@@ -625,6 +683,8 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     deliveryId: z.string().min(1).max(128),
     text: z.string().max(1_000_000),
     images: z.array(chatImageSchema.required({ data: true, byteLength: true })).max(CHAT_IMAGE_ATTACHMENTS_PER_MESSAGE),
+    /** Provider-validated overrides for the next Codex turn. */
+    settings: chatSettingsPatchSchema.optional(),
   }).strict(),
   z.object({
     ...requestEnvelope,
@@ -682,6 +742,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("health"), status: z.literal("ok") }),
   sessionSnapshotSchema,
   chatPageSchema,
+  chatSettingsUpdateSchema,
   chatCommandsSchema,
   nativeServicesStateSchema,
   z.object({
@@ -984,6 +1045,10 @@ export type AgentConnection = z.infer<typeof agentConnectionSchema>;
 export type AppSettings = z.infer<typeof appSettingsSchema>;
 export type AppSettingsPatch = z.infer<typeof appSettingsPatchSchema>;
 export type ChatCapabilities = z.infer<typeof chatCapabilitiesSchema>;
+export type ChatSettingsValues = z.infer<typeof chatSettingsValuesSchema>;
+export type ChatSettings = z.infer<typeof chatSettingsSchema>;
+export type ChatSettingsPatch = z.infer<typeof chatSettingsPatchSchema>;
+export type ChatSettingsUpdate = z.infer<typeof chatSettingsUpdateSchema>;
 export type ChatUsageGlance = z.infer<typeof chatUsageGlanceSchema>;
 export type ChatSlashCommand = z.infer<typeof chatSlashCommandSchema>;
 export type ChatCommands = z.infer<typeof chatCommandsSchema>;

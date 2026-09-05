@@ -4,6 +4,7 @@ import {
   type ChatImage,
   type ChatCommands,
   type ClientMessage,
+  type ChatSettingsPatch,
   type SessionSection,
 } from "@agent-visor/protocol";
 import { connectDaemon, type DaemonConnection } from "./daemon-connection";
@@ -122,6 +123,7 @@ export function useChat(sessionId: string, section: SessionSection = "history") 
           byteLength: image.byteLength ?? encodedBase64ByteLength(image.data),
         }];
       }),
+      ...(delivery.draft.settings ? { settings: delivery.draft.settings } : {}),
     };
     let sent = false;
     try {
@@ -140,15 +142,23 @@ export function useChat(sessionId: string, section: SessionSection = "history") 
     deliveryExpiryScheduler.schedule(generation);
   }, [controller, deliveryExpiryScheduler, sessionId]);
 
-  const send = useCallback((text: string, images: ChatImage[]): boolean => {
+  const send = useCallback((text: string, images: ChatImage[], settings?: ChatSettingsPatch): boolean => {
     const generation = activeGeneration.current;
-    const delivery = controller.beginDelivery(generation, { text, images });
+    const delivery = controller.beginDelivery(generation, {
+      text,
+      images,
+      ...(settings ? { settings } : {}),
+    });
     if (!delivery) return false;
     sendDelivery(delivery);
     return true;
   }, [controller, sendDelivery]);
 
-  const noteComposerDraft = useCallback((draft: { text: string; images: ChatImage[] }) => {
+  const noteComposerDraft = useCallback((draft: {
+    text: string;
+    images: ChatImage[];
+    settings?: ChatSettingsPatch;
+  }) => {
     controller.noteComposerDraft(activeGeneration.current, draft);
   }, [controller]);
 

@@ -3,7 +3,11 @@ import WebSocket from "ws";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { defaultChatVisibility, serverMessageSchema } from "@agent-visor/protocol";
+import {
+  defaultChatVisibility,
+  serverMessageSchema,
+  type ChatSettingsUpdate,
+} from "@agent-visor/protocol";
 import { fixtureSnapshot } from "./fixture.js";
 import { startServer, type RunningServer } from "./server.js";
 import { SessionRepository, type ProviderAdapter } from "./sessions.js";
@@ -162,6 +166,72 @@ describe("Agent Visor daemon", () => {
       type: "chat_action_result", id: "send-1", action: "send", sessionId: "pi-ready",
       generation: 1, deliveryId: "delivery-1", ok: false, error: "Read only.",
     });
+    socket.close();
+  });
+
+  it("routes lazy Codex settings updates only to the matching open chat", async () => {
+    let publishSettings: ((update: ChatSettingsUpdate) => void) | undefined;
+    const source = {
+      current: () => fixtureSnapshot,
+      subscribe: () => () => undefined,
+      subscribeChatSettings: (listener: (update: ChatSettingsUpdate) => void) => {
+        publishSettings = listener;
+        return () => { publishSettings = undefined; };
+      },
+      chatPage: async (sessionId: string) => ({
+        type: "chat_page" as const,
+        sessionId,
+        items: [],
+        hasMoreBefore: false,
+        capabilities: {
+          canSendText: true, canSendImages: false, canCancel: false,
+          canApprove: false, canAnswer: false,
+        },
+        pendingAction: null,
+      }),
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    socket.send(JSON.stringify({
+      type: "open_chat", id: "open-codex", sessionId: "pi-ready", generation: 1,
+    }));
+    await expect.poll(() => messages.some((message) => (
+      typeof message === "object" && message !== null
+      && (message as { type?: unknown }).type === "chat_page"
+    ))).toBe(true);
+
+    publishSettings?.({
+      type: "chat_settings_update",
+      sessionId: "pi-ready",
+      generation: 1,
+      settings: {
+        provider: "codex",
+        current: { modelId: "gpt-6-astra", reasoningEffort: "high" },
+        models: [{
+          id: "gpt-6-astra", displayName: "GPT-6 Astra", description: "Fast model",
+          reasoningEfforts: [{ value: "high", description: "Deep" }],
+          defaultReasoningEffort: "high", supportsImages: true, isDefault: true,
+        }],
+        permissionProfiles: [],
+        appliesTo: "next_turn",
+        canChange: true,
+      },
+    });
+    await expect.poll(() => messages.some((message) => (
+      typeof message === "object" && message !== null
+      && (message as { type?: unknown }).type === "chat_settings_update"
+    ))).toBe(true);
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: "chat_settings_update",
+      sessionId: "pi-ready",
+      generation: 1,
+    }));
     socket.close();
   });
 

@@ -145,6 +145,35 @@ describe("Chat session recovery integration", () => {
     }]);
   });
 
+  it("keeps selected model, effort, and access through failed-send recovery", () => {
+    const controller = controllerWith();
+    const generation = setup(controller);
+    const settings = {
+      modelId: "gpt-6-astra",
+      reasoningEffort: "max",
+      permissionProfile: ":danger-full-access",
+    };
+    const draft: SubmittedChatDraft = { text: "keep settings", images: [], settings };
+    // This represents the empty post-submit composer retaining the selected
+    // settings while the provider acknowledgement is still pending.
+    controller.noteComposerDraft(generation, { text: "", images: [], settings });
+    const delivery = controller.beginDelivery(generation, draft)!;
+
+    controller.receive(generation, sendAck(delivery.requestId, delivery.deliveryId, generation), transport);
+
+    expect(controller.currentState().recoveryCommand).toMatchObject({
+      type: "restore",
+      draft,
+      expectedComposer: { draft: { text: "", images: [], settings } },
+    });
+    const recovery = controller.currentState().recovery![0]!;
+    controller.noteComposerDraft(generation, draft);
+    expect(controller.retryRecovery(generation, recovery.id)).toMatchObject({
+      draft,
+      source: { draft },
+    });
+  });
+
   it("restores the snapshot when a retried send fails after its guarded clear", () => {
     const controller = controllerWith();
     const generation = setup(controller);

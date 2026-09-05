@@ -8,6 +8,9 @@ import {
   type ChatItem,
   type ChatUsageGlance,
   type ChatPendingAction,
+  type ChatSettings,
+  type ChatSettingsPatch,
+  type ChatSettingsUpdate,
   type NativeHelperFocusTarget,
   type NativeHelperPiRestorationUpdate,
   type NativeHelperTerminalTarget,
@@ -27,7 +30,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { chatCapabilities, normalizeChatText, readChatPage } from "./chat.js";
+import { chatCapabilities, chatSettingsForSession, normalizeChatText, readChatPage } from "./chat.js";
 import { loadSlashCommandCatalog } from "./slash-commands.js";
 
 export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie";
@@ -56,6 +59,8 @@ export type DiscoveredProviderSession = {
   controlTarget?: SessionControlTarget;
   messageTransport?: "terminal" | "codex_app_server";
   modelCatalog?: Record<string, { displayName: string; contextWindow?: number }>;
+  /** Codex app-server options verified for this session's working directory. */
+  chatSettingsCatalog?: Pick<ChatSettings, "models" | "permissionProfiles">;
   codexLifecycle?: import("./providers/codex-lifecycle.js").CodexLifecycle;
 };
 
@@ -99,6 +104,7 @@ export interface SessionControls {
     deliveryId?: string,
     evidence?: ChatDeliveryEvidence,
     isCurrent?: ChatSendCurrentness,
+    settings?: ChatSettingsPatch,
   ): Promise<void>;
   /** Return the exact live delivery targeted by the provider cancel route. */
   activeCancelDeliveryId?(session: DiscoveredProviderSession): string | undefined;
@@ -125,6 +131,8 @@ export interface SessionControls {
 export interface SessionSnapshotSource {
   current(): SessionSnapshot;
   subscribe(listener: (snapshot: SessionSnapshot) => void): () => void;
+  /** Push a settings-only update when a lazy Codex catalog finishes loading. */
+  subscribeChatSettings?(listener: ChatSettingsListener): () => void;
   acknowledgeReady?(sessionId: string): void;
   chatPage?(
     sessionId: string,
@@ -142,6 +150,10 @@ export interface SessionSnapshotSource {
 export interface ProviderAdapter {
   readonly id: ProviderID;
   discover(): Promise<DiscoveredProviderSession[]>;
+  /** Load provider controls lazily for an opened chat, never during discovery. */
+  chatSettings?(session: DiscoveredProviderSession): Promise<
+    DiscoveredProviderSession["chatSettingsCatalog"]
+  >;
   noteHook?(event: HookSessionEvent): void;
 }
 
@@ -186,6 +198,10 @@ const maxTerminalBaselineUserEntryIds = 512;
 // transcript evidence or image payload is retained. Raise only with a
 // memory/latency review; all exits release the operation reservation.
 export const MAX_CHAT_ACTIONS_PER_SESSION = 32;
+// Give the normal app-server handshake a short chance to populate the
+// composer without making transcript loading wait on a stalled provider.
+const codexSettingsFirstOpenWaitMs = 750;
+const codexSettingsCatalogTtlMs = 60_000;
 
 type SessionRepositoryOptions = {
   piRuntimeStatePath?: string;
@@ -222,6 +238,8 @@ type ChatPageReadReservation = {
   deliveryKey?: string;
   active: boolean;
 };
+
+export type ChatSettingsListener = (update: ChatSettingsUpdate) => void;
 
 type ChatSendInFlight = {
   epoch: number;
@@ -300,7 +318,26 @@ export class SessionRepository {
     update: NativeHelperPiRestorationUpdate,
   ) => void>();
   private readonly chatBySession = new Map<string, DiscoveredProviderSession>();
+  // Settings catalogs are loaded only when a Codex chat is opened. Keep the
+  // verified catalog through the normal discovery refresh so a renderer can
+  // send its next-turn selection without spawning another app-server.
+  private readonly chatSettingsCatalogBySession = new Map<
+    string,
+    {
+      cwd: string;
+      catalog: NonNullable<DiscoveredProviderSession["chatSettingsCatalog"]>;
+      expiresAt: number;
+    }
+  >();
+  private readonly chatSettingsCurrentBySession = new Map<
+    string,
+    {
+      cwd: string;
+      current: ChatSettings["current"];
+    }
+  >();
   private readonly listeners = new Set<(snapshot: SessionSnapshot) => void>();
+  private readonly chatSettingsListeners = new Set<ChatSettingsListener>();
   private readonly controlBySession = new Map<string, DiscoveredProviderSession>();
   private readonly externalActions = new Map<string, Map<string, ExternalApprovalRecord>>();
   private controls: SessionControls | undefined;
@@ -375,6 +412,11 @@ export class SessionRepository {
   subscribe(listener: (snapshot: SessionSnapshot) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  subscribeChatSettings(listener: ChatSettingsListener): () => void {
+    this.chatSettingsListeners.add(listener);
+    return () => this.chatSettingsListeners.delete(listener);
   }
 
   subscribePiRestoration(
@@ -700,18 +742,77 @@ export class SessionRepository {
       pageGeneration,
       record,
     );
-    this.controls?.reconcile?.(record);
+    let chatRecord = this.withFreshChatSettingsCatalog(sessionId, record);
+    const settingsProvider = this.providers.find((provider) => provider.id === record.provider);
+    let initialPageMetadata: ChatPage["metadata"];
+    let initialPageReturned = false;
+    let settingsCatalogPromise: Promise<NonNullable<DiscoveredProviderSession["chatSettingsCatalog"]> | undefined> | undefined;
+    if (record.provider === "codex" && !chatRecord.chatSettingsCatalog && settingsProvider?.chatSettings) {
+      settingsCatalogPromise = settingsProvider.chatSettings(record).then(
+        (catalog) => {
+          if (!catalog) return undefined;
+          const current = this.chatBySession.get(sessionId);
+          if (current && sessionActionFingerprint(current) === sessionActionFingerprint(record)) {
+            this.chatSettingsCatalogBySession.set(sessionId, {
+              cwd: record.cwd,
+              catalog,
+              expiresAt: Date.now() + codexSettingsCatalogTtlMs,
+            });
+            chatRecord = { ...current, chatSettingsCatalog: catalog };
+            // Keep the catalog out of the discovered session record. The
+            // session cache has an explicit TTL; a copied catalog would
+            // otherwise survive refreshes indefinitely.
+            if (initialPageReturned && before === undefined
+              && this.chatPageRequestEpochBySession.get(sessionId) === pageReservation.requestEpoch
+              && this.chatGenerationBySession.get(sessionId) === pageGeneration) {
+              this.publishChatSettingsUpdate(
+                sessionId,
+                pageGeneration,
+                chatRecord,
+                initialPageMetadata,
+              );
+            }
+          }
+          return catalog;
+        },
+        () => undefined,
+      );
+    }
+    this.controls?.reconcile?.(chatRecord);
     try {
-      const page = await this.chatPageReader(record, before, limit);
+      const pageRead = this.chatPageReader(chatRecord, before, limit);
+      if (settingsCatalogPromise) {
+        await Promise.race([
+          settingsCatalogPromise.then(() => undefined),
+          new Promise<void>((resolve) => {
+            const timeout = setTimeout(resolve, codexSettingsFirstOpenWaitMs);
+            timeout.unref?.();
+          }),
+        ]);
+      }
+      const page = await pageRead;
+      const chatSettings = before === undefined
+        ? chatSettingsForSession(chatRecord, page.metadata)
+        : undefined;
+      if (before === undefined) initialPageMetadata = page.metadata;
+      if (chatSettings) {
+        page.chatSettings = chatSettings;
+      }
       // Revalidate before any post-read native reconciliation or capability
       // mutation. A late R1 is data for the renderer only; it cannot rewind
       // delivery evidence established by a newer R2/baseline.
       if (!this.isChatPageReadCurrent(pageReservation)) return page;
+      if (chatSettings) {
+        this.chatSettingsCurrentBySession.set(sessionId, {
+          cwd: chatRecord.cwd,
+          current: chatSettings.current,
+        });
+      }
       if (before === undefined && this.chatUsageGlance) {
         try {
-          const usage = await this.chatUsageGlance(record);
-          const providerMatches = (record.provider === "codex" && usage?.provider === "codex")
-            || (record.provider === "claude_code" && usage?.provider === "claude");
+          const usage = await this.chatUsageGlance(chatRecord);
+          const providerMatches = (chatRecord.provider === "codex" && usage?.provider === "codex")
+            || (chatRecord.provider === "claude_code" && usage?.provider === "claude");
           if (this.isChatPageReadCurrent(pageReservation) && providerMatches && usage) {
             page.metadata = { ...(page.metadata ?? {}), usageGlance: usage };
           }
@@ -724,7 +825,7 @@ export class SessionRepository {
       // delivery evidence. Keep this call latest-only so a future control
       // implementation cannot accidentally treat `false` as permission.
       if (before === undefined) {
-        this.controls?.reconcileChatPage?.(record, page, true);
+        this.controls?.reconcileChatPage?.(chatRecord, page, true);
       }
       if (record.messageTransport === "terminal" && this.controls?.isAvailable?.() === false) {
         const readOnlyReason = "The native helper is unavailable. Terminal chat is read only until it recovers.";
@@ -735,15 +836,15 @@ export class SessionRepository {
         page.capabilities.readOnlyReason = readOnlyReason;
       }
       const canCyclePermissionMode = page.capabilities.canCyclePermissionMode === true
-        && this.controls?.canCyclePermissionMode?.(record) === true;
+        && this.controls?.canCyclePermissionMode?.(chatRecord) === true;
       page.capabilities.canCyclePermissionMode = canCyclePermissionMode;
       // A transcript transport is not enough to cancel. Keep the page honest
       // when the daemon has no live helper or daemon-owned Codex turn. The
       // capability and identity are derived from one live control lookup so a
       // page cannot advertise a route for an unrelated delivery.
-      const cancelDeliveryId = this.controls?.activeCancelDeliveryId?.(record);
+      const cancelDeliveryId = this.controls?.activeCancelDeliveryId?.(chatRecord);
       const canCancel = cancelDeliveryId !== undefined
-        && (this.controls?.canCancel?.(record, cancelDeliveryId) ?? false);
+        && (this.controls?.canCancel?.(chatRecord, cancelDeliveryId) ?? false);
       page.capabilities.canCancel = canCancel;
       if (canCancel) page.capabilities.cancelDeliveryId = cancelDeliveryId;
       else delete page.capabilities.cancelDeliveryId;
@@ -754,7 +855,7 @@ export class SessionRepository {
         page.capabilities.canApprove = pendingActions.some((action) => action.type === "approval");
         page.capabilities.canAnswer = pendingActions.some((action) => action.type === "question");
       }
-      if (record.sessionClass === "automation") {
+      if (chatRecord.sessionClass === "automation") {
         // Automation may expose pending provider state for inspection, but it
         // must never turn that state into a writable Agent Visor action card.
         page.capabilities.canSendText = false;
@@ -767,8 +868,22 @@ export class SessionRepository {
         delete page.capabilities.maxTextBytes;
         page.capabilities.readOnlyReason = automationChatReadOnlyReason;
       }
+      // The catalog may have completed while optional usage/reconciliation
+      // awaits were in flight. Attach it before returning the first page so
+      // that narrow timing window does not rely on the later update event.
+      if (before === undefined && !page.chatSettings && chatRecord.chatSettingsCatalog) {
+        const finalChatSettings = chatSettingsForSession(chatRecord, page.metadata);
+        if (finalChatSettings) {
+          page.chatSettings = finalChatSettings;
+          this.chatSettingsCurrentBySession.set(sessionId, {
+            cwd: chatRecord.cwd,
+            current: finalChatSettings.current,
+          });
+        }
+      }
       return page;
     } finally {
+      initialPageReturned = true;
       this.releaseChatPageRead(sessionId, pageReservation);
     }
   }
@@ -787,6 +902,54 @@ export class SessionRepository {
       sessionId,
       ...catalog,
     };
+  }
+
+  private withFreshChatSettingsCatalog(
+    sessionId: string,
+    session: DiscoveredProviderSession,
+  ): DiscoveredProviderSession {
+    if (session.provider !== "codex") return session;
+    const cached = this.cachedChatSettingsCatalog(sessionId, session.cwd);
+    if (cached) return { ...session, chatSettingsCatalog: cached };
+    // A catalog copied onto a discovered record is safe only when it also has
+    // a live session-cache entry. Strip it when the cache expires so sends
+    // cannot silently validate against stale provider choices.
+    if (!session.chatSettingsCatalog) return session;
+    const { chatSettingsCatalog: _staleCatalog, ...withoutCatalog } = session;
+    return withoutCatalog;
+  }
+
+  private cachedChatSettingsCatalog(
+    sessionId: string,
+    cwd: string,
+  ): NonNullable<DiscoveredProviderSession["chatSettingsCatalog"]> | undefined {
+    const cached = this.chatSettingsCatalogBySession.get(sessionId);
+    if (!cached || cached.cwd !== cwd || cached.expiresAt <= Date.now()) {
+      if (cached) this.chatSettingsCatalogBySession.delete(sessionId);
+      return undefined;
+    }
+    return cached.catalog;
+  }
+
+  private publishChatSettingsUpdate(
+    sessionId: string,
+    generation: number,
+    session: DiscoveredProviderSession,
+    metadata: ChatPage["metadata"],
+  ): void {
+    const settings = chatSettingsForSession(session, metadata);
+    if (!settings) return;
+    this.chatSettingsCurrentBySession.set(sessionId, {
+      cwd: session.cwd,
+      current: settings.current,
+    });
+    const update: ChatSettingsUpdate = {
+      type: "chat_settings_update",
+      sessionId,
+      generation,
+      settings,
+    };
+    for (const listener of this.chatSettingsListeners) listener(structuredClone(update));
   }
 
   async focusSession(sessionId: string): Promise<string | undefined> {
@@ -1033,29 +1196,68 @@ export class SessionRepository {
     operationIsCurrent: () => boolean,
     deliveryKey: string,
   ): Promise<string | undefined> {
-    const capabilities = initialSession ? chatCapabilities(initialSession) : undefined;
-    if (!initialSession || !this.controls || !capabilities?.canSendText) {
+    let session = initialSession
+      ? this.withFreshChatSettingsCatalog(message.sessionId, initialSession)
+      : undefined;
+    if (session
+      && session.provider === "codex"
+      && session.messageTransport === "codex_app_server"
+      && (message.settings !== undefined || message.images.length > 0)
+      && !session.chatSettingsCatalog) {
+      const settingsProvider = this.providers.find((provider) => provider.id === "codex");
+      const catalogPromise = settingsProvider?.chatSettings?.(session);
+      const catalog = catalogPromise ? await catalogPromise.catch(() => undefined) : undefined;
+      if (catalog) {
+        if (!operationIsCurrent()) return "This chat session changed before Codex settings could be loaded.";
+        this.chatSettingsCatalogBySession.set(message.sessionId, {
+          cwd: session.cwd,
+          catalog,
+          expiresAt: Date.now() + codexSettingsCatalogTtlMs,
+        });
+        session = { ...session, chatSettingsCatalog: catalog };
+      }
+    }
+    const capabilities = session ? chatCapabilities(session) : undefined;
+    if (!session || !this.controls || !capabilities?.canSendText) {
       return "Chat sending is unavailable for this session.";
     }
-    if (initialSession.messageTransport === "terminal" && this.controls.isAvailable?.() === false) {
+    if (session.messageTransport === "terminal" && this.controls.isAvailable?.() === false) {
       return "The native helper is unavailable. Terminal chat is read only until it recovers.";
     }
     if (message.images.length > 0 && !capabilities.canSendImages) {
       return "Image sending is unavailable for this session.";
     }
-    const initialFingerprint = sessionActionFingerprint(initialSession);
+    const settingsError = validateChatSettings(
+      session,
+      message.settings,
+      this.chatSettingsCurrentBySession.get(message.sessionId),
+    );
+    if (settingsError) return settingsError;
+    if (message.images.length > 0 && message.settings?.modelId) {
+      const model = session.chatSettingsCatalog?.models.find(({ id }) => id === message.settings?.modelId);
+      if (model && !model.supportsImages) return "The selected Codex model does not support images.";
+    }
+    if (message.images.length > 0 && !message.settings?.modelId) {
+      const current = this.chatSettingsCurrentBySession.get(message.sessionId);
+      const modelId = current?.cwd === session.cwd ? current.current.modelId : undefined;
+      const model = modelId
+        ? session.chatSettingsCatalog?.models.find(({ id }) => id === modelId)
+        : undefined;
+      if (model && !model.supportsImages) return "The selected Codex model does not support images.";
+    }
+    const initialFingerprint = sessionActionFingerprint(session);
     const submittedAt = this.now().toISOString();
     // A delivery baseline supersedes any page read that started earlier. The
     // baseline itself owns an exact page-read reservation, but
     // concurrent sends must remain independent: one send cannot make every
     // other admitted send stale merely because their evidence reads overlap.
-    const pageReservation = isTerminalChatRoute(initialSession)
+    const pageReservation = isTerminalChatRoute(session)
       ? (() => {
         this.invalidateChatPageReads(message.sessionId);
         return this.reserveChatPageRead(
           message.sessionId,
           message.generation,
-          initialSession,
+          session,
           deliveryKey,
         );
       })()
@@ -1072,7 +1274,7 @@ export class SessionRepository {
     };
     try {
       const evidence = await captureTerminalDeliveryEvidence(
-        initialSession,
+        session,
         message.text,
         message.id,
         message.images,
@@ -1083,22 +1285,25 @@ export class SessionRepository {
       if ((pageReservation && !this.isChatPageReadCurrent(pageReservation)) || !operationIsCurrent()) {
         return "This chat session changed before the message could be delivered.";
       }
-      const session = this.chatBySession.get(message.sessionId);
+      const liveSessionRecord = this.chatBySession.get(message.sessionId);
+      const freshSession = liveSessionRecord
+        ? this.withFreshChatSettingsCatalog(message.sessionId, liveSessionRecord)
+        : undefined;
       const generation = this.chatGenerationBySession.get(message.sessionId);
-      const liveCapabilities = session ? chatCapabilities(session) : undefined;
-      if (!session
+      const liveCapabilities = freshSession ? chatCapabilities(freshSession) : undefined;
+      if (!freshSession
         || generation !== message.generation
-        || sessionActionFingerprint(session) !== initialFingerprint
+        || sessionActionFingerprint(freshSession) !== initialFingerprint
         || !liveCapabilities?.canSendText
         || (message.images.length > 0 && !liveCapabilities.canSendImages)) {
         return "This chat session changed before the message could be delivered.";
       }
-      if (session.messageTransport === "terminal" && this.controls.isAvailable?.() === false) {
+      if (freshSession.messageTransport === "terminal" && this.controls.isAvailable?.() === false) {
         return "The native helper is unavailable. Terminal chat is read only until it recovers.";
       }
       await this.controls.send(
-        structuredClone(session), message.text, message.images, message.deliveryId, evidence,
-        isCurrent,
+        structuredClone(freshSession), message.text, message.images, message.deliveryId, evidence,
+        isCurrent, message.settings,
       );
       return undefined;
     } catch (error) {
@@ -1289,6 +1494,8 @@ export class SessionRepository {
   }
 
   private forgetChatState(sessionId: string): void {
+    this.chatSettingsCatalogBySession.delete(sessionId);
+    this.chatSettingsCurrentBySession.delete(sessionId);
     this.chatStateEpochBySession.set(sessionId, this.chatStateEpoch(sessionId) + 1);
     // In-flight operations carry their own reservation because the bounded
     // epoch tombstone may later be reclaimed. Invalidate those reservations
@@ -1484,6 +1691,18 @@ export class SessionRepository {
       if (!existing || (record.authority ?? 1) >= (existing.authority ?? 1)) {
         const authority = authoritative.get(record.id);
         const owner = authority?.owner ?? record.owner;
+        const cachedSettings = this.chatSettingsCatalogBySession.get(record.id);
+        if (cachedSettings && (
+          record.provider !== "codex"
+          || cachedSettings.cwd !== record.cwd
+          || cachedSettings.expiresAt <= Date.now()
+        )) {
+          this.chatSettingsCatalogBySession.delete(record.id);
+        }
+        const cachedCurrent = this.chatSettingsCurrentBySession.get(record.id);
+        if (cachedCurrent && (record.provider !== "codex" || cachedCurrent.cwd !== record.cwd)) {
+          this.chatSettingsCurrentBySession.delete(record.id);
+        }
         this.chatBySession.set(record.id, structuredClone({
           ...record,
           owner,
@@ -1896,6 +2115,43 @@ function sessionActionFingerprint(session: DiscoveredProviderSession): string {
     session.messageTransport,
     session.controlTarget,
   ]);
+}
+
+function validateChatSettings(
+  session: DiscoveredProviderSession,
+  settings: ChatSettingsPatch | undefined,
+  currentSettings?: {
+    cwd: string;
+    current: ChatSettings["current"];
+  },
+): string | undefined {
+  if (!settings) return undefined;
+  if (session.provider !== "codex" || session.messageTransport !== "codex_app_server") {
+    return "Model and permission controls are unavailable for this session.";
+  }
+  const catalog = session.chatSettingsCatalog;
+  if (!catalog) return "Codex settings are unavailable. Reopen the conversation and try again.";
+  const model = settings.modelId
+    ? catalog.models.find(({ id }) => id === settings.modelId)
+    : undefined;
+  if (settings.modelId && !model) return "The selected Codex model is unavailable.";
+  if (settings.reasoningEffort) {
+    const effectiveModelId = settings.modelId
+      ?? (currentSettings?.cwd === session.cwd ? currentSettings.current.modelId : undefined);
+    const effectiveModel = model
+      ?? (effectiveModelId
+        ? catalog.models.find(({ id }) => id === effectiveModelId)
+        : undefined);
+    if (!effectiveModel) return "The current Codex model is unknown; select a model before choosing reasoning.";
+    if (!effectiveModel.reasoningEfforts.some(({ value }) => value === settings.reasoningEffort)) {
+      return "The selected reasoning level is unavailable for Codex.";
+    }
+  }
+  if (settings.permissionProfile) {
+    const profile = catalog.permissionProfiles.find(({ id }) => id === settings.permissionProfile);
+    if (!profile?.allowed) return "The selected Codex permission profile is unavailable.";
+  }
+  return undefined;
 }
 
 function chatSendRequestKey(sessionId: string, generation: number, requestId: string): string {

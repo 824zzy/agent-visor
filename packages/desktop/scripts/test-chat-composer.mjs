@@ -83,6 +83,70 @@ const metadata = {
   },
 };
 
+const chatSettings = {
+  provider: "codex",
+  current: {
+    modelId: "gpt-5.6-sol",
+    reasoningEffort: "high",
+    permissionProfile: ":workspace",
+  },
+  models: [
+    {
+      id: "gpt-5.6-sol",
+      displayName: "GPT-5.6 Sol",
+      description: "Reliable agentic workhorse.",
+      reasoningEfforts: [
+        { value: "medium", description: "Balanced reasoning." },
+        { value: "high", description: "More deliberate reasoning." },
+      ],
+      defaultReasoningEffort: "high",
+      supportsImages: true,
+      isDefault: true,
+    },
+    {
+      id: "gpt-6-astra",
+      displayName: "GPT-6 Astra",
+      description: "Most capable model.",
+      reasoningEfforts: [
+        { value: "high", description: "More deliberate reasoning." },
+        { value: "max", description: "Maximum reasoning." },
+      ],
+      defaultReasoningEffort: "max",
+      supportsImages: true,
+      isDefault: false,
+    },
+    {
+      id: "gpt-rejected",
+      displayName: "Rejected model",
+      description: "Fixture model rejected by the provider.",
+      reasoningEfforts: [
+        { value: "high", description: "More deliberate reasoning." },
+      ],
+      defaultReasoningEffort: "high",
+      supportsImages: true,
+      isDefault: false,
+    },
+    {
+      id: "gpt-text-only",
+      displayName: "Text only",
+      description: "Fixture model without image input.",
+      reasoningEfforts: [
+        { value: "high", description: "More deliberate reasoning." },
+      ],
+      defaultReasoningEffort: "high",
+      supportsImages: false,
+      isDefault: false,
+    },
+  ],
+  permissionProfiles: [
+    { id: ":workspace", displayName: "Workspace", description: "Access files in the workspace.", allowed: true },
+    { id: ":danger-full-access", displayName: "Full access", description: "Allow unrestricted local access.", allowed: true },
+    { id: ":read-only", displayName: "Read only", description: "Inspect without writing.", allowed: false },
+  ],
+  appliesTo: "next_turn",
+  canChange: true,
+};
+
 let server;
 let window;
 let exitCode = 0;
@@ -235,6 +299,7 @@ async function run() {
             canPersist: true,
           },
           metadata,
+          chatSettings,
         };
       }
       return {
@@ -251,10 +316,14 @@ async function run() {
         },
         pendingAction: null,
         metadata,
+        chatSettings,
       };
     },
     chatAction: async (message) => {
       actions.push(message);
+      if (message.type === "send_chat" && message.settings?.modelId === "gpt-rejected") {
+        return "The provider rejected this model for the next turn.";
+      }
       if (message.type === "cycle_permission_mode") {
         return new Promise((resolve) => {
           releasePermissionCycle = () => {
@@ -322,19 +391,81 @@ async function run() {
   assert(emptyProbe.sendDisabled, "empty composer disables Send");
   const contextProbe = await window.webContents.executeJavaScript(`(() => {
     const context = document.querySelector('[aria-label="Composer model and effort"]');
+    const permission = document.querySelector('[aria-label="Permission: Workspace"]');
     return {
       text: context?.textContent ?? '',
       role: context?.getAttribute('role') ?? '',
       hasPopup: context?.getAttribute('aria-haspopup') ?? '',
-      selector: Boolean(document.querySelector('[aria-label="Select model"], [aria-label="Model selector"], [aria-haspopup="listbox"]')),
+      expanded: context?.getAttribute('aria-expanded') ?? '',
+      permissionRole: permission?.getAttribute('role') ?? '',
+      permissionPopup: permission?.getAttribute('aria-haspopup') ?? '',
+      modelLeft: context?.getBoundingClientRect().left ?? -1,
+      permissionLeft: permission?.getBoundingClientRect().left ?? -1,
+      sendLeft: document.querySelector('[aria-label="Send"]')?.getBoundingClientRect().left ?? -1,
     };
   })()`);
   assert(contextProbe.text.includes("GPT-5.6 Sol")
-    && contextProbe.text.includes("Reasoning High")
-    && contextProbe.role !== "button"
-    && contextProbe.hasPopup === ""
-    && !contextProbe.selector,
-  `model and effort context stays passive without a fake selector (${JSON.stringify(contextProbe)})`);
+    && contextProbe.text.includes("High")
+    && !contextProbe.text.includes("Reasoning High")
+    && contextProbe.role === "button"
+    && contextProbe.hasPopup === "menu"
+    && contextProbe.expanded === "false"
+    && contextProbe.permissionRole === "button"
+    && contextProbe.permissionPopup === "menu"
+    && contextProbe.modelLeft < contextProbe.permissionLeft
+    && contextProbe.permissionLeft < contextProbe.sendLeft,
+  `Codex model, effort, and permission controls expose provider options (${JSON.stringify(contextProbe)})`);
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Composer model and effort\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Composer model and effort menu\"]'))");
+  const modelMenuProbe = await window.webContents.executeJavaScript(`(() => ({
+    expanded: document.querySelector('[aria-label="Composer model and effort"]')?.getAttribute('aria-expanded') ?? '',
+    menuRole: document.querySelector('[aria-label="Composer model and effort menu"]')?.getAttribute('role') ?? '',
+    options: [...document.querySelectorAll('[aria-label^="Model:"]')].map((item) => item.textContent?.trim()),
+    scope: document.querySelector('[aria-label="Applies from your next message (until changed)"]')?.textContent ?? '',
+  }))()`);
+  assert(modelMenuProbe.expanded === "true"
+    && modelMenuProbe.menuRole === "menu"
+    && modelMenuProbe.options.some((option) => option.includes("GPT-6 Astra"))
+    && modelMenuProbe.scope === "Applies from your next message (until changed)",
+  `model menu exposes catalog options and next-message scope (${JSON.stringify(modelMenuProbe)})`);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await capture("light-model-menu.png");
+  await window.webContents.executeJavaScript("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))");
+  await waitFor("document.activeElement?.getAttribute('aria-label') === 'Model: GPT-6 Astra'");
+  const keyboardMenuProbe = await window.webContents.executeJavaScript(`(() => ({
+    focused: document.activeElement?.getAttribute('aria-label') ?? '',
+    active: document.querySelector('[aria-label="Model: GPT-6 Astra"]')?.getAttribute('aria-selected') ?? '',
+  }))()`);
+  assert(keyboardMenuProbe.focused === "Model: GPT-6 Astra" && keyboardMenuProbe.active === "false",
+    `ArrowDown moves focus without changing the staged selection (${JSON.stringify(keyboardMenuProbe)})`);
+  await window.webContents.executeJavaScript("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))");
+  await waitFor("document.querySelector('[aria-label=\"Composer model and effort\"]')?.textContent.includes('GPT-6 Astra')");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Permission: Workspace\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Composer permission menu\"]'))");
+  const permissionMenuProbe = await window.webContents.executeJavaScript(`(() => ({
+    options: [...document.querySelectorAll('[aria-label^="Permission:"]')].map((item) => ({
+      label: item.getAttribute('aria-label'), disabled: item.getAttribute('aria-disabled') ?? '',
+    })),
+    scope: document.querySelector('[aria-label="Applies from your next message (until changed)"]')?.textContent ?? '',
+    approvalNote: document.querySelector('[aria-label="Existing approval settings are preserved."]')?.textContent ?? '',
+  }))()`);
+  assert(permissionMenuProbe.options.some(({ label }) => label === "Permission: Full access")
+    && permissionMenuProbe.options.some(({ label, disabled }) => label === "Permission: Read only" && disabled === "true")
+    && permissionMenuProbe.scope === "Applies from your next message (until changed)"
+    && permissionMenuProbe.approvalNote === "Existing approval settings are preserved.",
+  `permission menu exposes allowed and rejected provider profiles honestly (${JSON.stringify(permissionMenuProbe)})`);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await capture("light-permission-menu.png");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Permission: Full access\"]')?.click()");
+  await waitFor("document.querySelector('[aria-label=\"Permission: Full access\"]')?.getAttribute('aria-expanded') === 'false'");
+  const stagedProbe = await window.webContents.executeJavaScript(`(() => ({
+    model: document.querySelector('[aria-label="Composer model and effort"]')?.textContent ?? '',
+    permission: document.querySelector('[aria-label="Permission: Full access"]')?.textContent ?? '',
+    modelExpanded: document.querySelector('[aria-label="Composer model and effort"]')?.getAttribute('aria-expanded') ?? '',
+  }))()`);
+  assert(stagedProbe.model.includes("GPT-6 Astra") && stagedProbe.model.includes("Max")
+    && stagedProbe.permission.includes("Full access"),
+  `staged next-message settings update only after provider options are selected (${JSON.stringify(stagedProbe)})`);
   await capture("light-empty.png");
 
   const compactHeight = emptyProbe.outerHeight;
@@ -376,8 +507,10 @@ async function run() {
   await waitFor("document.querySelector('[aria-label=\"Chat message\"]')?.value === " + JSON.stringify(multilineDraft));
   await waitFor("Boolean(document.querySelector('[aria-label=\"Attached image composer.png\"]'))");
   assert(await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Chat message"]')?.value === ${JSON.stringify(multilineDraft)}
-    && Boolean(document.querySelector('[aria-label="Attached image composer.png"]'))`),
-  "approval response restores the stored text and image draft");
+    && Boolean(document.querySelector('[aria-label="Attached image composer.png"]'))
+    && document.querySelector('[aria-label="Composer model and effort"]')?.textContent.includes('GPT-6 Astra')
+    && document.querySelector('[aria-label="Permission: Full access"]')?.textContent.includes('Full access')`),
+    "approval response restores the stored text, image, and provider settings draft");
 
   await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Remove image composer.png\"]')?.click()");
   await waitFor("!document.querySelector('[aria-label=\"Attached image composer.png\"]')");
@@ -394,10 +527,35 @@ async function run() {
   const plainEnter = await dispatchComposerKey({ key: "Enter" });
   assert(plainEnter.defaultPrevented, "plain Enter is consumed by the submit action");
   await waitUntil(() => actions.some((action) => action.type === "send_chat" && action.text === "paste draft"));
+  const configuredSend = actions.findLast((action) => action.type === "send_chat" && action.text === "paste draft");
+  assert(configuredSend?.settings?.modelId === "gpt-6-astra"
+    && configuredSend.settings.reasoningEffort === "max"
+    && configuredSend.settings.permissionProfile === ":danger-full-access",
+  `selected model, effort, and permission travel with the next send (${JSON.stringify(configuredSend?.settings)})`);
   await waitFor("document.querySelector('[aria-label=\"Chat message\"]')?.value === ''");
   await waitFor("!document.querySelector('[aria-label=\"Attached image pasted.png\"]')");
 
-  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Chat composer\"]')?.getBoundingClientRect().height <= " + (compactHeight + 1));
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Composer model and effort\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Composer model and effort menu\"]'))");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Model: Rejected model\"]')?.click()");
+  await setInput("rejected setting");
+  await waitFor("document.querySelector('[aria-label=\"Send\"]')?.getAttribute('aria-disabled') !== 'true'");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Send\"]')?.click()");
+  await waitUntil(() => actions.some((action) => action.type === "send_chat" && action.settings?.modelId === "gpt-rejected"));
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Chat delivery recovery\"]'))");
+  await waitFor("document.querySelector('[aria-label=\"Chat message\"]')?.value === 'rejected setting'");
+  const rejectedProbe = await window.webContents.executeJavaScript(`(() => ({
+    model: document.querySelector('[aria-label="Composer model and effort"]')?.textContent ?? '',
+    recovery: document.querySelector('[aria-label="Chat delivery recovery"]')?.textContent ?? '',
+    draft: document.querySelector('[aria-label="Chat message"]')?.value ?? '',
+  }))()`);
+  assert(rejectedProbe.model.includes("Rejected model")
+    && rejectedProbe.recovery.includes("provider rejected")
+    && rejectedProbe.draft === "rejected setting",
+  `a rejected setting remains clearly staged and actionable (${JSON.stringify(rejectedProbe)})`);
+
+  await setInput("");
+  await waitFor(`document.querySelector('[aria-label="Chat composer"]')?.getBoundingClientRect().height <= ${compactHeight + 1}`);
   const clearedProbe = await probeComposer();
   assert(clearedProbe.outerHeight <= compactHeight + 1,
     `clearing the draft returns the composer to its compact height (${JSON.stringify({ compactHeight, clearedProbe })})`);
@@ -412,6 +570,30 @@ async function run() {
   await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Remove image composer.png\"]')?.click()");
   await waitFor("!document.querySelector('[aria-label=\"Attached image composer.png\"]')");
   assert(await probeSendDisabled(), "removing the last attachment disables Send for an empty draft");
+
+  await addPickerImage("capability.png");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Attached image capability.png\"]'))");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Composer model and effort\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Composer model and effort menu\"]'))");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Model: Text only\"]')?.click()");
+  await waitFor("document.querySelector('[aria-label=\"Composer model and effort\"]')?.textContent.includes('Text only')");
+  await waitFor("document.querySelector('[aria-label=\"Composer validation errors\"]')?.textContent.includes('Choose a model with image support')");
+  const incompatibleImageProbe = await window.webContents.executeJavaScript(`(() => ({
+    hasAttachment: Boolean(document.querySelector('[aria-label="Attached image capability.png"]')),
+    hasAddImage: Boolean(document.querySelector('[aria-label="Add image"]')),
+    sendDisabled: document.querySelector('[aria-label="Send"]')?.getAttribute('aria-disabled') ?? '',
+    error: document.querySelector('[aria-label="Composer validation errors"]')?.textContent ?? '',
+  }))()`);
+  assert(incompatibleImageProbe.hasAttachment && !incompatibleImageProbe.hasAddImage
+    && incompatibleImageProbe.sendDisabled === "true"
+    && incompatibleImageProbe.error.includes("Choose a model with image support"),
+  `text-only model preserves the image draft and blocks an incompatible send (${JSON.stringify(incompatibleImageProbe)})`);
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Composer model and effort\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Composer model and effort menu\"]'))");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Model: GPT-6 Astra\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Add image\"]')) && document.querySelector('[aria-label=\"Send\"]')?.getAttribute('aria-disabled') !== 'true'");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Remove image capability.png\"]')?.click()");
+  await waitFor("!document.querySelector('[aria-label=\"Attached image capability.png\"]')");
 
   await openChat(gatedPermissionSession);
   await waitFor("Boolean(document.querySelector('[aria-label=\"Permission mode: Default\"]'))");
@@ -454,10 +636,11 @@ async function run() {
     && detailsProbe.detailsText.includes("Context: 12,000 / 114,688 tokens")
     && detailsProbe.detailsText.includes("Path: /fixture/project"),
   `Details retains provider, context, and path diagnostics (${JSON.stringify(detailsProbe)})`);
-  assert(detailsProbe.composerText.includes("GPT-5.6 Sol")
-    && detailsProbe.composerText.includes("Reasoning High")
+  assert(detailsProbe.composerText.includes("GPT-6 Astra")
+    && detailsProbe.composerText.includes("Max")
+    && !detailsProbe.composerText.includes("Reasoning Max")
     && !detailsProbe.composerText.includes("/fixture/project"),
-  `composer retains passive model and effort context (${JSON.stringify(detailsProbe)})`);
+  `composer retains model and effort context (${JSON.stringify(detailsProbe)})`);
   await capture("light-details.png");
 
   await openChat(workingSession);
@@ -552,6 +735,18 @@ async function run() {
   const narrowProbe = await probeComposer();
   assert(narrowProbe.outerWidth <= 464 && narrowProbe.toolbarScrollWidth <= narrowProbe.toolbarClientWidth + 1,
     `narrow composer stays contained in its viewport (${JSON.stringify(narrowProbe)})`);
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Composer model and effort\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Composer model and effort menu\"]'))");
+  const narrowMenuProbe = await window.webContents.executeJavaScript(`(() => {
+    const menu = document.querySelector('[aria-label="Composer model and effort menu"]')?.getBoundingClientRect();
+    return { left: menu?.left ?? -1, right: menu?.right ?? -1, viewport: window.innerWidth };
+  })()`);
+  assert(narrowMenuProbe.left >= -1 && narrowMenuProbe.right <= narrowMenuProbe.viewport + 1,
+    `narrow model menu remains inside the viewport (${JSON.stringify(narrowMenuProbe)})`);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await capture("light-narrow-model-menu.png");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Composer model and effort\"]')?.click()");
+  await waitFor("document.querySelector('[aria-label=\"Composer model and effort\"]')?.getAttribute('aria-expanded') === 'false'");
   await capture("light-narrow.png");
   nativeTheme.themeSource = "dark";
   await new Promise((resolve) => setTimeout(resolve, 120));
@@ -561,6 +756,12 @@ async function run() {
   }))()`);
   assert(darkProbe.surfaceBackground === darkProbe.canvasBackground,
     `composer enclosure shares the dark Chat canvas (${darkProbe.canvasBackground} → ${darkProbe.surfaceBackground})`);
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Composer model and effort\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Composer model and effort menu\"]'))");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await capture("dark-model-menu.png");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Composer model and effort\"]')?.click()");
+  await waitFor("document.querySelector('[aria-label=\"Composer model and effort\"]')?.getAttribute('aria-expanded') === 'false'");
   await capture("dark-narrow.png");
   await window.setSize(1_200, 760);
   for (let index = 0; index < 15; index += 1) {
@@ -589,7 +790,7 @@ async function run() {
   console.log(JSON.stringify({
     artifactRoot,
     actions: actions.map(({ type, sessionId, text, deliveryId }) => ({ type, sessionId, text, deliveryId })),
-      files: ["light-empty.png", "light-draft-image.png", "light-details.png", "light-canceling.png", "light-read-only.png", "light-narrow.png", "dark-narrow.png", "dark-scaled.png"],
+      files: ["light-empty.png", "light-model-menu.png", "light-permission-menu.png", "light-draft-image.png", "light-details.png", "light-canceling.png", "light-read-only.png", "light-narrow-model-menu.png", "light-narrow.png", "dark-model-menu.png", "dark-narrow.png", "dark-scaled.png"],
   }, null, 2));
 }
 

@@ -11,6 +11,7 @@ import {
   type ChatItem,
   type ChatMetadata,
   type ChatPage,
+  type ChatSettings,
 } from "@agent-visor/protocol";
 import { summaryWork } from "./machine.js";
 import { normalizeCodexAssistantText } from "./codex-assistant-text.js";
@@ -42,6 +43,11 @@ export async function readChatPage(
     before === undefined,
     session.modelCatalog,
   );
+  // Older pages are historical transcript content; their settings metadata
+  // must not replace the effective values shown for the current turn.
+  const chatSettings = before === undefined
+    ? chatSettingsForSession(session, page.metadata)
+    : undefined;
   return {
     type: "chat_page",
     sessionId: session.id,
@@ -49,6 +55,7 @@ export async function readChatPage(
     hasMoreBefore: page.start > 0,
     nextBefore: page.start > 0 ? page.start : undefined,
     ...(page.metadata ? { metadata: page.metadata } : {}),
+    ...(chatSettings ? { chatSettings } : {}),
     transcriptEvidence: {
       // An empty page can be a missing/unloaded or partially written source;
       // callers must not use it for content-only delivery reconciliation.
@@ -60,6 +67,31 @@ export async function readChatPage(
     },
     capabilities: chatCapabilities(session),
     pendingAction: null,
+  };
+}
+
+/**
+ * Build the renderer contract only when Codex supplied a verified catalog.
+ * Transcript metadata is evidence for the current values; absent fields stay
+ * absent instead of being filled from a local default.
+ */
+export function chatSettingsForSession(
+  session: DiscoveredProviderSession,
+  metadata?: ChatMetadata,
+): ChatSettings | undefined {
+  if (session.provider !== "codex" || !session.chatSettingsCatalog) return undefined;
+  const current: ChatSettings["current"] = {
+    ...(metadata?.modelId ? { modelId: metadata.modelId } : {}),
+    ...(metadata?.reasoningEffort ? { reasoningEffort: metadata.reasoningEffort } : {}),
+    ...(metadata?.permissionProfile ? { permissionProfile: metadata.permissionProfile } : {}),
+  };
+  return {
+    provider: "codex",
+    current,
+    models: session.chatSettingsCatalog.models,
+    permissionProfiles: session.chatSettingsCatalog.permissionProfiles,
+    appliesTo: "next_turn",
+    canChange: chatCapabilities(session).canSendText,
   };
 }
 
@@ -270,6 +302,7 @@ export function parseChatMetadata(
   let permissionMode: string | undefined;
   let sandbox: string | undefined;
   let approvalPolicy: string | undefined;
+  let permissionProfile: string | undefined;
   let contextTokens: number | undefined;
   let contextWindow: number | undefined;
   const setModel = (value: unknown, providerValue?: unknown) => {
@@ -312,6 +345,9 @@ export function parseChatMetadata(
         approvalPolicy = boundedText(payload.approval_policy) ?? approvalPolicy;
         const sandboxPolicy = record(payload.sandbox_policy) ? payload.sandbox_policy : undefined;
         sandbox = boundedText(sandboxPolicy?.type) ?? sandbox;
+        const activeProfile = record(payload.active_permission_profile)
+          ? payload.active_permission_profile : undefined;
+        permissionProfile = boundedText(activeProfile?.id) ?? permissionProfile;
       }
       if (value.type === "event_msg" && payload?.type === "thread_settings_applied") {
         const applied = record(payload.thread_settings) ? payload.thread_settings : undefined;
@@ -321,6 +357,7 @@ export function parseChatMetadata(
         const profile = record(applied?.active_permission_profile)
           ? applied.active_permission_profile : record(applied?.permission_profile)
             ? applied.permission_profile : undefined;
+        permissionProfile = boundedText(profile?.id) ?? permissionProfile;
         sandbox = boundedText(profile?.type) ?? sandbox;
       }
       if (value.type === "event_msg" && payload?.type === "token_count") {
@@ -365,6 +402,7 @@ export function parseChatMetadata(
     ...(permissionMode ? { permissionMode } : {}),
     ...(sandbox ? { sandbox } : {}),
     ...(approvalPolicy ? { approvalPolicy } : {}),
+    ...(permissionProfile ? { permissionProfile } : {}),
     ...(contextTokens ? { contextTokens } : {}),
     ...(contextWindow ? { contextWindow } : {}),
   };
