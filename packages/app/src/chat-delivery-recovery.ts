@@ -550,7 +550,29 @@ export function createChatDeliveryRecoveryStore(
     },
 
     recordCancellation(input) {
-      if (!input.confirmed) return undefined;
+      if (!input.confirmed || !isActive(input.sessionId, input.generation)) return undefined;
+      const scope = scopes.get(scopeKey(input.sessionId, input.generation));
+      const existing = scope && [...scope.values()].find((candidate) => (
+        (candidate.requestId === input.requestId && candidate.deliveryId === input.deliveryId)
+        || (candidate.retry?.requestId === input.requestId
+          && candidate.retry.deliveryId === input.deliveryId)
+      ));
+      if (existing
+        && (existing.status === "retrying"
+          || existing.status === "awaiting-canonical"
+          || existing.status === "uncertain")) {
+        // Stop is authoritative for the exact delivery even when its
+        // acknowledgement or transcript proof was already uncertain. Keep
+        // the recovery lineage so a late canonical row can still consume it.
+        existing.status = "canceled";
+        existing.cause = "canceled";
+        existing.error = boundedError(input.error);
+        existing.updatedAt = clock.now();
+        return {
+          record: cloneRecord(existing),
+          restore: restoreDecision(existing, input.currentComposer, input.allowedEmptyRevisions),
+        };
+      }
       return record(input);
     },
 

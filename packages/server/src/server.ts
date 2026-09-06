@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { WebSocket, WebSocketServer } from "ws";
 import {
   PROTOCOL_VERSION,
@@ -7,7 +8,6 @@ import {
   type ClientMessage,
   type ChatCommands,
   type NativeServicesState,
-  type ServerMessage,
   type SessionSnapshot,
   type ChatSettingsUpdate,
 } from "@agent-visor/protocol";
@@ -47,7 +47,8 @@ export async function startServer(options: {
   const source = options.source ?? fixedSource(sessionSnapshotSchema.parse(options.snapshot));
   const subscribers = new Set<WebSocket>();
   const nativeSubscribers = new Set<WebSocket>();
-  const openChats = new Map<WebSocket, { sessionId: string; generation?: number }>();
+  type OpenChat = { sessionId: string; generation?: number; referenceId: string };
+  const openChats = new Map<WebSocket, OpenChat>();
   const server = new WebSocketServer({
     host: "127.0.0.1",
     port: options.port,
@@ -92,6 +93,8 @@ export async function startServer(options: {
     socket.once("close", () => {
       subscribers.delete(socket);
       nativeSubscribers.delete(socket);
+      const openChat = openChats.get(socket);
+      if (openChat) source.chatClosed?.(openChat.sessionId, openChat.referenceId);
       openChats.delete(socket);
     });
 
@@ -145,11 +148,65 @@ export async function startServer(options: {
         }, { requestType: parsed.data.type, requestId: parsed.data.id });
       } else if (parsed.data.type === "open_chat") {
         if (parsed.data.before === undefined) {
+          const previous = openChats.get(socket);
+          const sessionChanged = previous?.sessionId !== parsed.data.sessionId;
+          const referenceId = sessionChanged || !previous
+            ? randomUUID()
+            : previous.referenceId;
+          if (previous && sessionChanged) {
+            source.chatClosed?.(previous.sessionId, previous.referenceId);
+          }
           openChats.set(socket, {
             sessionId: parsed.data.sessionId,
+            referenceId,
             ...(parsed.data.generation !== undefined ? { generation: parsed.data.generation } : {}),
           });
+          if (sessionChanged) {
+            // Chat open holds a read lease only. A close or rapid switch
+            // during this await is guarded by the source's reference token;
+            // Send remains the native writer acquisition boundary.
+            if (source.chatOpened) await source.chatOpened(parsed.data.sessionId, referenceId);
+            const current = openChats.get(socket);
+            // A deferred chat read for an older session must not publish a
+            // page after this websocket has switched or reopened the session.
+            if (!current
+              || current.sessionId !== parsed.data.sessionId
+              || current.referenceId !== referenceId) return;
+          } else if (parsed.data.retryAvailability) {
+            // A same-session latest request is also the explicit Retry
+            // boundary after owner navigation released an idle Codex route.
+            const retryError = source.chatRetry
+              ? await source.chatRetry(parsed.data.sessionId)
+              : undefined;
+            const current = openChats.get(socket);
+            if (!current
+              || current.sessionId !== parsed.data.sessionId
+              || current.referenceId !== referenceId) return;
+            if (retryError) {
+              // Keep the renderer's existing page, transcript, and draft.
+              // The same request/session/reference fence used by chat_page
+              // prevents a late retry result from crossing a session switch.
+              sendDaemonMessage(socket, {
+                type: "daemon_error",
+                code: "invalid_response",
+                message: retryError,
+                responseType: "chat_page",
+                ...(parsed.data.id ? { requestId: parsed.data.id } : {}),
+                requestType: parsed.data.type,
+                sessionId: parsed.data.sessionId,
+              }, {
+                requestType: parsed.data.type,
+                ...(parsed.data.id ? { requestId: parsed.data.id } : {}),
+                sessionId: parsed.data.sessionId,
+              });
+              return;
+            }
+          }
         }
+        const requestOpenChat = openChats.get(socket);
+        const requestReferenceId = requestOpenChat?.sessionId === parsed.data.sessionId
+          ? requestOpenChat.referenceId
+          : undefined;
         if (source.chatPage) {
           try {
             source.acknowledgeReady?.(parsed.data.sessionId);
@@ -159,6 +216,13 @@ export async function startServer(options: {
               parsed.data.limit,
               parsed.data.generation,
             );
+            const current = openChats.get(socket);
+            // A page read can outlive a session switch. Only the exact chat
+            // reference that started this request may publish its response.
+            if (requestReferenceId !== undefined
+              && (!current
+                || current.sessionId !== parsed.data.sessionId
+                || current.referenceId !== requestReferenceId)) return;
             sendDaemonMessage(socket, {
               ...page,
               ...(parsed.data.id ? { requestId: parsed.data.id } : {}),
@@ -170,10 +234,18 @@ export async function startServer(options: {
             });
           } catch (error) {
             reportRequestFailure(error);
+            // Preserve the renderer's existing page while reporting the
+            // request failure through the correlated error channel. A
+            // synthetic chat_page would replace that page and discard its
+            // settings, retry identity, and recovery state.
             sendDaemonMessage(socket, {
-              ...failedChatPage(parsed.data.sessionId),
+              type: "daemon_error",
+              code: "invalid_response",
+              message: requestFailureMessage(error),
+              responseType: "chat_page",
               ...(parsed.data.id ? { requestId: parsed.data.id } : {}),
-              mode: parsed.data.before === undefined ? "latest" : "earlier",
+              requestType: parsed.data.type,
+              sessionId: parsed.data.sessionId,
             }, {
               requestType: parsed.data.type,
               ...(parsed.data.id ? { requestId: parsed.data.id } : {}),
@@ -266,6 +338,10 @@ export async function startServer(options: {
       unsubscribe();
       unsubscribeNative?.();
       unsubscribeChatSettings?.();
+      for (const openChat of openChats.values()) {
+        source.chatClosed?.(openChat.sessionId, openChat.referenceId);
+      }
+      openChats.clear();
       await closeServer(server);
     },
   };
@@ -282,29 +358,10 @@ function fixedSource(snapshot: SessionSnapshot): SessionSnapshotSource {
   };
 }
 
-function failedChatPage(sessionId: string): ServerMessage {
-  const readOnlyReason = "Unable to load this conversation record.";
-  return {
-    type: "chat_page",
-    sessionId,
-    items: [{
-      id: "chat-load-error",
-      kind: "system",
-      text: readOnlyReason,
-      tone: "error",
-      category: "other",
-    }],
-    hasMoreBefore: false,
-    capabilities: {
-      canSendText: false,
-      canSendImages: false,
-      canCancel: false,
-      canApprove: false,
-      canAnswer: false,
-      readOnlyReason,
-    },
-    pendingAction: null,
-  };
+function requestFailureMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const trimmed = message.trim();
+  return (trimmed || "Unable to load this conversation record.").slice(0, 512);
 }
 
 function reportRequestFailure(error: unknown): void {

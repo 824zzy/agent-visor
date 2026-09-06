@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:chat": "electron scripts/e2e --chat",
     "test:chat-composer": "electron scripts/test-chat-composer.mjs",
+    "test:chat-lifecycle": "electron scripts/test-chat-lifecycle.mjs",
     "test:export": "node scripts/test-exported-renderer.mjs",
     "test:native-services": "electron scripts/test-native-services-accessibility.mjs",
     "test:clean-profile": "node scripts/test-clean-profile.mjs && electron scripts/test-native-services-accessibility.mjs",

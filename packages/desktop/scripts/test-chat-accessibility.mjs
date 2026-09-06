@@ -76,6 +76,19 @@ const expectedFixtureContent = {
   "chat-item-tool-1": ["Bash", "45 passed"],
   "chat-item-answer-1": ["Done", "All checks passed"],
 };
+const readyState = { conversation: "open", turn: "ready", route: "available" };
+const workingState = {
+  conversation: "open",
+  turn: "working",
+  route: "waiting",
+  unavailableReason: "turn_in_progress",
+};
+const archivedState = {
+  conversation: "archived",
+  turn: "unknown",
+  route: "unavailable",
+  unavailableReason: "archived",
+};
 let mode = "history";
 let activeServer;
 let activeWindow;
@@ -92,6 +105,8 @@ const session = {
   updatedAt: "2026-08-22T10:00:00.000Z",
   canOpenOwner: true,
   canEnterChat: true,
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const codexUsageSession = {
   ...session,
@@ -101,6 +116,8 @@ const codexUsageSession = {
   owner: "Codex",
   subtitle: "Ready",
   updatedAt: "2026-08-22T09:30:00.000Z",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const visibilitySession = {
   ...session,
@@ -110,6 +127,8 @@ const visibilitySession = {
   owner: "Codex",
   subtitle: "Activity visibility fixture",
   updatedAt: "2026-08-22T09:45:00.000Z",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const claudeModeSession = {
   ...session,
@@ -118,14 +137,18 @@ const claudeModeSession = {
   source: "Claude Code",
   owner: "Ghostty",
   subtitle: "Agent is working",
-  section: "working",
+  section: "ready",
   updatedAt: "2026-08-22T09:15:00.000Z",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const claudeVisibilitySession = {
   ...claudeModeSession,
   id: "claude-chat-visibility",
   title: "Claude Chat Visibility",
   section: "ready",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const workingSession = {
   ...session,
@@ -134,6 +157,8 @@ const workingSession = {
   subtitle: "Agent is working",
   section: "working",
   updatedAt: "2026-08-22T11:00:00.000Z",
+  sessionState: workingState,
+  stateRevision: 1,
 };
 const secondSession = {
   ...session,
@@ -141,6 +166,8 @@ const secondSession = {
   title: "Second Migration Chat",
   subtitle: "Independent draft",
   updatedAt: "2026-08-22T09:00:00.000Z",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const deliverySession = {
   ...session,
@@ -148,14 +175,18 @@ const deliverySession = {
   title: "Delivery Parity Chat",
   subtitle: "Delivery identity fixture",
   updatedAt: "2026-08-22T08:00:00.000Z",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const startupRaceSession = {
   ...session,
   id: "pi-chat-startup-race",
   title: "Startup Race Chat",
   subtitle: "Agent is working",
-  section: "working",
+  section: "ready",
   updatedAt: "2026-08-22T07:30:00.000Z",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const terminalEvidenceSession = {
   ...workingSession,
@@ -163,6 +194,9 @@ const terminalEvidenceSession = {
   title: "Terminal Evidence Chat",
   subtitle: "Waiting for canonical turn evidence",
   updatedAt: "2026-08-22T07:15:00.000Z",
+  section: "ready",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const scopedExpirySession = {
   ...workingSession,
@@ -170,6 +204,9 @@ const scopedExpirySession = {
   title: "Scoped Expiry Chat",
   subtitle: "Pending delivery scope fixture",
   updatedAt: "2026-08-22T07:05:00.000Z",
+  section: "ready",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const tailSession = {
   ...session,
@@ -177,14 +214,18 @@ const tailSession = {
   title: "Tail Policy Chat",
   subtitle: "Streaming tail fixture",
   updatedAt: "2026-08-22T06:00:00.000Z",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const recoveryWorkingSession = {
   ...session,
   id: "pi-chat-recovery-working",
   title: "Recovery Working Chat",
   subtitle: "Agent is working",
-  section: "working",
+  section: "ready",
   updatedAt: "2026-08-22T07:00:00.000Z",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const endedSession = {
   ...session,
@@ -193,6 +234,8 @@ const endedSession = {
   subtitle: "Session ended",
   section: "history",
   updatedAt: "2026-08-21T09:00:00.000Z",
+  sessionState: archivedState,
+  stateRevision: 1,
 };
 const invalidPageSession = {
   ...session,
@@ -200,6 +243,8 @@ const invalidPageSession = {
   title: "Invalid Chat Response",
   subtitle: "Protocol error",
   updatedAt: "2026-08-20T09:00:00.000Z",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const invalidSlashSession = {
   ...session,
@@ -207,6 +252,8 @@ const invalidSlashSession = {
   title: "Invalid Slash Response",
   subtitle: "Protocol error",
   updatedAt: "2026-08-19T09:00:00.000Z",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const fixtureSessions = [session, visibilitySession, claudeVisibilitySession, codexUsageSession, claudeModeSession, workingSession, deliverySession, startupRaceSession, terminalEvidenceSession, scopedExpirySession, recoveryWorkingSession, tailSession, secondSession, endedSession, invalidPageSession, invalidSlashSession];
 const tailFixture = {
@@ -269,6 +316,14 @@ async function run() {
       revision,
       sessions: snapshotSessions(),
     });
+  };
+  const transition = (target, nextState) => {
+    target.sessionState = nextState;
+    target.stateRevision = (target.stateRevision ?? 0) + 1;
+    target.section = nextState.conversation === "archived"
+      ? "history"
+      : nextState.turn === "working" ? "working" : "ready";
+    publish(target.id);
   };
   tailFixture.publish = () => publish(tailSession.id);
   let ownerActions = 0;
@@ -337,6 +392,7 @@ async function run() {
     },
     chatPage: async (sessionId, before) => {
       const requested = fixtureSessions.find((entry) => entry.id === sessionId) ?? session;
+      return (async () => {
       if (requested.id === endedSession.id) {
         return {
           type: "chat_page",
@@ -598,6 +654,11 @@ async function run() {
           }],
         } : null,
       };
+      })().then((page) => ({
+        ...page,
+        sessionState: requested.sessionState,
+        stateRevision: requested.stateRevision,
+      }));
     },
     chatCommands: async (sessionId) => ({
       ...(sessionId === invalidSlashSession.id
@@ -707,20 +768,27 @@ async function run() {
         if (message.text === "cancel-safe") {
           deliveryFixture.cancelSafeDeliveryId = message.deliveryId;
           deliveryFixture.recoveryCancelDeliveryId = message.deliveryId;
-          publish(recoveryWorkingSession.id);
+          transition(recoveryWorkingSession, workingState);
           return new Promise((resolve) => { deliveryFixture.releaseCancelSend = resolve; });
         }
         if (message.text === "cancel-fail") {
           deliveryFixture.cancelFailureDeliveryId = message.deliveryId;
           deliveryFixture.recoveryCancelDeliveryId = message.deliveryId;
-          publish(recoveryWorkingSession.id);
-          return new Promise((resolve) => { deliveryFixture.releaseCancelFailureSend = resolve; });
+          transition(recoveryWorkingSession, workingState);
+          return new Promise((resolve) => {
+            deliveryFixture.releaseCancelFailureSend = (value) => {
+              transition(recoveryWorkingSession, readyState);
+              resolve(value);
+            };
+          });
         }
         if (message.text === "startup-race-b") {
+          transition(startupRaceSession, workingState);
           deliveryFixture.startupRaceDeliveryId = message.deliveryId;
           return undefined;
         }
         if (message.text === "terminal-delayed-echo") {
+          transition(terminalEvidenceSession, workingState);
           deliveryFixture.terminalEvidenceDeliveryId = message.deliveryId;
           deliveryFixture.terminalEvidenceRequestId = message.id;
           deliveryFixture.terminalEvidenceMode = "baseline";
@@ -737,7 +805,12 @@ async function run() {
       if (message.type === "respond_chat") mode = "history";
       if (message.type === "cancel_chat") {
         if (message.sessionId === startupRaceSession.id) {
-          return new Promise((resolve) => { deliveryFixture.releaseStartupRaceCancel = resolve; });
+          return new Promise((resolve) => {
+            deliveryFixture.releaseStartupRaceCancel = (value) => {
+              transition(startupRaceSession, readyState);
+              resolve(value);
+            };
+          });
         }
         if (message.sessionId === recoveryWorkingSession.id) {
           if (message.deliveryId === deliveryFixture.cancelFailureDeliveryId) {
@@ -750,7 +823,12 @@ async function run() {
             return new Promise((resolve) => { deliveryFixture.releaseCancelFailureAction = resolve; });
           }
           if (message.deliveryId === deliveryFixture.cancelSafeDeliveryId) {
-            return new Promise((resolve) => { deliveryFixture.releaseCancelSafe = resolve; });
+            return new Promise((resolve) => {
+              deliveryFixture.releaseCancelSafe = (value) => {
+                transition(recoveryWorkingSession, readyState);
+                resolve(value);
+              };
+            });
           }
           return message.deliveryId === undefined
             ? "The fixture requires a delivery identity."
@@ -1167,7 +1245,10 @@ async function run() {
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Open Chat for Startup Race Chat"]'))`);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Open Chat for Startup Race Chat"]')?.click()`);
     await waitFor(window, `document.body.textContent.includes('Startup race fixture.')`);
-    await waitFor(window, `Boolean(document.querySelector('[aria-label="Stop agent"]'))`);
+    assert(
+      await window.webContents.executeJavaScript(`!document.querySelector('[aria-label="Stop agent"]')`),
+      "a ready terminal conversation does not expose Stop before a new delivery starts",
+    );
     await setInput(window, "Chat message", "startup-race-b");
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Send"]')?.click()`);
     await waitUntil(() => actions.some((action) => action.type === "send_chat" && action.text === "startup-race-b"));
@@ -1920,12 +2001,24 @@ async function run() {
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Back to Sessions"]')?.click()`);
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Open Chat for Ended Migration Chat"]'))`);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Open Chat for Ended Migration Chat"]')?.click()`);
-    await waitFor(window, `document.body.textContent.includes('This session has ended. Chat history is read only.')`);
+    await waitFor(window, `document.body.textContent.includes('This conversation is archived. Open it in Ghostty to restore it.')`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Chat availability notice"]'))`);
+    const archivedProbe = await window.webContents.executeJavaScript(`(() => {
+      const input = document.querySelector('[aria-label="Chat message"]');
+      const send = document.querySelector('[aria-label="Send"]');
+      return {
+        notice: document.querySelector('[aria-label="Chat availability notice"]')?.textContent ?? '',
+        inputDisabled: Boolean(input?.disabled || input?.readOnly || input?.getAttribute('aria-disabled') === 'true'),
+        sendDisabled: send?.getAttribute('aria-disabled') === 'true',
+        addImage: Boolean(document.querySelector('[aria-label="Add image"]')),
+      };
+    })()`);
     assert(
-      await window.webContents.executeJavaScript(`!document.querySelector('[aria-label="Chat message"]')
-        && !document.querySelector('[aria-label="Send"]')
-        && !document.querySelector('[aria-label="Add image"]')`),
-      "ended Chat disables text, image, and submit controls",
+      archivedProbe.notice.includes('This conversation is archived. Open it in Ghostty to restore it.')
+        && archivedProbe.inputDisabled
+        && archivedProbe.sendDisabled
+        && !archivedProbe.addImage,
+      `archived Chat keeps the lifecycle explanation visible and disables text, image, and submit actions (${JSON.stringify(archivedProbe)})`,
     );
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Back to Sessions"]')?.click()`);
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Open Chat for Migration Chat"]'))`);
@@ -2135,23 +2228,32 @@ async function run() {
 }
 
 function capabilities(target = session, activeDeliveryId) {
-  if (target.section === "history") {
+  const state = target.sessionState ?? readyState;
+  if (state.conversation === "archived" || state.unavailableReason === "archived") {
     return {
       canSendText: false,
       canSendImages: false,
       canCancel: false,
       canApprove: false,
       canAnswer: false,
-      readOnlyReason: "This session has ended. Chat history is read only.",
+      readOnlyReason: "This conversation is archived. Open it in Ghostty to restore it.",
     };
   }
+  const canSend = state.conversation === "open"
+    && state.turn === "ready"
+    && state.route === "available";
+  const canCancel = state.conversation === "open"
+    && state.turn === "working"
+    && (activeDeliveryId !== undefined && activeDeliveryId !== null
+      ? true
+      : target.id === workingSession.id);
+  const deliveryId = activeDeliveryId ?? (target.id === workingSession.id ? `existing-${target.id}` : undefined);
   return {
-    canSendText: true,
-    canSendImages: true,
-    canCancel: target.section === "working",
-    ...(target.section === "working" && activeDeliveryId !== null
-      ? { cancelDeliveryId: activeDeliveryId ?? `existing-${target.id}` }
-      : {}),
+    canSendText: canSend,
+    canSendImages: canSend,
+    canCancel,
+    ...(canCancel && deliveryId ? { cancelDeliveryId: deliveryId } : {}),
+    ...(state.unavailableReason ? { unavailableReason: state.unavailableReason } : {}),
     canApprove: mode === "approval",
     canAnswer: mode === "question",
   };

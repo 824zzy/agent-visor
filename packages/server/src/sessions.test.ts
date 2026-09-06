@@ -10,11 +10,13 @@ import {
   type DiscoveredProviderSession,
   type HookSessionEvent,
   type ProviderAdapter,
+  type SessionRouteProbeResult,
 } from "./sessions.js";
 import type { ChatPage } from "@agent-visor/protocol";
 import { processInstanceToken } from "./providers/shared.js";
 import { FakeNativeHelper } from "./native-helper.js";
 import { NativeSessionControls } from "./session-controls.js";
+import type { CodexRouteEvent } from "./codex-turn.js";
 
 const live: DiscoveredProviderSession = {
   id: "pi-1",
@@ -24,10 +26,18 @@ const live: DiscoveredProviderSession = {
   cwd: "/Users/me/Codes/agent-visor",
   owner: "Ghostty",
   section: "working",
+  turnState: "working",
   updatedAt: "2026-08-22T08:00:00.000Z",
   canOpenOwner: true,
   canEnterChat: true,
   authority: 1,
+};
+
+const readyLive: DiscoveredProviderSession = {
+  ...live,
+  section: "ready",
+  turnState: "ready",
+  conversationState: "open",
 };
 
 class FakeProvider implements ProviderAdapter {
@@ -142,6 +152,107 @@ describe("SessionRepository", () => {
     provider.discover = async () => { throw new Error("mid-write read"); };
 
     expect(await repository.refresh()).toEqual(first);
+  });
+
+  it("keeps an exact opened Codex chat addressable after ambient discovery ages it out", async () => {
+    const sessionId = "opened-old-codex";
+    const session: DiscoveredProviderSession = {
+      ...live,
+      id: sessionId,
+      provider: "codex",
+      owner: "Codex",
+      section: "history",
+      conversationState: "open",
+      turnState: "ready",
+      routeState: "available",
+      chatPath: "/tmp/opened-old-codex.jsonl",
+      messageTransport: "codex_app_server",
+      controlTarget: { kind: "url", url: `codex://threads/${sessionId}` },
+    };
+    let exactResolutions = 0;
+    const provider: ProviderAdapter = {
+      id: "codex",
+      discover: async () => [],
+      resolve: async (id) => {
+        exactResolutions += 1;
+        return id === sessionId ? structuredClone(session) : undefined;
+      },
+    };
+    const repository = new SessionRepository([provider], {
+      chatPageReader: async () => ({ ...testChatPage("old-entry"), sessionId }),
+    });
+    const focused: string[] = [];
+    repository.setControls({
+      focus: async (record) => { focused.push(record.id); },
+      send: async () => undefined,
+    });
+
+    expect((await repository.refresh()).sessions).toEqual([]);
+    expect((await repository.chatPage(sessionId)).capabilities).toMatchObject({
+      canSendText: true,
+    });
+    expect((await repository.refresh()).sessions).toEqual([]);
+    expect((await repository.chatPage(sessionId)).capabilities).toMatchObject({
+      canSendText: true,
+    });
+    expect(await repository.focusSession(sessionId)).toBeUndefined();
+    expect(focused).toEqual([sessionId]);
+    expect(exactResolutions).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps a cached transcript readable while exact Codex resolution is unavailable", async () => {
+    const sessionId = "unresolved-codex";
+    const session: DiscoveredProviderSession = {
+      ...live,
+      id: sessionId,
+      provider: "codex",
+      owner: "Codex",
+      section: "ready",
+      conversationState: "open",
+      turnState: "ready",
+      routeState: "available",
+      chatPath: "/tmp/unresolved-codex.jsonl",
+      messageTransport: "codex_app_server",
+      controlTarget: { kind: "url", url: `codex://threads/${sessionId}` },
+    };
+    const provider: ProviderAdapter = {
+      id: "codex",
+      discover: async () => [structuredClone(session)],
+      resolve: async () => undefined,
+    };
+    let sends = 0;
+    const repository = new SessionRepository([provider], {
+      chatPageReader: async () => ({ ...testChatPage("cached-entry"), sessionId }),
+    });
+    repository.setControls({
+      focus: async () => undefined,
+      send: async () => { sends += 1; },
+    });
+
+    await repository.refresh();
+    const page = await repository.chatPage(sessionId);
+    expect(page.items).toMatchObject([{ id: "cached-entry", kind: "user" }]);
+    expect(page.sessionState).toMatchObject({
+      conversation: "open",
+      route: "unavailable",
+      unavailableReason: "provider_unavailable",
+    });
+    expect(page.capabilities).toMatchObject({
+      canSendText: false,
+      unavailableReason: "provider_unavailable",
+    });
+    await repository.refresh();
+    expect((await repository.chatPage(sessionId)).capabilities.canSendText).toBe(false);
+    expect(await repository.chatAction({
+      type: "send_chat",
+      id: "must-not-send",
+      sessionId,
+      generation: 1,
+      deliveryId: "must-not-deliver",
+      text: "must remain read only",
+      images: [],
+    })).toContain("unavailable");
+    expect(sends).toBe(0);
   });
 
   it("preserves Codex Chat entry and control permissions when history becomes Ready", async () => {
@@ -807,7 +918,7 @@ describe("SessionRepository", () => {
   it("exposes and routes Claude permission cycling through exact mode and generation", async () => {
     const transcript = temporaryTranscript("2026-08-23T00:00:00.000Z");
     const claude: DiscoveredProviderSession = {
-      ...live,
+      ...readyLive,
       id: "claude-cycle",
       provider: "claude_code",
       chatPath: transcript.path,
@@ -1200,7 +1311,7 @@ describe("SessionRepository", () => {
   it("routes focus and Chat through provider-owned control metadata", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi.jsonl",
       messageTransport: "terminal",
       controlTarget: {
@@ -1247,11 +1358,12 @@ describe("SessionRepository", () => {
       permissionProfiles: [{ id: ":workspace", displayName: "Workspace", allowed: true }],
     };
     const codexSession: DiscoveredProviderSession = {
-      ...live,
+      ...readyLive,
       provider: "codex",
       owner: "Codex",
       chatPath: "/tmp/codex-settings.jsonl",
       messageTransport: "codex_app_server",
+      routeState: "available",
     };
     let discoveries = 0;
     let settingsReads = 0;
@@ -1389,11 +1501,12 @@ describe("SessionRepository", () => {
         permissionProfiles: [{ id: ":workspace", displayName: "Workspace", allowed: true }],
       };
       const codexSession: DiscoveredProviderSession = {
-        ...live,
+        ...readyLive,
         provider: "codex",
         owner: "Codex",
         chatPath: "/tmp/codex-expired-settings.jsonl",
         messageTransport: "codex_app_server",
+        routeState: "available",
       };
       let settingsReads = 0;
       const provider: ProviderAdapter = {
@@ -1491,7 +1604,7 @@ describe("SessionRepository", () => {
   it("revalidates the live generation after an async evidence read before writing", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi.jsonl",
       messageTransport: "terminal",
       controlTarget: {
@@ -1526,7 +1639,9 @@ describe("SessionRepository", () => {
       deliveryId: "delivery-async", text: "must not write", images: [],
     });
     await started;
-    provider.sessions[0] = { ...provider.sessions[0]!, section: "ready" };
+    provider.sessions[0] = {
+      ...provider.sessions[0]!, section: "working", turnState: "working",
+    };
     await repository.refresh();
     releaseEvidence({
       type: "chat_page", sessionId: "pi-1", items: [], hasMoreBefore: false,
@@ -1551,7 +1666,7 @@ describe("SessionRepository", () => {
       },
     };
     provider.sessions = [{
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi-page-order.jsonl",
       messageTransport: "terminal",
       controlTarget: target,
@@ -1595,7 +1710,7 @@ describe("SessionRepository", () => {
   it("does not let a forgotten session read mutate state after same-ID reuse", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi-page-reuse.jsonl",
       messageTransport: "terminal",
       controlTarget: {
@@ -1630,7 +1745,7 @@ describe("SessionRepository", () => {
     provider.sessions = [];
     await repository.refresh();
     provider.sessions = [{
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi-page-reuse.jsonl",
       messageTransport: "terminal",
       controlTarget: {
@@ -1656,7 +1771,7 @@ describe("SessionRepository", () => {
   it("lets a newer delivery baseline supersede an in-flight page read", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi-page-baseline.jsonl",
       messageTransport: "terminal",
       controlTarget: {
@@ -1702,7 +1817,7 @@ describe("SessionRepository", () => {
   it("stales a deferred send baseline when a newer latest page starts", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi-page-baseline-r2.jsonl",
       messageTransport: "terminal",
       controlTarget: {
@@ -1758,7 +1873,7 @@ describe("SessionRepository", () => {
   it("stops a queued send when a newer latest page invalidates its baseline", async () => {
     const provider = new FakeProvider();
     const terminalSession: DiscoveredProviderSession = {
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi-queued-baseline.jsonl",
       messageTransport: "terminal",
       controlTarget: {
@@ -1835,7 +1950,7 @@ describe("SessionRepository", () => {
   it("allows a send whose baseline resolves before a newer latest page starts", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi-page-baseline-inverse.jsonl",
       messageTransport: "terminal",
       controlTarget: {
@@ -1887,7 +2002,7 @@ describe("SessionRepository", () => {
   it("keeps an authoritative earlier page fail-closed for native reconciliation", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi-earlier-authority.jsonl",
       messageTransport: "terminal",
       controlTarget: {
@@ -1917,10 +2032,10 @@ describe("SessionRepository", () => {
     expect(reconciled).toEqual([]);
   });
 
-  it("rejects chat actions over the per-session queue bound before evidence or images are retained", async () => {
+  it("rejects overlapping terminal sends before they reach the provider queue", async () => {
     const provider = new FakeProvider();
     const terminalSession: DiscoveredProviderSession = {
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi-queue-cap.jsonl",
       messageTransport: "terminal",
       controlTarget: {
@@ -1967,22 +2082,23 @@ describe("SessionRepository", () => {
         type: "send_chat", id: `queue-request-${index}`, sessionId: "pi-1", generation: 1,
         deliveryId: `queue-delivery-${index}`, text: `queued-${index}`, images: [],
       }));
-    // Let all admitted operations reach the evidence read without waiting on
-    // the gate itself. The next action is rejected before another read/send.
+    // Terminal admission reserves one next-turn slot synchronously. Only the
+    // first request may reach transcript evidence; later requests wait rather
+    // than queueing a competing provider turn.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(evidenceReads).toBe(MAX_CHAT_ACTIONS_PER_SESSION);
+    expect(evidenceReads).toBe(1);
     expect(await repository.chatAction({
       type: "send_chat", id: "queue-request-over", sessionId: "pi-1", generation: 1,
       deliveryId: "queue-delivery-over", text: "must reject", images: [],
-    })).toContain("Too many chat actions");
-    expect(evidenceReads).toBe(MAX_CHAT_ACTIONS_PER_SESSION);
+    })).toContain("Wait for this turn to finish");
+    expect(evidenceReads).toBe(1);
     expect(writes).toBe(0);
 
     releaseEvidence();
-    await expect(Promise.all(operations)).resolves.toEqual(
-      Array.from({ length: MAX_CHAT_ACTIONS_PER_SESSION }, () => undefined),
-    );
-    expect(writes).toBe(MAX_CHAT_ACTIONS_PER_SESSION);
+    const results = await Promise.all(operations);
+    expect(results[0]).toBeUndefined();
+    expect(results.slice(1).every((result) => result?.includes("Wait for this turn to finish"))).toBe(true);
+    expect(writes).toBe(1);
   }, 10_000);
 
   it("bounds repository focus reservations per session and releases them on forget and throw", async () => {
@@ -2160,7 +2276,7 @@ describe("SessionRepository", () => {
   it("keeps a deferred send stale through 513 forgets and same-ID reuse", async () => {
     const provider = new FakeProvider();
     const terminalSession: DiscoveredProviderSession = {
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi-chat.jsonl",
       messageTransport: "terminal",
       controlTarget: { kind: "terminal", target: {
@@ -2225,7 +2341,7 @@ describe("SessionRepository", () => {
   it("does not let a stale send failure clear a reused delivery", async () => {
     const provider = new FakeProvider();
     const terminalSession: DiscoveredProviderSession = {
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi-chat-reused-delivery.jsonl",
       messageTransport: "terminal",
       controlTarget: { kind: "terminal", target: {
@@ -2359,7 +2475,7 @@ describe("SessionRepository", () => {
   it("deduplicates a replay after the original action response is lost", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi.jsonl",
       messageTransport: "terminal",
       controlTarget: {
@@ -2401,7 +2517,7 @@ describe("SessionRepository", () => {
   it("rejects conflicting request and delivery identity reuse symmetrically", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi.jsonl",
       messageTransport: "terminal",
       controlTarget: {
@@ -2440,7 +2556,7 @@ describe("SessionRepository", () => {
 
   it("does not let a future open or send generation poison the live chat scope", async () => {
     const provider = new FakeProvider();
-    provider.sessions = [{ ...live, chatPath: "/tmp/pi.jsonl", messageTransport: "terminal",
+    provider.sessions = [{ ...readyLive, chatPath: "/tmp/pi.jsonl", messageTransport: "terminal",
       controlTarget: { kind: "terminal", target: {
         application: "Ghostty", pid: 42,
         processStartToken: processInstanceToken(42, "2026-08-23T00:00:00.000Z"),
@@ -2468,7 +2584,7 @@ describe("SessionRepository", () => {
 
   it("advances generation only through a bounded authoritative open transition", async () => {
     const provider = new FakeProvider();
-    provider.sessions = [{ ...live, chatPath: "/tmp/pi.jsonl", messageTransport: "terminal",
+    provider.sessions = [{ ...readyLive, chatPath: "/tmp/pi.jsonl", messageTransport: "terminal",
       controlTarget: { kind: "terminal", target: {
         application: "Ghostty", pid: 42,
         processStartToken: processInstanceToken(42, "2026-08-23T00:00:00.000Z"),
@@ -2494,7 +2610,7 @@ describe("SessionRepository", () => {
   it("forgets send reservations and results when a live session is removed", async () => {
     const provider = new FakeProvider();
     const terminalSession = {
-      ...live,
+      ...readyLive,
       chatPath: "/tmp/pi.jsonl",
       messageTransport: "terminal" as const,
       controlTarget: { kind: "terminal" as const, target: {
@@ -2559,7 +2675,7 @@ describe("SessionRepository", () => {
     const transcript = temporaryTranscript("2026-08-23T00:00:00.000Z");
     const provider = new FakeProvider();
     provider.sessions = [{
-      ...live,
+      ...readyLive,
       chatPath: transcript.path,
       messageTransport: "terminal",
       controlTarget: {
@@ -2702,7 +2818,7 @@ describe("SessionRepository", () => {
       },
     };
     provider.sessions = [{
-      ...live, chatPath: "/tmp/pi.jsonl", messageTransport: "terminal", controlTarget: target,
+      ...readyLive, chatPath: "/tmp/pi.jsonl", messageTransport: "terminal", controlTarget: target,
     }];
     const repository = new SessionRepository([provider]);
     const sends: unknown[][] = [];
@@ -2724,16 +2840,36 @@ describe("SessionRepository", () => {
     })).toBeUndefined();
     expect(sends).toHaveLength(1);
 
+    const settleTurn = async (updatedAt: string) => {
+      provider.sessions[0] = {
+        ...provider.sessions[0]!, section: "working", turnState: "working", updatedAt,
+      };
+      await repository.refresh();
+      provider.sessions[0] = {
+        ...provider.sessions[0]!, section: "ready", turnState: "ready",
+        updatedAt: new Date(Date.parse(updatedAt) + 1_000).toISOString(),
+      };
+      await repository.refresh();
+    };
+    await settleTurn("2026-08-23T00:00:01.000Z");
+
     for (const section of ["ready", "history"] as const) {
-      provider.sessions[0] = { ...provider.sessions[0]!, section };
+      provider.sessions[0] = {
+        ...provider.sessions[0]!, section, turnState: "ready", conversationState: "open",
+      };
       await repository.refresh();
       expect(await repository.chatAction({
         type: "send_chat", id: `send-${section}`, sessionId: "pi-1", generation: 1,
-        deliveryId: `delivery-${section}`, text: "Do not send", images: [],
-      })).toContain("unavailable");
+        deliveryId: `delivery-${section}`, text: "Continue", images: [],
+      })).toBeUndefined();
+      await settleTurn(section === "ready"
+        ? "2026-08-23T00:00:02.000Z"
+        : "2026-08-23T00:00:04.000Z");
     }
 
-    provider.sessions[0] = { ...provider.sessions[0]!, section: "working", provider: "cursor" };
+    provider.sessions[0] = {
+      ...provider.sessions[0]!, section: "working", turnState: "ready", provider: "cursor",
+    };
     await repository.refresh();
     expect(await repository.chatAction({
       type: "send_chat", id: "send-unsupported", sessionId: "pi-1", generation: 1,
@@ -2741,7 +2877,8 @@ describe("SessionRepository", () => {
     })).toContain("unavailable");
 
     provider.sessions[0] = {
-      ...provider.sessions[0]!, provider: "claude_code", messageTransport: "terminal",
+      ...provider.sessions[0]!, provider: "claude_code", section: "ready", turnState: "ready",
+      conversationState: "open", messageTransport: "terminal",
       controlTarget: { kind: "terminal", target: { ...target.target, application: "Terminal" } },
     };
     await repository.refresh();
@@ -2749,14 +2886,14 @@ describe("SessionRepository", () => {
       type: "send_chat", id: "send-image", sessionId: "pi-1", generation: 1,
       deliveryId: "delivery-image", text: "Do not send", images: [validImage],
     })).toContain("Image sending is unavailable");
-    expect(sends).toHaveLength(1);
+    expect(sends).toHaveLength(3);
   });
 
   it("reports terminal chat as read only when the native helper is unavailable", async () => {
     const transcript = temporaryTranscript("2026-08-23T00:00:00.000Z");
     const provider = new FakeProvider();
     provider.sessions = [{
-      ...live,
+      ...readyLive,
       chatPath: transcript.path,
       messageTransport: "terminal",
       controlTarget: {
@@ -2872,6 +3009,590 @@ describe("SessionRepository", () => {
     });
     expect(repository.chatRecord("pi-1")?.messageTransport).toBeUndefined();
   });
+
+  it("reserves a terminal next turn before concurrent sends can queue", async () => {
+    const terminalSession: DiscoveredProviderSession = {
+      ...live,
+      id: "terminal-send-race",
+      section: "ready",
+      turnState: "ready",
+      conversationState: "open",
+      updatedAt: "2026-08-23T00:00:00.000Z",
+      chatPath: "/tmp/terminal-send-race.jsonl",
+      messageTransport: "terminal",
+      controlTarget: {
+        kind: "terminal",
+        target: {
+          application: "Ghostty",
+          pid: 42,
+          processStartToken: processInstanceToken(42, "2026-08-23T00:00:00.000Z"),
+          tty: "ttys012",
+          cwd: live.cwd,
+        },
+      },
+    };
+    const provider = new FakeProvider();
+    provider.sessions = [terminalSession];
+    let releaseSend!: () => void;
+    let sendStarted!: () => void;
+    const sendGate = new Promise<void>((resolve) => { releaseSend = resolve; });
+    const sendStartedPromise = new Promise<void>((resolve) => { sendStarted = resolve; });
+    let sends = 0;
+    const repository = new SessionRepository([provider], {
+      chatPageReader: async () => ({
+        ...testChatPage("terminal-baseline"),
+        sessionId: terminalSession.id,
+      }),
+    });
+    repository.setControls({
+      focus: async () => undefined,
+      send: async () => {
+        sends += 1;
+        sendStarted();
+        await sendGate;
+      },
+    });
+
+    await repository.refresh();
+    const first = repository.chatAction({
+      type: "send_chat", id: "terminal-race-first", sessionId: terminalSession.id,
+      generation: 1, deliveryId: "terminal-race-delivery-first", text: "first", images: [],
+    });
+    await sendStartedPromise;
+
+    expect(repository.current().sessions[0]).toMatchObject({
+      id: terminalSession.id,
+      section: "working",
+      sessionState: { turn: "working", route: "waiting", unavailableReason: "turn_in_progress" },
+    });
+    expect((await repository.chatPage(terminalSession.id)).capabilities).toMatchObject({
+      canSendText: false,
+      unavailableReason: "turn_in_progress",
+    });
+
+    await expect(repository.chatAction({
+      type: "send_chat", id: "terminal-race-second", sessionId: terminalSession.id,
+      generation: 1, deliveryId: "terminal-race-delivery-second", text: "second", images: [],
+    })).resolves.toContain("Wait for this turn to finish");
+    expect(sends).toBe(1);
+
+    releaseSend();
+    await expect(first).resolves.toBeUndefined();
+
+    provider.sessions = [{
+      ...terminalSession,
+      section: "ready",
+      turnState: "ready",
+      updatedAt: "2026-08-23T00:00:01.000Z",
+    }];
+    // A transcript timestamp can advance before the provider exposes the
+    // post-send Working boundary. Raw Ready metadata must not reopen Send.
+    expect((await repository.refresh()).sessions[0]).toMatchObject({
+      section: "working",
+      sessionState: { turn: "working", route: "waiting", unavailableReason: "turn_in_progress" },
+    });
+    await expect(repository.chatAction({
+      type: "send_chat", id: "terminal-race-stale-ready", sessionId: terminalSession.id,
+      generation: 1, deliveryId: "terminal-race-delivery-stale-ready", text: "stale", images: [],
+    })).resolves.toContain("Wait for this turn to finish");
+    expect(sends).toBe(1);
+
+    provider.sessions = [{
+      ...terminalSession,
+      section: "working",
+      turnState: "working",
+      updatedAt: "2026-08-23T00:00:02.000Z",
+    }];
+    expect((await repository.refresh()).sessions[0]).toMatchObject({
+      section: "working",
+      sessionState: { turn: "working", route: "waiting", unavailableReason: "turn_in_progress" },
+    });
+
+    provider.sessions = [{
+      ...terminalSession,
+      section: "ready",
+      turnState: "ready",
+      updatedAt: "2026-08-23T00:00:03.000Z",
+    }];
+    expect((await repository.refresh()).sessions[0]).toMatchObject({
+      section: "ready",
+      sessionState: { turn: "ready", route: "available" },
+    });
+    await expect(repository.chatAction({
+      type: "send_chat", id: "terminal-race-third", sessionId: terminalSession.id,
+      generation: 1, deliveryId: "terminal-race-delivery-third", text: "third", images: [],
+    })).resolves.toBeUndefined();
+    expect(sends).toBe(2);
+  });
+
+  it("does not settle from a cached Working row after an older Ready hook", async () => {
+    const terminalSession: DiscoveredProviderSession = {
+      ...live,
+      id: "terminal-cached-working",
+      section: "working",
+      turnState: "working",
+      conversationState: "open",
+      updatedAt: "2026-08-23T00:00:00.000Z",
+      chatPath: "/tmp/terminal-cached-working.jsonl",
+      messageTransport: "terminal",
+      controlTarget: {
+        kind: "terminal",
+        target: {
+          application: "Ghostty",
+          pid: 43,
+          processStartToken: processInstanceToken(43, "2026-08-23T00:00:00.000Z"),
+          tty: "ttys013",
+          cwd: live.cwd,
+        },
+      },
+    };
+    let failProviderDiscovery = false;
+    let providerSession = terminalSession;
+    const provider: ProviderAdapter = {
+      id: "pi",
+      discover: async () => {
+        if (failProviderDiscovery) throw new Error("simulated provider outage");
+        return [structuredClone(providerSession)];
+      },
+    };
+    const unrelatedProvider: ProviderAdapter = {
+      id: "zed",
+      discover: async () => [{
+        ...readyLive,
+        id: "unrelated-zed-session",
+        provider: "zed",
+        owner: "Zed",
+      }],
+    };
+    let sends = 0;
+    const repository = new SessionRepository([provider, unrelatedProvider], {
+      chatPageReader: async () => ({
+        ...testChatPage("terminal-cached-working-baseline"),
+        sessionId: terminalSession.id,
+      }),
+    });
+    repository.setControls({
+      focus: async () => undefined,
+      send: async () => { sends += 1; },
+    });
+
+    await repository.refresh();
+    // This Ready boundary predates the send. It makes the raw cached Working
+    // row look continuable, but it cannot prove the next turn's lifecycle.
+    repository.applyHook({
+      sessionId: terminalSession.id,
+      cwd: terminalSession.cwd,
+      provider: "pi",
+      event: "Stop",
+      status: "idle",
+      receivedAt: "2026-08-23T00:00:01.000Z",
+      pid: 43,
+      tty: "ttys013",
+    });
+    expect(repository.current().sessions[0]).toMatchObject({
+      id: terminalSession.id,
+      section: "ready",
+      sessionState: { turn: "ready", route: "available" },
+    });
+
+    await expect(repository.chatAction({
+      type: "send_chat", id: "terminal-cached-working-send", sessionId: terminalSession.id,
+      generation: 1, deliveryId: "terminal-cached-working-delivery", text: "first", images: [],
+    })).resolves.toBeUndefined();
+    expect(sends).toBe(1);
+
+    // A first fresh raw Ready refresh still has no post-admission Working
+    // boundary. The stale cached Working row must not count as that boundary.
+    providerSession = {
+      ...terminalSession,
+      section: "ready",
+      turnState: "ready",
+      updatedAt: "2026-08-23T00:00:02.000Z",
+    };
+    // A failed target-provider discovery must not consume the unrelated
+    // provider's successful refresh as lifecycle evidence for this turn.
+    failProviderDiscovery = true;
+    expect((await repository.refresh()).sessions.find(({ id }) => id === terminalSession.id)).toMatchObject({
+      section: "working",
+      sessionState: { turn: "working", route: "waiting", unavailableReason: "turn_in_progress" },
+    });
+    failProviderDiscovery = false;
+    expect((await repository.refresh()).sessions.find(({ id }) => id === terminalSession.id)).toMatchObject({
+      section: "working",
+      sessionState: { turn: "working", route: "waiting", unavailableReason: "turn_in_progress" },
+    });
+    await expect(repository.chatAction({
+      type: "send_chat", id: "terminal-cached-working-second", sessionId: terminalSession.id,
+      generation: 1, deliveryId: "terminal-cached-working-second-delivery", text: "second", images: [],
+    })).resolves.toContain("Wait for this turn to finish");
+    expect(sends).toBe(1);
+  });
+
+  it("opens Codex Chat read-only without acquiring or releasing a writer", async () => {
+    const sessionId = "codex-chat-read-only-open";
+    const session: DiscoveredProviderSession = {
+      ...readyLive,
+      id: sessionId,
+      provider: "codex",
+      owner: "Codex",
+      routeState: "available",
+      routeOwnership: "unverified",
+      conversationState: "open",
+      chatPath: "/tmp/codex-chat-read-only-open.jsonl",
+      messageTransport: "codex_app_server",
+      controlTarget: { kind: "url", url: `codex://threads/${sessionId}` },
+    };
+    const provider: ProviderAdapter = {
+      id: "codex",
+      discover: async () => [structuredClone(session)],
+      resolve: async (id) => id === sessionId ? structuredClone(session) : undefined,
+    };
+    let statusReads = 0;
+    const repository = new SessionRepository([provider]);
+    repository.setControls({
+      focus: async () => undefined,
+      send: async () => undefined,
+      codexRouteStatus: () => {
+        statusReads += 1;
+        return { routeState: "unavailable", unavailableReason: "provider_unavailable" };
+      },
+    });
+    await repository.refresh();
+
+    await expect(repository.chatOpened(sessionId, "lease-A")).resolves.toBeUndefined();
+    expect(statusReads).toBe(0);
+    await expect(repository.chatRetry(sessionId)).resolves.toBeUndefined();
+    // Retry performs a read-only live probe before the exact provider read so
+    // a closing native child cannot be mistaken for a released route.
+    expect(statusReads).toBe(1);
+    repository.chatClosed(sessionId, "lease-A");
+    expect(statusReads).toBe(1);
+    expect(repository.current().sessions.find(({ id }) => id === sessionId)).toMatchObject({
+      sessionState: { route: "available", routeOwnership: "unverified" },
+    });
+  });
+
+  it("keeps a fast completed Codex send Ready after the send acknowledgement", async () => {
+    const sessionId = "codex-fast-complete-projection";
+    const session: DiscoveredProviderSession = {
+      ...readyLive,
+      id: sessionId,
+      provider: "codex",
+      owner: "Codex",
+      routeState: "available",
+      routeOwnership: "unverified",
+      conversationState: "open",
+      chatPath: "/tmp/codex-fast-complete-projection.jsonl",
+      messageTransport: "codex_app_server",
+      controlTarget: { kind: "url", url: `codex://threads/${sessionId}` },
+    };
+    const provider: ProviderAdapter = {
+      id: "codex",
+      discover: async () => [structuredClone(session)],
+    };
+    let sends = 0;
+    const repository = new SessionRepository([provider]);
+    repository.setControls({
+      focus: async () => undefined,
+      send: async () => { sends += 1; },
+      codexRouteStatus: () => ({ routeState: "available", turnState: "ready" }),
+    });
+    await repository.refresh();
+
+    await expect(repository.chatAction({
+      type: "send_chat", id: "fast-complete-request", sessionId, generation: 1,
+      deliveryId: "fast-complete-delivery", text: "already completed", images: [],
+    })).resolves.toBeUndefined();
+    expect(sends).toBe(1);
+    expect(repository.chatRecord(sessionId)).toMatchObject({
+      section: "ready", turnState: "ready", routeState: "available",
+    });
+    expect(repository.current().sessions.find(({ id }) => id === sessionId)).toMatchObject({
+      sessionState: { turn: "ready", route: "available" },
+    });
+  });
+
+  it("preserves a closing terminal probe and restores tentative readiness after release", async () => {
+    const sessionId = "codex-fast-complete-release-pending";
+    const session: DiscoveredProviderSession = {
+      ...readyLive,
+      id: sessionId,
+      provider: "codex",
+      owner: "Codex",
+      routeState: "available",
+      routeOwnership: "unverified",
+      conversationState: "open",
+      chatPath: "/tmp/codex-fast-complete-release-pending.jsonl",
+      messageTransport: "codex_app_server",
+      controlTarget: { kind: "url", url: `codex://threads/${sessionId}` },
+    };
+    let routeProbe: SessionRouteProbeResult = {
+      routeState: "unavailable",
+      unavailableReason: "provider_unavailable",
+      routeOwnership: "unverified",
+      releasePending: true,
+      turnState: "ready",
+      turnId: "turn-fast",
+      confirmedTerminal: true,
+    };
+    const provider: ProviderAdapter = {
+      id: "codex",
+      discover: async () => [structuredClone(session)],
+      resolve: async (id) => id === sessionId ? structuredClone(session) : undefined,
+    };
+    const repository = new SessionRepository([provider]);
+    repository.setControls({
+      focus: async () => undefined,
+      send: async () => undefined,
+      codexRouteStatus: () => routeProbe,
+    });
+    await repository.refresh();
+
+    await expect(repository.chatAction({
+      type: "send_chat", id: "fast-release-request", sessionId, generation: 1,
+      deliveryId: "fast-release-delivery", text: "finish", images: [],
+    })).resolves.toBeUndefined();
+    expect(repository.chatRecord(sessionId)).toMatchObject({
+      section: "ready", turnState: "ready", routeState: "unavailable",
+      routeOwnership: "unverified", releasePending: true, turnId: "turn-fast",
+      confirmedTerminal: true,
+    });
+    expect(repository.current().sessions.find(({ id }) => id === sessionId)).toMatchObject({
+      sessionState: { turn: "ready", route: "unavailable", unavailableReason: "provider_unavailable" },
+    });
+
+    await expect(repository.chatOpened(sessionId, "release-retry-lease")).resolves.toBeUndefined();
+    await expect(repository.chatRetry(sessionId)).resolves.toBe(
+      "The Codex route is still closing. Retry after it settles.",
+    );
+    expect(repository.chatRecord(sessionId)).toMatchObject({
+      routeState: "unavailable", releasePending: true, confirmedTerminal: true,
+      turnId: "turn-fast",
+    });
+
+    // The provider child has now exited. The exact read can restore a
+    // tentative route, but it must remain unverified until the next Send.
+    routeProbe = {
+      routeState: "available", routeOwnership: "unverified",
+      turnState: "ready", turnId: "turn-fast", confirmedTerminal: true,
+    };
+    await repository.refresh();
+    expect(repository.chatRecord(sessionId)).toMatchObject({
+      section: "ready", turnState: "ready", routeState: "available",
+      routeOwnership: "unverified",
+    });
+    expect(repository.chatRecord(sessionId)).not.toHaveProperty("releasePending");
+    expect(repository.current().sessions.find(({ id }) => id === sessionId)).toMatchObject({
+      sessionState: { turn: "ready", route: "available", routeOwnership: "unverified" },
+    });
+    repository.chatClosed(sessionId, "release-retry-lease");
+  });
+
+  it("recovers an uncertain Codex route only from exact ready evidence", async () => {
+    const sessionId = "codex-explicit-route-recovery";
+    const base: DiscoveredProviderSession = {
+      ...readyLive,
+      id: sessionId,
+      provider: "codex",
+      owner: "Codex",
+      routeState: "available",
+      routeOwnership: "unverified",
+      conversationState: "open",
+      chatPath: "/tmp/codex-explicit-route-recovery.jsonl",
+      messageTransport: "codex_app_server",
+      controlTarget: { kind: "url", url: `codex://threads/${sessionId}` },
+    };
+
+    const runCase = async (
+      lifecycle: Pick<DiscoveredProviderSession, "turnState"> & { turnId?: string },
+      expectedError?: string,
+      expectedRecoveryCalls = 0,
+    ): Promise<void> => {
+      const routeProbe: SessionRouteProbeResult = {
+        routeState: "unavailable", unavailableReason: "provider_unavailable",
+        turnState: "working", turnId: "turn-lost",
+      };
+      let recoveryCalls = 0;
+      let resolveCount = 0;
+      const provider: ProviderAdapter = {
+        id: "codex",
+        discover: async () => [structuredClone(base)],
+        resolve: async (id) => {
+          if (id !== sessionId) return undefined;
+          resolveCount += 1;
+          // The opened page and initial Send both observe the pre-loss ready
+          // state. Retry gets the fresh lifecycle result under test.
+          const initialLifecycle = { turnState: "ready" as const, turnId: "turn-lost" };
+          return {
+            ...structuredClone(base),
+            ...(resolveCount <= 2 ? initialLifecycle : lifecycle),
+            routeState: "available",
+            routeOwnership: "unverified",
+          };
+        },
+      };
+      const repository = new SessionRepository([provider]);
+      repository.setControls({
+        focus: async () => undefined,
+        send: async () => undefined,
+        codexRouteStatus: () => routeProbe,
+        recoverCodexRoute: () => {
+          recoveryCalls += 1;
+          return {
+            recovered: true,
+            probe: {
+              routeState: "available",
+              routeOwnership: "unverified",
+              turnState: "ready",
+              turnId: "turn-lost",
+              confirmedTerminal: true,
+            },
+          };
+        },
+      });
+      await repository.refresh();
+      await expect(repository.chatOpened(sessionId, `lease-${lifecycle.turnState}-${lifecycle.turnId ?? "missing"}`))
+        .resolves.toBeUndefined();
+      expect(repository.chatRecord(sessionId)).toMatchObject({
+        routeState: "available", turnState: "ready", turnId: "turn-lost",
+      });
+      const sendResult = await repository.chatAction({
+        type: "send_chat", id: `recovery-send-${lifecycle.turnState}-${lifecycle.turnId ?? "missing"}`,
+        sessionId, generation: 1, deliveryId: `recovery-delivery-${lifecycle.turnState}-${lifecycle.turnId ?? "missing"}`,
+        text: "may have started", images: [],
+      });
+      expect(sendResult).toBeUndefined();
+      const retry = await repository.chatRetry(sessionId);
+      if (expectedError) expect(retry).toContain(expectedError);
+      else expect(retry).toBeUndefined();
+      expect(recoveryCalls).toBe(expectedRecoveryCalls);
+      if (expectedError) {
+        expect(repository.chatRecord(sessionId)).toMatchObject({
+          routeState: "unavailable", routeUnavailableReason: "provider_unavailable",
+          turnState: "working", turnId: "turn-lost",
+        });
+      } else {
+        expect(repository.chatRecord(sessionId)).toMatchObject({
+          routeState: "available", routeOwnership: "unverified",
+          turnState: "ready", turnId: "turn-lost",
+        });
+      }
+      repository.chatClosed(sessionId, `lease-${lifecycle.turnState}-${lifecycle.turnId ?? "missing"}`);
+    };
+
+    await runCase({ turnState: "ready", turnId: "turn-lost" }, undefined, 1);
+    await runCase({ turnState: "working", turnId: "turn-lost" }, "has not confirmed", 0);
+    await runCase({ turnState: "ready", turnId: "turn-other" }, "different turn identity", 0);
+    await runCase({ turnState: "ready" }, "exact identity", 0);
+  });
+
+  it("keeps a lost Codex send unavailable instead of allowing an automatic retry", async () => {
+    const sessionId = "codex-uncertain-send";
+    const session: DiscoveredProviderSession = {
+      ...readyLive,
+      id: sessionId,
+      provider: "codex",
+      owner: "Codex",
+      routeState: "available",
+      routeOwnership: "unverified",
+      conversationState: "open",
+      chatPath: "/tmp/codex-uncertain-send.jsonl",
+      messageTransport: "codex_app_server",
+      controlTarget: { kind: "url", url: `codex://threads/${sessionId}` },
+    };
+    const provider: ProviderAdapter = {
+      id: "codex",
+      discover: async () => [structuredClone(session)],
+    };
+    let routeProbe: SessionRouteProbeResult = {
+      routeState: "unavailable", unavailableReason: "provider_unavailable",
+      turnState: "working", turnId: "turn-uncertain",
+    };
+    let sends = 0;
+    const repository = new SessionRepository([provider]);
+    repository.setControls({
+      focus: async () => undefined,
+      send: async () => { sends += 1; },
+      codexRouteStatus: () => routeProbe,
+    });
+    await repository.refresh();
+
+    await expect(repository.chatAction({
+      type: "send_chat", id: "uncertain-request", sessionId, generation: 1,
+      deliveryId: "uncertain-delivery", text: "may have started", images: [],
+    })).resolves.toBeUndefined();
+    expect(repository.chatRecord(sessionId)).toMatchObject({
+      section: "working", turnState: "working", routeState: "unavailable",
+      routeUnavailableReason: "provider_unavailable", turnId: "turn-uncertain",
+    });
+    expect(repository.current().sessions.find(({ id }) => id === sessionId)).toMatchObject({
+      sessionState: { route: "unavailable", unavailableReason: "provider_unavailable" },
+    });
+
+    routeProbe = { routeState: "available", turnState: "ready" };
+    await expect(repository.chatAction({
+      type: "send_chat", id: "uncertain-retry", sessionId, generation: 1,
+      deliveryId: "uncertain-retry-delivery", text: "must wait", images: [],
+    })).resolves.toContain("unavailable");
+    expect(sends).toBe(1);
+  });
+
+  it("retains a native user identity after many tool items arrive", async () => {
+    const sessionId = "codex-user-identity-retention";
+    const session: DiscoveredProviderSession = {
+      ...readyLive,
+      id: sessionId,
+      provider: "codex",
+      owner: "Codex",
+      routeState: "available",
+      routeOwnership: "unverified",
+      conversationState: "open",
+      chatPath: "/tmp/codex-user-identity-retention.jsonl",
+      messageTransport: "codex_app_server",
+      controlTarget: { kind: "url", url: `codex://threads/${sessionId}` },
+    };
+    const provider: ProviderAdapter = {
+      id: "codex",
+      discover: async () => [structuredClone(session)],
+    };
+    let emit!: (event: CodexRouteEvent) => void;
+    const repository = new SessionRepository([provider], {
+      chatPageReader: async () => ({
+        type: "chat_page", sessionId, items: [{
+          id: "native-user", kind: "user", text: "Continue", images: [],
+        }], hasMoreBefore: false,
+        transcriptEvidence: { authoritative: true, complete: true },
+        capabilities: { canSendText: true, canSendImages: true, canCancel: false, canApprove: false, canAnswer: false },
+        pendingAction: null,
+      }),
+    });
+    repository.setControls({
+      focus: async () => undefined,
+      send: async () => undefined,
+      subscribeCodexRouteEvents: (listener) => {
+        emit = listener;
+        return () => undefined;
+      },
+    });
+    await repository.refresh();
+    emit({
+      type: "item_started", threadId: sessionId, turnId: "turn-identity",
+      itemId: "native-user", itemType: "userMessage", deliveryId: "delivery-identity",
+    });
+    for (let index = 0; index < 128; index += 1) {
+      emit({
+        type: "item_started", threadId: sessionId, turnId: "turn-identity",
+        itemId: `tool-${index}`, itemType: "commandExecution", deliveryId: `delivery-tool-${index}`,
+      });
+    }
+
+    await expect(repository.chatPage(sessionId)).resolves.toMatchObject({
+      items: [{
+        id: "native-user", deliveryId: "delivery-identity", providerMessageId: "native-user",
+      }],
+    });
+  });
+
 });
 
 function heartbeat(overrides: Partial<HookSessionEvent> = {}): HookSessionEvent {

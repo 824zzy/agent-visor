@@ -16,6 +16,20 @@ const validImageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
 
 app.on("window-all-closed", () => {});
 
+const readyState = { conversation: "open", turn: "ready", route: "available" };
+const workingState = {
+  conversation: "open",
+  turn: "working",
+  route: "waiting",
+  unavailableReason: "turn_in_progress",
+};
+const archivedState = {
+  conversation: "archived",
+  turn: "unknown",
+  route: "unavailable",
+  unavailableReason: "archived",
+};
+
 const mainSession = {
   id: "composer-main",
   title: "Composer Main Chat",
@@ -28,6 +42,8 @@ const mainSession = {
   updatedAt: "2026-08-31T10:00:00.000Z",
   canOpenOwner: true,
   canEnterChat: true,
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const workingSession = {
   ...mainSession,
@@ -38,13 +54,29 @@ const workingSession = {
   owner: "Ghostty",
   section: "working",
   updatedAt: "2026-08-31T09:00:00.000Z",
+  sessionState: workingState,
+  stateRevision: 1,
 };
 const gatedPermissionSession = {
   ...workingSession,
   id: "composer-permission-gated",
   title: "Composer Permission Gated Chat",
   subtitle: "Permission display only",
+  section: "ready",
   updatedAt: "2026-08-31T08:30:00.000Z",
+  sessionState: readyState,
+  stateRevision: 1,
+};
+const permissionReadySession = {
+  ...mainSession,
+  id: "composer-permission-ready",
+  title: "Composer Permission Ready Chat",
+  source: "Claude Code",
+  owner: "Ghostty",
+  section: "ready",
+  subtitle: "Ready",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const imageOnlySession = {
   ...mainSession,
@@ -53,6 +85,8 @@ const imageOnlySession = {
   subtitle: "Images only",
   source: "Pi",
   updatedAt: "2026-08-31T08:00:00.000Z",
+  sessionState: readyState,
+  stateRevision: 1,
 };
 const readOnlySession = {
   ...mainSession,
@@ -62,8 +96,17 @@ const readOnlySession = {
   section: "history",
   cwd: "/fixture/archive",
   updatedAt: "2026-08-31T07:00:00.000Z",
+  sessionState: archivedState,
+  stateRevision: 1,
 };
-const sessions = [mainSession, workingSession, gatedPermissionSession, imageOnlySession, readOnlySession];
+const missingModelSession = {
+  ...mainSession,
+  id: "composer-missing-model",
+  title: "Composer Missing Model Chat",
+  sessionState: readyState,
+  stateRevision: 1,
+};
+const sessions = [mainSession, workingSession, gatedPermissionSession, permissionReadySession, imageOnlySession, readOnlySession, missingModelSession];
 
 const metadata = {
   model: "GPT-5.6 Sol",
@@ -96,8 +139,12 @@ const chatSettings = {
       displayName: "GPT-5.6 Sol",
       description: "Reliable agentic workhorse.",
       reasoningEfforts: [
+        { value: "low", description: "Quick reasoning." },
         { value: "medium", description: "Balanced reasoning." },
         { value: "high", description: "More deliberate reasoning." },
+        { value: "xhigh", description: "Extra deliberate reasoning." },
+        { value: "max", description: "Maximum reasoning." },
+        { value: "ultra", description: "Most extensive reasoning." },
       ],
       defaultReasoningEffort: "high",
       supportsImages: true,
@@ -156,6 +203,12 @@ let pendingApproval = false;
 let releasePermissionCycle;
 let releaseWorkingCancel;
 
+function completeWorkingSession() {
+  workingSession.sessionState = readyState;
+  workingSession.section = "ready";
+  workingSession.stateRevision += 1;
+}
+
 void (async () => {
   try {
     await prepareFixtureRoots();
@@ -206,6 +259,7 @@ async function run() {
     subscribe: () => () => {},
     chatPage: async (sessionId) => {
       const target = sessions.find(({ id }) => id === sessionId) ?? mainSession;
+      return (async () => {
       if (target.id === readOnlySession.id) {
         return {
           type: "chat_page",
@@ -218,7 +272,7 @@ async function run() {
             canCancel: false,
             canApprove: false,
             canAnswer: false,
-            readOnlyReason: "This archived conversation is read only.",
+            readOnlyReason: "This conversation is archived. Open it in Codex to restore it.",
           },
           pendingAction: null,
           metadata,
@@ -259,20 +313,39 @@ async function run() {
           metadata: { ...metadata, permissionMode: "default" },
         };
       }
+      if (target.id === permissionReadySession.id) {
+        return {
+          type: "chat_page",
+          sessionId,
+          items: [{ id: "permission-ready-answer", kind: "assistant", text: "Permission mode fixture." }],
+          hasMoreBefore: false,
+          capabilities: {
+            canSendText: true,
+            canSendImages: true,
+            canCancel: false,
+            canApprove: false,
+            canAnswer: false,
+            canCyclePermissionMode: true,
+          },
+          pendingAction: null,
+          metadata: { ...metadata, permissionMode: claudePermissionMode },
+          chatSettings,
+        };
+      }
       if (target.id === workingSession.id) {
+        const working = target.sessionState.turn === "working";
         return {
           type: "chat_page",
           sessionId,
           items: [{ id: "working-answer", kind: "assistant", text: "Working fixture." }],
           hasMoreBefore: false,
           capabilities: {
-            canSendText: true,
-            canSendImages: true,
-            canCancel: true,
-            cancelDeliveryId: "working-delivery",
+            canSendText: !working,
+            canSendImages: !working,
+            canCancel: working,
+            ...(working ? { cancelDeliveryId: "working-delivery", unavailableReason: "turn_in_progress" } : {}),
             canApprove: false,
             canAnswer: false,
-            canCyclePermissionMode: true,
           },
           pendingAction: null,
           metadata: { ...metadata, permissionMode: claudePermissionMode },
@@ -302,6 +375,24 @@ async function run() {
           chatSettings,
         };
       }
+      if (target.id === missingModelSession.id) {
+        return {
+          type: "chat_page", sessionId,
+          items: [{ id: "missing-model-answer", kind: "assistant", text: "Current model is absent from the selectable catalog." }],
+          hasMoreBefore: false,
+          capabilities: { canSendText: true, canSendImages: true, canCancel: false, canApprove: false, canAnswer: false },
+          pendingAction: null,
+          metadata: { ...metadata, model: "GPT-6 Astra", modelId: "gpt-6-astra", reasoningEffort: "xhigh" },
+          chatSettings: {
+            ...chatSettings,
+            current: { ...chatSettings.current, modelId: "gpt-6-astra", reasoningEffort: "xhigh" },
+            models: [
+              ...chatSettings.models.filter(({ id }) => id !== "gpt-6-astra"),
+              ...["one", "two", "three"].map((suffix) => ({ ...chatSettings.models[0], id: `extra-${suffix}`, displayName: `Additional model ${suffix}` })),
+            ],
+          },
+        };
+      }
       return {
         type: "chat_page",
         sessionId,
@@ -318,6 +409,11 @@ async function run() {
         metadata,
         chatSettings,
       };
+      })().then((page) => ({
+        ...page,
+        sessionState: target.sessionState,
+        stateRevision: target.stateRevision,
+      }));
     },
     chatAction: async (message) => {
       actions.push(message);
@@ -333,7 +429,12 @@ async function run() {
         });
       }
       if (message.type === "cancel_chat" && message.sessionId === workingSession.id) {
-        return new Promise((resolve) => { releaseWorkingCancel = resolve; });
+        return new Promise((resolve) => {
+          releaseWorkingCancel = (value) => {
+            completeWorkingSession();
+            resolve(value);
+          };
+        });
       }
       if (message.type === "respond_chat" && pendingApproval) pendingApproval = false;
       return undefined;
@@ -643,58 +744,70 @@ async function run() {
   `composer retains model and effort context (${JSON.stringify(detailsProbe)})`);
   await capture("light-details.png");
 
-  await openChat(workingSession);
-  await waitFor("Boolean(document.querySelector('[aria-label=\"Permission mode: Default\"]'))");
+  await openChat(permissionReadySession);
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Permission: Workspace\"]'))");
   const permissionBeforeCycle = await window.webContents.executeJavaScript(`(() => ({
-    role: document.querySelector('[aria-label="Permission mode: Default"]')?.getAttribute('role') ?? '',
-    disabled: document.querySelector('[aria-label="Permission mode: Default"]')?.getAttribute('aria-disabled') ?? '',
+    role: document.querySelector('[aria-label="Permission: Workspace"]')?.getAttribute('role') ?? '',
+    disabled: document.querySelector('[aria-label="Permission: Workspace"]')?.getAttribute('aria-disabled') ?? '',
     model: document.querySelector('[aria-label="Composer model and effort"]')?.textContent ?? '',
   }))()`);
   assert(permissionBeforeCycle.role === "button" && permissionBeforeCycle.disabled !== "true"
     && permissionBeforeCycle.model.includes("GPT-5.6 Sol"),
-  `Claude permission mode is actionable only when the page grants cycling (${JSON.stringify(permissionBeforeCycle)})`);
-  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Permission mode: Default\"]')?.click()");
-  await waitFor("document.querySelector('[aria-label=\"Permission mode: Accept Edits\"]')?.getAttribute('aria-disabled') === 'true'");
-  const permissionActionCount = actions.filter((action) => action.type === "cycle_permission_mode").length;
-  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Permission mode: Accept Edits\"]')?.click()");
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  assert(permissionActionCount === 1
-    && actions.filter((action) => action.type === "cycle_permission_mode").length === permissionActionCount,
-  "permission mode cycling issues one request and disables duplicates while pending");
-  releasePermissionCycle?.();
-  releasePermissionCycle = undefined;
-  await waitFor("Boolean(document.querySelector('[aria-label=\"Permission mode: Accept Edits\"]')) && document.querySelector('[aria-label=\"Permission mode: Accept Edits\"]')?.getAttribute('aria-disabled') !== 'true'");
-  await waitUntil(() => actions.some((action) => action.type === "cycle_permission_mode"
-    && action.sessionId === workingSession.id && action.expectedMode === "default"));
+  `Claude permission control is actionable while the ready page grants staging (${JSON.stringify(permissionBeforeCycle)})`);
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Permission: Workspace\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Composer permission menu\"]'))");
+  const permissionReadyMenuProbe = await window.webContents.executeJavaScript(`(() => ({
+    options: [...document.querySelectorAll('[aria-label^="Permission:"]')].map((item) => ({
+      label: item.getAttribute('aria-label'), disabled: item.getAttribute('aria-disabled') ?? '',
+    })),
+  }))()`);
+  assert(permissionReadyMenuProbe.options.some(({ label }) => label === "Permission: Full access")
+    && permissionReadyMenuProbe.options.some(({ label, disabled }) => label === "Permission: Read only" && disabled === "true"),
+  `ready permission menu exposes allowed and rejected profiles (${JSON.stringify(permissionReadyMenuProbe)})`);
+  const permissionActionCount = actions.length;
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Permission: Full access\"]')?.click()");
+  await waitFor("document.querySelector('[aria-label=\"Permission: Full access\"]')?.getAttribute('aria-expanded') === 'false'");
+  assert(actions.length === permissionActionCount,
+    "permission selection stages the next turn without sending a separate action");
+
+  completeWorkingSession();
+  await openChat(workingSession);
+  await setInput("draft survives stop");
+  await addPickerImage("cancel-existing.png");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Attached image cancel-existing.png\"]'))");
+  workingSession.sessionState = workingState;
+  workingSession.section = "working";
+  workingSession.stateRevision += 1;
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Back to Sessions\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Open Chat for Composer Working Chat\"]'))");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Open Chat for Composer Working Chat\"]')?.click()");
   await waitFor("Boolean(document.querySelector('[aria-label=\"Stop agent\"]'))");
   const emptyWorking = await probeActions();
   assert(emptyWorking.stopVisible && emptyWorking.sendDisabled && emptyWorking.stopEnabled,
-    `empty working composer makes Stop the available primary action (${JSON.stringify(emptyWorking)})`);
-  await setInput("draft survives stop");
-  await waitFor("document.querySelector('[aria-label=\"Send\"]')?.getAttribute('aria-disabled') !== 'true'");
-  const simultaneous = await probeActions();
-  assert(simultaneous.stopVisible && simultaneous.sendVisible && simultaneous.stopEnabled
-    && simultaneous.sendEnabled && simultaneous.sameActionCluster,
-  `valid drafts retain both Send and Stop in one action cluster (${JSON.stringify(simultaneous)})`);
+    `a busy working composer waits for the current turn while keeping exact Stop (${JSON.stringify(emptyWorking)})`);
+  await waitFor("document.querySelector('[aria-label=\"Chat message\"]')?.value === 'draft survives stop' && Boolean(document.querySelector('[aria-label=\"Attached image cancel-existing.png\"]'))");
+  const waitingWithDraft = await probeActions();
+  assert(waitingWithDraft.stopVisible && waitingWithDraft.sendVisible
+    && waitingWithDraft.stopEnabled && waitingWithDraft.sendDisabled,
+  `a busy turn keeps the draft visible but waits before sending (${JSON.stringify(waitingWithDraft)})`);
   await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Stop agent\"]')?.click()");
   await waitFor("Boolean(document.querySelector('[aria-label=\"Canceling agent\"]'))");
   const cancellationCount = actions.filter((action) => action.type === "cancel_chat").length;
   const cancelingProbe = await probeActions();
   assert(cancelingProbe.stopVisible && !cancelingProbe.stopEnabled
-    && cancelingProbe.sendVisible && cancelingProbe.sendEnabled,
-  `deferred cancellation disables duplicate Stop while preserving Send (${JSON.stringify(cancelingProbe)})`);
+    && cancelingProbe.sendVisible && cancelingProbe.sendDisabled,
+  `deferred cancellation disables duplicate Stop and keeps Send unavailable (${JSON.stringify(cancelingProbe)})`);
   await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Canceling agent\"]')?.click()");
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert(actions.filter((action) => action.type === "cancel_chat").length === cancellationCount,
     "deferred cancellation ignores a duplicate Stop action");
   await setInput("newer draft survives deferred stop");
-  await addPickerImage("cancel-newer.png");
-  await waitFor("Boolean(document.querySelector('[aria-label=\"Attached image cancel-newer.png\"]'))");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Attached image cancel-existing.png\"]'))");
   await capture("light-canceling.png");
   releaseWorkingCancel?.();
   releaseWorkingCancel = undefined;
   await waitFor("Boolean(document.querySelector('[aria-label=\"Agent stopped\"]'))");
-  assert(await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Chat message\"]')?.value === 'newer draft survives deferred stop' && Boolean(document.querySelector('[aria-label=\"Attached image cancel-newer.png\"]'))"),
+  assert(await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Chat message\"]')?.value === 'newer draft survives deferred stop' && Boolean(document.querySelector('[aria-label=\"Attached image cancel-existing.png\"]'))"),
     "confirmed cancellation preserves a newer text and image draft");
 
   await openChat(imageOnlySession);
@@ -706,11 +819,26 @@ async function run() {
       hasAddImage: Boolean(document.querySelector('[aria-label="Add image"]')),
     };
   })()`);
-  assert(!imageOnly.editable && imageOnly.hasAddImage, `image-only capability keeps attachment composition (${JSON.stringify(imageOnly)})`);
+  assert(imageOnly.editable && imageOnly.hasAddImage, `image-only capability keeps the draft editable while exposing attachment composition (${JSON.stringify(imageOnly)})`);
   assert(await probeSendDisabled(), "image-only composer is disabled until an image is attached");
+  await setInput("text-only draft");
+  await waitFor("document.querySelector('[aria-label=\"Chat message\"]')?.value === 'text-only draft'");
+  const textOnlySendCount = actions.filter((action) => action.type === "send_chat" && action.sessionId === imageOnlySession.id).length;
+  await dispatchComposerKey({ key: "Enter" });
+  await waitFor("document.querySelector('[aria-label=\"Composer validation errors\"]')?.textContent.includes('Text messages are unavailable')");
+  assert(actions.filter((action) => action.type === "send_chat" && action.sessionId === imageOnlySession.id).length === textOnlySendCount,
+    "image-only capability blocks a text-only submission");
   await addPickerImage("image-only.png");
   await waitFor("Boolean(document.querySelector('[aria-label=\"Attached image image-only.png\"]'))");
-  assert(await probeSendDisabled() === false, "image-only composer enables Send after an allowed image");
+  assert(await probeSendDisabled(), "image-only capability keeps mixed text and image submissions disabled");
+  const mixedSendCount = actions.filter((action) => action.type === "send_chat" && action.sessionId === imageOnlySession.id).length;
+  await dispatchComposerKey({ key: "Enter" });
+  await waitFor("document.querySelector('[aria-label=\"Composer validation errors\"]')?.textContent.includes('Text messages are unavailable')");
+  assert(actions.filter((action) => action.type === "send_chat" && action.sessionId === imageOnlySession.id).length === mixedSendCount,
+    "image-only capability blocks a mixed text and image submission");
+  await setInput("");
+  await waitFor("document.querySelector('[aria-label=\"Chat message\"]')?.value === ''");
+  assert(await probeSendDisabled() === false, "image-only composer enables Send after text is cleared");
   await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Send\"]')?.click()");
   await waitUntil(() => actions.some((action) => action.type === "send_chat" && action.sessionId === imageOnlySession.id));
   const imageOnlySend = actions.findLast((action) => action.type === "send_chat" && action.sessionId === imageOnlySession.id);
@@ -718,15 +846,20 @@ async function run() {
     `image-only draft reaches the existing send route (${JSON.stringify(imageOnlySend)})`);
 
   await openChat(readOnlySession);
-  await waitFor("Boolean(document.querySelector('[aria-label=\"Chat read-only notice\"]'))");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Chat availability notice\"]'))");
   const readOnlyProbe = await window.webContents.executeJavaScript(`(() => ({
     composer: Boolean(document.querySelector('[aria-label="Chat composer"]')),
-    input: Boolean(document.querySelector('[aria-label="Chat message"]')),
-    reasonCount: document.querySelectorAll('[aria-label="This archived conversation is read only."]').length,
+    inputDisabled: (() => {
+      const input = document.querySelector('[aria-label="Chat message"]');
+      return Boolean(input?.disabled || input?.readOnly || input?.getAttribute('aria-disabled') === 'true');
+    })(),
+    sendDisabled: document.querySelector('[aria-label="Send"]')?.getAttribute('aria-disabled') === 'true',
+    reasonCount: document.querySelectorAll('[aria-label="This conversation is archived. Open it in Codex to restore it."]').length,
     ownerAction: Boolean(document.querySelector('[aria-label="Open in Codex"]')),
   }))()`);
-  assert(!readOnlyProbe.composer && !readOnlyProbe.input && readOnlyProbe.reasonCount === 1 && readOnlyProbe.ownerAction,
-    `read-only mode has one reason and the supported source action without a dead composer (${JSON.stringify(readOnlyProbe)})`);
+  assert(readOnlyProbe.composer && readOnlyProbe.inputDisabled && readOnlyProbe.sendDisabled
+    && readOnlyProbe.reasonCount === 1 && readOnlyProbe.ownerAction,
+    `archived mode keeps one reason, a disabled composer, and the supported source action (${JSON.stringify(readOnlyProbe)})`);
   await capture("light-read-only.png");
 
   await openChat(mainSession);
@@ -787,10 +920,56 @@ async function run() {
     && unscaledProbe.sendGlyphContained,
   `scaling back down restores compact input and public Send geometry (${JSON.stringify(unscaledProbe)})`);
 
+  await openChat(missingModelSession);
+  await window.setSize(520, 760);
+  await waitFor("window.innerWidth <= 600");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Composer model and effort\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Composer model and effort menu\"]'))");
+  const missingModelProbe = await window.webContents.executeJavaScript(`(() => {
+    const trigger = document.querySelector('[aria-label="Composer model and effort"]');
+    const menu = document.querySelector('[aria-label="Composer model and effort menu"]');
+    const bounds = menu.getBoundingClientRect();
+    return { label: trigger.textContent, vectorIcon: Boolean(trigger.querySelector('svg')),
+      left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom,
+      width: bounds.width, viewport: window.innerWidth, height: window.innerHeight,
+      currentDisabled: document.querySelector('[aria-label="Model: GPT-6-astra"]')?.getAttribute('aria-disabled') };
+  })()`);
+  assert(missingModelProbe.label.includes("GPT-6-astra") && missingModelProbe.label.includes("Extra high")
+    && missingModelProbe.vectorIcon && missingModelProbe.currentDisabled === "true",
+  `missing current model remains visible without becoming selectable (${JSON.stringify(missingModelProbe)})`);
+  assert(missingModelProbe.left >= 12 && missingModelProbe.right <= missingModelProbe.viewport - 12
+    && missingModelProbe.top >= 12 && missingModelProbe.bottom <= missingModelProbe.height - 12
+    && missingModelProbe.width >= 320,
+  `missing-model menu stays readable and inside every viewport edge (${JSON.stringify(missingModelProbe)})`);
+  await capture("missing-current-model.png");
+  await window.webContents.executeJavaScript("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))");
+  await waitFor("document.querySelector('[aria-label=\"Composer model and effort\"]')?.getAttribute('aria-expanded') === 'false'");
+  await waitFor("document.activeElement?.getAttribute('aria-label') === 'Composer model and effort'");
+  assert(await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Chat header rail\"]')?.textContent.includes('Composer Missing Model Chat') && document.activeElement?.getAttribute('aria-label') === 'Composer model and effort'"),
+    "Escape dismisses only the popup and restores trigger focus without leaving Chat");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Composer model and effort\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Model: GPT-5.6 Sol\"]'))");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Model: GPT-5.6 Sol\"]')?.click()");
+  await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Composer model and effort\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Reasoning effort: Ultra\"]'))");
+  const reasoningProbe = await window.webContents.executeJavaScript(`(() => {
+    const menu = document.querySelector('[aria-label="Composer model and effort menu"]').getBoundingClientRect();
+    const options = [...document.querySelectorAll('[aria-label^="Reasoning effort:"]')].map((node) => {
+      const rect = node.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right };
+    });
+    return { menu: { top: menu.top, bottom: menu.bottom, left: menu.left, right: menu.right }, options };
+  })()`);
+  assert(reasoningProbe.options.length === 6 && reasoningProbe.options.every((rect) =>
+    rect.top >= reasoningProbe.menu.top && rect.bottom <= reasoningProbe.menu.bottom
+    && rect.left >= reasoningProbe.menu.left && rect.right <= reasoningProbe.menu.right),
+  `all six reasoning choices stay visible below the scrollable model catalog (${JSON.stringify(reasoningProbe)})`);
+  await capture("reasoning-options-contained.png");
+
   console.log(JSON.stringify({
     artifactRoot,
     actions: actions.map(({ type, sessionId, text, deliveryId }) => ({ type, sessionId, text, deliveryId })),
-      files: ["light-empty.png", "light-model-menu.png", "light-permission-menu.png", "light-draft-image.png", "light-details.png", "light-canceling.png", "light-read-only.png", "light-narrow-model-menu.png", "light-narrow.png", "dark-model-menu.png", "dark-narrow.png", "dark-scaled.png"],
+      files: ["light-empty.png", "light-model-menu.png", "light-permission-menu.png", "light-draft-image.png", "light-details.png", "light-canceling.png", "light-read-only.png", "light-narrow-model-menu.png", "light-narrow.png", "dark-model-menu.png", "dark-narrow.png", "dark-scaled.png", "missing-current-model.png", "reasoning-options-contained.png"],
   }, null, 2));
 }
 
@@ -812,7 +991,7 @@ async function openChat(target) {
   await waitFor(`document.querySelector('[aria-label="Chat header rail"]')?.textContent.includes(${targetTitle}) === true`);
   const encodedSessionId = encodeURIComponent(target.id);
   if (target.id === readOnlySession.id) {
-    await waitFor(`Boolean(document.querySelector('#chat-timeline-${encodedSessionId}')) && Boolean(document.querySelector('[aria-label="Chat read-only notice"]'))`);
+    await waitFor(`Boolean(document.querySelector('#chat-timeline-${encodedSessionId}')) && Boolean(document.querySelector('[aria-label="Chat availability notice"]'))`);
   } else {
     await waitFor(`Boolean(document.querySelector('#chat-timeline-${encodedSessionId}')) && Boolean(document.querySelector('#chat-composer-input-${encodedSessionId}'))`);
   }

@@ -7,6 +7,11 @@ const page = (sessionId: string, text: string): ChatPage => ({
   sessionId,
   items: [{ id: `${sessionId}-item`, kind: "assistant", text }],
   hasMoreBefore: false,
+  sessionState: {
+    conversation: "open",
+    turn: "ready",
+    route: "available",
+  },
   capabilities: {
     canSendText: true,
     canSendImages: false,
@@ -24,7 +29,7 @@ describe("Chat session controller", () => {
       onSlashCommands: () => undefined,
       onOpenLatest: () => undefined,
     }, { createRequestId: () => "image-request", createDeliveryId: () => "image-delivery" });
-    const generation = controller.activate("image-only", "working");
+    const generation = controller.activate("image-only");
     controller.receive(generation, JSON.stringify({
       ...page("image-only", "ready"),
       capabilities: {
@@ -75,6 +80,382 @@ describe("Chat session controller", () => {
     })).toBeUndefined();
   });
 
+  it("refreshes capability state without transcript content and fails closed against a stale page", () => {
+    const opened: string[] = [];
+    const retryFlags: boolean[] = [];
+    const controller = createChatSessionController({
+      onState: () => undefined,
+      onSlashCommands: () => undefined,
+      onOpenLatest: (_connection, _sessionId, requestId, retryAvailability) => {
+        opened.push(requestId);
+        retryFlags.push(retryAvailability === true);
+      },
+    }, { createRequestId: (() => {
+      let serial = 0;
+      return () => `state-refresh-${++serial}`;
+    })() });
+    const transport = { close: () => undefined, send: () => true };
+    const generation = controller.activate("session");
+    const readyState = { conversation: "open" as const, turn: "ready" as const, route: "available" as const };
+    const workingState = {
+      conversation: "open" as const,
+      turn: "working" as const,
+      route: "waiting" as const,
+      unavailableReason: "turn_in_progress" as const,
+    };
+    controller.receive(generation, JSON.stringify({
+      ...page("session", "same transcript"),
+      sessionState: readyState,
+      stateRevision: 1,
+    }), transport);
+    const summary = {
+      id: "session",
+      title: "Conversation",
+      subtitle: "Ready to continue",
+      source: "Codex",
+      project: "fixture",
+      owner: "Codex",
+      cwd: "/fixture",
+      section: "ready" as const,
+      attentionTier: "ready" as const,
+      updatedAt: "2026-09-05T00:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: true,
+      sessionState: readyState,
+      stateRevision: 1,
+    };
+    controller.receive(generation, JSON.stringify({ type: "session_snapshot", revision: 1, sessions: [summary] }), transport);
+    controller.receive(generation, JSON.stringify({
+      type: "session_snapshot",
+      revision: 2,
+      sessions: [{
+        ...summary,
+        subtitle: "Agent is working",
+        section: "working",
+        attentionTier: "working",
+        sessionState: workingState,
+        stateRevision: 2,
+      }],
+    }), transport);
+
+    expect(opened).toEqual(["state-refresh-1"]);
+    expect(retryFlags).toEqual([false]);
+    expect(controller.currentState().page).toMatchObject({
+      sessionState: workingState,
+      stateRevision: 2,
+      capabilities: { canSendText: false, canSendImages: false, canCancel: false },
+    });
+    expect(controller.beginDelivery(generation, { text: "must wait", images: [] })).toBeUndefined();
+
+    expect(controller.refresh(generation, transport)).toBe(true);
+    expect(opened).toEqual(["state-refresh-1", "state-refresh-2"]);
+    expect(retryFlags).toEqual([false, true]);
+  });
+
+  it("fails delivery admission closed when lifecycle state is busy despite stale send bits", () => {
+    const controller = createChatSessionController({
+      onState: () => undefined,
+      onSlashCommands: () => undefined,
+      onOpenLatest: () => undefined,
+    });
+    const transport = { close: () => undefined, send: () => true };
+    const generation = controller.activate("busy-admission");
+    controller.receive(generation, JSON.stringify({
+      ...page("busy-admission", "still running"),
+      sessionState: {
+        conversation: "open",
+        turn: "working",
+        route: "waiting",
+        unavailableReason: "turn_in_progress",
+      },
+      capabilities: {
+        ...page("busy-admission", "still running").capabilities,
+        canSendText: true,
+        canSendImages: true,
+      },
+    }), transport);
+
+    expect(controller.beginDelivery(generation, { text: "must wait", images: [] })).toBeUndefined();
+    expect(controller.beginDelivery(generation, {
+      text: "",
+      images: [{
+        name: "diagram.png",
+        mimeType: "image/png",
+        byteLength: 8,
+        data: "iVBORw0KGgo=",
+      }],
+    })).toBeUndefined();
+  });
+
+  it("retains the page and revokes every response action through an open-page error", () => {
+    const controller = createChatSessionController({
+      onState: () => undefined,
+      onSlashCommands: () => undefined,
+      onOpenLatest: () => undefined,
+    });
+    const transport = { close: () => undefined, send: () => true };
+    const generation = controller.activate("error-retain");
+    controller.receive(generation, JSON.stringify({
+      ...page("error-retain", "history to retain"),
+      pendingAction: {
+        type: "approval",
+        approvalId: "approval-1",
+        toolUseId: "tool-1",
+        toolName: "shell",
+        input: { command: "rm -rf build" },
+        canPersist: true,
+      },
+      capabilities: {
+        ...page("error-retain", "history to retain").capabilities,
+        canApprove: true,
+        canCancel: true,
+        cancelDeliveryId: "delivery-1",
+      },
+    }), transport);
+    controller.noteDelivery(generation, "delivery-1");
+
+    controller.receive(generation, JSON.stringify({
+      type: "daemon_error",
+      code: "invalid_response",
+      message: "The opened conversation could not be refreshed.",
+      responseType: "chat_page",
+      requestType: "open_chat",
+      sessionId: "error-retain",
+    }), transport);
+
+    expect(controller.currentState()).toMatchObject({
+      status: "loaded",
+      error: "The opened conversation could not be refreshed.",
+      page: {
+        items: [{ text: "history to retain" }],
+        sessionState: {
+          conversation: "unknown",
+          turn: "unknown",
+          route: "unavailable",
+          unavailableReason: "provider_unavailable",
+        },
+        capabilities: {
+          canSendText: false,
+          canSendImages: false,
+          canCancel: false,
+          canApprove: false,
+          canAnswer: false,
+        },
+      },
+    });
+    expect(controller.currentState().page?.capabilities.cancelDeliveryId).toBeUndefined();
+    expect(controller.currentState().canCancelForActiveDelivery).toBeUndefined();
+    expect(controller.beginDelivery(generation, { text: "keep draft", images: [] })).toBeUndefined();
+  });
+
+  it("retains the transcript and draft route through a real disconnect", () => {
+    const controller = createChatSessionController({
+      onState: () => undefined,
+      onSlashCommands: () => undefined,
+      onOpenLatest: () => undefined,
+    });
+    const transport = { close: () => undefined, send: () => true };
+    const generation = controller.activate("disconnect-retain");
+    controller.receive(generation, JSON.stringify({
+      ...page("disconnect-retain", "history before disconnect"),
+      chatSettings: {
+        provider: "codex",
+        current: { modelId: "model-a", reasoningEffort: "medium", permissionProfile: "full" },
+        models: [{
+          id: "model-a",
+          displayName: "Model A",
+          description: "Fixture model",
+          reasoningEfforts: [{ value: "medium", description: "Medium" }],
+          defaultReasoningEffort: "medium",
+          supportsImages: true,
+          isDefault: true,
+        }],
+        permissionProfiles: [{
+          id: "full",
+          displayName: "Full access",
+          allowed: true,
+        }],
+        appliesTo: "next_turn",
+        canChange: true,
+      },
+    }), transport);
+    controller.noteComposerDraft(generation, {
+      text: "draft survives disconnect",
+      images: [{
+        name: "draft.png",
+        mimeType: "image/png",
+        byteLength: 8,
+        data: "iVBORw0KGgo=",
+      }],
+      settings: { modelId: "model-a", reasoningEffort: "medium", permissionProfile: "full" },
+    });
+
+    controller.disconnect(generation);
+
+    expect(controller.currentState()).toMatchObject({
+      status: "loaded",
+      error: "Connection to Agent Visor was lost. Retry when the daemon is available.",
+      page: {
+        items: [{ text: "history before disconnect" }],
+        sessionState: {
+          conversation: "unknown",
+          turn: "unknown",
+          route: "unavailable",
+          unavailableReason: "provider_unavailable",
+        },
+        capabilities: {
+          canSendText: false,
+          canSendImages: false,
+          canCancel: false,
+          canApprove: false,
+          canAnswer: false,
+        },
+      },
+    });
+    expect(controller.currentState().page?.chatSettings?.current).toEqual({
+      modelId: "model-a",
+      reasoningEffort: "medium",
+      permissionProfile: "full",
+    });
+    expect(controller.beginDelivery(generation, { text: "must wait", images: [] })).toBeUndefined();
+  });
+
+  it("temporarily fails closed when the active session is omitted from discovery", () => {
+    const opened: string[] = [];
+    const controller = createChatSessionController({
+      onState: () => undefined,
+      onSlashCommands: () => undefined,
+      onOpenLatest: (_connection, _sessionId, requestId) => opened.push(requestId),
+    }, { createRequestId: (() => {
+      let serial = 0;
+      return () => `resolve-missing-${++serial}`;
+    })() });
+    const transport = { close: () => undefined, send: () => true };
+    const generation = controller.activate("missing-session");
+    controller.receive(generation, JSON.stringify(page("missing-session", "keep me")), transport);
+    const summary = {
+      id: "missing-session",
+      title: "Conversation",
+      subtitle: "Ready",
+      source: "Codex",
+      project: "fixture",
+      owner: "Codex",
+      cwd: "/fixture",
+      section: "ready",
+      attentionTier: "ready",
+      updatedAt: "2026-09-05T00:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: true,
+      sessionState: { conversation: "open", turn: "ready", route: "available" },
+      stateRevision: 1,
+    } as const;
+    controller.receive(generation, JSON.stringify({
+      type: "session_snapshot",
+      revision: 1,
+      sessions: [summary],
+    }), transport);
+    controller.receive(generation, JSON.stringify({
+      type: "session_snapshot",
+      revision: 2,
+      sessions: [],
+    }), transport);
+
+    expect(opened).toEqual(["resolve-missing-1"]);
+    expect(controller.currentState()).toMatchObject({
+      status: "loaded",
+      page: {
+        items: [{ text: "keep me" }],
+        sessionState: {
+          conversation: "unknown",
+          turn: "unknown",
+          route: "unavailable",
+          unavailableReason: "conversation_unavailable",
+        },
+        capabilities: {
+          canSendText: false,
+          canSendImages: false,
+          canCancel: false,
+        },
+      },
+    });
+    expect(controller.beginDelivery(generation, { text: "must resolve first", images: [] })).toBeUndefined();
+
+    controller.receive(generation, JSON.stringify({
+      ...page("missing-session", "fresh page"),
+      requestId: "resolve-missing-1",
+      mode: "latest",
+      stateRevision: 2,
+    }), transport);
+    expect(controller.currentState()).toMatchObject({
+      page: {
+        items: [{ text: "fresh page" }],
+        sessionState: { conversation: "open", turn: "ready", route: "available" },
+        capabilities: { canSendText: true },
+      },
+    });
+  });
+
+  it("keeps an exact Stop capability through repeated busy snapshots", () => {
+    const controller = createChatSessionController({
+      onState: () => undefined,
+      onSlashCommands: () => undefined,
+      onOpenLatest: () => undefined,
+    });
+    const transport = { close: () => undefined, send: () => true };
+    const generation = controller.activate("busy");
+    const workingState = {
+      conversation: "open" as const,
+      turn: "working" as const,
+      route: "waiting" as const,
+      unavailableReason: "turn_in_progress" as const,
+    };
+    controller.receive(generation, JSON.stringify({
+      ...page("busy", "still working"),
+      sessionState: workingState,
+      stateRevision: 8,
+      capabilities: {
+        ...page("busy", "still working").capabilities,
+        canSendText: false,
+        canCancel: true,
+        cancelDeliveryId: "delivery-8",
+      },
+    }), transport);
+    controller.noteDelivery(generation, "delivery-8");
+    controller.receive(generation, JSON.stringify({
+      type: "session_snapshot",
+      revision: 8,
+      sessions: [{
+        id: "busy",
+        title: "Busy",
+        subtitle: "Still working",
+        source: "Codex",
+        project: "fixture",
+        owner: "Codex",
+        cwd: "/fixture",
+        section: "working",
+        attentionTier: "working",
+        updatedAt: "2026-09-05T00:00:00.000Z",
+        canOpenOwner: true,
+        canEnterChat: true,
+        sessionState: workingState,
+        stateRevision: 8,
+      }],
+    }), transport);
+
+    expect(controller.currentState()).toMatchObject({
+      canCancelForActiveDelivery: true,
+      page: {
+        sessionState: workingState,
+        stateRevision: 8,
+        capabilities: {
+          canSendText: false,
+          canCancel: true,
+          cancelDeliveryId: "delivery-8",
+        },
+      },
+    });
+  });
+
   it("rechecks image capability before retrying an image-only recovery", () => {
     const controller = createChatSessionController({
       onState: () => undefined,
@@ -91,7 +472,7 @@ describe("Chat session controller", () => {
       })(),
     });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("image-retry", "working");
+    const generation = controller.activate("image-retry");
     const canSendImagesOnly = {
       ...page("image-retry", "ready").capabilities,
       canSendText: false,
@@ -177,7 +558,7 @@ describe("Chat session controller", () => {
       close: () => undefined,
       send: (data: string) => { sent.push(data); return true; },
     };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     controller.receive(generation, JSON.stringify({
       ...page("session", "working"),
       capabilities: {
@@ -213,7 +594,7 @@ describe("Chat session controller", () => {
       onOpenLatest: (_connection, _sessionId, requestId) => { latestRequestId = requestId; },
     }, { createRequestId: () => "cycle-1" });
     const transport = { close: () => undefined, send: (data: string) => { sent.push(data); return true; } };
-    const generation = controller.activate("claude", "working");
+    const generation = controller.activate("claude");
     controller.receive(generation, JSON.stringify({
       ...page("claude", "working"),
       metadata: { permissionMode: "default" },
@@ -270,7 +651,7 @@ describe("Chat session controller", () => {
       onOpenLatest: () => undefined,
     }, { createRequestId: () => "cycle-exact" });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("claude", "working");
+    const generation = controller.activate("claude");
     controller.receive(generation, JSON.stringify({
       ...page("claude", "working"), metadata: { permissionMode: "plan" },
       capabilities: { ...page("claude", "working").capabilities, canCyclePermissionMode: true },
@@ -295,7 +676,7 @@ describe("Chat session controller", () => {
       onOpenLatest: () => undefined,
     }, { createRequestId: () => "request-1", createDeliveryId: () => "send-1" });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     const workingPage = {
       ...page("session", "working"),
       capabilities: {
@@ -312,12 +693,12 @@ describe("Chat session controller", () => {
       ...workingPage,
       capabilities: { ...workingPage.capabilities, cancelDeliveryId: "other-delivery" },
     };
-    const next = controller.activate("session", "working");
+    const next = controller.activate("session");
     controller.receive(next, JSON.stringify(mismatch), transport);
     controller.noteDelivery(next, "send-1");
     expect(controller.requestCancel(next, transport)).toBe(false);
 
-    const missing = controller.activate("session", "working");
+    const missing = controller.activate("session");
     const missingIdentityPage = {
       ...page("session", "working"),
       capabilities: { ...page("session", "working").capabilities, canCancel: true },
@@ -344,7 +725,7 @@ describe("Chat session controller", () => {
       createDeliveryId: () => "delivery-b",
     });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     const pageA = {
       ...page("session", "delivery A working"),
       capabilities: {
@@ -393,7 +774,7 @@ describe("Chat session controller", () => {
       onOpenLatest: () => undefined,
     });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     controller.receive(generation, JSON.stringify({
       ...page("session", "working"),
       capabilities: {
@@ -422,7 +803,7 @@ describe("Chat session controller", () => {
       createDeliveryId: () => "delivery-1",
     });
     const transport = { close: () => undefined, send: (data: string) => { sent.push(data); return true; } };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     controller.receive(generation, JSON.stringify({
       ...page("session", "working"),
       capabilities: { ...page("session", "working").capabilities, canCancel: true, cancelDeliveryId: "delivery-1" },
@@ -450,7 +831,7 @@ describe("Chat session controller", () => {
       onOpenLatest: (_connection, sessionId) => opened.push(sessionId),
     }, { createRequestId: () => "cancel-2" });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     controller.receive(generation, JSON.stringify({
       ...page("session", "working"),
       capabilities: {
@@ -475,7 +856,7 @@ describe("Chat session controller", () => {
     expect(controller.currentState()).toMatchObject({ cancel: { status: "confirmed" } });
     expect(opened).toEqual(["session"]);
 
-    const second = controller.activate("session", "working");
+    const second = controller.activate("session");
     controller.receive(second, JSON.stringify({
       ...page("session", "working"),
       capabilities: {
@@ -504,7 +885,7 @@ describe("Chat session controller", () => {
       onOpenLatest: (_connection, _sessionId, requestId) => { latestRequestId = requestId; },
     }, { createRequestId: () => "cancel-refresh" });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     controller.receive(generation, JSON.stringify({
       ...page("session", "working"),
       capabilities: {
@@ -546,7 +927,7 @@ describe("Chat session controller", () => {
       onOpenLatest: () => undefined,
     }, { createRequestId: () => "cancel-failed-refresh" });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     const workingPage = {
       ...page("session", "working"),
       capabilities: {
@@ -605,7 +986,7 @@ describe("Chat session controller", () => {
       })(),
     });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     const workingPage = {
       ...page("session", "working"),
       capabilities: {
@@ -648,11 +1029,11 @@ describe("Chat session controller", () => {
       close: () => undefined,
       send: (data: string) => { sent.push(data); return true; },
     };
-    const first = controller.activate("first", "working");
+    const first = controller.activate("first");
     controller.receive(first, JSON.stringify(page("first", "not cancellable")), transport);
     expect(controller.requestCancel(first, transport)).toBe(false);
 
-    const second = controller.activate("second", "ready");
+    const second = controller.activate("second");
     controller.receive(second, JSON.stringify({
       ...page("second", "ready"),
       capabilities: { ...page("second", "ready").capabilities, canCancel: true },
@@ -736,7 +1117,7 @@ describe("Chat session controller", () => {
       createDeliveryId: () => "delivery-1",
     });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     controller.receive(generation, JSON.stringify({
       ...page("session", "baseline"),
       items: [{ id: "old-user", kind: "user", text: "repeat", images: [] }],
@@ -765,7 +1146,7 @@ describe("Chat session controller", () => {
       onOpenLatest: () => undefined,
     });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     controller.receive(generation, JSON.stringify(page("session", "baseline")), transport);
     controller.requestEarlier(generation, "earlier-1");
 
@@ -792,7 +1173,7 @@ describe("Chat session controller", () => {
       onOpenLatest: () => undefined,
     });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     controller.receive(generation, JSON.stringify(page("session", "baseline")), transport);
     controller.requestEarlier(generation, "earlier-1");
 
@@ -812,7 +1193,7 @@ describe("Chat session controller", () => {
       onOpenLatest: () => undefined,
     });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     controller.receive(generation, JSON.stringify(page("session", "baseline")), transport);
     controller.requestLatest(generation, "latest-1");
 
@@ -832,7 +1213,7 @@ describe("Chat session controller", () => {
       onOpenLatest: () => undefined,
     });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
 
     controller.requestLatest(generation, "latest-r1");
     controller.requestLatest(generation, "latest-r2");
@@ -862,7 +1243,7 @@ describe("Chat session controller", () => {
       onOpenLatest: () => undefined,
     }, { deliveryClock: { now: () => now } });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     controller.requestLatest(generation, "expired-page");
     now = 61_000;
 
@@ -881,7 +1262,10 @@ describe("Chat session controller", () => {
       sessionId: "session",
     }), transport);
 
-    expect(controller.currentState()).toEqual({ sessionId: "session", status: "loading" });
+    expect(controller.currentState()).toEqual({
+      sessionId: "session",
+      status: "loading",
+    });
   });
 
   it("clears open-page identities on disconnect so a late response cannot apply after reconnect", () => {
@@ -891,7 +1275,7 @@ describe("Chat session controller", () => {
       onOpenLatest: () => undefined,
     });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     controller.requestLatest(generation, "before-disconnect");
     controller.disconnect(generation);
 
@@ -900,7 +1284,11 @@ describe("Chat session controller", () => {
       requestId: "before-disconnect",
       mode: "latest",
     }), transport);
-    expect(controller.currentState()).toEqual({ sessionId: "session", status: "loading" });
+    expect(controller.currentState()).toEqual({
+      sessionId: "session",
+      status: "loading",
+      error: "Connection to Agent Visor was lost.",
+    });
 
     controller.requestLatest(generation, "after-reconnect");
     controller.receive(generation, JSON.stringify({
@@ -1213,7 +1601,7 @@ describe("Chat session controller", () => {
       createDeliveryId: () => "delivery-id",
     });
     const transport = { close: () => undefined, send: () => true };
-    const generation = controller.activate("session", "working");
+    const generation = controller.activate("session");
     controller.requestLatest(generation, "latest-page");
 
     const makeItems = (prefix: string) => Array.from({ length: 1_000 }, (_, index) => ({

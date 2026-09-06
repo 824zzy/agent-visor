@@ -293,6 +293,12 @@ describe("session snapshot protocol", () => {
     expect(clientMessageSchema.safeParse({
       type: "open_chat", sessionId: "session-1", before: 2048, limit: 500,
     }).success).toBe(true);
+    expect(clientMessageSchema.parse({
+      type: "open_chat", id: "retry-1", sessionId: "session-1",
+      retryAvailability: true,
+    })).toMatchObject({
+      type: "open_chat", id: "retry-1", retryAvailability: true,
+    });
     expect(clientMessageSchema.safeParse({
       type: "send_chat", id: "request-1", sessionId: "session-1", generation: 3,
       deliveryId: "delivery-1", text: "Continue", images: [],

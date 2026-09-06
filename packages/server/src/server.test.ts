@@ -169,6 +169,212 @@ describe("Agent Visor daemon", () => {
     socket.close();
   });
 
+  it("keeps one opaque chat reference for same-session pages and closes the exact token", async () => {
+    const opened: Array<{ sessionId: string; referenceId: string }> = [];
+    const closed: Array<{ sessionId: string; referenceId: string }> = [];
+    const pageSessions: string[] = [];
+    const retried: string[] = [];
+    const source = {
+      current: () => fixtureSnapshot,
+      subscribe: () => () => undefined,
+      chatOpened: async (sessionId: string, referenceId = "missing-reference") => {
+        opened.push({ sessionId, referenceId });
+        return undefined;
+      },
+      chatClosed: (sessionId: string, referenceId = "missing-reference") => {
+        closed.push({ sessionId, referenceId });
+      },
+      chatRetry: async (sessionId: string) => {
+        retried.push(sessionId);
+        return undefined;
+      },
+      chatPage: async (sessionId: string) => {
+        pageSessions.push(sessionId);
+        return {
+          type: "chat_page" as const,
+          sessionId,
+          items: [],
+          hasMoreBefore: false,
+          capabilities: {
+            canSendText: true, canSendImages: false, canCancel: false,
+            canApprove: false, canAnswer: false,
+          },
+          pendingAction: null,
+        };
+      },
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    socket.on("message", (data) => serverMessageSchema.parse(JSON.parse(data.toString())));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+
+    socket.send(JSON.stringify({ type: "open_chat", id: "same-1", sessionId: "session-a" }));
+    await expect.poll(() => pageSessions).toEqual(["session-a"]);
+    socket.send(JSON.stringify({ type: "open_chat", id: "same-2", sessionId: "session-a" }));
+    await expect.poll(() => pageSessions).toEqual(["session-a", "session-a"]);
+    expect(opened).toHaveLength(1);
+    expect(retried).toEqual([]);
+    socket.send(JSON.stringify({
+      type: "open_chat", id: "retry-1", sessionId: "session-a", retryAvailability: true,
+    }));
+    await expect.poll(() => pageSessions).toEqual(["session-a", "session-a", "session-a"]);
+    expect(opened).toHaveLength(1);
+    expect(retried).toEqual(["session-a"]);
+
+    socket.send(JSON.stringify({ type: "open_chat", id: "switch-1", sessionId: "session-b" }));
+    await expect.poll(() => pageSessions).toEqual(["session-a", "session-a", "session-a", "session-b"]);
+    expect(opened).toHaveLength(2);
+    expect(closed).toEqual([opened[0]]);
+
+    const closedSocket = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    socket.close();
+    await closedSocket;
+    await expect.poll(() => closed).toEqual(opened);
+  });
+
+  it("propagates retry errors and drops late results after a chat switch", async () => {
+    const pageSessions: string[] = [];
+    const retryCalls: string[] = [];
+    let retryStarted!: () => void;
+    const retryStartedPromise = new Promise<void>((resolve) => { retryStarted = resolve; });
+    let resolveStaleRetry!: (value: string | undefined) => void;
+    const source = {
+      current: () => fixtureSnapshot,
+      subscribe: () => () => undefined,
+      chatOpened: async () => undefined,
+      chatClosed: () => undefined,
+      chatRetry: (sessionId: string) => {
+        retryCalls.push(sessionId);
+        if (sessionId === "session-a") {
+          retryStarted();
+          return new Promise<string | undefined>((resolve) => {
+            resolveStaleRetry = resolve;
+          });
+        }
+        return Promise.resolve("The Codex route is still closing. Retry after it settles.");
+      },
+      chatPage: async (sessionId: string) => {
+        pageSessions.push(sessionId);
+        return {
+          type: "chat_page" as const,
+          sessionId,
+          items: [{ id: "draft-anchor", kind: "user" as const, text: "Draft stays", images: [] }],
+          hasMoreBefore: false,
+          capabilities: {
+            canSendText: true, canSendImages: false, canCancel: false,
+            canApprove: false, canAnswer: false,
+          },
+          pendingAction: null,
+        };
+      },
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+
+    socket.send(JSON.stringify({ type: "open_chat", id: "open-a", sessionId: "session-a" }));
+    await expect.poll(() => pageSessions).toEqual(["session-a"]);
+    socket.send(JSON.stringify({
+      type: "open_chat", id: "retry-a", sessionId: "session-a", retryAvailability: true,
+    }));
+    await retryStartedPromise;
+
+    socket.send(JSON.stringify({ type: "open_chat", id: "open-b", sessionId: "session-b" }));
+    await expect.poll(() => pageSessions).toEqual(["session-a", "session-b"]);
+    resolveStaleRetry("stale retry must not cross the chat reference");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(messages).not.toContainEqual(expect.objectContaining({ requestId: "retry-a" }));
+
+    socket.send(JSON.stringify({
+      type: "open_chat", id: "retry-b", sessionId: "session-b", retryAvailability: true,
+    }));
+    await expect.poll(() => messages).toContainEqual({
+      type: "daemon_error",
+      code: "invalid_response",
+      message: "The Codex route is still closing. Retry after it settles.",
+      responseType: "chat_page",
+      requestType: "open_chat",
+      requestId: "retry-b",
+      sessionId: "session-b",
+    });
+    expect(pageSessions).toEqual(["session-a", "session-b"]);
+    expect(retryCalls).toEqual(["session-a", "session-b"]);
+    socket.close();
+  });
+
+  it("drops deferred pages from stale chat references during rapid switch and reopen", async () => {
+    const opened: Array<{ sessionId: string; referenceId: string }> = [];
+    const closed: Array<{ sessionId: string; referenceId: string }> = [];
+    const pageSessions: string[] = [];
+    const pendingOpens: Array<{
+      sessionId: string;
+      referenceId: string;
+      resolve(value: string | undefined): void;
+    }> = [];
+    const source = {
+      current: () => fixtureSnapshot,
+      subscribe: () => () => undefined,
+      chatOpened: (sessionId: string, referenceId = "missing-reference") => {
+        opened.push({ sessionId, referenceId });
+        return new Promise<string | undefined>((resolve) => {
+          pendingOpens.push({ sessionId, referenceId, resolve });
+        });
+      },
+      chatClosed: (sessionId: string, referenceId = "missing-reference") => {
+        closed.push({ sessionId, referenceId });
+      },
+      chatPage: async (sessionId: string) => {
+        pageSessions.push(sessionId);
+        return {
+          type: "chat_page" as const,
+          sessionId,
+          items: [],
+          hasMoreBefore: false,
+          capabilities: {
+            canSendText: true, canSendImages: false, canCancel: false,
+            canApprove: false, canAnswer: false,
+          },
+          pendingAction: null,
+        };
+      },
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    socket.on("message", (data) => serverMessageSchema.parse(JSON.parse(data.toString())));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+
+    socket.send(JSON.stringify({ type: "open_chat", id: "rapid-a1", sessionId: "session-a" }));
+    await expect.poll(() => pendingOpens.length).toBe(1);
+    socket.send(JSON.stringify({ type: "open_chat", id: "rapid-b", sessionId: "session-b" }));
+    await expect.poll(() => pendingOpens.length).toBe(2);
+    expect(closed).toEqual([opened[0]]);
+    socket.send(JSON.stringify({ type: "open_chat", id: "rapid-a2", sessionId: "session-a" }));
+    await expect.poll(() => pendingOpens.length).toBe(3);
+    expect(closed).toEqual([opened[0], opened[1]]);
+    expect(new Set(opened.map(({ referenceId }) => referenceId)).size).toBe(3);
+
+    pendingOpens[0]!.resolve(undefined);
+    pendingOpens[1]!.resolve(undefined);
+    pendingOpens[2]!.resolve(undefined);
+    await expect.poll(() => pageSessions).toEqual(["session-a"]);
+
+    const closedSocket = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    socket.close();
+    await closedSocket;
+    await expect.poll(() => closed).toEqual(opened);
+  });
+
   it("routes lazy Codex settings updates only to the matching open chat", async () => {
     let publishSettings: ((update: ChatSettingsUpdate) => void) | undefined;
     const source = {
@@ -470,17 +676,21 @@ describe("Agent Visor daemon", () => {
       socket.once("error", reject);
     });
 
-    socket.send(JSON.stringify({ type: "open_chat", sessionId: "pi-ready" }));
+    socket.send(JSON.stringify({ type: "open_chat", id: "open-failed", sessionId: "pi-ready" }));
     await expect.poll(() => failed.mock.calls.length).toBe(1);
     await expect.poll(() => messages.some((message) => (
       typeof message === "object" && message !== null && "type" in message
-      && message.type === "chat_page"
+      && message.type === "daemon_error"
     ))).toBe(true);
-    expect(messages).toContainEqual(expect.objectContaining({
-      type: "chat_page",
+    expect(messages).toContainEqual({
+      type: "daemon_error",
+      code: "invalid_response",
+      message: "conversation file changed",
+      responseType: "chat_page",
+      requestType: "open_chat",
+      requestId: "open-failed",
       sessionId: "pi-ready",
-      items: [expect.objectContaining({ kind: "system", tone: "error" })],
-    }));
+    });
     socket.send(JSON.stringify({ type: "health" }));
     await expect.poll(() => messages.some((message) => (
       typeof message === "object" && message !== null && "type" in message
@@ -547,7 +757,11 @@ describe("Agent Visor daemon", () => {
         tty: "ttys001",
         sessionFile: path.join(cwd, "conversation.jsonl"),
       });
-      expect(source.chatRecord("hook-only")).toBeUndefined();
+      expect(source.chatRecord("hook-only")).toMatchObject({
+        id: "hook-only",
+        provider: "claude_code",
+        chatPath: path.join(cwd, "conversation.jsonl"),
+      });
       running = await startServer({ port: 0, source, token });
       const socket = new WebSocket(running.url);
       const messages: unknown[] = [];

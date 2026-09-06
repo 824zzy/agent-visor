@@ -75,10 +75,13 @@ Chat displays supported provider history, grouped work, reasoning, tools,
 images, questions, approvals, pagination, and technical Details in the same
 window as Sessions.
 
-The owner remains authoritative. Chat is read-only for history-only sessions,
-unsupported control routes, Zed-hosted sessions, and other rows whose provider
-does not expose a verified send path. Sending and approval actions appear only
-when the current provider capability and session identity allow them.
+The owner remains authoritative. Chat can read an open conversation without
+opening a native writer, even after the conversation becomes old or its
+completion is acknowledged in the Sessions list. A Send attempts the exact
+provider route only at the delivery boundary. Unsupported control routes,
+Zed-hosted sessions, and other owner-only rows show an explicit reason and
+owner action. Sending and approval actions appear only when the current
+provider capability and exact session identity allow them.
 
 Active Codex sessions expose provider-backed composer controls for model,
 reasoning effort, and access profile. The compact model and effort control shows
@@ -111,9 +114,9 @@ provider-authoritative credential route.
 | Source | Discovery and status | Owner action | Chat capability |
 | --- | --- | --- | --- |
 | Claude Code | Local hooks, process metadata, and transcripts | Focus the detected terminal, Cursor, Zed, or Claude owner | Text, images, questions, and approvals when a verified route exists; history can be read-only |
-| Codex CLI | Rollouts, SQLite, process, TTY, and hook evidence | Focus the owning terminal | Provider-routed text and local images when active; history-only rows are read-only |
-| Codex Desktop | Thread database and recent rollout evidence | Use the verified <code>codex://threads/&lt;id&gt;</code> route when available | Provider-routed text, images, questions, and approvals when active |
-| Pi CLI | Process and tree-shaped transcript evidence plus an automatic local lifecycle integration | Focus the exact owning terminal | Text and ordered local-image paths when active; historical rows are read-only |
+| Codex CLI | Rollouts, SQLite, process, TTY, and hook evidence | Focus the owning terminal | Provider-routed text and local images when the exact route is available; inactive or unsupported terminal routes explain their owner-only status |
+| Codex Desktop | Thread database plus exact opened-thread resolution; no supported Desktop-local writer endpoint is currently available | Open the verified <code>codex://threads/&lt;id&gt;</code> owner route | Chat is read-only until Send proves a route can be acquired. An owner-held thread rejects the send safely and preserves the draft; a locally owned route is released after the confirmed turn or Stop while Chat stays open |
+| Pi CLI | Process and tree-shaped transcript evidence plus an automatic local lifecycle integration | Focus the exact owning terminal | Text and ordered local-image paths when the verified terminal route is available; owner-only states remain explicit |
 | Cursor | Cursor-owned transcripts and terminal evidence | Focus the owning editor or terminal | Read-only history |
 | Zed-hosted agents | Zed database identity, title, workspace, and provider transcript | Focus Zed; exact thread reveal is best effort | Read-only history |
 | Auggie | Authenticated hook lifecycle | Focus the detected owner | Observe-only history |
@@ -123,14 +126,58 @@ state. A running host process alone is not treated as a real session.
 
 ## Session semantics
 
-1. **Needs attention**: an approval or structured question is blocking the turn.
-2. **Ready**: the turn finished or the agent is waiting for normal input.
-3. **Working**: the agent is processing or compacting.
-4. **Recent**: no turn is active, but the session remains useful for navigation.
+Agent Visor keeps four independent facts for an opened conversation:
 
-Status can be hook-driven or inferred from source transcripts. Hover details
-show freshness and evidence so a disk-derived state is not presented as
-stronger than it is.
+1. **Conversation**: the provider says whether the conversation is open,
+   archived, or currently unknown.
+2. **Turn**: the current or most recently observed turn is working, needs an
+   answer, ready for input, or unknown.
+3. **Route**: the exact provider route is available, waiting for a running
+   turn, or unavailable.
+4. **Attention**: completion acknowledgment and recency determine list order
+   and notification state.
+
+The Sessions list uses attention and recency. They do not end a conversation
+and they do not decide whether Chat can send or stop. A quiet or acknowledged
+conversation remains the same conversation when it is opened again.
+
+When an open route is ready, the composer continues the existing conversation
+regardless of list age. While another turn is running and steering or queueing
+is not verified, Agent Visor keeps the draft and asks the user to send it after
+the turn finishes. A temporary provider or helper outage keeps the composer
+draft in place and offers retry; the owner action remains available. Archived,
+unsupported, automation, and owner-only states show an explicit reason and an
+action to continue in the source application.
+
+For Codex Desktop, a ready thread record alone does not prove a local write
+route. Chat opening and read-time refreshes never acquire the native writer.
+Agent Visor presents the conversation as available for a tentative Send while
+keeping ownership unverified. Send is the admission boundary: it acquires the
+exact route, reports an owner-only rejection without losing the draft, and
+marks the route owned only after the provider accepts the turn.
+
+After Codex confirms turn completion or Stop, Agent Visor releases its local
+writer automatically while Chat stays open. If the provider connection ends
+before completion is confirmed, the route stays unavailable until the user
+retries after the provider state is clear. Retry restores tentative readiness
+only when a fresh ready lifecycle record carries the same turn identity;
+otherwise the draft stays staged with the owner action available.
+
+When Codex still owns an idle thread in another process, the daemon reports an
+owner-only route after the attempted send instead of claiming that the thread
+is owned locally. Agent Visor keeps the local draft and staged settings visible
+while the user continues in Codex; it does not resume a competing writer
+automatically.
+
+Stop is shown only when the daemon advertises the exact delivery/turn identity
+that it can cancel. State and capability revisions refresh Chat independently
+of transcript content, and older history pages cannot overwrite a newer
+capability projection.
+
+For local diagnostics, set `AGENT_VISOR_DATA_DIR`. The server writes bounded,
+redacted route records to `codex-route-diagnostics.jsonl` and keeps at most one
+rotated `.1` backup. Prompt text, images, credentials, and tool output are not
+written.
 
 ## Installation
 
@@ -231,7 +278,7 @@ analytics.
 - Claude usage remains unavailable until a provider-authoritative credential route exists.
 - Cursor Chat is read-only. Zed-hosted Chat is read-only and exact sidebar/thread reveal is best effort. Auggie remains observe-only.
 - Automatic Pi session restoration after a physical macOS reboot has not completed real-machine acceptance and is outside the verified 2.7.0 release scope.
-- Historical, ended, and unsupported sessions are read-only. Chat sending and approval controls require a verified provider route for the current session.
+- Archived, unsupported, automation, and owner-only conversations remain read-only in Chat. Temporary route loss keeps the draft visible and offers retry; Chat sending and approval controls require a verified provider route for the current session.
 - Update installation is manual. Agent Visor validates the newer version, HTTPS
   GitHub release URL, and signature metadata shape, then opens its release page;
   Electron does not cryptographically verify ZIP bytes before opening GitHub.
@@ -282,10 +329,16 @@ npm run typecheck
 npm test
 npm run test:sessions
 npm run test:chat
+npm run test:chat-lifecycle
 npm run test:clean-profile
 npm run test:native-services
 npm run test:native-helper
 ~~~
+
+`npm run test:chat-lifecycle` runs the focused Electron fixture for the Chat
+state contract. It checks an old but open conversation, a controlled running
+turn with an identity-bound Stop action, a retryable provider outage, draft and
+staged-setting preservation, and an archived owner-only state.
 
 The distributable Electron candidate is built with the release identity:
 

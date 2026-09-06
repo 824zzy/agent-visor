@@ -269,6 +269,75 @@ describe("pending chat delivery store", () => {
     })).toMatchObject([{ status: "confirmed" }]);
   });
 
+  it("uses request and delivery identity when native annotation arrives after the action ack", () => {
+    const store = createPendingChatDeliveryStore();
+    activate(store);
+    store.begin({
+      sessionId: "session", generation: 1, requestId: "request-native", deliveryId: "delivery-native",
+      draft: draft("native turn"),
+    });
+    expect(store.acknowledge({
+      sessionId: "session", generation: 1,
+      requestId: "request-native", deliveryId: "delivery-native", ok: true,
+    })).toMatchObject({ status: "acknowledged" });
+
+    expect(store.reconcile({
+      sessionId: "session", generation: 1,
+      turns: [canonical("native-row", "native turn", {
+        requestId: "request-native",
+        deliveryId: "delivery-native",
+        providerMessageId: "native-user-1",
+      })],
+    })).toMatchObject([{
+      requestId: "request-native",
+      deliveryId: "delivery-native",
+      providerMessageId: "native-user-1",
+      status: "confirmed",
+    }]);
+  });
+
+  it("rejects a known conflicting provider annotation and provider-only unknown rows", () => {
+    const knownProvider = createPendingChatDeliveryStore();
+    activate(knownProvider);
+    knownProvider.begin({
+      sessionId: "session", generation: 1, requestId: "request-known", deliveryId: "delivery-known",
+      draft: draft("same"),
+    });
+    expect(knownProvider.reconcile({
+      sessionId: "session", generation: 1,
+      turns: [canonical("known-provider", "same", {
+        requestId: "request-known",
+        deliveryId: "delivery-known",
+        providerMessageId: "native-user-1",
+      })],
+    })).toMatchObject([{ status: "confirmed", providerMessageId: "native-user-1" }]);
+    expect(knownProvider.reconcile({
+      sessionId: "session", generation: 1,
+      turns: [canonical("wrong-provider", "same", {
+        requestId: "request-known",
+        deliveryId: "delivery-known",
+        providerMessageId: "native-user-2",
+      })],
+    })).toEqual([]);
+    expect(knownProvider.get("session", 1)).toMatchObject([{
+      status: "confirmed", providerMessageId: "native-user-1",
+    }]);
+
+    const unknownProvider = createPendingChatDeliveryStore();
+    activate(unknownProvider);
+    unknownProvider.begin({
+      sessionId: "session", generation: 1, requestId: "request-unknown", deliveryId: "delivery-unknown",
+      draft: draft("provider only"),
+    });
+    expect(unknownProvider.reconcile({
+      sessionId: "session", generation: 1,
+      turns: [canonical("provider-only", "provider only", {
+        providerMessageId: "native-user-3",
+      })],
+    })).toEqual([]);
+    expect(unknownProvider.get("session", 1)).toMatchObject([{ status: "pending" }]);
+  });
+
   it("keeps original and retry lineage ambiguous for content-only canonical rows", () => {
     const store = createPendingChatDeliveryStore();
     activate(store);
@@ -565,8 +634,9 @@ describe("pending chat delivery store", () => {
       sessionId: "session", generation: 1,
       requestId: delivery.requestId, deliveryId: delivery.deliveryId,
     })).toMatchObject({ status: "canceled" });
-    // Recreate the acknowledged state: a canonical deadline must be distinct
-    // from an action acknowledgement and must remove synthetic cancelability.
+    // Recreate the acknowledged state: a canonical deadline is distinct from
+    // an action acknowledgement, but the exact provider route remains
+    // cancellable while the turn is still active.
     const second = store.begin({
       sessionId: "session", generation: 1, requestId: "request-ack-2", deliveryId: "delivery-ack-2",
       draft: draft("no transcript"),
@@ -585,8 +655,39 @@ describe("pending chat delivery store", () => {
     expect(store.cancel({
       sessionId: "session", generation: 1,
       requestId: second.requestId, deliveryId: second.deliveryId,
-    })).toBeUndefined();
-    expect(store.optimisticRows("session", 1)).toMatchObject([{ text: "no transcript" }]);
+    })).toMatchObject({ status: "canceled" });
+    expect(store.optimisticRows("session", 1)).toEqual([]);
+  });
+
+  it("settles a canceled delivery when its exact canonical row arrives later", () => {
+    const store = createPendingChatDeliveryStore();
+    activate(store);
+    store.begin({
+      sessionId: "session", generation: 1,
+      requestId: "request-canceled", deliveryId: "delivery-canceled",
+      draft: draft("stopped"),
+    });
+    store.acknowledge({
+      sessionId: "session", generation: 1,
+      requestId: "request-canceled", deliveryId: "delivery-canceled", ok: true,
+    });
+    expect(store.cancel({
+      sessionId: "session", generation: 1,
+      requestId: "request-canceled", deliveryId: "delivery-canceled",
+    })).toMatchObject({ status: "canceled" });
+
+    expect(store.reconcile({
+      sessionId: "session", generation: 1,
+      turns: [canonical("canonical-stopped", "stopped", {
+        requestId: "request-canceled",
+        deliveryId: "delivery-canceled",
+      })],
+    })).toMatchObject([{
+      requestId: "request-canceled",
+      deliveryId: "delivery-canceled",
+      status: "canceled",
+    }]);
+    expect(store.optimisticRows("session", 1)).toEqual([]);
   });
 
   it("requires a post-submit timestamp and an authoritative baseline for content fallback", () => {

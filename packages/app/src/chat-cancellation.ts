@@ -1,5 +1,3 @@
-import type { SessionSection } from "@agent-visor/protocol";
-
 export type ChatCancellationViewStatus = "canceling" | "confirmed" | "failed" | undefined;
 
 export type ChatCancellationView = {
@@ -11,11 +9,12 @@ export type ChatCancellationView = {
 
 /** Keep the stop affordance honest when a page or session snapshot is stale. */
 export function chatCancellationView(
-  section: SessionSection,
   canCancel: boolean,
   status: ChatCancellationViewStatus,
 ): ChatCancellationView {
-  const active = section === "working" && canCancel;
+  // The daemon's exact cancellation capability is the authority for whether
+  // Stop targets a live turn. List ordering is not a lifecycle signal.
+  const active = canCancel;
   if (status === "canceling") {
     return {
       visible: true,

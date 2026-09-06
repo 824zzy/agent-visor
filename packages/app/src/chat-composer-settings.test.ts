@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatSettings } from "@agent-visor/protocol";
 import {
   canSendImagesForSettings,
+  composerModelLabel,
   imageCapabilityMessage,
   mergeSettingPatch,
   selectedModel,
@@ -63,6 +64,16 @@ const settings: ChatSettings = {
 };
 
 describe("chat composer settings", () => {
+  it("keeps the current model visible when the selectable catalog omits it", () => {
+    const omitted = { ...settings, models: settings.models.filter(({ id }) => id !== "gpt-6-astra"),
+      current: { ...settings.current, modelId: "gpt-6-astra", reasoningEffort: "xhigh" } };
+    expect(composerModelLabel(omitted)).toBe("GPT-6-astra");
+    expect(selectedReasoningEffort(omitted)?.value).toBe("xhigh");
+    expect(composerModelLabel(omitted, { modelId: "gpt-5.6-sol" })).toBe("GPT-5.6 Sol");
+    expect(composerModelLabel(omitted, { modelId: "custom-model" }, "Old model")).toBe("custom-model");
+    expect(composerModelLabel(undefined, undefined, "Provider model")).toBe("Provider model");
+  });
+
   it("uses staged values for the next message without changing provider current values", () => {
     const staged = { modelId: "gpt-6-astra", reasoningEffort: "max" };
     expect(settingValues(settings, staged)).toEqual({

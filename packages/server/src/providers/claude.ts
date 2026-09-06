@@ -10,6 +10,14 @@ const terminalStatuses = new Set([
   "ended", "exited", "closed", "deactivated", "inactive", "stopped", "terminated",
 ]);
 
+// Claude session metadata distinguishes an active turn from a session that is
+// waiting for the next prompt. Keep this allowlist narrow: an unfamiliar
+// status must not make a live terminal writable just because its process is
+// present.
+const readyStatuses = new Set([
+  "idle", "ready", "waiting", "waiting_for_input", "awaiting_input",
+]);
+
 export class ClaudeProvider implements ProviderAdapter {
   readonly id = "claude_code" as const;
 
@@ -66,6 +74,9 @@ export class ClaudeProvider implements ProviderAdapter {
         processStartToken,
       );
       const applicationTarget = applicationTargetForProcess(process.pid, processes);
+      const turnState = status === "busy"
+        ? "working" as const
+        : readyStatuses.has(status) ? "ready" as const : "unknown" as const;
 
       results.push({
         id: sessionID,
@@ -79,6 +90,8 @@ export class ClaudeProvider implements ProviderAdapter {
         canOpenOwner: true,
         canEnterChat: true,
         sessionClass: terminalTarget ? "terminal" : "interactive",
+        conversationState: "open",
+        turnState,
         chatPath: transcript,
         ...(terminalTarget ? {
           controlTarget: { kind: "terminal" as const, target: terminalTarget },

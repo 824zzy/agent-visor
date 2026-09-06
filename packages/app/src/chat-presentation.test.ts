@@ -330,7 +330,9 @@ describe("Chat presentation", () => {
       hasMoreBefore: true,
       nextBefore: 100,
       metadata: { model: "GPT-5.6 Sol" },
-      capabilities: { canSendText: true, canSendImages: false, canCancel: false, canApprove: false, canAnswer: false },
+      sessionState: { conversation: "open", turn: "ready", route: "available" } as const,
+      stateRevision: 2,
+      capabilities: { canSendText: false, canSendImages: false, canCancel: false, canApprove: false, canAnswer: false, unavailableReason: "turn_in_progress" as const },
       pendingAction: null,
     };
     const earlier = {
@@ -339,10 +341,16 @@ describe("Chat presentation", () => {
       hasMoreBefore: false,
       nextBefore: undefined,
       metadata: undefined,
+      sessionState: { conversation: "open", turn: "working", route: "waiting", unavailableReason: "turn_in_progress" } as const,
+      stateRevision: 1,
+      capabilities: { canSendText: true, canSendImages: true, canCancel: true, canApprove: false, canAnswer: false },
     };
     expect(mergeChatPage(current, earlier, "earlier")).toMatchObject({
       items: [{ id: "old" }, { id: "new" }],
       metadata: { model: "GPT-5.6 Sol" },
+      sessionState: { conversation: "open", turn: "ready", route: "available" },
+      stateRevision: 2,
+      capabilities: { canSendText: false, canSendImages: false, canCancel: false, canApprove: false, canAnswer: false, unavailableReason: "turn_in_progress" },
       hasMoreBefore: false,
     });
     expect(mergeChatPage(current, {
