@@ -369,7 +369,7 @@ describe("live provider adapters", () => {
   });
 
   it.each([120_000, 121_000, 720_000, 3_600_000, 24 * 3_600_000, 41 * 3_600_000])(
-    "opens readable Codex History after %i ms idle without enabling controls",
+    "keeps an old unarchived Codex conversation distinct from archival after %i ms idle",
     async (ageMs) => {
       const directory = mkdtempSync(path.join(tmpdir(), "codex-history-chat-"));
       const rollout = path.join(directory, "rollout.jsonl");
@@ -403,7 +403,8 @@ describe("live provider adapters", () => {
         expect(page.capabilities).toMatchObject({
           canSendText: false, canSendImages: false, canCancel: false,
           canApprove: false, canAnswer: false,
-          readOnlyReason: "This session has ended. Chat history is read only.",
+          unavailableReason: "provider_unavailable",
+          readOnlyReason: "The provider route is temporarily unavailable.",
         });
         expect((await repository.refresh()).sessions).toEqual(snapshot.sessions);
 

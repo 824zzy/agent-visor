@@ -159,6 +159,189 @@ describe("provider Chat parsing", () => {
     ])[0]).toMatchObject({ family: "edit" });
   });
 
+  it("uses the exact native Codex user identity without dropping legacy content", () => {
+    const turnId = "turn-native-identity";
+    const nativeID = "native-user-identity";
+    const legacyID = "msg-legacy-user-identity";
+    const items = parseChatLines("codex", [
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", id: "internal-context", role: "user",
+        content: [{ type: "input_text", text: "<environment_context>setup</environment_context>" }],
+        internal_chat_message_metadata_passthrough: {
+          turn_id: "turn-context", content_item_kinds: ["environments.environment_context"],
+        },
+      } }),
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", id: legacyID, role: "user",
+        content: [
+          { type: "input_text", text: "Inspect this image." },
+          { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+        ],
+        internal_chat_message_metadata_passthrough: {
+          turn_id: turnId, content_item_kinds: ["user.text", "user.image"],
+        },
+      } }),
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", id: "delegation", role: "user",
+        content: [{ type: "input_text", text: "<codex_delegation><input>Review helper</input></codex_delegation>" }],
+        internal_chat_message_metadata_passthrough: { turn_id: turnId, content_item_kinds: ["user.text"] },
+      } }),
+      JSON.stringify({ type: "event_msg", payload: {
+        type: "item_completed", turn_id: turnId,
+        item: {
+          type: "UserMessage", id: nativeID, client_id: "client-native-identity",
+          content: [
+            { type: "text", text: "Inspect this image.", text_elements: [] },
+            { type: "local_image", path: "/tmp/sanitized.png" },
+          ],
+        },
+      } }),
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", id: "assistant-native-identity", role: "assistant",
+        content: [{ type: "output_text", text: "Done" }],
+      } }),
+    ]);
+
+    expect(items).toHaveLength(3);
+    expect(items.find((item) => item.kind === "user")).toMatchObject({
+      id: legacyID,
+      providerMessageId: nativeID,
+      text: "Inspect this image.",
+      images: [{ mimeType: "image/png", data: "iVBORw0KGgo=" }],
+    });
+    expect(items.map((item) => item.kind)).toEqual(["user", "activity", "assistant"]);
+    expect(items.find((item) => item.kind === "activity")).toMatchObject({ activity: "delegation" });
+    expect(items.some((item) => item.id === nativeID)).toBe(false);
+    expect(items.some((item) => item.id === "internal-context")).toBe(false);
+  });
+
+  it("keeps the paired Codex render ID stable while adding native provider identity", () => {
+    const response = JSON.stringify({ type: "response_item", payload: {
+      type: "message", id: "msg-stable-render", role: "user",
+      content: [{ type: "input_text", text: "Stable prompt" }],
+      internal_chat_message_metadata_passthrough: { turn_id: "turn-stable-render" },
+    } });
+    const native = JSON.stringify({ type: "event_msg", payload: {
+      type: "item_completed", turn_id: "turn-stable-render",
+      item: { type: "UserMessage", id: "native-stable-provider", content: [{ type: "text", text: "Stable prompt" }] },
+    } });
+    const before = parseChatLines("codex", [response])[0];
+    const after = parseChatLines("codex", [response, native])[0];
+
+    expect(before).toMatchObject({ id: "msg-stable-render", kind: "user" });
+    expect(after).toMatchObject({
+      id: "msg-stable-render", kind: "user", providerMessageId: "native-stable-provider",
+    });
+    expect(after?.id).toBe(before?.id);
+  });
+
+  it("falls back to legacy Codex user rows when native identity is absent", () => {
+    const items = parseChatLines("codex", [JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message", id: "legacy-only", role: "user",
+        content: [{ type: "input_text", text: "Legacy prompt" }],
+        internal_chat_message_metadata_passthrough: { turn_id: "turn-without-native" },
+      },
+    })]);
+
+    expect(items).toEqual([{
+      id: "legacy-only", kind: "user", text: "Legacy prompt", images: [], timestamp: undefined,
+    }]);
+  });
+
+  it("does not guess a native identity for an ambiguous Codex turn", () => {
+    const turnId = "turn-ambiguous-native-identity";
+    const items = parseChatLines("codex", [
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", id: "legacy-one", role: "user",
+        content: [{ type: "input_text", text: "First prompt" }],
+        internal_chat_message_metadata_passthrough: { turn_id: turnId },
+      } }),
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", id: "legacy-two", role: "user",
+        content: [{ type: "input_text", text: "Second prompt" }],
+        internal_chat_message_metadata_passthrough: { turn_id: turnId },
+      } }),
+      JSON.stringify({ type: "event_msg", payload: {
+        type: "item_completed", turn_id: turnId,
+        item: { type: "UserMessage", id: "native-ambiguous", content: [{ type: "text", text: "First prompt" }] },
+      } }),
+    ]);
+
+    expect(items.map((item) => item.id)).toEqual(["legacy-one", "legacy-two"]);
+    expect(items.every((item) => item.kind !== "user" || !item.providerMessageId)).toBe(true);
+  });
+
+  it("keeps physically repeated legacy Codex rows ambiguous", () => {
+    const duplicate = JSON.stringify({ type: "response_item", payload: {
+      type: "message", id: "legacy-physically-repeated", role: "user",
+      content: [{ type: "input_text", text: "Repeated prompt" }],
+      internal_chat_message_metadata_passthrough: { turn_id: "turn-physically-repeated" },
+    } });
+    const native = JSON.stringify({ type: "event_msg", payload: {
+      type: "item_completed", turn_id: "turn-physically-repeated",
+      item: { type: "UserMessage", id: "native-physically-repeated", content: [{ type: "text", text: "Repeated prompt" }] },
+    } });
+
+    const items = parseChatLines("codex", [duplicate, duplicate, native]);
+
+    expect(items.map((item) => item.id)).toEqual([
+      "legacy-physically-repeated", "legacy-physically-repeated",
+    ]);
+    expect(items.every((item) => item.kind !== "user" || !item.providerMessageId)).toBe(true);
+  });
+
+  it("preserves an ambiguous native turn across Codex page cursors", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "agent-visor-codex-ambiguous-page-"));
+    const transcript = path.join(directory, "session.jsonl");
+    const session = {
+      id: "codex-ambiguous-page", provider: "codex", cwd: "/tmp", owner: "Codex", section: "history",
+      updatedAt: "2026-09-06T08:00:00.000Z", canOpenOwner: true, canEnterChat: true, chatPath: transcript,
+    } as const;
+    const turnId = "turn-ambiguous-page";
+    const first = JSON.stringify({ type: "response_item", payload: {
+      type: "message", id: "legacy-page-one", role: "user",
+      content: [{ type: "input_text", text: "First visible row" }],
+      internal_chat_message_metadata_passthrough: { turn_id: turnId },
+    } });
+    const second = JSON.stringify({ type: "response_item", payload: {
+      type: "message", id: "legacy-page-two", role: "user",
+      content: [{ type: "input_text", text: "Second visible row" }],
+      internal_chat_message_metadata_passthrough: { turn_id: turnId },
+    } });
+    const native = JSON.stringify({ type: "event_msg", payload: {
+      type: "item_completed", turn_id: turnId,
+      item: { type: "UserMessage", id: "native-ambiguous-page", content: [{ type: "text", text: "Second visible row" }] },
+    } });
+    const assistant = JSON.stringify({ type: "response_item", payload: {
+      type: "message", id: "assistant-ambiguous-page", role: "assistant",
+      content: [{ type: "output_text", text: "Observed both rows" }],
+    } });
+    try {
+      await writeFile(transcript, `${[first, second, native, assistant].join("\n")}\n`);
+
+      const latest = await readChatPage(session, undefined, 1);
+      expect(latest.items.map((item) => item.id)).toEqual(["legacy-page-two", "assistant-ambiguous-page"]);
+      expect(latest.items.find((item) => item.kind === "user")).not.toHaveProperty("providerMessageId");
+      expect(latest.nextBefore).toBeDefined();
+
+      const earlier = await readChatPage(session, latest.nextBefore, 1);
+      expect(earlier.items.map((item) => item.id)).toEqual(["legacy-page-one"]);
+      expect(earlier.items[0]).not.toHaveProperty("providerMessageId");
+      expect(earlier.items.some((item) => item.id === "native-ambiguous-page")).toBe(false);
+
+      const complete = await readChatPage(session);
+      expect(complete.items.map((item) => item.id)).toEqual([
+        "legacy-page-one", "legacy-page-two", "assistant-ambiguous-page",
+      ]);
+      expect(complete.items.filter((item) => item.kind === "user")
+        .every((item) => !item.providerMessageId)).toBe(true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("hides injected Codex environment context without hiding the real prompt", () => {
     const items = parseChatLines("codex", [
       JSON.stringify({ type: "response_item", payload: {
@@ -174,6 +357,37 @@ describe("provider Chat parsing", () => {
     ]);
 
     expect(items).toEqual([{ id: "prompt", kind: "user", text: "Proceed", images: [], timestamp: undefined }]);
+  });
+
+  it("filters the Codex turn-aborted harness row while preserving authored unknown content", () => {
+    const items = parseChatLines("codex", [
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", id: "generic-abort", role: "user",
+        content: [{ type: "input_text", text: "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>" }],
+        internal_chat_message_metadata_passthrough: {
+          turn_id: "turn-abort", content_item_kinds: ["generic.turn_aborted"],
+        },
+      } }),
+      JSON.stringify({ type: "event_msg", payload: {
+        type: "turn_aborted", turn_id: "turn-abort", reason: "interrupted",
+      } }),
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", id: "authored-unknown", role: "user",
+        content: [{ type: "input_text", text: "<turn_aborted>authored example</turn_aborted>" }],
+        internal_chat_message_metadata_passthrough: {
+          turn_id: "turn-authored", content_item_kinds: ["generic.unknown"],
+        },
+      } }),
+    ]);
+
+    expect(items).toHaveLength(2);
+    expect(items.find((item) => item.id === "generic-abort")).toBeUndefined();
+    expect(items.find((item) => item.id === "authored-unknown")).toMatchObject({
+      kind: "user", text: "<turn_aborted>authored example</turn_aborted>",
+    });
+    expect(items.find((item) => item.kind === "system")).toMatchObject({
+      category: "interrupted", text: "Request interrupted",
+    });
   });
 
   it("classifies a typed Codex subagent notification as labeled activity", () => {
@@ -739,6 +953,7 @@ describe("provider Chat parsing", () => {
     const base = {
       id: "session-1", provider: "pi" as const, cwd: "/tmp/project", owner: "Ghostty",
       section: "working" as const, updatedAt: "2026-08-23T00:00:00.000Z",
+      turnState: "working" as const,
       canOpenOwner: true, canEnterChat: true,
       controlTarget: {
         kind: "terminal" as const,
@@ -752,7 +967,14 @@ describe("provider Chat parsing", () => {
       },
     };
     expect(chatCapabilities({ ...base, messageTransport: "terminal" })).toMatchObject({
-      canSendText: true, canSendImages: true, canCancel: true, maxTextBytes: 65_536,
+      canSendText: false,
+      canSendImages: false,
+      canCancel: true,
+      unavailableReason: "turn_in_progress",
+      maxTextBytes: 65_536,
+    });
+    expect(chatCapabilities({ ...base, turnState: "ready", messageTransport: "terminal" })).toMatchObject({
+      canSendText: true, canSendImages: true, canCancel: false, maxTextBytes: 65_536,
     });
     expect(chatCapabilities({
       ...base,
@@ -768,7 +990,23 @@ describe("provider Chat parsing", () => {
           cwd: "/tmp/project",
         },
       },
-    })).toMatchObject({ canSendText: true, canSendImages: false, canCancel: true });
+    })).toMatchObject({ canSendText: false, canSendImages: false, canCancel: true, unavailableReason: "turn_in_progress" });
+    expect(chatCapabilities({
+      ...base,
+      turnState: "ready",
+      provider: "claude_code",
+      messageTransport: "terminal",
+      controlTarget: {
+        kind: "terminal",
+        target: {
+          application: "Terminal",
+          pid: 42,
+          processStartToken: processInstanceToken(42, "2026-08-23T00:00:00.000Z"),
+          tty: "ttys001",
+          cwd: "/tmp/project",
+        },
+      },
+    })).toMatchObject({ canSendText: true, canSendImages: false, canCancel: false });
     expect(chatCapabilities({ ...base, provider: "claude_code", messageTransport: "terminal" }))
       .toMatchObject({ maxTextBytes: 65_536 });
     expect(chatCapabilities({ ...base, provider: "cursor" })).toMatchObject({
@@ -780,7 +1018,8 @@ describe("provider Chat parsing", () => {
     const ended = {
       id: "ended-session", provider: "pi" as const, cwd: "/tmp/project", owner: "Ghostty",
       section: "history" as const, updatedAt: "2026-08-23T00:00:00.000Z",
-      canOpenOwner: true, canEnterChat: true, messageTransport: "terminal" as const,
+      canOpenOwner: true, canEnterChat: true, conversationState: "archived" as const,
+      turnState: "unknown" as const, messageTransport: "terminal" as const,
     };
     expect(chatCapabilities(ended)).toEqual({
       canSendText: false,
@@ -788,7 +1027,8 @@ describe("provider Chat parsing", () => {
       canCancel: false,
       canApprove: false,
       canAnswer: false,
-      readOnlyReason: "This session has ended. Chat history is read only.",
+      unavailableReason: "archived",
+      readOnlyReason: "This conversation is archived. Open it in the source app to restore it.",
     });
   });
 
@@ -807,6 +1047,7 @@ describe("provider Chat parsing", () => {
       canCancel: false,
       canApprove: false,
       canAnswer: false,
+      unavailableReason: "automation",
       readOnlyReason: "Automation sessions are read only.",
     });
   });
@@ -852,6 +1093,129 @@ describe("provider Chat parsing", () => {
         complete: false,
         sourceTimestamp: "2026-08-22T10:04:00.000Z",
       });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a Codex response/native identity pair atomic across page cursors", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "agent-visor-codex-native-page-"));
+    const transcript = path.join(directory, "session.jsonl");
+    const session = {
+      id: "codex-native-page", provider: "codex", cwd: "/tmp", owner: "Codex", section: "history",
+      updatedAt: "2026-09-06T07:20:57.248Z", canOpenOwner: true, canEnterChat: true, chatPath: transcript,
+    } as const;
+    const turns = [1, 2].flatMap((turn) => {
+      const turnId = `turn-page-${turn}`;
+      return [
+        JSON.stringify({ type: "response_item", timestamp: `2026-09-06T07:2${turn}:00.000Z`, payload: {
+          type: "message", id: `msg-page-${turn}`, role: "user",
+          content: [{ type: "input_text", text: `Prompt ${turn}` }],
+          internal_chat_message_metadata_passthrough: { turn_id: turnId, content_item_kinds: ["user.text"] },
+        } }),
+        JSON.stringify({ type: "event_msg", timestamp: `2026-09-06T07:2${turn}:00.000Z`, payload: {
+          type: "item_completed", turn_id: turnId,
+          item: { type: "UserMessage", id: `native-page-${turn}`, content: [{ type: "text", text: `Prompt ${turn}` }] },
+        } }),
+        JSON.stringify({ type: "response_item", timestamp: `2026-09-06T07:2${turn}:01.000Z`, payload: {
+          type: "message", id: `answer-page-${turn}`, role: "assistant",
+          content: [{ type: "output_text", text: `Answer ${turn}` }],
+        } }),
+      ];
+    });
+    try {
+      await writeFile(transcript, `${turns.join("\n")}\n`);
+
+      const latest = await readChatPage(session, undefined, 1);
+      expect(latest.items.map((item) => item.id)).toEqual(["msg-page-2", "answer-page-2"]);
+      expect(latest.items.find((item) => item.kind === "user")).toMatchObject({
+        providerMessageId: "native-page-2",
+      });
+      expect(latest.nextBefore).toBeDefined();
+
+      const earlier = await readChatPage(session, latest.nextBefore, 1);
+      expect(earlier.items.map((item) => item.id)).toEqual(["msg-page-1", "answer-page-1"]);
+      expect(earlier.items.find((item) => item.kind === "user")).toMatchObject({
+        providerMessageId: "native-page-1",
+      });
+      expect(earlier.items.some((item) => item.id === "native-page-1")).toBe(false);
+
+      const firstResponseOffset = Buffer.byteLength(`${turns[0]}\n`);
+      const beforeNativeEvent = await readChatPage(session, firstResponseOffset, 1);
+      expect(beforeNativeEvent.items).toHaveLength(1);
+      expect(beforeNativeEvent.items[0]).toMatchObject({
+        id: "msg-page-1", providerMessageId: "native-page-1",
+      });
+
+      const complete = await readChatPage(session);
+      expect(complete.items.map((item) => item.id)).toEqual([
+        "msg-page-1", "answer-page-1", "msg-page-2", "answer-page-2",
+      ]);
+      expect(complete.items.filter((item) => item.kind === "user")).toHaveLength(2);
+      expect(complete.items.some((item) => item.id.startsWith("native-page-"))).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("loads an oversized Codex response row before exposing its native event", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "agent-visor-codex-native-large-page-"));
+    const transcript = path.join(directory, "session.jsonl");
+    const session = {
+      id: "codex-native-large-page", provider: "codex", cwd: "/tmp", owner: "Codex", section: "history",
+      updatedAt: "2026-09-06T07:21:57.248Z", canOpenOwner: true, canEnterChat: true, chatPath: transcript,
+    } as const;
+    const oldTurn = [
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", id: "msg-large-old", role: "user",
+        content: [{ type: "input_text", text: "Old prompt" }],
+        internal_chat_message_metadata_passthrough: { turn_id: "turn-large-old" },
+      } }),
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", id: "answer-large-old", role: "assistant",
+        content: [{ type: "output_text", text: "Old answer" }],
+      } }),
+    ];
+    const oversizedImageData = Buffer.concat([
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+      Buffer.alloc(300_000),
+    ]).toString("base64");
+    const oversizedImage = `data:image/png;base64,${oversizedImageData}`;
+    const latestResponse = JSON.stringify({ type: "response_item", payload: {
+      type: "message", id: "msg-large-latest", role: "user",
+      content: [
+        { type: "input_text", text: "Inspect this oversized image." },
+        { type: "input_image", image_url: oversizedImage },
+      ],
+      internal_chat_message_metadata_passthrough: {
+        turn_id: "turn-large-latest", content_item_kinds: ["user.text", "user.image"],
+      },
+    } });
+    const latestEvent = JSON.stringify({ type: "event_msg", payload: {
+      type: "item_completed", turn_id: "turn-large-latest",
+      item: { type: "UserMessage", id: "native-large-latest", content: [
+        { type: "text", text: "Inspect this oversized image." },
+        { type: "local_image", path: "/tmp/oversized.png" },
+      ] },
+    } });
+    const latestAnswer = JSON.stringify({ type: "response_item", payload: {
+      type: "message", id: "answer-large-latest", role: "assistant",
+      content: [{ type: "output_text", text: "Large answer" }],
+    } });
+    try {
+      await writeFile(transcript, `${[...oldTurn, latestResponse, latestEvent, latestAnswer].join("\n")}\n`);
+
+      const latest = await readChatPage(session, undefined, 1);
+      expect(latest.items.map((item) => item.id)).toEqual(["msg-large-latest", "answer-large-latest"]);
+      expect(latest.items.find((item) => item.kind === "user")).toMatchObject({
+        providerMessageId: "native-large-latest",
+        images: [{ mimeType: "image/png", data: oversizedImageData }],
+      });
+      expect(latest.nextBefore).toBeDefined();
+
+      const earlier = await readChatPage(session, latest.nextBefore, 1);
+      expect(earlier.items.map((item) => item.id)).toEqual(["msg-large-old", "answer-large-old"]);
+      expect(earlier.items.some((item) => item.id === "native-large-latest")).toBe(false);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

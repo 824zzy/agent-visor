@@ -87,6 +87,7 @@ import {
 import { CONTENT_RAIL_INSET, contentRailStyle } from "./content-rail";
 import { createChatPalette, type ChatPalette, type Palette } from "./theme";
 import { chatCancellationView, type ChatCancellationView } from "./chat-cancellation";
+import { chatLifecycleView } from "./chat-lifecycle";
 import type { ChatDeliveryRecoveryRecord } from "./chat-delivery-recovery";
 import { chatRecoveryView } from "./chat-recovery-presentation";
 import {
@@ -112,6 +113,13 @@ type ChatTimelineRow =
   | { type: "group-work-header"; id: string; turnID: string; count: number; live: boolean; expanded: boolean }
   | { type: "group-work-item"; id: string; turnID: string; item: ChatItem }
   | { type: "group-answer"; id: string; turnID: string; item: ChatItem };
+
+const hiddenCancellationView: ChatCancellationView = {
+  visible: false,
+  enabled: false,
+  label: "Stop",
+  accessibilityLabel: "Stop agent",
+};
 
 type ChatPrependAnchor = {
   sessionID: string;
@@ -144,10 +152,11 @@ export function Chat({
   session: SessionSummary;
   visibility: ChatVisibility;
 }) {
-  const chat = useChat(session.id, session.section);
+  const chat = useChat(session.id);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const chatSurface = useMemo(() => createChatPalette(palette), [palette]);
   const styles = useMemo(() => createStyles(chatSurface, contentScale), [chatSurface, contentScale]);
+  const lifecycle = chatLifecycleView(session, chat.page);
   const canonicalItems = chat.page?.items ?? [];
   const canonicalItemCount = useRef(canonicalItems.length);
   canonicalItemCount.current = canonicalItems.length;
@@ -487,6 +496,7 @@ export function Chat({
 
   useEffect(() => {
     const keyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       const command = browserCommand(event);
       if (command?.type === "scale") {
         event.preventDefault();
@@ -510,7 +520,8 @@ export function Chat({
           <Pressable accessibilityLabel="Back to Sessions" onPress={onBack} style={styles.backButton}>
             <Text style={styles.link}>‹ Back to Sessions</Text>
           </Pressable>
-          <View accessibilityLabel={`${sectionLabel(session.section)} status`} style={[styles.status, { backgroundColor: sectionColor(session.section, palette) }]} />
+          <View accessibilityLabel={`${lifecycle.statusLabel} status`} style={[styles.status, { backgroundColor: lifecycleColor(lifecycle.statusTone, palette) }]} />
+          <Text accessibilityLabel={`Conversation status: ${lifecycle.statusLabel}`} style={styles.statusLabel}>{lifecycle.statusLabel}</Text>
           <Text numberOfLines={1} style={styles.headerTitle}>{session.title}</Text>
           {session.canOpenOwner ? (
             <Pressable accessibilityLabel={`Open in ${session.owner}`} onPress={onOpenOwner} style={styles.headerAction}>
@@ -531,9 +542,9 @@ export function Chat({
         </View>
       ) : null}
 
-      {chat.status === "loading" ? (
+      {chat.status === "loading" && !chat.page ? (
         <Centered text="Loading Chat history…" styles={styles} />
-      ) : chat.status === "failed" ? (
+      ) : chat.status === "failed" && !chat.page ? (
         <Centered text="Unable to load Chat history" styles={styles} />
       ) : (
         <>
@@ -672,47 +683,60 @@ export function Chat({
       ) : null}
       {(() => {
         const cancellation = chatCancellationView(
-          session.section,
           chat.canCancelForActiveDelivery ?? false,
           chat.cancel?.status,
         );
         const pendingActions = chat.page?.pendingActions
           ?? (chat.page?.pendingAction ? [chat.page.pendingAction] : []);
-        return pendingActions.length > 0 ? (
-        <View style={styles.actionSurface}>
-          <View accessibilityLabel="Chat action rail" style={styles.actionRail}>
-            {pendingActions.map((action, index) => (
-              <PendingAction
-                action={action}
-                canRespond={action.type === "approval"
-                  ? chat.page?.capabilities.canApprove === true
-                  : chat.page?.capabilities.canAnswer === true}
-                cancellation={index === 0 ? cancellation : undefined}
-                onCancel={chat.cancelChat}
-                key={action.approvalId ?? action.toolUseId}
-                onRespond={chat.respond}
-                source={session.source}
-                styles={styles}
-              />
-            ))}
-          </View>
-        </View>
-        ) : chat.page && chat.page.capabilities.canSendText === false
-          && chat.page.capabilities.canSendImages === false ? (
-          <ReadOnlyNotice reason={chat.page.capabilities.readOnlyReason} styles={styles} />
-        ) : chat.page ? (
+        const canSendInLifecycle = lifecycle.canEditDraft
+          && lifecycle.turn === "ready"
+          && lifecycle.route === "available"
+          && pendingActions.length === 0;
+        return (
+          <>
+          {pendingActions.length > 0 ? (
+            <View style={styles.actionSurface}>
+              <View accessibilityLabel="Chat action rail" style={styles.actionRail}>
+                {pendingActions.map((action, index) => (
+                  <PendingAction
+                    action={action}
+                    canRespond={action.type === "approval"
+                      ? chat.page?.capabilities.canApprove === true
+                      : chat.page?.capabilities.canAnswer === true}
+                    cancellation={index === 0 ? cancellation : undefined}
+                    onCancel={chat.cancelChat}
+                    key={action.approvalId ?? action.toolUseId}
+                    onRespond={chat.respond}
+                    source={session.source}
+                    styles={styles}
+                  />
+                ))}
+              </View>
+            </View>
+          ) : null}
+          {pendingActions.length === 0 && chat.page ? (
+          <>
+          {lifecycle.notice ? (
+            <ReadOnlyNotice
+              canRetry={lifecycle.canRetry}
+              onRetry={chat.retryAvailability}
+              reason={lifecycle.notice}
+              styles={styles}
+            />
+          ) : null}
           <Composer
             key={session.id}
-            canSendImages={chat.page.capabilities.canSendImages}
-            canSendText={chat.page.capabilities.canSendText}
+            canEditDraft={lifecycle.canEditDraft}
+            canSendImages={canSendInLifecycle && chat.page.capabilities.canSendImages}
+            canSendText={canSendInLifecycle && chat.page.capabilities.canSendText}
             chatSettings={chat.page.chatSettings}
             contentScale={contentScale}
             maxTextBytes={chat.page.capabilities.maxTextBytes}
             metadata={chat.page.metadata}
             onDraftChange={chat.noteComposerDraft}
             onCancel={chat.cancelChat}
-            cancellation={cancellation}
-            canCyclePermissionMode={chat.page.capabilities.canCyclePermissionMode === true}
+            cancellation={pendingActions.length === 0 ? cancellation : hiddenCancellationView}
+            canCyclePermissionMode={canSendInLifecycle && chat.page.capabilities.canCyclePermissionMode === true}
             onCycleMode={chat.cyclePermissionMode}
             cycleModeDisabled={chat.permissionModeCycle !== undefined}
             onResize={handleComposerResize}
@@ -728,7 +752,10 @@ export function Chat({
             slashCommandsTruncated={chat.slashCommandsTruncated}
             styles={styles}
           />
-        ) : null;
+          </>
+          ) : null}
+          </>
+        );
       })()}
     </View>
   );
@@ -1485,19 +1512,31 @@ function QuestionAction({
   );
 }
 
-function ReadOnlyNotice({ reason, styles }: { reason?: string; styles: ChatStyles }) {
+function ReadOnlyNotice({
+  canRetry,
+  onRetry,
+  reason,
+  styles,
+}: {
+  canRetry: boolean;
+  onRetry(): boolean;
+  reason?: string;
+  styles: ChatStyles;
+}) {
   return (
-    <View accessibilityLabel="Chat read-only notice" style={styles.readOnlySurface}>
+    <View accessibilityLabel="Chat availability notice" style={styles.readOnlySurface}>
       <View style={styles.readOnlyRail}>
         <Text accessibilityLabel={reason ?? "This conversation is read only."} style={styles.readOnlyNotice}>
           {reason ?? "This conversation is read only."}
         </Text>
+        {canRetry ? <ActionButton label="Retry availability" onPress={() => { onRetry(); }} styles={styles} /> : null}
       </View>
     </View>
   );
 }
 
 export function Composer({
+  canEditDraft,
   canSendImages,
   canSendText,
   canCyclePermissionMode,
@@ -1523,6 +1562,7 @@ export function Composer({
   slashCommandsTruncated,
   styles,
 }: {
+  canEditDraft: boolean;
   canSendImages: boolean;
   canSendText: boolean;
   canCyclePermissionMode: boolean;
@@ -1886,10 +1926,10 @@ export function Composer({
   }, [attachmentOperations, effectiveCanSendImages, inputId, maxTextBytes, query, sessionId, slashCommandsError, slashCommandsTruncated, slashOpen, slashSuggestions.length]);
 
   useEffect(() => {
-    if (!canSendText || typeof document === "undefined") return;
+    if (!canEditDraft || typeof document === "undefined") return;
     const frame = requestAnimationFrame(() => document.getElementById(inputId)?.focus());
     return () => cancelAnimationFrame(frame);
-  }, [canSendText, inputId]);
+  }, [canEditDraft, inputId]);
 
   const addPickedImages = () => {
     if (!effectiveCanSendImages) return;
@@ -1897,7 +1937,7 @@ export function Composer({
     void pickImages().then((files) => appendFiles(files, operation));
   };
   const applySettingPatch = (patch: ChatSettingsPatch): boolean => {
-    if (!chatSettings?.canChange) return false;
+    if (!canEditDraft || !chatSettings?.canChange) return false;
     const nextSettings = { ...(draftRef.current.settings ?? {}), ...patch };
     commitDraft((current) => ({ ...current, settings: nextSettings }));
     const nextImageMessage = draftRef.current.images.length
@@ -1912,10 +1952,6 @@ export function Composer({
     });
     return true;
   };
-
-  if (!canSendText && !canSendImages) {
-    return null;
-  }
 
   const submission = draftSubmission(draft, maxTextBytes);
   const canSendDraft = Boolean(submission
@@ -1980,7 +2016,7 @@ export function Composer({
           accessibilityHint={maxTextBytes
             ? `Maximum ${maxTextBytes.toLocaleString()} UTF-8 bytes for this terminal`
             : undefined}
-          editable={canSendText}
+          editable={canEditDraft}
           multiline
           maxLength={COMPOSER_MAX_TEXT_LENGTH}
           nativeID={inputId}
@@ -1996,7 +2032,7 @@ export function Composer({
             setValidationErrors([]);
           }}
           onLayout={updateMeasuredHeight}
-          placeholder={canSendText ? "Message agent…" : "Text messages are unavailable"}
+          placeholder={canEditDraft ? "Message agent…" : "Text messages are unavailable"}
           placeholderTextColor={styles.composerPlaceholder.color}
           scrollEnabled={layout.scrollable}
           style={[styles.composerInput, {
@@ -2249,12 +2285,17 @@ function workCountLabel(count: number): string {
   return `${count} work item${count === 1 ? "" : "s"}`;
 }
 
-function sectionLabel(section: SessionSummary["section"]): string {
-  return { needs_you: "Needs you", ready: "Ready", working: "In progress", history: "History" }[section];
-}
-
-function sectionColor(section: SessionSummary["section"], palette: Palette): string {
-  return { needs_you: palette.attention, ready: palette.ready, working: palette.working, history: palette.history }[section];
+function lifecycleColor(
+  tone: ReturnType<typeof chatLifecycleView>["statusTone"],
+  palette: Palette,
+): string {
+  return {
+    attention: palette.attention,
+    ready: palette.ready,
+    working: palette.working,
+    unavailable: palette.history,
+    archived: palette.history,
+  }[tone];
 }
 
 type ChatStyles = ReturnType<typeof createStyles>;
@@ -2266,6 +2307,7 @@ function createStyles(palette: ChatPalette, scale: number) {
     headerRail: { ...contentRailStyle(), alignItems: "center", flexDirection: "row", minHeight: 46 },
     backButton: { justifyContent: "center", minHeight: 44, paddingRight: 12 },
     status: { borderRadius: 4, height: 8, marginRight: 8, width: 8 },
+    statusLabel: { color: palette.muted, fontSize: font(11), marginRight: 8 },
     headerTitle: { color: palette.foreground, flex: 1, fontSize: font(14), fontWeight: "600" },
     headerAction: { justifyContent: "center", minHeight: 44, paddingHorizontal: 12 },
     detailsButton: { alignItems: "center", justifyContent: "center", minHeight: 44, width: 44 },

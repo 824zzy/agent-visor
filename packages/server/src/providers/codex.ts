@@ -31,6 +31,13 @@ where archived = 0
 order by updated_at desc
 limit 200`;
 
+const threadByIDSQL = (id: string): string => `
+select id, rollout_path, cwd, substr(title, 1, 500) as title,
+       updated_at, archived, source
+from threads
+where id = '${id.replaceAll("'", "''")}'
+limit 1`;
+
 const codexSettingsCatalogTtlMs = 60_000;
 const maxSettingsCatalogCWDs = 64;
 
@@ -104,6 +111,50 @@ export class CodexProvider implements ProviderAdapter {
     return results;
   }
 
+  /**
+   * Opening a chat is an exact lookup. It must not inherit discover()'s
+   * bounded ambient freshness window, or an older unarchived conversation
+   * would appear to have ended merely because it was quiet.
+   */
+  async resolve(sessionId: string): Promise<DiscoveredProviderSession | undefined> {
+    const database = await codexDatabase(this.environment);
+    if (!database || !sessionId.trim()) return undefined;
+    const thread = rows(await this.environment.sqlite(database, threadByIDSQL(sessionId)))[0];
+    if (!thread || thread.id !== sessionId) return undefined;
+    // A database row alone is not enough to prove that the opened transcript
+    // still exists. Discovery applies the same evidence requirement.
+    if (!await this.environment.stamp(thread.rolloutPath)) return undefined;
+    const indexTitles = await codexIndexTitles(this.environment);
+    const modelCatalog = await codexModelCatalog(this.environment, this.modelCatalogCache);
+    const processes = await this.environment.processes();
+    const cliCandidates = thread.source === "cli"
+      ? await Promise.all(processes
+        .filter((process) => process.tty
+          && path.basename(process.command) === "codex"
+          && !/(?:app|mcp|exec)-server/.test(process.arguments))
+        .map(async (process) => ({ process, cwd: await this.environment.cwd(process.pid) })))
+      : [];
+    const cliProcess = cliCandidates.find(({ cwd }) => cwd === thread.cwd)?.process;
+    const terminalTarget = cliProcess
+      ? terminalTargetForProcess(
+        cliProcess,
+        thread.cwd,
+        processes,
+        processInstanceToken(
+          cliProcess.pid,
+          await this.environment.processStartedAt(cliProcess.pid),
+        ),
+      )
+      : undefined;
+    return this.session(
+      thread,
+      indexTitles,
+      cliProcess ? ownerForProcess(cliProcess.pid, processes) : "Codex",
+      modelCatalog,
+      terminalTarget,
+    );
+  }
+
   private async session(
     thread: CodexRow,
     indexTitles: Map<string, string>,
@@ -116,14 +167,15 @@ export class CodexProvider implements ProviderAdapter {
       : thread.source === "cli" ? "terminal" as const : "interactive" as const;
     const storedTitle = indexTitles.get(thread.id) || thread.title;
     const title = storedTitle || await codexRolloutTitle(this.environment, thread.rolloutPath);
+    const rolloutStamp = await this.environment.stamp(thread.rolloutPath);
     const codexLifecycle = owner === "Codex" && !terminalTarget
       ? await this.lifecycleReader.read(this.environment, thread.id, thread.rolloutPath)
       : undefined;
-    // Ready attention and the recent-session window are separate policies.
-    // A completed task becomes History after 30 minutes, but is still a shortcut.
-    const section = codexLifecycle?.phase === "ready"
-      && this.environment.now().valueOf() - Date.parse(codexLifecycle.observedAt) > 30 * 60_000
-      ? "history" : codexLifecycle?.phase ?? "history";
+    // A completed turn remains a usable conversation. Ambient list freshness
+    // is an attention policy and must never turn an open thread into History.
+    const section = thread.archived
+      ? "history"
+      : codexLifecycle?.phase ?? "history";
     return {
       id: thread.id,
       provider: "codex",
@@ -136,6 +188,12 @@ export class CodexProvider implements ProviderAdapter {
       section,
       updatedAt: codexLifecycle?.observedAt ?? iso(thread.updatedAt * 1_000),
       ...(codexLifecycle ? { codexLifecycle } : {}),
+      conversationState: thread.archived ? "archived" : "open",
+      ...(codexLifecycle ? { turnState: codexLifecycle.phase === "working" ? "working" as const : "ready" as const } : {}),
+      ...(codexLifecycle?.turnId ? { turnId: codexLifecycle.turnId } : {}),
+      ...(rolloutStamp
+        ? { transcriptRevision: `${rolloutStamp.modifiedAt.valueOf()}:${rolloutStamp.size}` }
+        : {}),
       canOpenOwner: true,
       // Desktop discovery already requires an existing transcript. Inactivity
       // does not prevent reading it; send/cancel authority is checked separately.
@@ -143,6 +201,9 @@ export class CodexProvider implements ProviderAdapter {
       sessionClass,
       chatPath: thread.rolloutPath,
       messageTransport: "codex_app_server",
+      ...(owner === "Codex" && !terminalTarget
+        ? { routeState: "available" as const, routeOwnership: "unverified" as const }
+        : {}),
       ...(modelCatalog ? { modelCatalog } : {}),
       controlTarget: terminalTarget
         ? { kind: "terminal", target: terminalTarget }

@@ -101,6 +101,7 @@ export class PiProvider implements ProviderAdapter {
     });
     return Promise.all(selected.map(async (file): Promise<DiscoveredProviderSession> => {
       const process = matched.get(file.id);
+      const runtime = this.runtimeBySession.get(file.id);
       const title = await piTranscriptTitle(this.environment, file, this.nameCache);
       const terminalTarget = process
         ? terminalTargetForProcess(
@@ -125,6 +126,14 @@ export class PiProvider implements ProviderAdapter {
         canOpenOwner: process !== undefined,
         canEnterChat: true,
         sessionClass: process ? "terminal" : "interactive",
+        conversationState: process ? "open" : "unknown",
+        ...(process && runtime
+          ? {
+            turnState: runtime.isIdle === true || runtime.status.trim().toLowerCase() === "idle"
+              ? "ready" as const
+              : runtime.event === "SessionEnd" ? "unknown" as const : "working" as const,
+          }
+          : {}),
         chatPath: file.path,
         ...(modelCatalog ? { modelCatalog } : {}),
         ...(terminalTarget ? {

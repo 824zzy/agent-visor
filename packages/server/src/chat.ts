@@ -1,9 +1,8 @@
-import { open, stat } from "node:fs/promises";
+import { open, stat, type FileHandle } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import {
   CHAT_IMAGE_MAX_BASE64_CHARS,
   CHAT_IMAGE_SUPPORTED_MIME_TYPES,
-  NATIVE_HELPER_MAX_TEXT_BYTES,
   chatImageBase64Bytes,
   chatImageMimeForBytes,
   type ChatCapabilities,
@@ -17,10 +16,32 @@ import { summaryWork } from "./machine.js";
 import { normalizeCodexAssistantText } from "./codex-assistant-text.js";
 import { terminalOutputText } from "./terminal-output-text.js";
 import type { DiscoveredProviderSession, ProviderID } from "./sessions.js";
-import { isVerifiableProcessInstanceToken } from "./providers/shared.js";
+import { chatCapabilitiesForState } from "./session-state.js";
 
 const pageChunkBytes = 256 * 1_024;
 const maxPageBytes = 16 * 1_024 * 1_024;
+
+type CodexNativeUserRecord = {
+  turnId: string;
+  id: string;
+  clientId?: string;
+  content: Record<string, unknown>[];
+};
+
+type CodexTurnParseMode = "native" | "paired" | "legacy";
+
+type CodexParseContext = {
+  nativeUsersByTurnId: Map<string, CodexNativeUserRecord[]>;
+  modeByTurnId: Map<string, CodexTurnParseMode>;
+  consumedNativeUserIds: Set<string>;
+};
+
+type ChatParseOptions = {
+  /** Native Codex identity records adjacent to a paginated read window. */
+  codexIdentityLines?: string[];
+  /** Preserve turn classification while reparsing a selected page slice. */
+  codexContext?: CodexParseContext;
+};
 
 export async function readChatPage(
   session: DiscoveredProviderSession,
@@ -96,76 +117,9 @@ export function chatSettingsForSession(
 }
 
 export function chatCapabilities(session: DiscoveredProviderSession): ChatCapabilities {
-  if (session.sessionClass === "automation") {
-    return {
-      canSendText: false,
-      canSendImages: false,
-      canCancel: false,
-      canApprove: false,
-      canAnswer: false,
-      readOnlyReason: "Automation sessions are read only.",
-    };
-  }
-  if (session.section === "history") {
-    return {
-      canSendText: false,
-      canSendImages: false,
-      canCancel: false,
-      canApprove: false,
-      canAnswer: false,
-      readOnlyReason: "This session has ended. Chat history is read only.",
-    };
-  }
-  const terminalTransport = session.messageTransport === "terminal"
-    && (session.provider === "claude_code" || session.provider === "pi")
-    && session.controlTarget?.kind === "terminal";
-  const verifiedTerminalTransport = terminalTransport
-    && session.controlTarget?.kind === "terminal"
-    && isVerifiableProcessInstanceToken(
-      session.controlTarget.target.pid,
-      session.controlTarget.target.processStartToken,
-    );
-  const codexTransport = session.messageTransport === "codex_app_server"
-    && session.provider === "codex";
-  if (session.section === "working" && (verifiedTerminalTransport || codexTransport)) {
-    return {
-      canSendText: true,
-      canSendImages: (session.provider === "claude_code"
-        && session.controlTarget?.kind === "terminal"
-        && session.controlTarget.target.application !== "Terminal")
-        || session.provider === "pi"
-        || session.messageTransport === "codex_app_server",
-      canCancel: session.section === "working"
-        && ((session.messageTransport === "codex_app_server" && session.provider === "codex")
-          || (session.messageTransport === "terminal"
-            && session.controlTarget?.kind === "terminal"
-            && (session.provider === "claude_code" || session.provider === "pi"))),
-      canApprove: false,
-      canAnswer: false,
-      ...(session.provider === "claude_code" && verifiedTerminalTransport
-        ? { canCyclePermissionMode: true } : {}),
-      ...(verifiedTerminalTransport ? { maxTextBytes: NATIVE_HELPER_MAX_TEXT_BYTES } : {}),
-    };
-  }
-  const readOnlyReason = terminalTransport && !verifiedTerminalTransport
-    ? "The terminal process identity is unavailable. Chat is read only until it can be verified."
-    : session.owner === "Zed"
-    ? "Continue in Zed. Zed-hosted Chat is read only."
-    : session.provider === "cursor"
-      ? "Continue in Cursor. Cursor Chat is read only."
-      : !session.canOpenOwner
-        ? "Chat history is read only."
-        : session.section !== "working"
-          ? "This session is not actively receiving messages."
-        : "Continue in the source app while native message transport is unavailable.";
-  return {
-    canSendText: false,
-    canSendImages: false,
-    canCancel: false,
-    canApprove: false,
-    canAnswer: false,
-    readOnlyReason,
-  };
+  return chatCapabilitiesForState(session, {
+    nativeHelperAvailable: true,
+  });
 }
 
 async function readLinesBackward(
@@ -180,37 +134,79 @@ async function readLinesBackward(
   return summaryWork.run(async () => {
     const file = await open(path, "r");
     try {
+      const codexIdentityLines = provider === "codex" && end < fileSize
+        ? await readCodexIdentityLines(file, end, fileSize)
+        : [];
+      const parse = (
+        candidateLines: string[],
+        codexContext?: CodexParseContext,
+      ) => parseChatLinesDetailed(provider, candidateLines, {
+        codexIdentityLines,
+        ...(codexContext ? { codexContext } : {}),
+      });
       let start = end;
       let buffer = Buffer.alloc(0);
       let lines: Array<{ text: string; start: number }> = [];
       let items: ChatItem[] = [];
       let parseErrors = 0;
       while (start > 0 && end - start < maxPageBytes
-        && (items.length < limit || items[0]?.kind !== "user")) {
+        && (items.length < limit || items[0]?.kind !== "user"
+          || codexNativeEventAtPageStart(provider, lines))) {
         const nextStart = Math.max(0, start - pageChunkBytes);
         const chunk = Buffer.alloc(start - nextStart);
         await file.read(chunk, 0, chunk.length, nextStart);
         buffer = Buffer.concat([chunk, buffer]);
         start = nextStart;
         lines = completeLines(buffer, start, end < fileSize);
-        items = parseChatLines(provider, lines.map((line) => line.text));
+        items = parse(lines.map((line) => line.text)).items;
       }
 
+      const codexWindowContext = provider === "codex"
+        ? codexParseContext(lines.map((line) => line.text), codexIdentityLines)
+        : undefined;
+      const parseSelection = (candidateLines: string[]) => parseChatLinesDetailed(provider, candidateLines, {
+        codexIdentityLines,
+        ...(codexWindowContext ? { codexContext: cloneCodexParseContext(codexWindowContext) } : {}),
+      });
       let selectedLine = lines.length;
       let itemCount = 0;
       while (selectedLine > 0 && itemCount < limit) {
         selectedLine -= 1;
-        itemCount += parseChatLines(provider, [lines[selectedLine]!.text]).length;
+        itemCount += parseSelection([lines[selectedLine]!.text]).items.length;
       }
       while (selectedLine > 0
-        && !parseChatLines(provider, [lines[selectedLine]!.text]).some((item) => item.kind === "user")) {
+        && !parseSelection([lines[selectedLine]!.text]).items.some((item) => item.kind === "user")) {
         selectedLine -= 1;
+      }
+      let deferNativePrefix = false;
+      if (provider === "codex") {
+        const selectedBeforePair = selectedLine;
+        const pairedStart = codexPairedResponseStart(
+          lines, selectedLine, codexIdentityLines, codexWindowContext,
+        );
+        selectedLine = pairedStart;
+        // A provider row larger than the bounded page read can leave its
+        // native event as the first complete line. Keep that event out of the
+        // current page so the next cursor lands before the legacy row, where
+        // the exact turn pair can be reconciled without a duplicate.
+        deferNativePrefix = end - start >= maxPageBytes
+          && codexNativeEventAtPageStart(provider, lines)
+          && pairedStart === selectedBeforePair;
       }
       const metadata = includeMetadata
         ? parseChatMetadata(provider, lines.map((line) => line.text), modelCatalog)
         : undefined;
-      const parsed = parseChatLinesDetailed(provider, lines.slice(selectedLine).map((line) => line.text));
+      const parsed = parse(lines.slice(selectedLine).map((line) => line.text), codexWindowContext);
       items = parsed.items.slice(-1_000);
+      if (deferNativePrefix) {
+        const native = codexNativeUserAtLine(lines[0]?.text);
+        if (native) {
+          items = items.filter((item) => {
+            if (item.kind !== "user") return true;
+            return item.id !== native.id || item.providerMessageId !== native.id;
+          });
+        }
+      }
       parseErrors = parsed.parseErrors;
       return {
         items,
@@ -222,6 +218,33 @@ async function readLinesBackward(
       await file.close();
     }
   });
+}
+
+function codexNativeEventAtPageStart(
+  provider: ProviderID,
+  lines: Array<{ text: string; start: number }>,
+): boolean {
+  if (provider !== "codex" || lines.length === 0) return false;
+  return codexNativeUserAtLine(lines[0]!.text) !== undefined;
+}
+
+function codexNativeUserAtLine(line: string | undefined): CodexNativeUserRecord | undefined {
+  if (!line) return undefined;
+  let value: unknown;
+  try { value = JSON.parse(line); } catch { return undefined; }
+  return record(value) ? codexNativeUserRecord(value) : undefined;
+}
+
+async function readCodexIdentityLines(
+  file: FileHandle,
+  start: number,
+  fileSize: number,
+): Promise<string[]> {
+  if (start >= fileSize) return [];
+  const end = Math.min(fileSize, start + pageChunkBytes);
+  const chunk = Buffer.alloc(end - start);
+  await file.read(chunk, 0, chunk.length, start);
+  return chunk.toString("utf8").split("\n").filter((line) => line.length > 0);
 }
 
 function completeLines(buffer: Buffer, absoluteStart: number, endsBeforeEOF: boolean): Array<{ text: string; start: number }> {
@@ -260,23 +283,31 @@ function latestTimestamp(items: ChatItem[]): string | undefined {
   return undefined;
 }
 
-export function parseChatLines(provider: ProviderID, lines: string[]): ChatItem[] {
-  return parseChatLinesDetailed(provider, lines).items;
+export function parseChatLines(
+  provider: ProviderID,
+  lines: string[],
+  options: ChatParseOptions = {},
+): ChatItem[] {
+  return parseChatLinesDetailed(provider, lines, options).items;
 }
 
 export function parseChatLinesDetailed(
   provider: ProviderID,
   lines: string[],
+  options: ChatParseOptions = {},
 ): { items: ChatItem[]; parseErrors: number } {
   const items: ChatItem[] = [];
   const tools = new Map<string, number>();
+  const codexContext = provider === "codex"
+    ? options.codexContext ?? codexParseContext(lines, options.codexIdentityLines ?? [])
+    : undefined;
   let parseErrors = 0;
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     let value: unknown;
     try { value = JSON.parse(lines[lineIndex]!); } catch { parseErrors += 1; continue; }
     if (!record(value)) continue;
     if (provider === "claude_code") parseClaude(value, lineIndex, items, tools);
-    if (provider === "codex") parseCodex(value, lineIndex, items, tools);
+    if (provider === "codex") parseCodex(value, lineIndex, items, tools, codexContext);
     if (provider === "pi") parsePi(value, lineIndex, items, tools);
     if (provider === "cursor") parseCursor(value, lineIndex, items, tools);
   }
@@ -284,6 +315,133 @@ export function parseChatLinesDetailed(
     items: items.filter((item) => item.kind !== "user" || item.text.length > 0 || item.images.length > 0),
     parseErrors,
   };
+}
+
+function codexParseContext(
+  lines: string[],
+  identityLines: string[],
+): CodexParseContext {
+  const nativeUsersByTurnId = new Map<string, CodexNativeUserRecord[]>();
+  const nativeIDs = new Set<string>();
+  for (const line of [...lines, ...identityLines]) {
+    let value: unknown;
+    try { value = JSON.parse(line); } catch { continue; }
+    if (!record(value)) continue;
+    const native = codexNativeUserRecord(value);
+    if (!native || nativeIDs.has(native.id)) continue;
+    nativeIDs.add(native.id);
+    const users = nativeUsersByTurnId.get(native.turnId) ?? [];
+    users.push(native);
+    nativeUsersByTurnId.set(native.turnId, users);
+  }
+
+  // Only count legacy rows that the existing parser would render as user
+  // content. Internal context and delegation rows remain available to their
+  // existing classifiers and do not consume a native user identity.
+  const legacyVisibleUsersByTurnId = new Map<string, number>();
+  const legacyLines = [...lines, ...identityLines];
+  for (let lineIndex = 0; lineIndex < legacyLines.length; lineIndex += 1) {
+    let value: unknown;
+    try { value = JSON.parse(legacyLines[lineIndex]!); } catch { continue; }
+    if (!record(value)) continue;
+    const payload = record(value.payload) ? value.payload : undefined;
+    if (value.type !== "response_item" || !payload || payload.type !== "message"
+      || payload.role !== "user") continue;
+    const turnId = codexResponseTurnId(payload);
+    if (!turnId) continue;
+    const legacyItems: ChatItem[] = [];
+    parseCodex(value, lineIndex, legacyItems, new Map());
+    if (!legacyItems.some((item) => item.kind === "user")) continue;
+    legacyVisibleUsersByTurnId.set(
+      turnId,
+      (legacyVisibleUsersByTurnId.get(turnId) ?? 0) + 1,
+    );
+  }
+
+  const modeByTurnId = new Map<string, CodexTurnParseMode>();
+  for (const [turnId, nativeUsers] of nativeUsersByTurnId) {
+    const legacyCount = legacyVisibleUsersByTurnId.get(turnId) ?? 0;
+    // A single native item and a single visible legacy row form an explicit
+    // turn boundary. Any mismatch is ambiguous, so keep the legacy parser's
+    // complete output and ignore native duplicates for that turn.
+    const mode: CodexTurnParseMode = nativeUsers.length === 1 && legacyCount === 1
+      ? "paired"
+      : legacyCount === 0 ? "native" : "legacy";
+    modeByTurnId.set(turnId, mode);
+  }
+  return {
+    nativeUsersByTurnId,
+    modeByTurnId,
+    consumedNativeUserIds: new Set(),
+  };
+}
+
+function cloneCodexParseContext(context: CodexParseContext): CodexParseContext {
+  return {
+    nativeUsersByTurnId: context.nativeUsersByTurnId,
+    modeByTurnId: context.modeByTurnId,
+    consumedNativeUserIds: new Set(),
+  };
+}
+
+function codexNativeUserRecord(
+  value: Record<string, unknown>,
+): CodexNativeUserRecord | undefined {
+  if (value.type !== "event_msg") return undefined;
+  const payload = record(value.payload) ? value.payload : undefined;
+  if (!payload || payload.type !== "item_completed") return undefined;
+  const item = record(payload.item) ? payload.item : undefined;
+  if (!item || item.type !== "UserMessage") return undefined;
+  const turnId = text(payload.turn_id);
+  const id = text(item.id);
+  if (!turnId || !id) return undefined;
+  const content = Array.isArray(item.content)
+    ? item.content.filter(record)
+    : [];
+  return {
+    turnId,
+    id,
+    ...(text(item.client_id) ? { clientId: text(item.client_id) } : {}),
+    content,
+  };
+}
+
+function codexResponseTurnId(payload: Record<string, unknown>): string | undefined {
+  const metadata = record(payload.internal_chat_message_metadata_passthrough)
+    ? payload.internal_chat_message_metadata_passthrough
+    : undefined;
+  return text(metadata?.turn_id) || text(payload.turn_id);
+}
+
+function codexPairedResponseStart(
+  lines: Array<{ text: string; start: number }>,
+  selectedLine: number,
+  identityLines: string[],
+  context?: CodexParseContext,
+): number {
+  if (selectedLine >= lines.length) return selectedLine;
+  let value: unknown;
+  try { value = JSON.parse(lines[selectedLine]!.text); } catch { return selectedLine; }
+  if (!record(value)) return selectedLine;
+  const native = codexNativeUserRecord(value);
+  if (!native) return selectedLine;
+  const parseContext = context ?? codexParseContext(lines.map((line) => line.text), identityLines);
+  if (parseContext.modeByTurnId.get(native.turnId) !== "paired") return selectedLine;
+  let candidate = -1;
+  for (let index = 0; index < selectedLine; index += 1) {
+    let prior: unknown;
+    try { prior = JSON.parse(lines[index]!.text); } catch { continue; }
+    if (!record(prior)) continue;
+    const payload = record(prior.payload) ? prior.payload : undefined;
+    if (prior.type !== "response_item" || !payload || payload.type !== "message"
+      || payload.role !== "user" || codexResponseTurnId(payload) !== native.turnId) continue;
+    const legacyItems: ChatItem[] = [];
+    parseCodex(prior, index, legacyItems, new Map());
+    if (!legacyItems.some((item) => item.kind === "user")) continue;
+    if (candidate >= 0) return selectedLine;
+    candidate = index;
+  }
+  return candidate >= 0 ? candidate : selectedLine;
 }
 
 export type ChatModelCatalog = Record<string, {
@@ -581,6 +739,7 @@ function parseCodex(
   lineIndex: number,
   items: ChatItem[],
   tools: Map<string, number>,
+  context?: CodexParseContext,
 ): void {
   const payload = record(value.payload) ? value.payload : undefined;
   if (!payload) return;
@@ -588,6 +747,15 @@ function parseCodex(
   const type = text(payload.type);
   const id = text(payload.id) || text(payload.turn_id) || `codex-${lineIndex}`;
   if (value.type === "event_msg") {
+    const native = codexNativeUserRecord(value);
+    if (native && context?.modeByTurnId.get(native.turnId) === "native"
+      && !context.consumedNativeUserIds.has(native.id)) {
+      const item = codexNativeUserItem(native, timestamp);
+      if (item) {
+        items.push(item);
+        context.consumedNativeUserIds.add(native.id);
+      }
+    }
     if (type === "task_complete") {
       const duration = positiveInteger(payload.duration_ms);
       if (duration) addSystem(items, `${id}-duration`, "turn_duration", `Turn duration: ${formatDuration(duration)}`, timestamp);
@@ -636,7 +804,19 @@ function parseCodex(
       ? normalizeCodexUserText(rawBody, images.length > 0, attachmentEnvelopeBlocks.size > 0)
       : normalizeCodexAssistantText(rawBody);
     if (role === "user" && (body.trim() || images.length)) {
-      items.push(user(id, body, images, timestamp, chatIdentity(value, payload)));
+      const turnId = codexResponseTurnId(payload);
+      const native = turnId && context?.modeByTurnId.get(turnId) === "paired"
+        ? context.nativeUsersByTurnId.get(turnId)?.[0]
+        : undefined;
+      if (native && context && !context.consumedNativeUserIds.has(native.id)) {
+        items.push(user(id, body, images, timestamp, {
+          ...chatIdentity(value, payload),
+          providerMessageId: native.id,
+        }));
+        context.consumedNativeUserIds.add(native.id);
+      } else if (!native || !context?.consumedNativeUserIds.has(native.id)) {
+        items.push(user(id, body, images, timestamp, chatIdentity(value, payload)));
+      }
     }
     if (role === "assistant" && body.trim()) items.push({ id, kind: "assistant", text: body, timestamp });
     return;
@@ -663,6 +843,29 @@ function parseCodex(
   if (type === "function_call_output" || type === "custom_tool_call_output") {
     finishTool(items, tools, text(payload.call_id), false, contentText(payload.output));
   }
+}
+
+function codexNativeUserItem(
+  native: CodexNativeUserRecord,
+  timestamp?: string,
+): ChatItem | undefined {
+  const textBlocks = native.content
+    .filter((block) => block.type === "text")
+    .map((block) => text(block.text))
+    .filter(Boolean);
+  const rawBody = textBlocks.join("\n");
+  const images = native.content.flatMap((block, index): ChatImage[] => {
+    if (block.type !== "input_image" && block.type !== "image") return [];
+    const source = record(block.source) ? block.source : undefined;
+    const image = normalizeImage(
+      block.image_url || block.url || source?.data,
+      block.media_type || source?.media_type,
+    );
+    return image ? [{ name: `image-${index + 1}`, ...image }] : [];
+  });
+  const body = normalizeCodexUserText(rawBody, images.length > 0, false);
+  if (!body.trim() && images.length === 0) return undefined;
+  return user(native.id, body, images, timestamp, { providerMessageId: native.id });
 }
 
 type CodexContentKinds = {
@@ -781,6 +984,7 @@ function isCodexInternalContentKind(kind: string): boolean {
     "goal.internal_context",
     "plugins.recommendations",
     "agents_md.instructions",
+    "generic.turn_aborted",
   ].includes(kind);
 }
 

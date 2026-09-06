@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from "react-native";
 import type { ChatSettings, ChatSettingsPatch } from "@agent-visor/protocol";
 import type { ChatPalette } from "./theme";
 import {
+  composerModelLabel,
   selectedModel,
   selectedPermissionProfile,
   selectedReasoningEffort,
@@ -10,6 +11,7 @@ import {
   settingScopeLabel,
   settingValues,
 } from "./chat-composer-settings";
+import { chatSettingMenuLayout } from "./chat-setting-menu-layout";
 
 type SettingChange = (patch: ChatSettingsPatch) => boolean | void;
 
@@ -114,18 +116,26 @@ function ModelEffortMenu({
   const values = settingValues(settings, staged);
   const model = selectedModel(settings, staged);
   const effort = selectedReasoningEffort(settings, staged);
-  const modelLabel = model?.displayName ?? fallbackModel;
+  const modelLabel = composerModelLabel(settings, staged, fallbackModel);
   const effortLabel = effort?.value ?? fallbackEffort;
   const label = [modelLabel, effortLabel ? displayEffort(effortLabel) : undefined]
     .filter(Boolean).join(" · ") || "Model settings";
-  const modelOptions = settings?.models.map((option) => ({
+  const modelOptions: SettingOption[] = settings?.models.map((option) => ({
     id: option.id,
     label: option.displayName,
     description: option.supportsImages
       ? option.description
-      : `${option.description} Image attachments are unavailable for this model.`,
+      : `${option.description} Text only.`,
     reasoningEffort: option.defaultReasoningEffort,
   })) ?? [];
+  if (values.modelId && !model) {
+    modelOptions.unshift({
+      id: values.modelId,
+      label: modelLabel!,
+      description: "Current model · unavailable to select",
+      disabled: true,
+    });
+  }
   const effortOptions = model?.reasoningEfforts.map((option) => ({
     id: option.value,
     label: displayEffort(option.value),
@@ -146,6 +156,7 @@ function ModelEffortMenu({
   return (
     <SettingMenu
       accessibilityLabel="Composer model and effort"
+      align="left"
       ariaLabel="Composer model and effort"
       onChange={onChange!}
       scope={settingScopeLabel(settings)}
@@ -194,6 +205,7 @@ function PermissionMenu({
   return (
     <SettingMenu
       accessibilityLabel={`Permission: ${label}`}
+      align="right"
       ariaLabel="Composer permission"
       onChange={onChange!}
       scope={settingScopeLabel(settings)}
@@ -212,6 +224,7 @@ type SelectedValues = { modelId?: string; reasoningEffort?: string; permissionPr
 
 function SettingMenu({
   accessibilityLabel,
+  align,
   ariaLabel,
   onChange,
   scope,
@@ -222,6 +235,7 @@ function SettingMenu({
   valueLabel,
 }: {
   accessibilityLabel: string;
+  align: "left" | "right";
   ariaLabel: string;
   onChange: SettingChange;
   scope?: string;
@@ -232,6 +246,7 @@ function SettingMenu({
   valueLabel: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [layout, setLayout] = useState<ReturnType<typeof chatSettingMenuLayout>>();
   const [activeIndex, setActiveIndex] = useState(0);
   const activeIndexRef = useRef(0);
   const options = useMemo(
@@ -242,6 +257,26 @@ function SettingMenu({
   const firstEnabledIndex = options.findIndex(({ option }) => !option.disabled);
   const triggerID = `chat-setting-trigger-${slug(ariaLabel)}`;
   const menuID = `${triggerID}-menu`;
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const trigger = document.getElementById(triggerID);
+    if (!trigger) return;
+    const reposition = () => setLayout(chatSettingMenuLayout(
+      trigger.getBoundingClientRect(),
+      { width: window.innerWidth, height: window.innerHeight },
+      align,
+      styles.optionLabel.fontSize / 14,
+    ));
+    reposition();
+    const observer = new ResizeObserver(reposition);
+    observer.observe(trigger);
+    window.addEventListener("resize", reposition);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", reposition);
+    };
+  }, [align, open, styles, triggerID]);
 
   const focusTrigger = () => {
     if (typeof document === "undefined") return;
@@ -277,6 +312,12 @@ function SettingMenu({
       const trigger = document.getElementById(triggerID);
       const menu = document.getElementById(menuID);
       if (!trigger?.contains(target) && !menu?.contains(target)) close(false);
+    };
+    const focusIn = (event: FocusEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (!document.getElementById(triggerID)?.contains(target)
+        && !document.getElementById(menuID)?.contains(target)) close(false);
     };
     const keyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -315,22 +356,25 @@ function SettingMenu({
       }
     };
     document.addEventListener("pointerdown", pointerDown);
+    document.addEventListener("focusin", focusIn);
     document.addEventListener("keydown", keyDown);
     return () => {
       document.removeEventListener("pointerdown", pointerDown);
+      document.removeEventListener("focusin", focusIn);
       document.removeEventListener("keydown", keyDown);
     };
   }, [firstEnabledIndex, menuID, onChange, open, options, triggerID]);
 
+  const initialIndex = selectedIndex >= 0 && !options[selectedIndex]!.option.disabled
+    ? selectedIndex : firstEnabledIndex;
   useEffect(() => {
     if (!open) return;
-    const index = selectedIndex >= 0 && !options[selectedIndex]!.option.disabled
-      ? selectedIndex : firstEnabledIndex;
+    const index = initialIndex;
     if (index < 0) return;
     activeIndexRef.current = index;
     setActiveIndex(index);
     requestAnimationFrame(() => focusOption(index));
-  }, [firstEnabledIndex, open, options, selectedIndex]);
+  }, [initialIndex, menuID, open]);
 
   const select = (section: SettingSection, option: SettingOption) => {
     if (option.disabled) return;
@@ -363,14 +407,17 @@ function SettingMenu({
         style={styles.trigger}
       >
         <Text numberOfLines={1} style={styles.value}>{valueLabel}</Text>
-        <Text aria-hidden style={styles.chevron}>⌄</Text>
+        <svg aria-hidden="true" width={styles.optionLabel.fontSize} height={styles.optionLabel.fontSize} viewBox="0 0 20 20" style={{ color: styles.value.color, flexShrink: 0 }}>
+          <path d="m5 7.5 5 5 5-5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
       </Pressable>
-      {open ? (
-        <View accessibilityLabel={`${ariaLabel} menu`} accessibilityRole="menu" nativeID={menuID} style={styles.menu}>
-          <ScrollView keyboardShouldPersistTaps="handled" style={styles.menuScroller}>
-            {sections.map((section) => (
-              <View key={section.key}>
+      {open && layout ? (
+        <View accessibilityLabel={`${ariaLabel} menu`} accessibilityRole="menu" nativeID={menuID} style={[styles.menu, layout]}>
+            {sections.map((section) => {
+              const content = (
+              <View key={section.key} style={section.key === "reasoningEffort" && styles.effortSection}>
                 <Text style={styles.sectionLabel}>{section.label}</Text>
+                <View style={section.key === "reasoningEffort" && styles.effortOptions}>
                 {section.options.map((option) => {
                   const index = options.findIndex(({ section: candidate, option: value }) => candidate.key === section.key && value.id === option.id);
                   const selectedValue = selectedValueFor(selected, section.key);
@@ -378,6 +425,7 @@ function SettingMenu({
                   return (
                     <Pressable
                       accessibilityLabel={`${section.label}: ${option.label}`}
+                      accessibilityHint={option.description}
                       accessibilityRole="menuitem"
                       accessibilityState={{ disabled: option.disabled, selected: selectedOption }}
                       aria-checked={selectedOption}
@@ -388,21 +436,29 @@ function SettingMenu({
                       nativeID={`${menuID}-option-${index}`}
                       key={option.id}
                       onPress={() => select(section, option)}
-                      style={[styles.option, index === activeIndex && styles.optionActive, selectedOption && styles.optionSelected]}
+                      onFocus={() => { activeIndexRef.current = index; setActiveIndex(index); }}
+                      onHoverIn={() => focusOption(index)}
+                      style={[styles.option, section.key === "reasoningEffort" && styles.effortOption, index === activeIndex && styles.optionActive, selectedOption && styles.optionSelected]}
                     >
                       <Text style={styles.optionCheck}>{selectedOption ? "✓" : ""}</Text>
                       <View style={styles.optionCopy}>
                         <Text style={styles.optionLabel}>{option.label}</Text>
-                        {option.description ? <Text style={styles.optionDescription}>{option.description}</Text> : null}
+                        {option.description && section.key !== "reasoningEffort" ? <Text numberOfLines={2} style={styles.optionDescription}>{option.description}</Text> : null}
                       </View>
                     </Pressable>
                   );
                 })}
+                </View>
               </View>
-            ))}
+              );
+              return section.key === "reasoningEffort" ? content : (
+                <ScrollView key={section.key} keyboardShouldPersistTaps="handled" style={styles.menuScroller}>
+                  {content}
+                </ScrollView>
+              );
+            })}
             {scope ? <Text accessibilityLabel={scope} style={styles.scope}>{scope}</Text> : null}
             {scopeNote ? <Text accessibilityLabel={scopeNote} style={styles.scopeNote}>{scopeNote}</Text> : null}
-          </ScrollView>
         </View>
       ) : null}
     </View>
@@ -410,6 +466,7 @@ function SettingMenu({
 }
 
 function displayEffort(value: string): string {
+  if (value === "xhigh") return "Extra high";
   return value.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[-_]+/g, " ").replace(/\b\w/g, (part) => part.toUpperCase());
 }
 
@@ -428,21 +485,23 @@ function createStyles(palette: ChatPalette, scale: number) {
   return StyleSheet.create({
     row: { alignItems: "center", flexDirection: "row", flexShrink: 1, gap: 2, minHeight: 44, minWidth: 0 },
     menuAnchor: { flexShrink: 1, maxWidth: "100%", minWidth: 0, position: "relative" },
-    trigger: { alignItems: "center", borderRadius: 8, flexDirection: "row", gap: 3, justifyContent: "center", maxWidth: "100%", minHeight: 44, minWidth: 0, paddingHorizontal: 4 },
-    value: { color: palette.muted, flexShrink: 1, fontSize: font(12), lineHeight: font(18), maxWidth: 300, minWidth: 0, textAlign: "right" },
-    chevron: { color: palette.tertiary, fontSize: font(13), lineHeight: font(18) },
-    menu: { backgroundColor: palette.card, borderColor: palette.border, borderRadius: 10, borderWidth: 1, bottom: 48, maxWidth: 320, minWidth: 190, position: "absolute", right: 0, shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 12, zIndex: 20 },
-    menuScroller: { maxHeight: 260 },
-    sectionLabel: { color: palette.tertiary, fontSize: font(10), fontWeight: "600", paddingHorizontal: 11, paddingTop: 9, paddingBottom: 4, textTransform: "uppercase" },
-    option: { alignItems: "flex-start", flexDirection: "row", gap: 7, minHeight: 36, paddingHorizontal: 10, paddingVertical: 7 },
+    trigger: { alignItems: "center", borderRadius: 8, flexDirection: "row", gap: 6, justifyContent: "center", maxWidth: "100%", minHeight: 44, minWidth: 0, paddingHorizontal: 6 },
+    value: { color: palette.muted, flexShrink: 1, fontSize: font(13), lineHeight: font(20), maxWidth: 300, minWidth: 0 },
+    menu: { backgroundColor: palette.card, borderColor: palette.border, borderRadius: 12, borderWidth: 1, position: "fixed", shadowColor: "#000", shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 6 }, overflow: "hidden", padding: 5, zIndex: 100 } as unknown as ViewStyle,
+    menuScroller: { flexShrink: 1, minHeight: 0, scrollbarColor: `${palette.composerBorder} ${palette.card}`, scrollbarWidth: "thin" } as unknown as ViewStyle,
+    sectionLabel: { color: palette.muted, fontSize: font(12), fontWeight: "600", paddingHorizontal: 10, paddingTop: 8, paddingBottom: 6 },
+    effortSection: { borderTopColor: palette.border, borderTopWidth: 1, marginTop: 5, flexShrink: 0 },
+    effortOptions: { flexDirection: "row", flexWrap: "wrap", gap: 3, paddingBottom: 6 },
+    effortOption: { flexBasis: "30%", flexGrow: 1, paddingHorizontal: 7, alignItems: "center" },
+    option: { alignItems: "flex-start", borderRadius: 7, flexDirection: "row", gap: 8, minHeight: 36, paddingHorizontal: 9, paddingVertical: 8 },
     optionActive: { backgroundColor: palette.accentWash },
-    optionSelected: { backgroundColor: `${palette.accentWash}88` },
-    optionCheck: { color: palette.accent, fontSize: font(13), lineHeight: font(18), textAlign: "center", width: 14 },
+    optionSelected: { backgroundColor: palette.accentWash },
+    optionCheck: { color: palette.accent, fontSize: font(14), lineHeight: font(20), textAlign: "center", width: 14 },
     optionCopy: { flex: 1, minWidth: 0 },
-    optionLabel: { color: palette.foreground, fontSize: font(12), lineHeight: font(17) },
-    optionDescription: { color: palette.muted, fontSize: font(10), lineHeight: font(14) },
-    scope: { borderTopColor: palette.border, borderTopWidth: 1, color: palette.tertiary, fontSize: font(10), lineHeight: font(14), paddingHorizontal: 10, paddingVertical: 8 },
-    scopeNote: { color: palette.tertiary, fontSize: font(10), lineHeight: font(14), paddingHorizontal: 10, paddingBottom: 8 },
+    optionLabel: { color: palette.foreground, fontSize: font(14), lineHeight: font(20) },
+    optionDescription: { color: palette.muted, fontSize: font(12), lineHeight: font(17), marginTop: 2 },
+    scope: { borderTopColor: palette.border, borderTopWidth: 1, color: palette.muted, flexShrink: 0, fontSize: font(11), lineHeight: font(16), paddingHorizontal: 10, paddingVertical: 9, marginTop: 5 },
+    scopeNote: { color: palette.muted, flexShrink: 0, fontSize: font(11), lineHeight: font(16), paddingHorizontal: 10, paddingBottom: 8 },
   });
 }
 

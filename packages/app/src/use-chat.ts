@@ -5,7 +5,6 @@ import {
   type ChatCommands,
   type ClientMessage,
   type ChatSettingsPatch,
-  type SessionSection,
 } from "@agent-visor/protocol";
 import { connectDaemon, type DaemonConnection } from "./daemon-connection";
 import { createChatSessionController, type ChatSessionState } from "./chat-session-controller";
@@ -15,7 +14,7 @@ import { CHAT_INITIAL_PAGE_LIMIT } from "./chat-pagination-window";
 
 type ChatState = ChatSessionState;
 
-export function useChat(sessionId: string, section: SessionSection = "history") {
+export function useChat(sessionId: string) {
   const [state, setState] = useState<ChatState>({ sessionId, status: "loading" });
   const socket = useRef<DaemonConnection | undefined>(undefined);
   const slashCommandRequestSent = useRef(false);
@@ -35,13 +34,14 @@ export function useChat(sessionId: string, section: SessionSection = "history") 
         error,
       });
     },
-    onOpenLatest: (connection, currentSessionId, requestId) => {
+    onOpenLatest: (connection, currentSessionId, requestId, retryAvailability) => {
       connection.send(JSON.stringify({
         type: "open_chat",
         id: requestId,
         sessionId: currentSessionId,
         generation: activeGeneration.current,
         limit: CHAT_INITIAL_PAGE_LIMIT,
+        ...(retryAvailability ? { retryAvailability: true } : {}),
       }));
     },
   })).current;
@@ -51,7 +51,7 @@ export function useChat(sessionId: string, section: SessionSection = "history") 
   })).current;
 
   useEffect(() => {
-    const generation = controller.activate(sessionId, section);
+    const generation = controller.activate(sessionId);
     activeGeneration.current = generation;
     let connection: DaemonConnection;
     connection = connectDaemon({
@@ -87,10 +87,6 @@ export function useChat(sessionId: string, section: SessionSection = "history") 
       slashCommandRequestSent.current = false;
     };
   }, [controller, deliveryExpiryScheduler, sessionId]);
-
-  useEffect(() => {
-    controller.setSection(activeGeneration.current, section);
-  }, [controller, section]);
 
   const visibleState = state.sessionId === sessionId
     ? state
@@ -168,6 +164,12 @@ export function useChat(sessionId: string, section: SessionSection = "history") 
     sendDelivery(retry.delivery);
   }, [controller, sendDelivery]);
 
+  const retryAvailability = useCallback((): boolean => {
+    const connection = socket.current;
+    if (!connection) return false;
+    return controller.refresh(activeGeneration.current, connection);
+  }, [controller]);
+
   const dismissRecovery = useCallback((recoveryId: string) => {
     controller.dismissRecovery(activeGeneration.current, recoveryId);
   }, [controller]);
@@ -242,6 +244,7 @@ export function useChat(sessionId: string, section: SessionSection = "history") 
     cyclePermissionMode,
     dismissRecovery,
     retryRecovery,
+    retryAvailability,
     send,
     slashCommands: visibleSlashCommands,
     slashCommandsError: visibleSlashCommandsError,

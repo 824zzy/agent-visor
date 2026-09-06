@@ -264,6 +264,43 @@ describe("chat delivery recovery store", () => {
     expect(result?.restore).toMatchObject({ status: "restored", draft: draft() });
   });
 
+  it("transitions an uncertain recovery to canceled while preserving newer composer content", () => {
+    const store = createChatDeliveryRecoveryStore();
+    store.activate("session", 1);
+    const submitted = failure({
+      cause: "delivery-uncertain",
+      error: "The provider did not publish the turn before the deadline.",
+      currentComposer: composer({ text: "newer draft", images: [] }, 2),
+    });
+    const uncertain = store.recordFailure(submitted)!;
+
+    const canceled = store.recordCancellation({
+      ...submitted,
+      error: "The message was canceled before the provider confirmed it.",
+      cause: "canceled",
+      confirmed: true,
+    });
+
+    expect(uncertain.record).toMatchObject({ status: "uncertain", cause: "delivery-uncertain" });
+    expect(canceled).toMatchObject({
+      record: { status: "canceled", cause: "canceled" },
+      restore: { status: "preserved", reason: "newer-composer-content" },
+    });
+    expect(store.list("session", 1)).toMatchObject([{
+      requestId: submitted.requestId,
+      deliveryId: submitted.deliveryId,
+      status: "canceled",
+      cause: "canceled",
+    }]);
+    expect(store.reconcileCanonical({
+      sessionId: "session",
+      generation: 1,
+      requestId: submitted.requestId,
+      deliveryId: submitted.deliveryId,
+    })).toBe(true);
+    expect(store.list("session", 1)).toEqual([]);
+  });
+
   it("preserves inactive actionable recovery scopes at the explicit scope bound", () => {
     const store = createChatDeliveryRecoveryStore({ maxScopes: 2 });
     store.activate("first", 1);

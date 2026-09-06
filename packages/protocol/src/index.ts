@@ -26,6 +26,60 @@ export const sessionAttentionTierSchema = z.enum([
   "history",
 ]);
 
+/** Provider-owned conversation lifetime. List age is deliberately absent. */
+export const sessionConversationStateSchema = z.enum([
+  "open",
+  "archived",
+  "unknown",
+]);
+
+/** Activity of the current or most recently observed provider turn. */
+export const sessionTurnStateSchema = z.enum([
+  "working",
+  "needs_you",
+  "ready",
+  "unknown",
+]);
+
+/** Route-level availability is independent from conversation lifetime. */
+export const sessionRouteStateSchema = z.enum([
+  "available",
+  "waiting",
+  "unavailable",
+]);
+
+/**
+ * Route availability says whether a send may be attempted. It does not by
+ * itself prove that Agent Visor owns the provider's exclusive writer.
+ */
+export const sessionRouteOwnershipSchema = z.enum([
+  "owned",
+  "unverified",
+  "external",
+]);
+
+/** Stable machine-readable reason for a route that cannot accept text. */
+export const sessionUnavailableReasonSchema = z.enum([
+  "automation",
+  "archived",
+  "conversation_unavailable",
+  "native_helper_unavailable",
+  "owner_only",
+  "provider_unavailable",
+  "turn_in_progress",
+  "turn_not_active",
+  "unsupported",
+  "unknown",
+]);
+
+export const sessionStateSchema = z.object({
+  conversation: sessionConversationStateSchema,
+  turn: sessionTurnStateSchema,
+  route: sessionRouteStateSchema,
+  routeOwnership: sessionRouteOwnershipSchema.optional(),
+  unavailableReason: sessionUnavailableReasonSchema.optional(),
+}).strict();
+
 // A provider's interaction class is separate from its current lifecycle
 // phase. It lets ambient surfaces exclude machine-owned work without
 // changing the transcript's actual status for the Sessions browser.
@@ -46,6 +100,10 @@ export const sessionSummarySchema = z.object({
   section: sessionSectionSchema,
   sessionClass: sessionClassSchema.optional(),
   attentionTier: sessionAttentionTierSchema.optional(),
+  /** State used for actions; section remains a list/attention presentation. */
+  sessionState: sessionStateSchema.optional(),
+  /** Changes when provider state or action availability changes. */
+  stateRevision: z.number().int().nonnegative().optional(),
   updatedAt: z.iso.datetime(),
   canOpenOwner: z.boolean(),
   canEnterChat: z.boolean(),
@@ -440,6 +498,8 @@ export const chatCapabilitiesSchema = z.object({
   canCyclePermissionMode: z.boolean().optional(),
   /** Provider-native terminal text ceiling, in UTF-8 bytes. */
   maxTextBytes: z.number().int().positive().max(NATIVE_HELPER_MAX_TEXT_BYTES).optional(),
+  /** Stable reason for an unavailable text route. */
+  unavailableReason: sessionUnavailableReasonSchema.optional(),
   readOnlyReason: z.string().min(1).max(1_024).optional(),
 }).strict();
 
@@ -623,6 +683,8 @@ export const chatPageSchema = z.object({
   metadata: chatMetadataSchema.optional(),
   chatSettings: chatSettingsSchema.optional(),
   transcriptEvidence: chatTranscriptEvidenceSchema.optional(),
+  sessionState: sessionStateSchema.optional(),
+  stateRevision: z.number().int().nonnegative().optional(),
   capabilities: chatCapabilitiesSchema,
   pendingAction: chatPendingActionSchema.nullable(),
   /** Multiple provider approvals may be pending in one session. */
@@ -667,6 +729,9 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     // The active renderer generation is carried on the authoritative latest
     // open so the daemon can reject arbitrary future send generations.
     generation: z.number().int().positive().max(2_147_483_647).optional(),
+    // Only an explicit availability retry may reacquire a route released for
+    // owner focus. Ordinary latest-page refreshes must not contend for it.
+    retryAvailability: z.boolean().optional(),
     before: z.number().int().nonnegative().optional(),
     limit: z.number().int().min(1).max(1_000).optional(),
   }).strict(),
@@ -1085,3 +1150,9 @@ export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
 export type SessionSummary = z.infer<typeof sessionSummarySchema>;
 export type SessionAttentionTier = z.infer<typeof sessionAttentionTierSchema>;
 export type SessionClass = z.infer<typeof sessionClassSchema>;
+export type SessionConversationState = z.infer<typeof sessionConversationStateSchema>;
+export type SessionTurnState = z.infer<typeof sessionTurnStateSchema>;
+export type SessionRouteState = z.infer<typeof sessionRouteStateSchema>;
+export type SessionRouteOwnership = z.infer<typeof sessionRouteOwnershipSchema>;
+export type SessionUnavailableReason = z.infer<typeof sessionUnavailableReasonSchema>;
+export type SessionState = z.infer<typeof sessionStateSchema>;

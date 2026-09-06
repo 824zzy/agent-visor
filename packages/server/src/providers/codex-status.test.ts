@@ -102,6 +102,28 @@ describe("Codex desktop lifecycle status", () => {
     }
   });
 
+  it("advances the session revision for content flushed during an unchanged turn", async () => {
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn-1");
+    const first = await repository.refresh();
+    const firstRevision = first.sessions[0]?.stateRevision;
+    expect(firstRevision).toBeTypeOf("number");
+
+    // No lifecycle marker changes here. A late response row still changes the
+    // rollout stamp, which must wake Chat so an early empty native refresh is
+    // not held until turn completion.
+    environment.clock += 1_000;
+    environment.modifiedAt = environment.clock;
+    environment.content += JSON.stringify({ type: "response_item", payload: {
+      type: "message", content: "late row",
+    } }) + "\n";
+    const second = await repository.refresh();
+    expect(second.sessions[0]?.stateRevision).toBeGreaterThan(firstRevision);
+    expect(second.sessions[0]?.sessionState).toMatchObject({
+      route: "waiting", turn: "working",
+    });
+  });
+
   it.each([null, "", "x".repeat(257)])("rejects an invalid explicit terminal identity (%s)", async (turnId) => {
     const { environment, repository } = setup();
     environment.append("task_started", "turn-1");
@@ -191,7 +213,7 @@ describe("Codex desktop lifecycle status", () => {
     expect((await repository.refresh()).sessions[0]?.section).toBe("working");
   });
 
-  it("keeps a dormant completed task in recent History with Open Chat", async () => {
+  it("keeps a dormant completed task as durable Ready with Open Chat", async () => {
     const { environment, repository, hook } = setup();
     environment.append("task_started", "turn-1");
     environment.append("task_complete", "turn-1");
@@ -203,12 +225,14 @@ describe("Codex desktop lifecycle status", () => {
 
     expect(snapshot.sessions).toMatchObject([{
       id: sessionId,
-      section: "history",
+      section: "ready",
+      attentionTier: "ready",
       canEnterChat: true,
     }]);
     expect(menuPresentation(snapshot, []).pills).toMatchObject([{
       id: sessionId,
-      phase: "history",
+      phase: "ready",
+      attentionTier: "ready",
     }]);
   });
 

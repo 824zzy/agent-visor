@@ -264,12 +264,25 @@ function matchesCanonicalIdentity(
   record: DeliveryRecord,
   turn: CanonicalChatUserTurn,
 ): boolean {
-  // An identified provider row must match every identity field it provides.
-  // This prevents a mismatched request ID from falling through to text.
+  const hasRequestOrDeliveryIdentity = validIdentity(turn.requestId)
+    || validIdentity(turn.deliveryId);
+
+  // Request and delivery IDs identify the renderer's submitted delivery. A
+  // native transcript may add its provider message ID later than the daemon
+  // action acknowledgement, so an unknown local provider ID cannot veto an
+  // otherwise exact request/delivery match.
   if (validIdentity(turn.requestId) && record.requestId !== turn.requestId) return false;
   if (validIdentity(turn.deliveryId) && record.deliveryId !== turn.deliveryId) return false;
-  if (validIdentity(turn.providerMessageId)
-    && record.providerMessageId !== turn.providerMessageId) return false;
+
+  if (validIdentity(turn.providerMessageId)) {
+    // A provider-only row has no renderer identity to anchor it. Require the
+    // provider ID to be known locally in that case; when request/delivery
+    // identity is present, reject only a known conflicting provider ID.
+    if ((!hasRequestOrDeliveryIdentity || validIdentity(record.providerMessageId))
+      && record.providerMessageId !== turn.providerMessageId) return false;
+  }
+
+  if (!hasRequestOrDeliveryIdentity && !validIdentity(record.providerMessageId)) return false;
   return hasCanonicalIdentity(turn);
 }
 
@@ -637,14 +650,15 @@ export function createPendingChatDeliveryStore(
 
         if (identified) {
           const record = scope.records.find((candidate) => (
-            candidate.status !== "canceled" && matchesCanonicalIdentity(candidate, turn)
+            matchesCanonicalIdentity(candidate, turn)
           ));
           const superseded = [...scope.superseded.values()].find((candidate) => (
-            candidate.status !== "canceled" && matchesCanonicalIdentity(candidate, turn)
+            matchesCanonicalIdentity(candidate, turn)
           ));
           const matched = record ?? superseded;
           if (!matched) continue;
           const didChange = confirm(matched, clock.now(), turn.providerMessageId);
+          const canonicalWasNew = matched.canonicalItemId !== canonicalId;
           matched.canonicalItemId = canonicalId;
           rememberCanonicalId(scope, canonicalId);
           const source = superseded ?? [...scope.superseded.values()].find((candidate) => (
@@ -654,7 +668,13 @@ export function createPendingChatDeliveryStore(
             scope.superseded.delete(source.deliveryId);
             scope.snapshotBytes -= submittedChatDraftByteSize(source.draft);
           }
-          if (didChange) changed.push(cloneRecord(matched));
+          // A confirmed Stop can race the provider transcript commit. The
+          // exact canonical identity still settles the recovery record even
+          // though the delivery remains canceled and is no longer rendered
+          // as an optimistic row.
+          if (didChange || (matched.status === "canceled" && canonicalWasNew)) {
+            changed.push(cloneRecord(matched));
+          }
           continue;
         }
 
@@ -714,6 +734,7 @@ export function createPendingChatDeliveryStore(
       const record = findByIdentity(scope, input.requestId, input.deliveryId);
       if (!record || (record.status !== "pending"
         && record.status !== "acknowledged"
+        && record.status !== "uncertain"
         && !(record.status === "confirmed" && record.canonicalItemId === undefined))) return undefined;
       record.status = "canceled";
       record.updatedAt = clock.now();

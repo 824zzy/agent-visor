@@ -17,6 +17,16 @@ export function selectedModel(settings: ChatSettings | undefined, staged?: ChatS
   return settings?.models.find((model) => model.id === values.modelId);
 }
 
+export function composerModelLabel(
+  settings: ChatSettings | undefined,
+  staged?: ChatSettingsPatch,
+  fallback?: string,
+): string | undefined {
+  const id = settingValues(settings, staged).modelId;
+  return selectedModel(settings, staged)?.displayName
+    ?? (id ? id.replace(/^gpt-/i, "GPT-") : fallback);
+}
+
 export function selectedPermissionProfile(settings: ChatSettings | undefined, staged?: ChatSettingsPatch) {
   const values = settingValues(settings, staged);
   return settings?.permissionProfiles.find((profile) => profile.id === values.permissionProfile);

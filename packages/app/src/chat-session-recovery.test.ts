@@ -34,6 +34,11 @@ const emptyPage = (sessionId: string, canCancel = false): ChatPage => ({
   sessionId,
   items: [],
   hasMoreBefore: false,
+  sessionState: {
+    conversation: "open",
+    turn: "ready",
+    route: "available",
+  },
   capabilities: {
     canSendText: true,
     canSendImages: true,
@@ -89,10 +94,9 @@ function sendAck(
 
 function setup(
   controller: ReturnType<typeof createChatSessionController>,
-  section: "working" | "ready" = "working",
   canCancel = false,
 ): number {
-  const generation = controller.activate("session", section);
+  const generation = controller.activate("session");
   controller.receive(generation, JSON.stringify(emptyPage("session", canCancel)), transport);
   return generation;
 }
@@ -261,13 +265,13 @@ describe("Chat session recovery integration", () => {
   it("does not expire or restore a prior session delivery after switching A to B", () => {
     const clock = new TestClock();
     const controller = controllerWith(clock);
-    const firstGeneration = controller.activate("first", "working");
+    const firstGeneration = controller.activate("first");
     controller.receive(firstGeneration, JSON.stringify(emptyPage("first")), transport);
     controller.noteComposerDraft(firstGeneration, { text: "", images: [] });
     const firstDraft = submittedDraft("first session");
     const firstDelivery = controller.beginDelivery(firstGeneration, firstDraft)!;
 
-    const secondGeneration = controller.activate("second", "working");
+    const secondGeneration = controller.activate("second");
     controller.receive(secondGeneration, JSON.stringify(emptyPage("second")), transport);
     controller.noteComposerDraft(secondGeneration, { text: "", images: [] });
     clock.advance(CHAT_DELIVERY_TTL_MS);
@@ -278,7 +282,7 @@ describe("Chat session recovery integration", () => {
     expect(controller.currentState().recoveryCommand).toBeUndefined();
     expect(firstDelivery.draft).toEqual(firstDraft);
 
-    const firstAgainGeneration = controller.activate("first", "working");
+    const firstAgainGeneration = controller.activate("first");
     controller.receive(firstAgainGeneration, JSON.stringify(emptyPage("first")), transport);
     expect(controller.currentState().page?.items).toMatchObject([{
       id: firstDelivery.optimisticRowId,
@@ -314,7 +318,7 @@ describe("Chat session recovery integration", () => {
 
   it("restores only after confirmed cancel and never after cancel failure", () => {
     const controller = controllerWith();
-    const generation = setup(controller, "working", true);
+    const generation = setup(controller, true);
     controller.noteComposerDraft(generation, { text: "", images: [] });
     const delivery = controller.beginDelivery(generation, submittedDraft())!;
     controller.receive(generation, JSON.stringify({
@@ -334,7 +338,7 @@ describe("Chat session recovery integration", () => {
     expect(controller.currentState().recovery).toMatchObject([{ status: "canceled" }]);
     expect(controller.currentState().page?.items).toEqual([]);
 
-    const next = controller.activate("session", "working");
+    const next = controller.activate("session");
     controller.receive(next, JSON.stringify(emptyPage("session", true)), transport);
     controller.noteComposerDraft(next, { text: "", images: [] });
     const failedCancelDelivery = controller.beginDelivery(next, submittedDraft("failed cancel"))!;
@@ -368,7 +372,7 @@ describe("Chat session recovery integration", () => {
     const delivery = controller.beginDelivery(first, submittedDraft())!;
     controller.receive(first, sendAck(delivery.requestId, delivery.deliveryId, first), transport);
     const recoveryId = controller.currentState().recovery![0]!.id;
-    const second = controller.activate("other", "ready");
+    const second = controller.activate("other");
     controller.receive(second, JSON.stringify(emptyPage("other")), transport);
 
     expect(controller.retryRecovery(first, recoveryId)).toBeUndefined();
@@ -389,7 +393,7 @@ describe("Chat session recovery integration", () => {
     controller.noteComposerDraft(firstGeneration, draft);
     const retry = controller.retryRecovery(firstGeneration, recoveryId)!;
 
-    const secondGeneration = controller.activate("other", "working");
+    const secondGeneration = controller.activate("other");
     controller.receive(secondGeneration, JSON.stringify(emptyPage("other")), transport);
     // An acknowledgement that arrives on the retired A generation while B is
     // active must not settle the retry or mutate B's recovery state.
@@ -430,9 +434,9 @@ describe("Chat session recovery integration", () => {
     controller.noteComposerDraft(firstGeneration, draft);
     const retry = controller.retryRecovery(firstGeneration, recoveryId)!;
 
-    const secondGeneration = controller.activate("other", "working");
+    const secondGeneration = controller.activate("other");
     controller.receive(secondGeneration, JSON.stringify(emptyPage("other")), transport);
-    const returnedGeneration = controller.activate("session", "working");
+    const returnedGeneration = controller.activate("session");
     controller.requestLatest(returnedGeneration, "return-latest");
     controller.receive(returnedGeneration, JSON.stringify({
       ...emptyPage("session"),
@@ -509,12 +513,12 @@ describe("Chat session recovery integration", () => {
     const recoveryId = controller.currentState().recovery?.[0]?.id;
     expect(recoveryId).toBeDefined();
 
-    const second = controller.activate("other", "working");
+    const second = controller.activate("other");
     expect(controller.currentState().sessionId).toBe("other");
     expect(controller.currentState().recovery).toBeUndefined();
     controller.receive(second, JSON.stringify(emptyPage("other")), transport);
 
-    const returned = controller.activate("session", "working");
+    const returned = controller.activate("session");
     controller.receive(returned, JSON.stringify(emptyPage("session")), transport);
     expect(controller.currentState().recovery).toMatchObject([{
       id: `session:${returned}:${delivery.deliveryId}`,

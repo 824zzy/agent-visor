@@ -1,7 +1,7 @@
 import type {
   ChatPage,
   ChatCommands,
-  SessionSection,
+  SessionState,
 } from "@agent-visor/protocol";
 import { serverMessageSchema } from "@agent-visor/protocol";
 import type { DaemonConnection } from "./daemon-connection";
@@ -12,6 +12,7 @@ import {
 } from "./chat-pagination-window";
 import {
   CHAT_DELIVERY_TTL_MS,
+  CHAT_DELIVERY_EXPIRED_ERROR,
   CHAT_DELIVERY_UNCERTAIN_ERROR,
   createPendingChatDeliveryStore,
   type DeliveryClock,
@@ -86,11 +87,11 @@ export type ChatCancellationState = {
 };
 
 export type ChatSessionController = {
-  activate(sessionId: string, section?: SessionSection): number;
+  activate(sessionId: string): number;
   deactivate(generation: number): void;
-  setSection(generation: number, section: SessionSection): void;
   noteComposerDraft(generation: number, draft: SubmittedChatDraft): void;
   requestLatest(generation: number, requestId: string): void;
+  refresh(generation: number, connection: DaemonConnection): boolean;
   beginDelivery(generation: number, draft: SubmittedChatDraft): PendingChatDelivery | undefined;
   failDelivery(
     generation: number,
@@ -116,7 +117,12 @@ export type ChatSessionController = {
 type ChatSessionControllerHandlers = {
   onState(state: ChatSessionState): void;
   onSlashCommands(commands: ChatCommands | undefined, sessionId: string, error?: string): void;
-  onOpenLatest(connection: DaemonConnection, sessionId: string, requestId: string): void;
+  onOpenLatest(
+    connection: DaemonConnection,
+    sessionId: string,
+    requestId: string,
+    retryAvailability?: boolean,
+  ): void;
 };
 
 export type ChatSessionControllerOptions = {
@@ -133,7 +139,11 @@ export function createChatSessionController(
 ): ChatSessionController {
   let generation = 0;
   let state: ChatSessionState = { sessionId: "", status: "loading" };
-  let latestUpdatedAt: string | undefined;
+  // Session snapshots carry attention and capability evidence separately from
+  // transcript timestamps. Keep a renderer-side fingerprint so a state-only
+  // change refreshes the Chat page even when no new transcript item exists.
+  let latestSessionFingerprint: string | undefined;
+  let latestSessionSnapshotSeen = false;
   let nextPageMode: "latest" | "earlier" = "latest";
   type OpenChatRequest = {
     sessionId: string;
@@ -147,8 +157,8 @@ export function createChatSessionController(
   const openChatRequests = new Map<string, OpenChatRequest>();
   const latestRequestEpochByScope = new Map<string, number>();
   let activeSessionId = "";
-  let activeSection: SessionSection | undefined;
   let lastDeliveryId: string | undefined;
+  let deliveryErrorDeliveryId: string | undefined;
   let cancelRequest: ChatCancellationState | undefined;
   let permissionModeCycle: ChatPermissionModeCycleState | undefined;
   let optimisticPermissionMode: string | undefined;
@@ -232,16 +242,17 @@ export function createChatSessionController(
   }
 
   return {
-    activate(sessionId, section) {
+    activate(sessionId) {
       generation += 1;
       activeSessionId = sessionId;
-      activeSection = section;
       lastDeliveryId = undefined;
+      deliveryErrorDeliveryId = undefined;
       cancelRequest = undefined;
       permissionModeCycle = undefined;
       optimisticPermissionMode = undefined;
       pendingSends.clear();
-      latestUpdatedAt = undefined;
+      latestSessionFingerprint = undefined;
+      latestSessionSnapshotSeen = false;
       nextPageMode = "latest";
       openChatRequests.clear();
       latestRequestEpochByScope.clear();
@@ -266,21 +277,20 @@ export function createChatSessionController(
     deactivate(candidate) {
       if (!isCurrent(candidate)) return;
       generation += 1;
-      activeSection = undefined;
       lastDeliveryId = undefined;
+      deliveryErrorDeliveryId = undefined;
       cancelRequest = undefined;
       permissionModeCycle = undefined;
       optimisticPermissionMode = undefined;
       pendingSends.clear();
+      latestSessionFingerprint = undefined;
+      latestSessionSnapshotSeen = false;
       allowedEmptyRevisionsByDelivery.clear();
       openChatRequests.clear();
       latestRequestEpochByScope.clear();
       latestBaselineAllowsContentFallback = false;
       paginationWindow = new ChatPaginationWindow();
       droppedHistoryAtSafetyCap = false;
-    },
-    setSection(candidate, section) {
-      if (isCurrent(candidate)) activeSection = section;
     },
     noteComposerDraft(candidate, draft) {
       if (!isCurrent(candidate)) return;
@@ -291,6 +301,14 @@ export function createChatSessionController(
       if (!isCurrent(candidate) || requestId.length === 0) return;
       registerLatestRequest(candidate, requestId);
       nextPageMode = "latest";
+    },
+    refresh(candidate, connection) {
+      if (!isCurrent(candidate) || activeSessionId.length === 0) return false;
+      const requestId = createRequestId();
+      registerLatestRequest(candidate, requestId);
+      nextPageMode = "latest";
+      handlers.onOpenLatest(connection, activeSessionId, requestId, true);
+      return true;
     },
     beginDelivery(candidate, draft) {
       if (!isCurrent(candidate)
@@ -394,6 +412,10 @@ export function createChatSessionController(
         now: deliveryClock.now(),
       });
       if (expired.length) {
+        // The visible timeout message represents the first expired delivery
+        // in this batch. Keep that identity so a different late canonical row
+        // cannot clear the warning for the still-unresolved delivery.
+        deliveryErrorDeliveryId = expired[0]?.deliveryId;
         let command: ChatRecoveryCommand | undefined;
         for (const delivery of expired) {
           const pending = pendingSends.get(delivery.requestId);
@@ -454,7 +476,14 @@ export function createChatSessionController(
               allowedEmptyRevisions,
             });
           }
-          if (lastDeliveryId === delivery.deliveryId) lastDeliveryId = undefined;
+          // An acknowledged delivery may still be an active provider turn
+          // after its transcript deadline. Keep its exact cancel identity so
+          // Stop remains available until the provider reports completion.
+          // An unacknowledged send has no proof of an active turn and must
+          // fail closed after expiry.
+          if (lastDeliveryId === delivery.deliveryId && delivery.status === "failed") {
+            lastDeliveryId = undefined;
+          }
           if (!command && recovery) command = restoreCommand(recovery.restore);
         }
         publishPageWithDeliveries(candidate);
@@ -580,7 +609,6 @@ export function createChatSessionController(
     requestCancel(candidate, connection) {
       const page = state.page;
       if (!isCurrent(candidate)
-        || activeSection !== "working"
         || !state.canCancelForActiveDelivery
         || !page
         || !lastDeliveryId
@@ -621,7 +649,6 @@ export function createChatSessionController(
       const expectedMode = page?.metadata?.permissionMode;
       const nextMode = expectedMode ? nextPermissionMode(expectedMode) : undefined;
       if (!isCurrent(candidate)
-        || activeSection !== "working"
         || !page
         || page.capabilities.canCyclePermissionMode !== true
         || !expectedMode
@@ -703,14 +730,30 @@ export function createChatSessionController(
               && pageRequest.generation === candidate
               && pageRequest.mode === "latest"
               && pageRequest.epoch === latestRequestEpochByScope.get(requestScopeKey(activeSessionId, candidate)))
-          );
+        );
         if (isActiveLatestPageError) {
           if (message.requestId) openChatRequests.delete(message.requestId);
-          publish({
-            sessionId: activeSessionId,
-            status: "failed",
-            error: message.message,
-          });
+          const retainedPage = state.page
+            ? temporarilyUnavailablePage(state.page, "provider_unavailable")
+            : undefined;
+          if (retainedPage) {
+            // An active conversation remains useful while the exact page
+            // request is retried. Keep its transcript and composer state, but
+            // make every response capability fail closed until a fresh page
+            // proves the route again.
+            publishWithRecovery(candidate, {
+              ...state,
+              status: "loaded",
+              page: retainedPage,
+              error: message.message,
+            });
+          } else {
+            publish({
+              sessionId: activeSessionId,
+              status: "failed",
+              error: message.message,
+            });
+          }
         } else if (message.requestType === "get_chat_commands"
           && (!message.responseType || message.responseType === "chat_commands")
           && message.requestId === slashRequestId) {
@@ -742,16 +785,6 @@ export function createChatSessionController(
         // Do this check before freshness, reconciliation, or page merging so
         // an earlier response cannot replace a latest page (or vice versa).
         if (request && message.mode !== undefined && message.mode !== request.mode) return;
-        // A refreshed page must carry the exact active delivery identity. A
-        // missing identity is fail-closed after this point.
-        if (lastDeliveryId === undefined
-          && message.capabilities.cancelDeliveryId !== undefined
-          && state.cancel?.status !== "confirmed") {
-          // A working provider may already have a turn before this Chat
-          // instance opens. Adopt only the server-provided active identity;
-          // never synthesize one from text or page position.
-          lastDeliveryId = message.capabilities.cancelDeliveryId;
-        }
         const mode = message.mode ?? request?.mode ?? nextPageMode;
         if (mode === "earlier") {
           // Earlier pages must be tied to the reservation made for this
@@ -770,6 +803,27 @@ export function createChatSessionController(
           if (request?.epoch !== undefined
             && request.epoch !== latestRequestEpochByScope.get(scopeKey)) return;
           if (!message.requestId && hasLatestRequestIdentity(candidate)) return;
+          // A working provider may already have a turn before this Chat
+          // instance opens. Adopt only the server-provided active identity;
+          // never synthesize one from text or page position. Older pages are
+          // never allowed to seed or replace this identity.
+          const trackedDelivery = lastDeliveryId
+            ? deliveryStore.get(activeSessionId, candidate)
+              .find((delivery) => delivery.deliveryId === lastDeliveryId)
+            : undefined;
+          const trackedDeliveryKeepsIdentity = trackedDelivery !== undefined
+            && (trackedDelivery.status === "pending"
+              || trackedDelivery.status === "acknowledged"
+              || (trackedDelivery.status === "confirmed"
+                && message.capabilities.cancelDeliveryId === lastDeliveryId));
+          if (!message.capabilities.canCancel && !trackedDeliveryKeepsIdentity) {
+            lastDeliveryId = undefined;
+          } else if (message.capabilities.canCancel
+            && message.capabilities.cancelDeliveryId !== undefined
+            && !trackedDeliveryKeepsIdentity
+            && state.cancel?.status !== "confirmed") {
+            lastDeliveryId = message.capabilities.cancelDeliveryId;
+          }
         }
         const latestScopeKey = JSON.stringify([activeSessionId, candidate]);
         const firstLatestPage = mode === "latest" && !observedLatestPageScopes.has(latestScopeKey);
@@ -837,10 +891,21 @@ export function createChatSessionController(
           optimisticPermissionMode = undefined;
           permissionModeCycle = undefined;
         }
+        const deliveryErrorWasResolved = deliveryErrorDeliveryId !== undefined
+          && reconciled.some((delivery) => delivery.deliveryId === deliveryErrorDeliveryId)
+          && (state.error === CHAT_DELIVERY_UNCERTAIN_ERROR
+            || state.error === CHAT_DELIVERY_EXPIRED_ERROR);
+        const deliveryErrorShouldPersist = deliveryErrorDeliveryId !== undefined
+          && !deliveryErrorWasResolved
+          && (state.error === CHAT_DELIVERY_UNCERTAIN_ERROR
+            || state.error === CHAT_DELIVERY_EXPIRED_ERROR);
+        if (deliveryErrorWasResolved) deliveryErrorDeliveryId = undefined;
         publishWithRecovery(candidate, {
           sessionId: activeSessionId,
           status: "loaded",
           page: withDeliveryRows(merged, activeSessionId, candidate),
+          ...(deliveryErrorWasResolved ? { error: undefined } : {}),
+          ...(deliveryErrorShouldPersist ? { error: state.error } : {}),
           // A successful cancel refreshes the transcript immediately. Keep
           // the identity-bound outcome visible until a new action or session
           // generation replaces it; otherwise the refresh races the UI state
@@ -861,12 +926,107 @@ export function createChatSessionController(
       }
       if (message.type === "session_snapshot") {
         const session = message.sessions.find(({ id }) => id === activeSessionId);
-        const updatedAt = session?.updatedAt;
-        if (session) activeSection = session.section;
-        if (latestUpdatedAt && updatedAt && latestUpdatedAt !== updatedAt && nextPageMode !== "earlier") {
+        const fingerprint = session ? JSON.stringify({
+          stateRevision: session.stateRevision,
+          updatedAt: session.updatedAt,
+          section: session.section,
+          attentionTier: session.attentionTier,
+          sessionState: session.sessionState,
+          canOpenOwner: session.canOpenOwner,
+          canEnterChat: session.canEnterChat,
+          subtitle: session.subtitle,
+        }) : undefined;
+        // An opened conversation can age out of ambient discovery without
+        // ending. Refresh once on that omission so the daemon can resolve the
+        // exact ID; do not repeatedly reopen while it remains absent.
+        const sessionChanged = latestSessionSnapshotSeen
+          && fingerprint !== latestSessionFingerprint;
+        const shouldResolveMissingSession = !session
+          && state.page !== undefined
+          && (!latestSessionSnapshotSeen || sessionChanged);
+        if (sessionChanged || shouldResolveMissingSession) {
           openLatest(connection);
         }
-        latestUpdatedAt = updatedAt;
+        if (!session && state.page) {
+          const reason = "conversation_unavailable" as const;
+          const currentState = state.page.sessionState;
+          const currentCapabilities = state.page.capabilities;
+          const alreadyUnavailable = currentState?.route === "unavailable"
+            && currentState.unavailableReason === reason
+            && currentCapabilities.canSendText === false
+            && currentCapabilities.canSendImages === false
+            && currentCapabilities.canCancel === false
+            && currentCapabilities.canApprove === false
+            && currentCapabilities.canAnswer === false;
+          if (!alreadyUnavailable) {
+            // Discovery omission is not proof that an opened conversation
+            // ended. Temporarily invalidate the stale route while the exact
+            // conversation lookup is pending, preserving the visible page and
+            // all composer state.
+            publishWithRecovery(candidate, {
+              ...state,
+              status: "loaded",
+              page: temporarilyUnavailablePage(state.page, reason),
+              error: undefined,
+            });
+          }
+        }
+        if (session?.sessionState && state.page) {
+          const routeUnavailable = session.sessionState.route !== "available";
+          const revisionChanged = session.stateRevision !== undefined
+            && state.page.stateRevision !== undefined
+            && session.stateRevision !== state.page.stateRevision;
+          const pageState = state.page.sessionState;
+          const stateMatchesPage = pageState !== undefined
+            && sameSessionState(pageState, session.sessionState);
+          const turnIsWorking = session.sessionState.turn === "working";
+          // A busy WAIT snapshot may be repeated while the provider is still
+          // running. Preserve its exact Stop identity when the state and
+          // revision are unchanged; a new revision is the backend's proof
+          // that the turn/delivery identity changed.
+          const preserveOwnedCancel = turnIsWorking
+            && stateMatchesPage
+            && !revisionChanged
+            && state.page.capabilities.canCancel
+            && state.page.capabilities.cancelDeliveryId !== undefined
+            && state.page.capabilities.cancelDeliveryId === lastDeliveryId;
+          const stateChanged = !stateMatchesPage;
+          const shouldDisableSend = routeUnavailable || turnIsWorking || revisionChanged || stateChanged;
+          const shouldInvalidateCancel = !preserveOwnedCancel
+            && (routeUnavailable || revisionChanged || stateChanged || !turnIsWorking);
+          const shouldPublish = shouldDisableSend
+            || shouldInvalidateCancel
+            || state.page.sessionState === undefined
+            || (session.stateRevision !== undefined
+              && session.stateRevision !== state.page.stateRevision);
+          if (shouldPublish) {
+            const nextCapabilities = { ...state.page.capabilities };
+            if (shouldDisableSend) {
+              nextCapabilities.canSendText = false;
+              nextCapabilities.canSendImages = false;
+            }
+            if (routeUnavailable && session.sessionState.unavailableReason) {
+              nextCapabilities.unavailableReason = session.sessionState.unavailableReason;
+            }
+            if (shouldInvalidateCancel) {
+              nextCapabilities.canCancel = false;
+              delete nextCapabilities.cancelDeliveryId;
+              delete nextCapabilities.canCyclePermissionMode;
+            }
+            publishWithRecovery(candidate, {
+              ...state,
+              page: {
+                ...state.page,
+                sessionState: session.sessionState,
+                ...(session.stateRevision !== undefined ? { stateRevision: session.stateRevision } : {}),
+                capabilities: nextCapabilities,
+              },
+              canCancelForActiveDelivery: undefined,
+            });
+          }
+        }
+        latestSessionFingerprint = fingerprint;
+        latestSessionSnapshotSeen = true;
         return;
       }
       if (message.type === "chat_action_result") {
@@ -910,7 +1070,7 @@ export function createChatSessionController(
                 requestId: delivery.requestId,
                 deliveryId: delivery.deliveryId,
               });
-            if (canceled) {
+              if (canceled) {
                 pendingSends.delete(delivery.requestId);
                 const allowedEmptyRevisions = allowedEmptyRevisionsByDelivery.get(delivery.deliveryId);
                 allowedEmptyRevisionsByDelivery.delete(delivery.deliveryId);
@@ -1036,7 +1196,26 @@ export function createChatSessionController(
       openChatRequests.clear();
       latestRequestEpochByScope.clear();
       handlers.onSlashCommands(undefined, activeSessionId);
-      publish({ sessionId: activeSessionId, status: "loading" });
+      const retainedPage = state.page
+        ? temporarilyUnavailablePage(state.page, "provider_unavailable")
+        : undefined;
+      if (retainedPage) {
+        // Keep the last rendered transcript and draft mounted through a real
+        // websocket loss. Retry will replace this projection with a fresh
+        // capability snapshot once the daemon is reachable again.
+        publishWithRecovery(candidate, {
+          ...state,
+          status: "loaded",
+          page: retainedPage,
+          error: "Connection to Agent Visor was lost. Retry when the daemon is available.",
+        });
+      } else {
+        publish({
+          sessionId: activeSessionId,
+          status: "loading",
+          error: "Connection to Agent Visor was lost.",
+        });
+      }
     },
     currentState() {
       return state;
@@ -1236,8 +1415,10 @@ export function createChatSessionController(
       : undefined;
     // A page may describe a provider-owned turn that predates this renderer;
     // in that case there is no local delivery record, so the server's exact
-    // capability identity is the proof. Locally tracked uncertain/terminal
-    // deliveries must fail closed even if a stale page still says canCancel.
+    // capability identity is the proof. Failed/canceled deliveries must fail
+    // closed even if a stale page still says canCancel. An uncertain delivery
+    // remains actionable only while a fresh page advertises its exact identity:
+    // uncertainty concerns transcript delivery, not provider turn ownership.
     // Transcript reconciliation replaces the synthetic row, but it does not
     // prove that the provider has stopped working.  A fresh page is allowed
     // to keep an exact, provider-owned cancellation identity live after that
@@ -1247,7 +1428,8 @@ export function createChatSessionController(
     const deliveryIsActionable = delivery === undefined
       || delivery.status === "pending"
       || delivery.status === "acknowledged"
-      || delivery.status === "confirmed";
+      || delivery.status === "confirmed"
+      || delivery.status === "uncertain";
     return deliveryIsActionable
       && page.capabilities.canCancel
       && advertisedDeliveryId !== undefined
@@ -1332,6 +1514,47 @@ function cloneSubmittedDraft(draft: SubmittedChatDraft): SubmittedChatDraft {
   };
 }
 
+function sameSessionState(left: SessionState, right: SessionState): boolean {
+  return left.conversation === right.conversation
+    && left.turn === right.turn
+    && left.route === right.route
+    && left.unavailableReason === right.unavailableReason;
+}
+
+/**
+ * Retain a rendered page while its transport or exact session lookup is
+ * unavailable. This projection deliberately removes the provider revision:
+ * the next successful latest page must establish a new capability baseline,
+ * rather than being compared with stale route evidence.
+ */
+function temporarilyUnavailablePage(
+  page: ChatPage,
+  reason: NonNullable<SessionState["unavailableReason"]>,
+): ChatPage {
+  const { stateRevision: _staleStateRevision, ...pageWithoutRevision } = page;
+  const capabilities = {
+    ...page.capabilities,
+    canSendText: false,
+    canSendImages: false,
+    canCancel: false,
+    canApprove: false,
+    canAnswer: false,
+    unavailableReason: reason,
+  };
+  delete capabilities.cancelDeliveryId;
+  delete capabilities.canCyclePermissionMode;
+  return {
+    ...pageWithoutRevision,
+    sessionState: {
+      conversation: "unknown",
+      turn: "unknown",
+      route: "unavailable",
+      unavailableReason: reason,
+    },
+    capabilities,
+  };
+}
+
 /**
  * Keep the controller's admission policy aligned with the composer: text and
  * images are independent capabilities, while an empty submitted draft is not
@@ -1344,6 +1567,14 @@ function draftCapabilitiesAllow(
   draft: SubmittedChatDraft,
 ): boolean {
   if (!page) return false;
+  // Capability bits are necessary but not sufficient. A stale ready page can
+  // outlive a newer working, waiting, or unavailable lifecycle snapshot, so
+  // delivery admission must fail closed until the explicit route is ready.
+  const lifecycle = page.sessionState;
+  if (!lifecycle
+    || lifecycle.conversation !== "open"
+    || lifecycle.turn !== "ready"
+    || lifecycle.route !== "available") return false;
   const hasText = draft.text.trim().length > 0;
   const hasImages = draft.images.length > 0;
   return (hasText || hasImages)

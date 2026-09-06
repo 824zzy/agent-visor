@@ -43,11 +43,24 @@ function image(overrides: Partial<ChatImage> = {}): ChatImage {
 function session(overrides: Partial<DiscoveredProviderSession> = {}): DiscoveredProviderSession {
   return {
     id: "session-1", provider: "pi", cwd: "/tmp/project", owner: "Ghostty",
-    section: "working", updatedAt: "2026-08-23T00:00:00.000Z",
+    section: "ready", updatedAt: "2026-08-23T00:00:00.000Z",
+    turnState: "ready",
+    conversationState: "open",
     canOpenOwner: true, canEnterChat: true,
     controlTarget: { kind: "terminal", target }, messageTransport: "terminal",
     ...overrides,
+    ...(overrides.turnState === undefined && overrides.section !== undefined
+      ? { turnState: overrides.section === "working" ? "working" as const
+        : overrides.section === "needs_you" ? "needs_you" as const
+          : overrides.section === "ready" ? "ready" as const : "unknown" as const }
+      : {}),
   };
+}
+
+function workingSession(
+  overrides: Partial<DiscoveredProviderSession> = {},
+): DiscoveredProviderSession {
+  return session({ ...overrides, section: "working", turnState: "working" });
 }
 
 function page(...users: Array<{
@@ -90,7 +103,10 @@ async function sendAndObserve(
     baselineComplete: true,
     submittedText: text,
   });
-  controls.reconcileChatPage(targetSession, page({ id: canonicalId, text }));
+  controls.reconcileChatPage(
+    workingSession(targetSession),
+    page({ id: canonicalId, text }),
+  );
 }
 
 afterEach(async () => {
@@ -118,7 +134,7 @@ describe("native session controls", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-controls-test-"));
     roots.push(root);
     const controls = new NativeSessionControls(helper, root);
-    const claude = session({ provider: "claude_code" });
+    const claude = workingSession({ provider: "claude_code" });
 
     expect(controls.canCyclePermissionMode(claude)).toBe(true);
     await controls.cyclePermissionMode(claude);
@@ -201,19 +217,19 @@ describe("native session controls", () => {
 
     // A is the only registered delivery while its helper write is blocked;
     // B must not be able to steal the cancellation slot before its turn.
-    controls.reconcileChatPage(session(), page({ id: "canonical-a", text: "First" }));
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-a");
+    controls.reconcileChatPage(workingSession(), page({ id: "canonical-a", text: "First" }));
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-a");
 
     releaseFirst?.();
     await Promise.all([first, second]);
     // A remains the newest confirmed cancellation target until the provider
     // publishes B's canonical row. B's successful paste must not erase A.
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-a");
-    controls.reconcileChatPage(session(), page(
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-a");
+    controls.reconcileChatPage(workingSession(), page(
       { id: "canonical-a", text: "First" },
       { id: "canonical-b", text: "Second" },
     ));
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-b");
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-b");
     expect(helper.terminalSendRequests.map(({ text }) => text)).toEqual(["First", "Second"]);
   });
 
@@ -244,8 +260,8 @@ describe("native session controls", () => {
     await expect(queued).rejects.toThrow(/current|available|changed/i);
     expect(helper.terminalSendRequests).toEqual([]);
 
-    controls.reconcileChatPage(session(), page({ id: "canonical-stale", text: "stale" }));
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
+    controls.reconcileChatPage(workingSession(), page({ id: "canonical-stale", text: "stale" }));
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
   });
 
   it("opens only provider-owned exact session URLs", async () => {
@@ -308,7 +324,10 @@ describe("native session controls", () => {
     const calls: unknown[][] = [];
     const controls = new NativeSessionControls(helper, root, async (...args) => { calls.push(args); });
 
-    await controls.send(session({ provider: "codex", messageTransport: "codex_app_server" }), "Fix", [{
+    await controls.send(session({
+      provider: "codex", messageTransport: "codex_app_server", turnState: "ready",
+      routeState: "available",
+    }), "Fix", [{
       name: "pixel.webp", mimeType: "image/webp", byteLength: webp.byteLength,
       data: Buffer.from(webp).toString("base64"),
     }]);
@@ -326,13 +345,13 @@ describe("native session controls", () => {
     const controls = new NativeSessionControls(helper, root);
 
     await sendAndObserve(controls, session(), "Working", "delivery-terminal", "user-working");
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-terminal");
-    await expect(controls.cancel(session(), "wrong-delivery")).rejects.toThrow("unavailable");
-    await controls.cancel(session(), "delivery-terminal");
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-terminal");
+    await expect(controls.cancel(workingSession(), "wrong-delivery")).rejects.toThrow("unavailable");
+    await controls.cancel(workingSession(), "delivery-terminal");
 
     expect(helper.terminalCancelRequests).toEqual([target]);
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
-    expect(controls.canCancel(session(), "delivery-terminal")).toBe(false);
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
+    expect(controls.canCancel(workingSession(), "delivery-terminal")).toBe(false);
   });
 
   it("does not let a deferred cancel resurrect after forget tombstone churn", async () => {
@@ -349,13 +368,13 @@ describe("native session controls", () => {
       started();
       await new Promise<void>((resolve) => { release = resolve; });
     };
-    const deferred = controls.cancel(session(), "delivery-deferred-cancel");
+    const deferred = controls.cancel(workingSession(), "delivery-deferred-cancel");
     await startedPromise;
     controls.forget("session-1");
     for (let index = 0; index < 513; index += 1) controls.forget(`unrelated-cancel-${index}`);
     release?.();
     await expect(deferred).rejects.toThrow("unavailable");
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
     expect(helper.terminalCancelRequests).toHaveLength(1);
   });
 
@@ -369,8 +388,8 @@ describe("native session controls", () => {
     });
     const prompt = helper.terminalSendRequests.at(-1)?.text ?? "";
     expect(prompt).toMatch(/^Explain this image\n\/.*\.png$/);
-    controls.reconcileChatPage(session(), page({ id: "pi-text-image", text: prompt }), true);
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-pi-text-image");
+    controls.reconcileChatPage(workingSession(), page({ id: "pi-text-image", text: prompt }), true);
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-pi-text-image");
   });
 
   it("binds Pi image-only cancellation to its exact canonical path", async () => {
@@ -383,8 +402,8 @@ describe("native session controls", () => {
     });
     const prompt = helper.terminalSendRequests.at(-1)?.text ?? "";
     expect(prompt).toMatch(/^\/.*\.png$/);
-    controls.reconcileChatPage(session(), page({ id: "pi-image-only", text: prompt }), true);
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-pi-image-only");
+    controls.reconcileChatPage(workingSession(), page({ id: "pi-image-only", text: prompt }), true);
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-pi-image-only");
   });
 
   it("requires exact image fingerprints for identity-less Claude fallback", async () => {
@@ -402,13 +421,13 @@ describe("native session controls", () => {
       roots.push(root);
       const controls = new NativeSessionControls(helper, root);
       await controls.send(session({ provider: "claude_code" }), "Review", submittedImages, deliveryId, evidence);
-      controls.reconcileChatPage(session({ provider: "claude_code" }), page({
+      controls.reconcileChatPage(workingSession({ provider: "claude_code" }), page({
         id: `canonical-${deliveryId}`,
         text: "Review",
         timestamp: "2026-08-23T00:00:11.000Z",
         images: canonicalImages,
       }));
-      const active = controls.activeCancelDeliveryId(session({ provider: "claude_code" }));
+      const active = controls.activeCancelDeliveryId(workingSession({ provider: "claude_code" }));
       await controls.close();
       return active;
     };
@@ -435,11 +454,11 @@ describe("native session controls", () => {
       roots.push(root);
       const controls = new NativeSessionControls(helper, root);
       await controls.send(session({ provider: "claude_code" }), "Review", [pngImage, webpImage], deliveryId, evidence);
-      controls.reconcileChatPage(session({ provider: "claude_code" }), page({
+      controls.reconcileChatPage(workingSession({ provider: "claude_code" }), page({
         id: `canonical-${deliveryId}`, text: "Review",
         timestamp: "2026-08-23T00:00:11.000Z", images: canonicalImages,
       }));
-      const active = controls.activeCancelDeliveryId(session({ provider: "claude_code" }));
+      const active = controls.activeCancelDeliveryId(workingSession({ provider: "claude_code" }));
       await controls.close();
       return active;
     };
@@ -461,21 +480,21 @@ describe("native session controls", () => {
     };
 
     await controls.send(session(), "Working", [], "delivery-terminal", evidence);
-    controls.reconcileChatPage(session(), page({ id: "user-before", text: "Working" }));
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
+    controls.reconcileChatPage(workingSession(), page({ id: "user-before", text: "Working" }));
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
 
-    controls.reconcileChatPage(session(), page(
+    controls.reconcileChatPage(workingSession(), page(
       { id: "user-before", text: "Working" },
       { id: "user-after", text: "Working" },
     ));
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-terminal");
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-terminal");
 
     // Re-reading the same transcript must not create a second turn or clear the match.
-    controls.reconcileChatPage(session(), page(
+    controls.reconcileChatPage(workingSession(), page(
       { id: "user-before", text: "Working" },
       { id: "user-after", text: "Working" },
     ));
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-terminal");
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-terminal");
   });
 
   it("uses the baseline to distinguish identical prompts and fails closed on a different turn", async () => {
@@ -490,21 +509,21 @@ describe("native session controls", () => {
     };
 
     await controls.send(session(), "Same prompt", [], "delivery-same", evidence);
-    controls.reconcileChatPage(session(), page(
+    controls.reconcileChatPage(workingSession(), page(
       { id: "same-before", text: "Same prompt" },
       { id: "same-after", text: "Same prompt" },
     ));
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-same");
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-same");
 
     const second = new NativeSessionControls(helper, root);
     await second.send(session(), "Expected", [], "delivery-mismatch", {
       baselineUserEntryIds: ["before"], baselineComplete: true, submittedText: "Expected",
     });
-    second.reconcileChatPage(session(), page(
+    second.reconcileChatPage(workingSession(), page(
       { id: "before", text: "Prior" },
       { id: "external", text: "Different external turn" },
     ));
-    expect(second.activeCancelDeliveryId(session())).toBeUndefined();
+    expect(second.activeCancelDeliveryId(workingSession())).toBeUndefined();
   });
 
   it("never uses text fallback when a canonical row carries mismatched identity", async () => {
@@ -519,11 +538,11 @@ describe("native session controls", () => {
       requestId: "request-exact",
     });
 
-    controls.reconcileChatPage(session(), page(
+    controls.reconcileChatPage(workingSession(), page(
       { id: "before", text: "Earlier" },
       { id: "wrong-delivery", text: "Same prompt", deliveryId: "delivery-other" },
     ));
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
 
     const requestControls = new NativeSessionControls(helper, root);
     await requestControls.send(session(), "Same prompt", [], "delivery-request", {
@@ -532,11 +551,11 @@ describe("native session controls", () => {
       submittedText: "Same prompt",
       requestId: "request-exact",
     });
-    requestControls.reconcileChatPage(session(), page(
+    requestControls.reconcileChatPage(workingSession(), page(
       { id: "before", text: "Earlier" },
       { id: "wrong-request", text: "Same prompt", requestId: "request-other" },
     ));
-    expect(requestControls.activeCancelDeliveryId(session())).toBeUndefined();
+    expect(requestControls.activeCancelDeliveryId(workingSession())).toBeUndefined();
   });
 
   it("requires authoritative post-submit evidence for content fallback", async () => {
@@ -549,32 +568,32 @@ describe("native session controls", () => {
       baselineUserEntryIds: [], baselineComplete: false, submittedText: "Same prompt",
       authoritativeComplete: false, submittedAt,
     });
-    nonAuthoritative.reconcileChatPage(session(), page({
+    nonAuthoritative.reconcileChatPage(workingSession(), page({
       id: "old-row", text: "Same prompt", timestamp: "2026-08-23T00:00:11.000Z",
     }));
-    expect(nonAuthoritative.activeCancelDeliveryId(session())).toBeUndefined();
+    expect(nonAuthoritative.activeCancelDeliveryId(workingSession())).toBeUndefined();
 
     const old = new NativeSessionControls(helper, root);
     await old.send(session(), "Same prompt", [], "delivery-old", {
       baselineUserEntryIds: ["before"], baselineComplete: true, submittedText: "Same prompt",
       authoritativeComplete: true, submittedAt,
     });
-    old.reconcileChatPage(session(), page(
+    old.reconcileChatPage(workingSession(), page(
       { id: "before", text: "Earlier", timestamp: "2026-08-23T00:00:09.000Z" },
       { id: "old-row", text: "Same prompt", timestamp: "2026-08-23T00:00:09.500Z" },
     ));
-    expect(old.activeCancelDeliveryId(session())).toBeUndefined();
+    expect(old.activeCancelDeliveryId(workingSession())).toBeUndefined();
 
     const fresh = new NativeSessionControls(helper, root);
     await fresh.send(session(), "Same prompt", [], "delivery-fresh", {
       baselineUserEntryIds: ["before"], baselineComplete: true, submittedText: "Same prompt",
       authoritativeComplete: true, submittedAt,
     });
-    fresh.reconcileChatPage(session(), page(
+    fresh.reconcileChatPage(workingSession(), page(
       { id: "before", text: "Earlier", timestamp: "2026-08-23T00:00:09.000Z" },
       { id: "new-row", text: "Same prompt", timestamp: "2026-08-23T00:00:11.000Z" },
     ));
-    expect(fresh.activeCancelDeliveryId(session())).toBe("delivery-fresh");
+    expect(fresh.activeCancelDeliveryId(workingSession())).toBe("delivery-fresh");
   });
 
   it("allows exact delivery identity without a source timestamp", async () => {
@@ -587,10 +606,10 @@ describe("native session controls", () => {
       authoritativeComplete: false, submittedAt: "2026-08-23T00:00:10.000Z",
       requestId: "request-exact",
     });
-    controls.reconcileChatPage(session(), page({
+    controls.reconcileChatPage(workingSession(), page({
       id: "exact-row", text: "Image prompt", deliveryId: "delivery-exact",
     }));
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-exact");
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-exact");
   });
 
   it("consumes one canonical row at most once across identical deliveries", async () => {
@@ -605,14 +624,14 @@ describe("native session controls", () => {
     await controls.send(session(), "Same prompt", [], "delivery-a", evidence);
     await controls.send(session(), "Same prompt", [], "delivery-b", evidence);
     const canonical = page({ id: "one-row", text: "Same prompt" });
-    controls.reconcileChatPage(session(), canonical);
+    controls.reconcileChatPage(workingSession(), canonical);
 
     // The one canonical ID cannot silently back both pending deliveries. The
     // exact row is consumed by at most one cancellation target.
-    const active = controls.activeCancelDeliveryId(session());
+    const active = controls.activeCancelDeliveryId(workingSession());
     expect(active).toBeUndefined();
     expect(helper.terminalCancelRequests).toEqual([]);
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
   });
 
   it("does not consume a replayed canonical row for a later delivery", async () => {
@@ -622,17 +641,17 @@ describe("native session controls", () => {
     const controls = new NativeSessionControls(helper, root);
 
     await sendAndObserve(controls, session(), "Same prompt", "delivery-first", "old-row");
-    controls.reconcileChatPage(session(), page(
+    controls.reconcileChatPage(workingSession(), page(
       { id: "old-row", text: "Same prompt" },
       { id: "external-row", text: "External" },
     ));
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
 
     await controls.send(session(), "Same prompt", [], "delivery-second", {
       baselineUserEntryIds: [], baselineComplete: true, submittedText: "Same prompt",
     });
-    controls.reconcileChatPage(session(), page({ id: "old-row", text: "Same prompt" }));
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
+    controls.reconcileChatPage(workingSession(), page({ id: "old-row", text: "Same prompt" }));
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
   });
 
   it("rejects the action over-cap before a queued send can materialize images", async () => {
@@ -698,14 +717,14 @@ describe("native session controls", () => {
     await controls.send(session(), "First", [], "delivery-first", {
       baselineUserEntryIds: [], baselineComplete: true, submittedText: "First",
     });
-    controls.reconcileChatPage(session(), page({ id: "first", text: "First" }));
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-first");
+    controls.reconcileChatPage(workingSession(), page({ id: "first", text: "First" }));
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-first");
 
-    controls.reconcileChatPage(session(), page(
+    controls.reconcileChatPage(workingSession(), page(
       { id: "first", text: "First" },
       { id: "external", text: "External" },
     ));
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
     expect(helper.terminalCancelRequests).toEqual([]);
   });
 
@@ -716,18 +735,18 @@ describe("native session controls", () => {
     const controls = new NativeSessionControls(helper, root);
 
     await sendAndObserve(controls, session(), "Working", "delivery-a", "user-a");
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-a");
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-a");
 
     controls.reconcile(session({ section: "ready" }));
     expect(controls.activeCancelDeliveryId(session({ section: "ready" }))).toBeUndefined();
-    await expect(controls.cancel(session(), "delivery-a")).rejects.toThrow("unavailable");
+    await expect(controls.cancel(workingSession(), "delivery-a")).rejects.toThrow("unavailable");
 
     const replacementSession = session({ controlTarget: { kind: "terminal", target: replacementTarget } });
     await sendAndObserve(controls, replacementSession, "Working", "delivery-b", "user-b");
-    expect(controls.activeCancelDeliveryId(session({ controlTarget: { kind: "terminal", target: replacementTarget } }))).toBe("delivery-b");
+    expect(controls.activeCancelDeliveryId(workingSession({ controlTarget: { kind: "terminal", target: replacementTarget } }))).toBe("delivery-b");
     controls.reconcile(session({ controlTarget: { kind: "terminal", target } }));
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
-    await expect(controls.cancel(session(), "delivery-b")).rejects.toThrow("unavailable");
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
+    await expect(controls.cancel(workingSession(), "delivery-b")).rejects.toThrow("unavailable");
     expect(helper.terminalCancelRequests).toEqual([]);
   });
 
@@ -752,7 +771,7 @@ describe("native session controls", () => {
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(2);
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
   });
 
   it("forgets one session's terminal timer without affecting another session", async () => {
@@ -810,7 +829,7 @@ describe("native session controls", () => {
     const controls = new NativeSessionControls(helper, root);
     await sendAndObserve(controls, session(), "First", "delivery-instance-a", "user-a");
 
-    const reusedPID = session({
+    const reusedPID = workingSession({
       controlTarget: {
         kind: "terminal",
         target: { ...target, processStartToken: "start-b" },
@@ -826,7 +845,7 @@ describe("native session controls", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-controls-test-"));
     roots.push(root);
     const controls = new NativeSessionControls(helper, root);
-    const missingToken = session({
+    const missingToken = workingSession({
       controlTarget: {
         kind: "terminal",
         target: { application: "Ghostty", pid: target.pid, tty: target.tty, cwd: target.cwd },
@@ -851,7 +870,7 @@ describe("native session controls", () => {
     // reconciles the new verified process instance.
     controls.reconcile(replacementSession);
     await sendAndObserve(controls, replacementSession, "Second", "delivery-b", "user-b");
-    const current = session({ controlTarget: { kind: "terminal", target: replacementTarget } });
+    const current = workingSession({ controlTarget: { kind: "terminal", target: replacementTarget } });
     expect(controls.activeCancelDeliveryId(current)).toBe("delivery-b");
     await expect(controls.cancel(current, "delivery-a")).rejects.toThrow("unavailable");
     await controls.cancel(current, "delivery-b");
@@ -868,7 +887,7 @@ describe("native session controls", () => {
     helper.sendTerminal = async () => { throw new Error("terminal disappeared"); };
     await expect(controls.send(session(), "Second", [], "delivery-b")).rejects.toThrow("terminal disappeared");
     // A's confirmed identity remains actionable when queued B fails.
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-a");
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-a");
     expect(helper.terminalCancelRequests).toEqual([]);
   });
 
@@ -885,7 +904,7 @@ describe("native session controls", () => {
     await expect(controls.send(session(), "Second", [], "delivery-b", {
       baselineUserEntryIds: ["user-a"], baselineComplete: true, submittedText: "Second",
     })).rejects.toThrow("B failed");
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-a");
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-a");
 
   });
 
@@ -911,7 +930,7 @@ describe("native session controls", () => {
     release?.();
     await delivery;
 
-    expect(controls.activeCancelDeliveryId(session({
+    expect(controls.activeCancelDeliveryId(workingSession({
       controlTarget: { kind: "terminal", target: replacementTarget },
     }))).toBeUndefined();
     expect(helper.terminalCancelRequests).toEqual([]);
@@ -926,17 +945,17 @@ describe("native session controls", () => {
 
     await sendAndObserve(controls, session(), "First", "delivery-a", "user-a");
     await sendAndObserve(controls, secondSession, "Other", "delivery-other", "user-other");
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-a");
-    expect(controls.activeCancelDeliveryId(secondSession)).toBe("delivery-other");
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-a");
+    expect(controls.activeCancelDeliveryId(workingSession(secondSession))).toBe("delivery-other");
 
     controls.forget("session-1");
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
-    await expect(controls.cancel(session(), "delivery-a")).rejects.toThrow("unavailable");
-    expect(controls.activeCancelDeliveryId(secondSession)).toBe("delivery-other");
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
+    await expect(controls.cancel(workingSession(), "delivery-a")).rejects.toThrow("unavailable");
+    expect(controls.activeCancelDeliveryId(workingSession(secondSession))).toBe("delivery-other");
 
     // Reusing the session ID starts with a clean generation/target ledger.
     await sendAndObserve(controls, session(), "Replacement", "delivery-new", "user-new");
-    expect(controls.activeCancelDeliveryId(session())).toBe("delivery-new");
+    expect(controls.activeCancelDeliveryId(workingSession())).toBe("delivery-new");
   });
 
   it("keeps a deferred operation invalid after tombstone churn and session-ID reuse", async () => {
@@ -960,7 +979,7 @@ describe("native session controls", () => {
     for (let index = 0; index < 513; index += 1) controls.forget(`unrelated-${index}`);
     release?.();
     await expect(deferred).rejects.toThrow("removed");
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
 
     // Reusing the ID gets a fresh operation, but the old completion cannot
     // register or mutate its delivery state.
@@ -971,7 +990,7 @@ describe("native session controls", () => {
       baselineUserEntryIds: [], baselineComplete: true, submittedText: "new",
     });
     expect(helper.terminalSendRequests.map(({ text }) => text)).toEqual(["old", "new"]);
-    expect(controls.activeCancelDeliveryId(session())).toBeUndefined();
+    expect(controls.activeCancelDeliveryId(workingSession())).toBeUndefined();
   });
 
   it("cancels Claude in Terminal through the same verified terminal seam", async () => {
@@ -988,7 +1007,7 @@ describe("native session controls", () => {
       },
     });
     await sendAndObserve(controls, terminalSession, "Working", "delivery-claude", "user-claude");
-    await controls.cancel(terminalSession, "delivery-claude");
+    await controls.cancel(workingSession(terminalSession), "delivery-claude");
 
     expect(helper.terminalCancelRequests).toEqual([{
       ...target,
@@ -1011,18 +1030,51 @@ describe("native session controls", () => {
       (sessionId, deliveryId) => { codexCalls.push(`${sessionId}:${deliveryId}`); return true; },
     );
 
-    const codexSession = session({ provider: "codex", messageTransport: "codex_app_server" });
+    const codexSession = session({
+      provider: "codex", messageTransport: "codex_app_server", turnState: "ready",
+      routeState: "available",
+    });
     await controls.send(codexSession, "Working", [], "delivery-codex");
-    expect(controls.activeCancelDeliveryId(codexSession)).toBe("delivery-codex");
-    await expect(controls.cancel(codexSession, "wrong-delivery")).rejects.toThrow("unavailable");
-    await controls.cancel(codexSession, "delivery-codex");
+    const workingCodexSession = { ...codexSession, turnState: "working" as const };
+    expect(controls.activeCancelDeliveryId(workingCodexSession)).toBe("delivery-codex");
+    await expect(controls.cancel(workingCodexSession, "wrong-delivery")).rejects.toThrow("unavailable");
+    await controls.cancel(workingCodexSession, "delivery-codex");
     expect(codexSends).toEqual(["session-1"]);
     expect(codexCalls).toEqual(["session-1:delivery-codex"]);
     expect(helper.terminalCancelRequests).toEqual([]);
-    expect(controls.canCancel(codexSession, "delivery-codex")).toBe(false);
+    expect(controls.canCancel(workingCodexSession, "delivery-codex")).toBe(false);
     expect(controls.canCancel(session({ section: "ready" }))).toBe(false);
     expect(controls.canCancel(session({ provider: "cursor" }))).toBe(false);
     await expect(controls.cancel(session({ provider: "cursor" }))).rejects.toThrow("unavailable");
+  });
+
+  it("awaits an async Codex cancel result before clearing the exact delivery", async () => {
+    const helper = new FakeNativeHelper();
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-controls-test-"));
+    roots.push(root);
+    let resolveCancel!: (result: boolean) => void;
+    const cancelResult = new Promise<boolean>((resolve) => { resolveCancel = resolve; });
+    const controls = new NativeSessionControls(
+      helper,
+      root,
+      async () => undefined,
+      undefined,
+      undefined,
+      async () => cancelResult,
+    );
+    const codexSession = session({
+      provider: "codex", messageTransport: "codex_app_server", turnState: "ready",
+      routeState: "available",
+    });
+    await controls.send(codexSession, "Working", [], "delivery-async-cancel");
+    const working = { ...codexSession, turnState: "working" as const };
+    const cancel = controls.cancel(working, "delivery-async-cancel");
+    await vi.waitFor(() => expect(controls.canCancel(working, "delivery-async-cancel")).toBe(true));
+    resolveCancel(false);
+    await expect(cancel).rejects.toThrow("No active Codex turn");
+    // A rejected interrupt leaves the exact delivery registered for a later
+    // retry/reconciliation instead of falsely reporting it as stopped.
+    expect(controls.canCancel(working, "delivery-async-cancel")).toBe(true);
   });
 
   it("rejects malformed attachment metadata before native delivery", async () => {

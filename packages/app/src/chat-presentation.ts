@@ -402,6 +402,16 @@ export function mergeChatPage(
     hasMoreBefore: mode === "earlier" ? incoming.hasMoreBefore : current.hasMoreBefore,
     nextBefore: mode === "earlier" ? incoming.nextBefore : current.nextBefore,
     metadata: mode === "earlier" ? current.metadata : incoming.metadata,
+    // Earlier pages contain transcript history only. Keep the latest
+    // capability/state projection so an old page cannot re-enable Send or
+    // Stop after a newer state update has already denied it.
+    capabilities: mode === "earlier" ? current.capabilities : incoming.capabilities,
+    sessionState: mode === "earlier" ? current.sessionState : incoming.sessionState,
+    stateRevision: mode === "earlier" ? current.stateRevision : incoming.stateRevision,
+    chatSettings: mode === "earlier" ? current.chatSettings : incoming.chatSettings,
+    pendingAction: mode === "earlier" ? current.pendingAction : incoming.pendingAction,
+    pendingActions: mode === "earlier" ? current.pendingActions : incoming.pendingActions,
+    transcriptEvidence: mode === "earlier" ? current.transcriptEvidence : incoming.transcriptEvidence,
   };
 }
 

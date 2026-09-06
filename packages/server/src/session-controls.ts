@@ -10,9 +10,15 @@ import {
 } from "@agent-visor/protocol";
 import {
   activeCodexTurnDeliveryId,
+  closeCodexRoutes,
+  recoverCodexRoute as providerRecoverCodexRoute,
+  codexRouteStatus as providerCodexRouteStatus,
+  relinquishIdleCodexRoute as providerRelinquishIdleCodexRoute,
   sendCodexTurn,
+  subscribeCodexRouteEvents,
   stopCodexTurn,
   type CodexActionRegistrar,
+  type CodexRouteEvent,
 } from "./codex-turn.js";
 import type { NativeHelperAdapter } from "./native-helper.js";
 import {
@@ -25,9 +31,12 @@ import type {
   ChatSendCurrentness,
   DiscoveredProviderSession,
   SessionControls,
+  SessionRouteProbeResult,
+  SessionRouteRecoveryResult,
 } from "./sessions.js";
 import { normalizeChatText } from "./chat.js";
 import { isVerifiableProcessInstanceToken } from "./providers/shared.js";
+import { isTerminalRoute, resolveSessionState, sessionTurnState } from "./session-state.js";
 
 type ActiveTerminalDelivery = {
   sessionId: string;
@@ -89,6 +98,8 @@ export class NativeSessionControls implements SessionControls {
   private readonly terminalGenerationBySession = new Map<string, number>();
   private readonly knownTerminalTargetBySession = new Map<string, string>();
   private readonly codexDeliveryBySession = new Map<string, string>();
+  /** Last typed provider probe, retained across ambient rediscovery. */
+  private readonly codexRouteProbeBySession = new Map<string, SessionRouteProbeResult>();
   // A canonical transcript ID is global evidence, not a per-page hint. Keep
   // a bounded insertion-ordered history so replaying an earlier page cannot
   // bind the same provider row to a later delivery.
@@ -105,13 +116,61 @@ export class NativeSessionControls implements SessionControls {
       throw new Error("Exact application focus is unavailable.");
     },
     private readonly registerCodexAction?: CodexActionRegistrar,
-    private readonly cancelCodex = stopCodexTurn,
+    private readonly cancelCodex: (
+      sessionId: string,
+      deliveryId?: string,
+    ) => boolean | Promise<boolean> = stopCodexTurn,
   ) {
     this.imageLeases = new ChatImageLeaseStore({ root: imageRoot });
   }
 
   isAvailable(): boolean {
     return this.helper.isAvailable?.() !== false;
+  }
+
+  async relinquishIdleCodexRoute(sessionId: string): Promise<boolean> {
+    const relinquished = await providerRelinquishIdleCodexRoute(sessionId);
+    if (relinquished) {
+      this.codexRouteProbeBySession.set(sessionId, {
+        routeState: "unavailable",
+        unavailableReason: "provider_unavailable",
+        turnState: "ready",
+      });
+      return true;
+    }
+    const current = providerCodexRouteStatus(sessionId);
+    this.codexRouteProbeBySession.set(sessionId, current);
+    return false;
+  }
+
+  subscribeCodexRouteEvents(listener: (event: CodexRouteEvent) => void): () => void {
+    return subscribeCodexRouteEvents(listener);
+  }
+
+  codexRouteStatus(sessionId: string): SessionRouteProbeResult {
+    const current = providerCodexRouteStatus(sessionId) as SessionRouteProbeResult;
+    if (current.releasePending) return current;
+    if (current.routeState === "available") {
+      this.codexRouteProbeBySession.set(sessionId, current);
+      return current;
+    }
+    const cached = this.codexRouteProbeBySession.get(sessionId);
+    // A previous available result is stale as soon as the manager loses its
+    // child. Preserve only the stronger owner-only classification, which is
+    // still useful while the provider's writer remains held elsewhere.
+    return cached?.unavailableReason === "owner_only" ? cached : current;
+  }
+
+  recoverCodexRoute(
+    sessionId: string,
+    evidence: { turnState: "ready"; turnId: string },
+  ): SessionRouteRecoveryResult {
+    // This is deliberately a read/reconcile operation. The provider helper
+    // only clears its sticky uncertainty after the exact lifecycle identity
+    // matches; it never resumes a child or sends the user's draft.
+    const result = providerRecoverCodexRoute(sessionId, evidence);
+    this.codexRouteProbeBySession.set(sessionId, result.probe);
+    return result;
   }
 
   focus(session: DiscoveredProviderSession): Promise<void> {
@@ -199,12 +258,22 @@ export class NativeSessionControls implements SessionControls {
   }
 
   reconcile(session: DiscoveredProviderSession): void {
-    if (session.section !== "working" || this.helper.isAvailable?.() === false) {
+    if (sessionTurnState(session) !== "working") {
       this.clear(session.id);
       return;
     }
     if (session.provider === "codex" && session.messageTransport === "codex_app_server") {
+      // Codex cancellation is owned by the app-server child, so native helper
+      // availability must not erase a valid daemon-owned turn identity.
+      if (this.cancelCodex === stopCodexTurn
+        && providerCodexRouteStatus(session.id).routeState !== "available") {
+        this.codexDeliveryBySession.delete(session.id);
+      }
       this.clearTerminal(session.id);
+      return;
+    }
+    if (this.helper.isAvailable?.() === false) {
+      this.clear(session.id);
       return;
     }
     if (isTerminalCancellationRoute(session)
@@ -348,12 +417,15 @@ export class NativeSessionControls implements SessionControls {
 
   activeCancelDeliveryId(session: DiscoveredProviderSession): string | undefined {
     this.reconcile(session);
-    if (session.section !== "working" || this.helper.isAvailable?.() === false) return undefined;
+    if (sessionTurnState(session) !== "working") return undefined;
     if (session.provider === "codex" && session.messageTransport === "codex_app_server") {
+      if (this.cancelCodex === stopCodexTurn
+        && providerCodexRouteStatus(session.id).routeState !== "available") return undefined;
       return this.cancelCodex === stopCodexTurn
         ? activeCodexTurnDeliveryId(session.id)
         : this.codexDeliveryBySession.get(session.id);
     }
+    if (this.helper.isAvailable?.() === false) return undefined;
     if (session.messageTransport !== "terminal"
       || session.controlTarget?.kind !== "terminal"
       || (session.provider !== "claude_code" && session.provider !== "pi")
@@ -376,7 +448,7 @@ export class NativeSessionControls implements SessionControls {
         throw new Error("Cancellation is unavailable for this session.");
       }
       if (session.provider === "codex" && session.messageTransport === "codex_app_server") {
-        if (!this.cancelCodex(session.id, deliveryId)) {
+        if (!await this.cancelCodex(session.id, deliveryId)) {
           throw new Error("No active Codex turn is available to cancel.");
         }
         this.clear(session.id, deliveryId);
@@ -412,7 +484,7 @@ export class NativeSessionControls implements SessionControls {
 
   canCyclePermissionMode(session: DiscoveredProviderSession): boolean {
     if (this.helper.isAvailable?.() === false
-      || session.section !== "working"
+      || sessionTurnState(session) !== "working"
       || session.provider !== "claude_code"
       || session.messageTransport !== "terminal"
       || session.controlTarget?.kind !== "terminal"
@@ -470,6 +542,7 @@ export class NativeSessionControls implements SessionControls {
     this.knownTerminalTargetBySession.delete(sessionId);
     this.consumedCanonicalUserIDsBySession.delete(sessionId);
     this.codexDeliveryBySession.delete(sessionId);
+    this.codexRouteProbeBySession.delete(sessionId);
   }
 
   private async deliver(
@@ -482,7 +555,16 @@ export class NativeSessionControls implements SessionControls {
     settings?: ChatSettingsPatch,
   ): Promise<void> {
     if (!text && !images.length) throw new Error("The message is empty.");
-    if (session.section !== "working") {
+    const state = resolveSessionState(session, {
+      nativeHelperAvailable: this.helper.isAvailable?.() !== false,
+    });
+    if (state.route !== "available") {
+      if (sessionTurnState(session) === "working"
+        && isTerminalRoute(session)
+        && session.controlTarget?.kind === "terminal"
+        && !hasStableTerminalIdentity(session.controlTarget.target)) {
+        throw new Error("The terminal process identity is unavailable.");
+      }
       throw new Error("Native message delivery is unavailable for this session.");
     }
     if (!isCurrent()) throw new Error("The chat send is no longer current.");
@@ -500,8 +582,12 @@ export class NativeSessionControls implements SessionControls {
           evidence?.requestId,
           evidence?.generation,
           settings,
+          isCurrent,
         );
-        if (!isCurrent()) throw new Error("The session was removed before delivery completed.");
+        // sendCodex resolves only after the provider accepted turn/start. A
+        // live turn notification may legitimately change the projected turn
+        // state at that boundary; do not report that accepted turn as a
+        // retryable stale send or release it as an unconfirmed delivery.
         await this.imageLeases.release(imageLease.scope);
         return;
       }
@@ -556,6 +642,8 @@ export class NativeSessionControls implements SessionControls {
   }
 
   async close(): Promise<void> {
+    this.codexRouteProbeBySession.clear();
+    await closeCodexRoutes();
     await this.imageLeases.close();
   }
 
@@ -738,10 +826,7 @@ export class NativeSessionControls implements SessionControls {
 }
 
 function isTerminalCancellationRoute(session: DiscoveredProviderSession): boolean {
-  return session.section === "working"
-    && session.messageTransport === "terminal"
-    && session.controlTarget?.kind === "terminal"
-    && (session.provider === "claude_code" || session.provider === "pi");
+  return sessionTurnState(session) === "working" && isTerminalRoute(session);
 }
 
 /**
