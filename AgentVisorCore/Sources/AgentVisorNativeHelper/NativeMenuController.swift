@@ -6,6 +6,8 @@ import SwiftUI
 
 private final class NativePillButton: NSButton {
     var normalBackgroundColor = NSColor.black.withAlphaComponent(0.35)
+    var motionBackgroundColor: NSColor?
+    var restingBackgroundColor: NSColor { motionBackgroundColor ?? normalBackgroundColor }
     var onActivate: ((NSEvent.ModifierFlags) -> Void)?
     var onAccessibilityActivate: (() -> Void)?
     var onHoverChange: ((Bool) -> Void)?
@@ -44,7 +46,7 @@ private final class NativePillButton: NSButton {
     override func highlight(_ flag: Bool) {
         super.highlight(flag)
         layer?.backgroundColor = (
-            flag ? NSColor.white.withAlphaComponent(0.25) : normalBackgroundColor
+            flag ? NSColor.white.withAlphaComponent(0.25) : restingBackgroundColor
         ).cgColor
     }
 
@@ -56,7 +58,7 @@ private final class NativePillButton: NSButton {
     func flash() {
         layer?.backgroundColor = NSColor.white.withAlphaComponent(0.25).cgColor
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-            self?.layer?.backgroundColor = self?.normalBackgroundColor.cgColor
+            self?.layer?.backgroundColor = self?.restingBackgroundColor.cgColor
         }
     }
 }
@@ -96,18 +98,25 @@ private final class NativePillPanel: NSPanel {
         pillButton.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
         pillButton.layer?.cornerRadius = 12
         pillButton.layer?.masksToBounds = true
-        contentView = pillButton
+        let viewport = NSView(frame: .zero)
+        viewport.wantsLayer = true
+        viewport.layer?.masksToBounds = true
+        viewport.addSubview(pillButton)
+        contentView = viewport
     }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     override func isAccessibilityElement() -> Bool { false }
 
-    func place(frame: CGRect) {
+    func place(_ placement: NativeMenuLayoutTransition.Placement, overlapping: Bool) {
+        let frame = placement.frame
         if self.frame != frame { setFrame(frame, display: true) }
-        pillButton.frame = CGRect(origin: .zero, size: frame.size)
-        pillButton.layer?.cornerRadius = frame.height / 2
-        orderFrontRegardless()
+        pillButton.frame = placement.contentFrame.offsetBy(dx: -frame.minX, dy: -frame.minY)
+        pillButton.layer?.cornerRadius = placement.contentFrame.height / 2
+        // Opaque crossing pills keep the labels underneath from showing through.
+        pillButton.motionBackgroundColor = overlapping ? NSColor(white: 0.22, alpha: 1) : nil
+        pillButton.layer?.backgroundColor = pillButton.restingBackgroundColor.cgColor
     }
 }
 
@@ -384,7 +393,7 @@ final class NativeMenuController: NSObject {
     private var proposedFrames: [NativeMenuPanelTarget: CGRect] = [:]
     private var proposedLabels: [String: String] = [:]
     private var layoutSafeAreas: [CGRect] = []
-    private var layoutOpacity: Double = 1
+    private var layoutFrontToBack: [NativeMenuPanelTarget] = []
     private var layoutObservers: [NSObjectProtocol] = []
     private var renderedDisplayID: CGDirectDisplayID?
     private var renderedScreenFrame: CGRect?
@@ -609,7 +618,8 @@ final class NativeMenuController: NSObject {
             sessionFrames: panelHitSnapshot.sessionFrames,
             overflowFrame: panelHitSnapshot.overflowFrame,
             orderedUsageIDs: panelHitSnapshot.orderedUsageIDs,
-            usageFrames: panelHitSnapshot.usageFrames
+            usageFrames: panelHitSnapshot.usageFrames,
+            frontToBack: layoutFrontToBack
         ) {
         case .session(let id): activateSession(id, intent: activationIntent(for: modifiers))
         case .overflow: activateOverflow()
@@ -1060,18 +1070,17 @@ final class NativeMenuController: NSObject {
             layoutTransitionTimer?.invalidate()
             layoutTransitionTimer = nil
             layoutTransition = NativeMenuLayoutTransition()
-            layoutOpacity = 1
         }
         let panels = Array(sessionPanels.values) + Array(usagePanels.values)
             + [overflowPanel].compactMap { $0 }
         panels.forEach { $0.ignoresMouseEvents = !visible }
         if visible == presentationIsVisible {
-            panels.forEach { $0.alphaValue = visible ? layoutOpacity : 0 }
+            panels.forEach { $0.alphaValue = visible ? 1 : 0 }
         } else {
             presentationIsVisible = visible
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.15
-                panels.forEach { $0.animator().alphaValue = visible ? layoutOpacity : 0 }
+                panels.forEach { $0.animator().alphaValue = visible ? 1 : 0 }
             }
         }
     }
@@ -1307,13 +1316,11 @@ final class NativeMenuController: NSObject {
             popoverOpen: sessionPopover?.isShown == true
                 || overflowPopover?.isShown == true || usagePopover?.isShown == true,
             reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || !presentationIsVisible,
+            preferredTarget: lastActivation.map { .session($0.id) },
             now: ProcessInfo.processInfo.systemUptime
         )
-        layoutOpacity = presentation.opacity
+        layoutFrontToBack = presentation.orderedTargets
         let frames = presentation.frames
-        // Opacity is applied before relocating windows at the invisible midpoint.
-        (Array(sessionPanels.values) + Array(usagePanels.values) + [overflowPanel].compactMap { $0 })
-            .forEach { $0.alphaValue = presentationIsVisible ? layoutOpacity : 0 }
         let visibleIDs = frames.keys.compactMap { target -> String? in
             if case .session(let id) = target { return id }
             return nil
@@ -1325,30 +1332,38 @@ final class NativeMenuController: NSObject {
             navigatorPills: navigatorPills, visibleSessionIDs: visibleSessionIDs
         ).overflowSessionIDs.count
         for (id, panel) in sessionPanels {
-            guard let frame = frames[.session(id)], let pill = sessionPresentations[id] else {
+            guard let placement = presentation.placements[.session(id)], let pill = sessionPresentations[id] else {
                 panel.orderOut(nil)
                 continue
             }
             renderSession(panel, pill: pill, label: proposedLabels[id] ?? fullTitle(pill.title))
-            panel.place(frame: frame)
+            panel.place(placement, overlapping: presentation.overlappingTargets.contains(.session(id)))
         }
         for (id, panel) in usagePanels {
-            guard let frame = frames[.usage(id)], let glance = usagePresentations[id] else {
+            guard let placement = presentation.placements[.usage(id)], let glance = usagePresentations[id] else {
                 panel.orderOut(nil)
                 continue
             }
             renderUsage(panel, glance: glance)
-            panel.place(frame: frame)
+            panel.place(placement, overlapping: presentation.overlappingTargets.contains(.usage(id)))
         }
-        if let frame = frames[.overflow], currentOverflowCount > 0 {
+        if let placement = presentation.placements[.overflow], currentOverflowCount > 0 {
             let panel = overflowPanel ?? NativePillPanel()
             overflowPanel = panel
-            panel.alphaValue = presentationIsVisible ? layoutOpacity : 0
             renderOverflow(panel, count: currentOverflowCount)
-            panel.place(frame: frame)
+            panel.place(placement, overlapping: presentation.overlappingTargets.contains(.overflow))
         } else {
             overflowPanel?.orderOut(nil)
             dismissOverflowPopover()
+        }
+        // The first hit-test target must also be the topmost native window.
+        for target in layoutFrontToBack.reversed() {
+            switch target {
+            case .session(let id): sessionPanels[id]?.orderFrontRegardless()
+            case .usage(let id): usagePanels[id]?.orderFrontRegardless()
+            case .overflow: if currentOverflowCount > 0 { overflowPanel?.orderFrontRegardless() }
+            case .none: break
+            }
         }
         if !usagePanels.values.contains(where: { $0.isVisible }) { dismissUsagePopover() }
         capturePanelHitSnapshot()
@@ -1689,7 +1704,6 @@ final class NativeMenuController: NSObject {
         layoutTransitionTimer?.invalidate()
         layoutTransitionTimer = nil
         layoutTransition = NativeMenuLayoutTransition()
-        layoutOpacity = 1
         proposedFrames = [:]
         renderedDisplayID = nil
         renderedScreenFrame = nil
