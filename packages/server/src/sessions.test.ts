@@ -64,6 +64,36 @@ class FakeProvider implements ProviderAdapter {
 }
 
 describe("SessionRepository", () => {
+  it.each(["\n", "\r\n", "\r", "\v", "\f", "\u0085", "\u2028", "\u2029"])(
+    "uses one display-title line without changing the provider title (%j)", async (separator) => {
+      const provider = new FakeProvider();
+      const title = ` \t${separator} hi\t there ${separator}${separator}Instruction author: local:profile-test`;
+      provider.sessions = [{ ...live, title }];
+      const repository = new SessionRepository([provider]);
+
+      expect((await repository.refresh()).sessions[0]?.title).toBe("hi there");
+      expect(provider.sessions[0]?.title).toBe(title);
+    },
+  );
+
+  it("opens a Codex conversation without first acquiring a Visor writer", async () => {
+    const id = "unowned-pill-focus";
+    const record: DiscoveredProviderSession = {
+      ...readyLive, id, provider: "codex", owner: "Codex",
+      routeState: "available", routeOwnership: "unverified",
+      messageTransport: "codex_app_server",
+      controlTarget: { kind: "url", url: `codex://threads/${id}` },
+    };
+    const openURL = vi.fn(async () => undefined);
+    const controls = new NativeSessionControls(new FakeNativeHelper(), undefined, undefined, openURL);
+    const repository = new SessionRepository([{ id: "codex", discover: async () => [record] }]);
+    repository.setControls(controls);
+    await repository.refresh();
+
+    expect(await repository.focusSession(id)).toBeUndefined();
+    expect(openURL).toHaveBeenCalledExactlyOnceWith(`codex://threads/${id}`);
+  });
+
   it("keeps a stable revision while provider data is unchanged", async () => {
     const provider = new FakeProvider();
     const repository = new SessionRepository([provider]);

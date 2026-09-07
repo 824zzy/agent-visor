@@ -86,6 +86,8 @@ private final class NativePillPanel: NSPanel {
         pillButton.isBordered = false
         pillButton.focusRingType = .none
         pillButton.alignment = .center
+        pillButton.cell?.usesSingleLineMode = true
+        pillButton.cell?.lineBreakMode = .byTruncatingTail
         pillButton.imageScaling = .scaleNone
         pillButton.imagePosition = .imageLeading
         pillButton.imageHugsTitle = true
@@ -1673,7 +1675,7 @@ final class NativeMenuController: NSObject {
     }
 
     private func truncate(_ title: String, threshold: Int, prefix: Int) -> String {
-        let clean = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let clean = MenuBarPillTitlePolicy.title(sessionName: title, projectName: "Session")
         return clean.count > threshold ? String(clean.prefix(prefix)) + "..." : clean
     }
 

@@ -6,7 +6,7 @@ import type { NativeHelperUsageGlance } from "@agent-visor/protocol";
 import { runBackground } from "./background-task.js";
 import { stopCodexTurns } from "./codex-turn.js";
 import { startHookSocket, type RunningHookSocket } from "./hook-socket.js";
-import { menuPresentation, nativeActionFor } from "./menu.js";
+import { activateMenuPill, menuPresentation, nativeActionFor } from "./menu.js";
 import { runProcess } from "./machine.js";
 import {
   NativeHelperProcess,
@@ -115,14 +115,9 @@ if (nativeHelperExecutable) {
       }
       if (event.event === "activate_pill") {
         repository.acknowledgeReady(event.sessionId);
-        const action = nativeActionFor(event, repository.current());
-        if (action?.action === "open_chat") {
-          process.send?.(action);
-          return;
-        }
-        runBackground("session focus", () => repository.focusSession(event.sessionId).then((error) => {
-          if (error && action) process.send?.(action);
-        }));
+        runBackground("session focus", () => activateMenuPill(
+          event, repository, (message) => process.send?.(message),
+        ));
         return;
       }
       const action = nativeActionFor(event, repository.current());

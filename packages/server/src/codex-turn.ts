@@ -119,6 +119,8 @@ export type CodexRouteRecoveryResult = {
   reason?: "release_pending" | "identity_unavailable" | "identity_mismatch";
 };
 
+export type CodexRouteRelinquishResult = "not_owned" | "released" | "blocked";
+
 /**
  * Redacted native lifecycle evidence. Provider content is deliberately not
  * carried across this seam; the rollout reader remains the source of truth
@@ -1118,20 +1120,21 @@ export function releaseCodexRoute(threadId: string): void {
 
 /**
  * Relinquish an idle route before opening the owning desktop application.
- * Every retained reference is released together, and success is reported
- * only after the app-server child has exited. An active or unknown route is
- * left in place so navigation cannot interrupt an unrelated turn.
+ * Distinguish a writer we never acquired from a failed release. A released
+ * writer has confirmed child exit; active or uncertain turns stay blocked.
  */
-export async function relinquishIdleCodexRoute(threadId: string): Promise<boolean> {
+export async function relinquishIdleCodexRoute(threadId: string): Promise<CodexRouteRelinquishResult> {
   const entry = codexRoutes.get(threadId);
-  if (!entry) return false;
-  if (entry.closingPromise || entry.releasePending) return waitForCodexRouteClose(entry, false);
-  if (!entry.route || !entry.ready) return false;
+  if (!entry) return uncertainCodexTurn(threadId) ? "blocked" : "not_owned";
+  if (entry.closingPromise || entry.releasePending) {
+    return await waitForCodexRouteClose(entry) ? "released" : "blocked";
+  }
+  if (!entry.route || !entry.ready) return "blocked";
   const probe = entry.route.probe();
-  if (probe.routeState !== "available" || probe.turnState !== "ready") return false;
+  if (probe.routeState !== "available" || probe.turnState !== "ready") return "blocked";
   entry.references = 0;
   closeCodexRouteEntry(threadId, entry);
-  return waitForCodexRouteClose(entry);
+  return await waitForCodexRouteClose(entry) ? "released" : "blocked";
 }
 
 export async function closeCodexRoutes(): Promise<void> {

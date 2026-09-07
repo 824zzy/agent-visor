@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   Menu,
   shell,
@@ -37,6 +38,7 @@ let daemon: ChildProcess | undefined;
 let mainWindow: BrowserWindow | undefined;
 let secondInstancePending = false;
 let nativeActionQueue = Promise.resolve();
+let showingSessionFocusError = false;
 let quitting = false;
 
 app.setName(productName);
@@ -204,7 +206,16 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
   child.on("message", (message) => {
     const effect = nativeEffectFromDaemonMessage(message);
     if (effect) {
-      if (effect.action === "set_login_item") {
+      if (effect.action === "session_focus_failed") {
+        if (!showingSessionFocusError) {
+          showingSessionFocusError = true;
+          void dialog.showMessageBox({
+            type: "warning", message: "Couldn’t open this session",
+            detail: effect.message, buttons: ["OK"],
+          }).catch((error: unknown) => console.error(error))
+            .finally(() => { showingSessionFocusError = false; });
+        }
+      } else if (effect.action === "set_login_item") {
         if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: effect.enabled });
       } else if (effect.action === "open_update") {
         void shell.openExternal(effect.url);

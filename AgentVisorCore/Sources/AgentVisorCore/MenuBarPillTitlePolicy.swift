@@ -5,11 +5,21 @@ import Foundation
 public enum MenuBarPillTitlePolicy {
     public static func title(sessionName: String?, projectName: String) -> String {
         if let sessionName {
-            let trimmedName = sessionName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedName = singleLine(sessionName)
             if !trimmedName.isEmpty {
                 return trimmedName
             }
         }
-        return projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return singleLine(projectName)
+    }
+
+    private static func singleLine(_ value: String) -> String {
+        value.components(separatedBy: .newlines)
+            .lazy
+            .map { line in
+                line.components(separatedBy: .whitespaces)
+                    .filter { !$0.isEmpty }.joined(separator: " ")
+            }
+            .first { !$0.isEmpty } ?? ""
     }
 }

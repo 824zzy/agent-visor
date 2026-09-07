@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { nativeHelperRequestSchema, type SessionSnapshot } from "@agent-visor/protocol";
-import { menuPresentation, nativeActionFor } from "./menu.js";
+import { activateMenuPill, menuPresentation, nativeActionFor } from "./menu.js";
 
 const snapshot: SessionSnapshot = {
   type: "session_snapshot",
@@ -75,6 +75,32 @@ const snapshot: SessionSnapshot = {
 };
 
 describe("menu presentation", () => {
+  it("reports rejected native pill focus instead of silently consuming the click", async () => {
+    const dispatched: unknown[] = [];
+    const focused: string[] = [];
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: "history" }, {
+      current: () => snapshot,
+      focusSession: async (id) => {
+        focused.push(id);
+        return "This turn is still running in Agent Visor.";
+      },
+    }, (message) => dispatched.push(message));
+    expect(focused).toEqual(["history"]);
+    expect(dispatched).toEqual([{
+      type: "native_effect", action: "session_focus_failed",
+      message: "This turn is still running in Agent Visor.",
+    }]);
+  });
+
+  it("keeps explicit Chat activation out of owner focus", async () => {
+    const dispatched: unknown[] = [];
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: "work", intent: "chat" }, {
+      current: () => snapshot,
+      focusSession: async () => { throw new Error("Unexpected owner focus"); },
+    }, (message) => dispatched.push(message));
+    expect(dispatched).toEqual([{ type: "native_action", action: "open_chat", sessionId: "work" }]);
+  });
+
   it("orders active pills by attention", () => {
     const { navigatorPills: _, ...presentation } = menuPresentation(snapshot, []);
     expect({

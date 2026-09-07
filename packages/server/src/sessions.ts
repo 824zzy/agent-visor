@@ -37,6 +37,7 @@ import {
 import path from "node:path";
 import { chatCapabilities, chatSettingsForSession, normalizeChatText, readChatPage } from "./chat.js";
 import { loadSlashCommandCatalog } from "./slash-commands.js";
+import { sessionDisplayTitle } from "./session-title.js";
 import {
   chatCapabilitiesForState,
   conversationState,
@@ -181,12 +182,6 @@ export interface SessionControls {
   clear?(sessionId: string, deliveryId?: string): void;
   /** Forget all state for a session that has left the authoritative catalog. */
   forget?(sessionId: string): void;
-  /**
-   * Release all locally retained idle Codex references before owner focus.
-   * Returns true only after the provider child has exited; an active or
-   * unknown turn remains owned and returns false.
-   */
-  relinquishIdleCodexRoute?(sessionId: string): Promise<boolean>;
   /** Read current route ownership without acquiring a new reference. */
   codexRouteStatus?(sessionId: string): SessionRouteProbeResult;
   /** Reconcile a sticky uncertain Codex route from exact ready lifecycle evidence. */
@@ -439,8 +434,6 @@ export class SessionRepository {
   private readonly chatReadyLeasesBySession = new Map<string, Set<string>>();
   /** True after the first open attempt has settled for the current chat lease. */
   private readonly chatRouteReadyBySession = new Set<string>();
-  /** Idle Codex routes released for an explicit Open-in-owner action. */
-  private readonly codexOwnerFocusReleased = new Set<string>();
   // Settings catalogs are loaded only when a Codex chat is opened. Keep the
   // verified catalog through the normal discovery refresh so a renderer can
   // send its next-turn selection without spawning another app-server.
@@ -718,7 +711,6 @@ export class SessionRepository {
       this.chatOpenReferencesBySession.set(sessionId, references - 1);
     }
     if ((this.chatOpenReferencesBySession.get(sessionId) ?? 0) <= 0) {
-      this.codexOwnerFocusReleased.delete(sessionId);
       this.chatRouteReadyBySession.delete(sessionId);
       this.chatReadyLeasesBySession.delete(sessionId);
     } else if (!this.chatReadyLeasesBySession.get(sessionId)?.size) {
@@ -729,7 +721,6 @@ export class SessionRepository {
 
   async chatRetry(sessionId: string): Promise<string | undefined> {
     if ((this.chatOpenReferencesBySession.get(sessionId) ?? 0) <= 0) {
-      this.codexOwnerFocusReleased.delete(sessionId);
       return undefined;
     }
     if (!this.chatReadyLeasesBySession.get(sessionId)?.size) return undefined;
@@ -1423,58 +1414,6 @@ export class SessionRepository {
     }
     this.acknowledgeReady(sessionId);
     try {
-      if (session.provider === "codex" && session.messageTransport === "codex_app_server"
-        && this.controls.codexRouteStatus) {
-        let released = false;
-        if (this.controls.relinquishIdleCodexRoute) {
-          released = await this.controls.relinquishIdleCodexRoute(session.id);
-          if (!released) {
-            const probe = this.controls.codexRouteStatus(session.id);
-            if (probe.releasePending) {
-              return "Wait for the Codex route to finish closing before opening it in Codex.";
-            }
-            if (probe.routeState === "available") {
-              return probe.turnState === "working"
-                ? "Wait for this Codex turn to finish before opening it in Codex."
-                : "Wait for Codex to report this conversation is idle before opening it in Codex.";
-            }
-            if (session.routeState === "available"
-              && probe.unavailableReason !== "owner_only") {
-              return "Codex could not safely release its current route. Try again after it settles.";
-            }
-          }
-        } else {
-          const probe = this.controls.codexRouteStatus(session.id);
-          if (probe.releasePending) {
-            return "Wait for the Codex route to finish closing before opening it in Codex.";
-          }
-          if (probe.routeState === "available" && probe.turnState !== "ready") {
-            return probe.turnState === "working"
-              ? "Wait for this Codex turn to finish before opening it in Codex."
-              : "Wait for Codex to report this conversation is idle before opening it in Codex.";
-          }
-          if (probe.routeState === "available") {
-            // A provider route without the confirmed release operation cannot
-            // be treated as released before opening the owner application.
-            return "Wait for the Codex route to finish closing before opening it in Codex.";
-          }
-        }
-        if (released) {
-          // Releasing an idle route lets the owner application resume the
-          // same thread. The websocket remains open, but its next explicit
-          // Retry/latest request is the boundary that reacquires it.
-          this.codexOwnerFocusReleased.add(session.id);
-          const updated = this.withCodexRouteProbe(session, {
-            routeState: "unavailable",
-            unavailableReason: "provider_unavailable",
-            turnState: "ready",
-          });
-          this.rememberOpenedSession(updated);
-          this.chatBySession.set(session.id, structuredClone(updated));
-          this.controlBySession.set(session.id, structuredClone(updated));
-          this.publish([...this.lastByProvider.values()].flat());
-        }
-      }
       await this.controls.focus(structuredClone(session));
       return undefined;
     } catch (error) {
@@ -2262,7 +2201,6 @@ export class SessionRepository {
       this.openedSessionBySession.delete(sessionId);
       this.chatRouteReadyBySession.delete(sessionId);
     }
-    this.codexOwnerFocusReleased.delete(sessionId);
     this.codexEventRevisionBySession.delete(sessionId);
     this.codexNativeIdentityBySession.delete(sessionId);
     const eventPublishTimer = this.codexEventPublishTimers.get(sessionId);
@@ -3294,7 +3232,7 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
   return [...byID.values()]
     .map((session): SessionSummary => ({
       id: session.id,
-      title: session.title?.trim() || `${providerNames[session.provider]} session`,
+      title: sessionDisplayTitle(session.title) || `${providerNames[session.provider]} session`,
       subtitle: session.subtitle?.trim() ?? "",
       source: providerNames[session.provider],
       project: session.project?.trim() || path.basename(session.cwd) || session.cwd,
