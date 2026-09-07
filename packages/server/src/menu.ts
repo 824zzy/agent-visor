@@ -3,11 +3,10 @@ import type { NativeHelperUsageGlance, SessionSnapshot } from "@agent-visor/prot
 import type { NativeHelperEvent } from "./native-helper.js";
 import type { SessionSnapshotSource } from "./sessions.js";
 
-const phaseOrder = { needs_you: 0, ready: 1, working: 2, history: 3 } as const;
 const attentionOrder = {
   needs_you: 0,
-  ready: 1,
-  working: 2,
+  working: 1,
+  ready: 2,
   acknowledged_ready: 3,
   history: 4,
 } as const;
@@ -128,7 +127,7 @@ function presentationPill(
   };
 }
 
-function inspectorStatus(section: keyof typeof phaseOrder, subtitle: string): string {
+function inspectorStatus(section: SessionSnapshot["sessions"][number]["section"], subtitle: string): string {
   switch (section) {
     case "needs_you": return "Needs attention";
     case "ready": return "Ready";

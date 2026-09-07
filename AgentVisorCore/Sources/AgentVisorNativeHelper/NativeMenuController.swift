@@ -378,7 +378,6 @@ final class NativeMenuController: NSObject {
     private var hotkeyState = NativeMenuHotkeyState()
     private var density: PillBarPacker.Density = .standard
     private var readyPulseTimer: Timer?
-    private var readyFadeTimer: Timer?
     private var layoutTimer: Timer?
     private var layoutObservers: [NSObjectProtocol] = []
     private var renderedDisplayID: CGDirectDisplayID?
@@ -519,7 +518,6 @@ final class NativeMenuController: NSObject {
 
         layoutPresentation()
         refreshReadyPulse()
-        refreshReadyFade()
     }
 
     private func refreshReadyPulse() {
@@ -554,8 +552,7 @@ final class NativeMenuController: NSObject {
     private func updateReadyPulse(now: Date) {
         for (id, pill) in sessionPresentations
         where pill.phase == .ready && shortcutSnapshot?.positions[id] == nil {
-            let color = sessionPanels[id]?.pillButton.contentTintColor
-                ?? statusColor(for: pill, now: now)
+            let color = statusColor(for: pill)
             sessionPanels[id]?.pillButton.contentTintColor = color.withAlphaComponent(
                 readyAttention.opacity(id: id, phase: pill.phase, now: now)
             )
@@ -565,33 +562,6 @@ final class NativeMenuController: NSObject {
     private func stopReadyPulse() {
         readyPulseTimer?.invalidate()
         readyPulseTimer = nil
-    }
-
-    private func refreshReadyFade() {
-        let now = Date()
-        updateReadyFade(now: now)
-        guard sessionPresentations.values.contains(where: {
-            $0.phase == .ready && $0.inspector != nil
-                && readyAttention.statusStaleness(pill: $0, now: now) < 1
-        }) else {
-            readyFadeTimer?.invalidate()
-            readyFadeTimer = nil
-            return
-        }
-        guard readyFadeTimer == nil else { return }
-        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshReadyFade() }
-        }
-        readyFadeTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
-    }
-
-    private func updateReadyFade(now: Date) {
-        for (id, pill) in sessionPresentations
-        where pill.phase == .ready && shortcutSnapshot?.positions[id] == nil {
-            sessionPanels[id]?.pillButton.contentTintColor = statusColor(for: pill, now: now)
-                .withAlphaComponent(readyAttention.opacity(id: id, phase: pill.phase, now: now))
-        }
     }
 
     private func startClickMonitoring() {
@@ -1392,7 +1362,7 @@ final class NativeMenuController: NSObject {
         )
         if shortcutPosition == nil {
             let now = Date()
-            panel.pillButton.contentTintColor = statusColor(for: pill, now: now).withAlphaComponent(
+            panel.pillButton.contentTintColor = statusColor(for: pill).withAlphaComponent(
                 readyAttention.opacity(id: pill.id, phase: pill.phase, now: now)
             )
         }
@@ -1727,14 +1697,10 @@ final class NativeMenuController: NSObject {
         return image
     }
 
-    private func statusColor(for pill: NativeHelperPill, now: Date) -> NSColor {
-        let fresh = color(for: pill.phase)
-        let staleness = readyAttention.statusStaleness(pill: pill, now: now)
-        guard staleness > 0 else { return fresh }
-        return fresh.blended(
-            withFraction: staleness,
-            of: srgb(0x7F, 0x84, 0x9C)
-        ) ?? fresh
+    private func statusColor(for pill: NativeHelperPill) -> NSColor {
+        readyAttention.isAcknowledged(pill)
+            ? srgb(0x7F, 0x84, 0x9C)
+            : color(for: pill.phase)
     }
 
     private func color(for phase: NativeHelperPillPhase) -> NSColor {

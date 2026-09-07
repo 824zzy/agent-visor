@@ -41,8 +41,8 @@ public enum NativeMenuSessionOrder {
     ) -> Int {
         switch phase {
         case .needsYou: 0
-        case .ready: acknowledgedReadyIDs.contains(id) ? 3 : 1
-        case .working: 2
+        case .working: 1
+        case .ready: acknowledgedReadyIDs.contains(id) ? 3 : 2
         case .history: 4
         case nil: 5
         }

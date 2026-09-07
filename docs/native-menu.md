@@ -30,7 +30,7 @@ Full-screen detection uses native `AXFullScreen` evidence on the selected displa
 
 ## Session items
 
-Needs you items come first, then unacknowledged Ready to continue, In progress, acknowledged Ready to continue, and source-backed recent History shortcuts.
+Needs you items come first, then In progress, unseen Ready completions, seen Ready completions, and source-backed recent History shortcuts. The daemon and helper use the same attention order.
 
 ### Pill-surface selection contract
 
@@ -44,11 +44,11 @@ The daemon sends active candidates first and recent shortcuts second. The helper
 
 Ponytail: a change to the observed window, History eligibility, or overflow count must update the provider, menu-presentation, packer, and overflow-snapshot tests together. Do not restore a source-specific History exclusion at the presentation seam.
 
-A normal click acknowledges a Ready item and moves it behind In progress. Activity-only refreshes cannot move other pills while the user targets them.
+A normal click acknowledges a Ready item and moves it behind unseen completions. In progress stays ahead of both. Activity-only refreshes preserve positions within each attention tier.
 
 An observed transition into Ready pulses its status dot for up to seven minutes. Initial snapshots do not invent completions, and acknowledgment stops the pulse.
 
-Ready status color fades linearly from fresh green to muted gray over 42 minutes from the authoritative activity date. Acknowledgment does not reset this age. The helper updates the color every 30 seconds while pulse animation changes only opacity.
+An unseen Ready completion stays green regardless of its age. Activation marks it seen and turns its dot gray immediately. A later Working-to-Ready transition creates a new unseen completion. Pulse animation changes only opacity; elapsed time never marks a completion seen.
 
 Each item matches the released 24-point dark capsule, six-point status dot, seven-point outer padding, and three-point dot-to-title spacing.
 
@@ -84,7 +84,8 @@ Phase and membership changes adopt the new priority order. Existing panels move 
 The status colors match the released sRGB roles:
 
 - `#f4c114` means Needs you.
-- `#a6e3a1` means fresh Ready to continue and fades toward `#7f849c` as activity ages.
+- `#a6e3a1` means an unseen Ready completion.
+- `#7f849c` means a seen Ready completion.
 - `#d97857` means In progress.
 - Recent History uses the muted `#7f849c` role and lighter capsule treatment.
 

@@ -15,20 +15,22 @@ public struct NativeMenuReadyAttention {
         acknowledgedReadyIDs = Set(acknowledgedReadyIDs.filter { readyIDs.contains($0) })
         phaseChangedAtByID = phaseChangedAtByID.filter { readyIDs.contains($0.key) }
 
-        for pill in pills where pill.phase == .ready && pill.attentionTier != nil {
-            if pill.attentionTier == .acknowledgedReady {
-                acknowledgedReadyIDs.insert(pill.id)
-            } else {
-                acknowledgedReadyIDs.remove(pill.id)
-            }
-        }
-
         for pill in pills where pill.phase == .ready {
             guard let previousPhase = previousPhases[pill.id], previousPhase != .ready else {
                 continue
             }
             phaseChangedAtByID[pill.id] = now
             acknowledgedReadyIDs.remove(pill.id)
+        }
+
+        // The daemon may have seen an activation after this helper last saw Working.
+        // Its current acknowledgment wins over the local phase transition.
+        for pill in pills where pill.phase == .ready && pill.attentionTier != nil {
+            if pill.attentionTier == .acknowledgedReady {
+                acknowledgedReadyIDs.insert(pill.id)
+            } else {
+                acknowledgedReadyIDs.remove(pill.id)
+            }
         }
     }
 
@@ -40,15 +42,8 @@ public struct NativeMenuReadyAttention {
         pills.contains { shouldPulse(id: $0.id, phase: $0.phase, now: now) }
     }
 
-    public func statusStaleness(pill: NativeHelperPill, now: Date) -> Double {
-        let activityAt = pill.inspector.flatMap {
-            NativeHelperTimestamp.parse($0.activityAt)
-        }
-        return ReadyAttentionPolicy.statusStaleness(
-            isReady: pill.phase == .ready,
-            activityAt: activityAt,
-            now: now
-        )
+    public func isAcknowledged(_ pill: NativeHelperPill) -> Bool {
+        pill.phase == .ready && acknowledgedReadyIDs.contains(pill.id)
     }
 
     public func opacity(id: String, phase: NativeHelperPillPhase, now: Date) -> Double {
