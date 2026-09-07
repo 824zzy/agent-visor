@@ -20,6 +20,9 @@ import {
   stopCodexTurn,
   stopCodexTurns,
 } from "./codex-turn.js";
+import { FakeNativeHelper } from "./native-helper.js";
+import { NativeSessionControls } from "./session-controls.js";
+import type { DiscoveredProviderSession } from "./sessions.js";
 
 const roots: string[] = [];
 const originalEnvironment = new Map([
@@ -326,6 +329,7 @@ describe("Codex turn delivery", () => {
     });
     await expect(sendCodexTurn("thread-transport-loss", "do not duplicate", [], undefined, "delivery-loss-2"))
       .rejects.toThrow("Codex message delivery is unavailable.");
+    await expect(relinquishIdleCodexRoute("thread-transport-loss")).resolves.toBe("blocked");
     expect(recoverCodexRoute("thread-transport-loss", {
       turnState: "ready", turnId: "other-turn",
     })).toMatchObject({ recovered: false, reason: "identity_mismatch" });
@@ -341,6 +345,7 @@ describe("Codex turn delivery", () => {
     expect(codexRouteStatus("thread-transport-loss")).toMatchObject({
       routeState: "available", routeOwnership: "unverified", turnState: "ready",
     });
+    await expect(relinquishIdleCodexRoute("thread-transport-loss")).resolves.toBe("not_owned");
   });
 
   it("keeps a pre-ack transport loss unresolved when no turn identity was observed", async () => {
@@ -573,18 +578,68 @@ describe("Codex turn delivery", () => {
     await fakeCodex("complete");
     await acquireCodexRoute("thread-owner-focus", true);
     await acquireCodexRoute("thread-owner-focus", true);
-    await expect(relinquishIdleCodexRoute("thread-owner-focus")).resolves.toBe(true);
+    await expect(relinquishIdleCodexRoute("thread-owner-focus")).resolves.toBe("released");
     expect(codexRouteStatus("thread-owner-focus").routeState).toBe("unavailable");
   });
 
   it("refuses owner relinquish while a turn is active", async () => {
     await fakeCodex("approval");
     await sendCodexTurn("thread-owner-busy", "keep", [], undefined, "delivery-owner-busy");
-    await expect(relinquishIdleCodexRoute("thread-owner-busy")).resolves.toBe(false);
+    await expect(relinquishIdleCodexRoute("thread-owner-busy")).resolves.toBe("blocked");
     expect(codexRouteStatus("thread-owner-busy")).toMatchObject({
       routeState: "available", turnState: "working",
     });
     await expect(stopCodexTurn("thread-owner-busy", "delivery-owner-busy")).resolves.toBe(true);
+  });
+
+  it("checks owner focus after a queued send and opens only after the owned turn finishes", async () => {
+    const { root } = await fakeCodex("approval");
+    const opened: string[] = [];
+    const controls = new NativeSessionControls(new FakeNativeHelper(), root, undefined,
+      async (url) => { opened.push(url); });
+    const session: DiscoveredProviderSession = {
+      id: "thread-focus-after-send", provider: "codex", cwd: root, owner: "Codex",
+      section: "ready", turnState: "ready", updatedAt: new Date().toISOString(),
+      conversationState: "open", canOpenOwner: true, canEnterChat: true,
+      routeState: "available", routeOwnership: "unverified",
+      messageTransport: "codex_app_server",
+      controlTarget: { kind: "url", url: "codex://threads/thread-focus-after-send" },
+    };
+    const send = controls.send(session, "Keep running", [], "delivery-focus");
+    const focus = expect(controls.focus(session)).rejects.toThrow("still running in Agent Visor");
+    await send;
+    await focus;
+    expect(opened).toEqual([]);
+    expect(hasActiveCodexTurn(session.id, "delivery-focus")).toBe(true);
+
+    await stopCodexTurn(session.id, "delivery-focus");
+    await expect.poll(() => codexRouteStatus(session.id).turnState).toBe("ready");
+    await controls.focus(session);
+    expect(opened).toEqual(["codex://threads/thread-focus-after-send"]);
+    await controls.close();
+  });
+
+  it("does not reopen an older focus after waiting for its writer to close", async () => {
+    const { root } = await fakeCodex("delayed-close");
+    const opened: string[] = [];
+    const controls = new NativeSessionControls(new FakeNativeHelper(), root, undefined,
+      async (url) => { opened.push(url); });
+    const session: DiscoveredProviderSession = {
+      id: "thread-superseded-focus", provider: "codex", cwd: root, owner: "Codex",
+      section: "ready", turnState: "ready", updatedAt: new Date().toISOString(),
+      messageTransport: "codex_app_server",
+      controlTarget: { kind: "url", url: "codex://threads/thread-superseded-focus" },
+    };
+    await acquireCodexRoute(session.id, true);
+    const first = controls.focus(session);
+    await expect.poll(() => codexRouteStatus(session.id).releasePending).toBe(true);
+    await controls.focus({
+      ...session, id: "thread-newest-focus",
+      controlTarget: { kind: "url", url: "codex://threads/thread-newest-focus" },
+    });
+    await first;
+    expect(opened).toEqual(["codex://threads/thread-newest-focus"]);
+    await controls.close();
   });
 
   it("removes a route when its provider child exits unexpectedly", async () => {
@@ -598,7 +653,7 @@ describe("Codex turn delivery", () => {
   it("keeps an unconfirmed owner release pending and blocks reacquisition", async () => {
     const { log } = await fakeCodex("delayed-close");
     await acquireCodexRoute("thread-closing", true);
-    await expect(relinquishIdleCodexRoute("thread-closing")).resolves.toBe(false);
+    await expect(relinquishIdleCodexRoute("thread-closing")).resolves.toBe("blocked");
     expect(codexRouteStatus("thread-closing")).toEqual({
       routeState: "unavailable", unavailableReason: "provider_unavailable", releasePending: true,
     });
@@ -607,7 +662,7 @@ describe("Codex turn delivery", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(codexRouteStatus("thread-closing")).toMatchObject({ releasePending: true });
     expect((await requests(log)).filter((message) => message.method === "initialize")).toHaveLength(1);
-    await expect(repeatedRelease).resolves.toBe(true);
+    await expect(repeatedRelease).resolves.toBe("released");
     await expect(reacquire).resolves.toMatchObject({ routeState: "available" });
     expect((await requests(log)).filter((message) => message.method === "initialize")).toHaveLength(2);
   });

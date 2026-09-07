@@ -19,6 +19,7 @@ import {
   stopCodexTurn,
   type CodexActionRegistrar,
   type CodexRouteEvent,
+  type CodexRouteRelinquishResult,
 } from "./codex-turn.js";
 import type { NativeHelperAdapter } from "./native-helper.js";
 import {
@@ -128,19 +129,19 @@ export class NativeSessionControls implements SessionControls {
     return this.helper.isAvailable?.() !== false;
   }
 
-  async relinquishIdleCodexRoute(sessionId: string): Promise<boolean> {
+  private async relinquishIdleCodexRoute(sessionId: string): Promise<CodexRouteRelinquishResult> {
     const relinquished = await providerRelinquishIdleCodexRoute(sessionId);
-    if (relinquished) {
+    if (relinquished === "released") {
       this.codexRouteProbeBySession.set(sessionId, {
         routeState: "unavailable",
         unavailableReason: "provider_unavailable",
         turnState: "ready",
       });
-      return true;
+      return relinquished;
     }
     const current = providerCodexRouteStatus(sessionId);
     this.codexRouteProbeBySession.set(sessionId, current);
-    return false;
+    return relinquished;
   }
 
   subscribeCodexRouteEvents(listener: (event: CodexRouteEvent) => void): () => void {
@@ -179,6 +180,20 @@ export class NativeSessionControls implements SessionControls {
       if (serial !== this.focusSerial) return;
       const control = session.controlTarget;
       if (!control) throw new Error("Exact session focus is unavailable.");
+      if (session.provider === "codex" && session.messageTransport === "codex_app_server") {
+        // Check ownership inside the same action queue as Send. An ambient
+        // discovery record says nothing about a locally acquired writer.
+        const release = await this.relinquishIdleCodexRoute(session.id);
+        if (serial !== this.focusSerial) return;
+        if (release === "blocked") {
+          const probe = this.codexRouteStatus(session.id);
+          throw new Error(probe.releasePending
+            ? "Wait for the Codex route to finish closing before opening it in Codex."
+            : probe.turnState === "working"
+            ? "This turn is still running in Agent Visor. Wait for it to finish before opening it in Codex."
+            : "The previous turn's state is uncertain. Check its status in Agent Visor before opening it in Codex.");
+        }
+      }
       if (control.kind === "url") await this.openURL(control.url);
       else if (control.kind === "terminal") await this.helper.focusTerminal(control.target);
       else await this.helper.focus(control.target);

@@ -311,6 +311,14 @@ describe("desktop launch contract", () => {
 
   it("accepts only bounded native effects from the daemon", () => {
     expect(nativeEffectFromDaemonMessage({
+      type: "native_effect", action: "session_focus_failed", message: "The turn is still running.",
+    })).toEqual({ action: "session_focus_failed", message: "The turn is still running." });
+    for (const message of ["", " ", "x".repeat(1_001), 42]) {
+      expect(nativeEffectFromDaemonMessage({
+        type: "native_effect", action: "session_focus_failed", message,
+      })).toBeUndefined();
+    }
+    expect(nativeEffectFromDaemonMessage({
       type: "native_effect", action: "request_notifications",
     })).toEqual({ action: "request_notifications" });
     expect(nativeEffectFromDaemonMessage({

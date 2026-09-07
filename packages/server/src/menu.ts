@@ -1,6 +1,7 @@
 import os from "node:os";
 import type { NativeHelperUsageGlance, SessionSnapshot } from "@agent-visor/protocol";
 import type { NativeHelperEvent } from "./native-helper.js";
+import type { SessionSnapshotSource } from "./sessions.js";
 
 const phaseOrder = { needs_you: 0, ready: 1, working: 2, history: 3 } as const;
 const attentionOrder = {
@@ -17,6 +18,27 @@ const phaseLabel = {
   working: "in progress",
   history: "recent session",
 } as const;
+
+/** Native clicks must report a rejected focus instead of silently dropping it. */
+export async function activateMenuPill(
+  event: Extract<NativeHelperEvent, { event: "activate_pill" }>,
+  source: Pick<SessionSnapshotSource, "current" | "focusSession">,
+  dispatch: (message: NonNullable<ReturnType<typeof nativeActionFor>> | {
+    type: "native_effect"; action: "session_focus_failed"; message: string;
+  }) => void,
+): Promise<void> {
+  const action = nativeActionFor(event, source.current());
+  if (action?.action === "open_chat") {
+    dispatch(action);
+    return;
+  }
+  const error = source.focusSession
+    ? await source.focusSession(event.sessionId)
+    : "Opening this session is unavailable.";
+  if (error) dispatch({
+    type: "native_effect", action: "session_focus_failed", message: error.slice(0, 1_000),
+  });
+}
 
 export function nativeActionFor(event: NativeHelperEvent, snapshot: SessionSnapshot) {
   if (event.event === "notification_permission") return undefined;

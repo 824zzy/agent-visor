@@ -125,6 +125,7 @@ export function nativeActionFromDaemonMessage(value: unknown): NativeAction | un
 }
 
 export type NativeEffect =
+  | { action: "session_focus_failed"; message: string }
   | { action: "set_login_item"; enabled: boolean }
   | { action: "open_update"; url: string }
   | { action: "request_notifications" }
@@ -134,6 +135,12 @@ export function nativeEffectFromDaemonMessage(value: unknown): NativeEffect | un
   if (typeof value !== "object" || value === null) return undefined;
   const message = value as Record<string, unknown>;
   if (message.type !== "native_effect") return undefined;
+  if (message.action === "session_focus_failed") {
+    return typeof message.message === "string" && message.message.trim().length > 0
+      && message.message.length <= 1_000
+      ? { action: "session_focus_failed", message: message.message }
+      : undefined;
+  }
   if (message.action === "request_notifications") return { action: "request_notifications" };
   if (message.action === "set_badge") {
     return Number.isInteger(message.count) && Number(message.count) >= 0 && Number(message.count) <= 512
