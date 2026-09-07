@@ -44,7 +44,13 @@ The daemon sends active candidates first and recent shortcuts second. The helper
 
 Ponytail: a change to the observed window, History eligibility, or overflow count must update the provider, menu-presentation, packer, and overflow-snapshot tests together. Do not restore a source-specific History exclusion at the presentation seam.
 
-A normal click acknowledges a Ready item and moves it behind unseen completions. In progress stays ahead of both. Activity-only refreshes preserve positions within each attention tier.
+A normal click immediately opens the selected task and marks its Ready completion seen. The new priority order is deferred while the pointer remains over either pill strip, a press begun there remains held, session shortcut modifiers are held, or a native popover is open. Gaps between pills count as part of the strip; the notch does not.
+
+After 120 milliseconds outside the interaction, one 180-millisecond fade applies the latest layout at its invisible midpoint. Pills do not slide across each other. Pointer re-entry restores full opacity and holds the currently rendered positions. Reduce Motion retains the interaction hold and applies the deferred layout without fading.
+
+The rendered layout determines click targets, visible shortcut numbers, and overflow membership. Seen state, colors, and provider updates continue during the hold. Removed sessions disappear immediately. If screen or menu/tray geometry makes the held frames unsafe, safe placement takes precedence over the hold. Screen changes and hiding cancel pending motion.
+
+In progress stays ahead of unseen and seen completions once the layout settles. Activity-only refreshes preserve positions within each attention tier.
 
 An observed transition into Ready pulses its status dot for up to seven minutes. Initial snapshots do not invent completions, and acknowledgment stops the pulse.
 

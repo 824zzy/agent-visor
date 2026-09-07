@@ -23,7 +23,7 @@ final class TransientPopoverActivationWiringAuditTests: XCTestCase {
         XCTAssertTrue(
             helper.contains("as? NSHostingController<NativeMenuUsageView>")
                 && helper.contains("content.rootView = NativeMenuUsageView")
-                && helper.contains("if !showsUsage { dismissUsagePopover() }"),
+                && helper.contains("if !usagePanels.values.contains(where: { $0.isVisible }) { dismissUsagePopover() }"),
             "Open usage details must update in place and close when their anchor disappears."
         )
         XCTAssertTrue(

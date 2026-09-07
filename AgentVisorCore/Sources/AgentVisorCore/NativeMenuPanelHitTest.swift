@@ -1,6 +1,6 @@
 import CoreGraphics
 
-public enum NativeMenuPanelTarget: Equatable, Sendable {
+public enum NativeMenuPanelTarget: Hashable, Sendable {
     case session(String)
     case overflow
     case usage(String)
