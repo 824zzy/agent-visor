@@ -6,6 +6,7 @@ import type { NativeHelperUsageGlance } from "@agent-visor/protocol";
 import { runBackground } from "./background-task.js";
 import { stopCodexTurns } from "./codex-turn.js";
 import { startHookSocket, type RunningHookSocket } from "./hook-socket.js";
+import { startAlfredSocket } from "./alfred.js";
 import { activateMenuPill, menuPresentation, nativeActionFor } from "./menu.js";
 import { runProcess } from "./machine.js";
 import {
@@ -61,6 +62,7 @@ const repository = new SessionRepository(
 );
 
 let hookSocket: RunningHookSocket | undefined;
+let alfredSocket: Awaited<ReturnType<typeof startAlfredSocket>> | undefined;
 let nativeHelper: NativeHelperProcess | undefined;
 let nativeServices: NativeServicesRepository | undefined;
 let unsubscribeMenu: (() => void) | undefined;
@@ -180,6 +182,14 @@ const sessionControls = new NativeSessionControls(
   ),
 );
 repository.setControls(sessionControls);
+try {
+  alfredSocket = await startAlfredSocket({
+    socketPath: path.join(dataRoot, "alfred", "s.sock"),
+    source: repository,
+  });
+} catch (error) {
+  console.warn(`Agent Visor Alfred session search unavailable: ${String(error)}`);
+}
 nativeServices = new NativeServicesRepository({
   settings,
   helper: helperAdapter,
@@ -243,6 +253,7 @@ async function stop(): Promise<void> {
   unsubscribePiRestoration?.();
   unsubscribeSettings?.();
   stopCodexTurns();
+  await alfredSocket?.close();
   await sessionControls.close();
   await hookSocket?.close();
   await nativeHelper?.close().catch((error: unknown) => {

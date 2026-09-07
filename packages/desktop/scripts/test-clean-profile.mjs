@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +24,8 @@ const child = spawn(process.execPath, [path.resolve(directory, "../../server/dis
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
+let daemonDiagnostics = "";
+child.stderr.on("data", (chunk) => { daemonDiagnostics = (daemonDiagnostics + String(chunk)).slice(-16_384); });
 
 try {
   const origin = await daemonOrigin(child);
@@ -41,6 +43,13 @@ try {
   const snapshot = messages.find(({ type }) => type === "session_snapshot");
   const native = messages.find(({ type }) => type === "native_services_state");
   assert(snapshot.sessions.length === 0, "clean HOME starts without provider rows");
+  const alfred = JSON.parse(execFileSync("/usr/bin/python3", [
+    path.resolve(directory, "../../../integrations/alfred/agent_visor.py"), "search", "",
+  ], { encoding: "utf8", env: { ...process.env, agent_visor_data_dir: data }, timeout: 5_000 }));
+  assert(alfred.items[0]?.title === "No agent sessions yet",
+    `the real daemon starts the Alfred interface and serves the workflow client: ${JSON.stringify(alfred)}\n${daemonDiagnostics}`);
+  assert(((await stat(path.join(data, "alfred/s.sock"))).mode & 0o777) === 0o600,
+    "Alfred session search uses a private socket");
   assert(native.settings.appearance === "dark", "clean settings use typed defaults");
   assert(native.agents.find(({ id }) => id === "claude")?.available === true,
     "clean profile offers Claude connection setup");
@@ -59,7 +68,7 @@ try {
   assert(((await stat(path.join(data, "settings.json"))).mode & 0o777) === 0o600,
     "clean settings file uses mode 0600");
   ws.close();
-  console.log("Clean profile PASS: profile isolation, agent setup, settings, protocol, and lifecycle.");
+  console.log("Clean profile PASS: profile isolation, agent setup, settings, Alfred, protocol, and lifecycle.");
 } finally {
   const exited = new Promise((resolve) => child.once("exit", resolve));
   child.kill("SIGTERM");

@@ -109,7 +109,15 @@ When Codex exposes a recognized limit, an optional menu-bar pill shows
 usage is currently unavailable because the Electron daemon has no
 provider-authoritative credential route.
 
+## Alfred session search
+
+With Alfred Powerpack, the optional [Agent Visor Sessions workflow](integrations/alfred/README.md)
+lets you type `av <query>` to find sessions by title, project, agent, or folder.
+Return opens the original app or terminal through Agent Visor's existing navigation.
+The companion app must be running with Alfred support enabled in its build.
+
 ## Supported sources
+
 
 | Source | Discovery and status | Owner action | Chat capability |
 | --- | --- | --- | --- |
