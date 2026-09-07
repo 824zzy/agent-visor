@@ -46,7 +46,9 @@ Ponytail: a change to the observed window, History eligibility, or overflow coun
 
 A normal click immediately opens the selected task and marks its Ready completion seen. The new priority order is deferred while the pointer remains over either pill strip, a press begun there remains held, session shortcut modifiers are held, or a native popover is open. Gaps between pills count as part of the strip; the notch does not.
 
-After 120 milliseconds outside the interaction, one 180-millisecond fade applies the latest layout at its invisible midpoint. Pills do not slide across each other. Pointer re-entry restores full opacity and holds the currently rendered positions. Reduce Motion retains the interaction hold and applies the deferred layout without fading.
+After 120 milliseconds outside the interaction, pills slide to their new positions over 240 milliseconds with smooth acceleration and deceleration. The clicked pill stays in front where paths cross; overlapping capsules use solid backgrounds so labels remain readable. Native window stacking and click routing share that same order. Pointer re-entry pauses at the last rendered positions, and leaving resumes toward the latest layout. Reduce Motion retains the interaction hold and applies the deferred layout without animation.
+
+Motion is clipped to each safe menu-bar lane without compressing the button content. A pill changing sides exits its source lane before entering the destination lane; it never travels through the notch. Pills entering or leaving overflow pass through their lane edge. Updates during a slide coalesce into the next move.
 
 The rendered layout determines click targets, visible shortcut numbers, and overflow membership. Seen state, colors, and provider updates continue during the hold. Removed sessions disappear immediately. If screen or menu/tray geometry makes the held frames unsafe, safe placement takes precedence over the hold. Screen changes and hiding cancel pending motion.
 

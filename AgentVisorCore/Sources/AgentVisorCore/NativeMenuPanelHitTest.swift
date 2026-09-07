@@ -14,8 +14,19 @@ public enum NativeMenuPanelHitTest {
         sessionFrames: [String: CGRect],
         overflowFrame: CGRect?,
         orderedUsageIDs: [String] = [],
-        usageFrames: [String: CGRect] = [:]
+        usageFrames: [String: CGRect] = [:],
+        frontToBack: [NativeMenuPanelTarget] = []
     ) -> NativeMenuPanelTarget {
+        for target in frontToBack {
+            let frame: CGRect?
+            switch target {
+            case .session(let id): frame = sessionFrames[id]
+            case .usage(let id): frame = usageFrames[id]
+            case .overflow: frame = overflowFrame
+            case .none: frame = nil
+            }
+            if contains(point, in: frame) { return target }
+        }
         for id in orderedSessionIDs where contains(point, in: sessionFrames[id]) {
             return .session(id)
         }
