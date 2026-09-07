@@ -104,7 +104,7 @@ private final class NativePillPanel: NSPanel {
     override func isAccessibilityElement() -> Bool { false }
 
     func place(frame: CGRect) {
-        setFrame(frame, display: true)
+        if self.frame != frame { setFrame(frame, display: true) }
         pillButton.frame = CGRect(origin: .zero, size: frame.size)
         pillButton.layer?.cornerRadius = frame.height / 2
         orderFrontRegardless()
@@ -379,6 +379,12 @@ final class NativeMenuController: NSObject {
     private var density: PillBarPacker.Density = .standard
     private var readyPulseTimer: Timer?
     private var layoutTimer: Timer?
+    private var layoutTransition = NativeMenuLayoutTransition()
+    private var layoutTransitionTimer: Timer?
+    private var proposedFrames: [NativeMenuPanelTarget: CGRect] = [:]
+    private var proposedLabels: [String: String] = [:]
+    private var layoutSafeAreas: [CGRect] = []
+    private var layoutOpacity: Double = 1
     private var layoutObservers: [NSObjectProtocol] = []
     private var renderedDisplayID: CGDirectDisplayID?
     private var renderedScreenFrame: CGRect?
@@ -567,7 +573,13 @@ final class NativeMenuController: NSObject {
     private func startClickMonitoring() {
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) {
             [weak self] event in
-            self?.handleClick(at: NSEvent.mouseLocation, modifiers: event.modifierFlags)
+            // Native buttons handle their own press on mouse-up. The fallback
+            // must not also activate them on mouse-down (especially a long press).
+            if event.window is NativePillPanel {
+                self?.updateLayoutFrames()
+            } else {
+                self?.handleClick(at: NSEvent.mouseLocation, modifiers: event.modifierFlags)
+            }
             return event
         }
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) {
@@ -582,6 +594,7 @@ final class NativeMenuController: NSObject {
         let isInsidePopover = popover(overflowPopover, contains: point)
             || popover(usagePopover, contains: point)
         guard presentationIsVisible else { return }
+        updateLayoutFrames(pointer: point)
         guard renderedGeometryIsFresh() else {
             if !isInsidePopover {
                 dismissOverflowPopover()
@@ -621,7 +634,9 @@ final class NativeMenuController: NSObject {
             }
         )
         panelHitSnapshot = NativeMenuPanelHitSnapshot(
-            orderedSessionIDs: displayedSessionIDs,
+            orderedSessionIDs: sessionFrames.keys.sorted {
+                sessionFrames[$0]!.minX < sessionFrames[$1]!.minX
+            },
             sessionFrames: sessionFrames,
             overflowFrame: overflowPanel.flatMap { $0.isVisible ? $0.frame : nil },
             orderedUsageIDs: displayedUsageIDs,
@@ -630,6 +645,7 @@ final class NativeMenuController: NSObject {
     }
 
     private func handleSessionHover(_ id: String, hovering: Bool) {
+        updateLayoutFrames()
         sessionHoverWorkItem?.cancel()
         if hovering {
             sessionHoverState.pointerEntered(id, at: ProcessInfo.processInfo.systemUptime)
@@ -705,6 +721,7 @@ final class NativeMenuController: NSObject {
            lastActivation.id == id,
            now - lastActivation.at < 0.2 { return }
         lastActivation = (id, now)
+        updateLayoutFrames()
         if sessionPresentations[id]?.phase == .ready {
             readyAttention.acknowledgeReady(id: id)
             displayedSessionIDs = NativeMenuSessionOrder.applyingReadyAcknowledgments(
@@ -893,6 +910,7 @@ final class NativeMenuController: NSObject {
         } else if !isArmed {
             clearShortcutSnapshot()
         }
+        updateLayoutFrames()
     }
 
     private func shortcutsAreArmed(_ flags: NSEvent.ModifierFlags) -> Bool {
@@ -933,16 +951,27 @@ final class NativeMenuController: NSObject {
     }
 
     private func startFullScreenPointerMonitoring() {
-        localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) {
+        let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .leftMouseUp]
+        localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) {
             [weak self] event in
             self?.updateFullScreenPointerReveal(at: NSEvent.mouseLocation)
+            self?.updatePendingLayoutTransition()
             return event
         }
-        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) {
+        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) {
             [weak self] _ in
             let point = NSEvent.mouseLocation
-            Task { @MainActor in self?.updateFullScreenPointerReveal(at: point) }
+            Task { @MainActor in
+                self?.updateFullScreenPointerReveal(at: point)
+                self?.updatePendingLayoutTransition(pointer: point)
+            }
         }
+    }
+
+    private func updatePendingLayoutTransition(pointer: CGPoint? = nil) {
+        // Pointer motion matters only while a different layout is waiting or fading.
+        guard layoutTransitionTimer != nil else { return }
+        updateLayoutFrames(pointer: pointer)
     }
 
     private func syncFullScreenRevealState() {
@@ -1027,16 +1056,22 @@ final class NativeMenuController: NSObject {
                 || overflowPopover?.isShown == true
                 || usagePopover?.isShown == true
         )
+        if !visible {
+            layoutTransitionTimer?.invalidate()
+            layoutTransitionTimer = nil
+            layoutTransition = NativeMenuLayoutTransition()
+            layoutOpacity = 1
+        }
         let panels = Array(sessionPanels.values) + Array(usagePanels.values)
             + [overflowPanel].compactMap { $0 }
         panels.forEach { $0.ignoresMouseEvents = !visible }
         if visible == presentationIsVisible {
-            panels.forEach { $0.alphaValue = visible ? 1 : 0 }
+            panels.forEach { $0.alphaValue = visible ? layoutOpacity : 0 }
         } else {
             presentationIsVisible = visible
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.15
-                panels.forEach { $0.animator().alphaValue = visible ? 1 : 0 }
+                context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.15
+                panels.forEach { $0.animator().alphaValue = visible ? layoutOpacity : 0 }
             }
         }
     }
@@ -1147,8 +1182,17 @@ final class NativeMenuController: NSObject {
             hidePresentation()
             return
         }
+        if renderedDisplayID != displayID || renderedScreenFrame != screen.frame {
+            layoutTransition = NativeMenuLayoutTransition()
+        }
         renderedDisplayID = displayID
         renderedScreenFrame = screen.frame
+        layoutSafeAreas = [
+            CGRect(x: bounds.leftInnerEdge - bounds.innerPadding - bounds.leftWidth,
+                   y: bounds.y, width: bounds.leftWidth, height: pillHeight),
+            CGRect(x: bounds.rightInnerEdge + bounds.innerPadding,
+                   y: bounds.y, width: bounds.rightWidth, height: pillHeight),
+        ].filter { $0.width > 0 }
 
         let orderedPills = displayedSessionIDs.compactMap { sessionPresentations[$0] }
         let labels = Dictionary(uniqueKeysWithValues: orderedPills.map {
@@ -1205,23 +1249,8 @@ final class NativeMenuController: NSObject {
             }
         )
         density = result.density
-        currentOverflowCount = result.hiddenCount
         let spacing = result.density == .pressure ? pressureSpacing : standardSpacing
         let padding = result.density == .pressure ? pressurePadding : standardPadding
-
-        let visibleSessionIDs = result.leftVisibleIds + result.rightVisibleIds
-        self.visibleSessionIDs = Set(visibleSessionIDs)
-        if shortcutSnapshot == nil {
-            shortcutSessionIDs = Array(visibleSessionIDs.prefix(9))
-        }
-        let visibleIDs = Set(visibleSessionIDs)
-        for (id, panel) in sessionPanels where !visibleIDs.contains(id) {
-            panel.orderOut(nil)
-        }
-        for (id, panel) in usagePanels where !showsUsage || !displayedUsageIDs.contains(id) {
-            panel.orderOut(nil)
-        }
-        if !showsUsage { dismissUsagePopover() }
 
         let leftElements = pillElements(
             ids: result.leftVisibleIds,
@@ -1250,29 +1279,87 @@ final class NativeMenuController: NSObject {
         let leftStart = bounds.leftInnerEdge
             - bounds.innerPadding
             - totalWidth(leftElements.map(\.width), spacing: spacing)
-        place(
-            elements: leftElements,
-            startX: leftStart,
-            y: bounds.y,
-            spacing: spacing,
-            labels: labels,
-            padding: padding
-        )
-        place(
-            elements: rightElements,
-            startX: bounds.rightInnerEdge + bounds.innerPadding,
-            y: bounds.y,
-            spacing: spacing,
-            labels: labels,
-            padding: padding
-        )
+        proposedLabels = labels
+        proposedFrames = layoutFrames(
+            elements: leftElements, startX: leftStart, y: bounds.y, spacing: spacing
+        ).merging(layoutFrames(
+            elements: rightElements, startX: bounds.rightInnerEdge + bounds.innerPadding,
+            y: bounds.y, spacing: spacing
+        )) { _, right in right }
+        updateLayoutFrames()
+    }
 
-        if result.hiddenCount == 0 {
+    /// The planner may change on every snapshot; only this method moves physical targets.
+    private func updateLayoutFrames(pointer: CGPoint? = nil) {
+        guard renderedDisplayID != nil else { return }
+        layoutTransitionTimer?.invalidate()
+        layoutTransitionTimer = nil
+        var available = Set(sessionPresentations.keys.map(NativeMenuPanelTarget.session))
+        available.formUnion(usagePresentations.keys.map(NativeMenuPanelTarget.usage))
+        if proposedFrames[.overflow] != nil || currentOverflowCount > 0 { available.insert(.overflow) }
+        let presentation = layoutTransition.update(
+            proposedFrames: proposedFrames,
+            availableTargets: available,
+            safeAreas: layoutSafeAreas,
+            pointer: presentationIsVisible ? (pointer ?? NSEvent.mouseLocation) : nil,
+            mouseDown: NSEvent.pressedMouseButtons & 1 != 0,
+            shortcutsHeld: shortcutsAreArmed(NSEvent.modifierFlags),
+            popoverOpen: sessionPopover?.isShown == true
+                || overflowPopover?.isShown == true || usagePopover?.isShown == true,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || !presentationIsVisible,
+            now: ProcessInfo.processInfo.systemUptime
+        )
+        layoutOpacity = presentation.opacity
+        let frames = presentation.frames
+        // Opacity is applied before relocating windows at the invisible midpoint.
+        (Array(sessionPanels.values) + Array(usagePanels.values) + [overflowPanel].compactMap { $0 })
+            .forEach { $0.alphaValue = presentationIsVisible ? layoutOpacity : 0 }
+        let visibleIDs = frames.keys.compactMap { target -> String? in
+            if case .session(let id) = target { return id }
+            return nil
+        }.sorted { frames[.session($0)]!.minX < frames[.session($1)]!.minX }
+        visibleSessionIDs = Set(visibleIDs)
+        if shortcutSnapshot == nil { shortcutSessionIDs = Array(visibleIDs.prefix(9)) }
+        currentOverflowCount = NativeMenuOverflowSnapshot(
+            menuPills: displayedSessionIDs.compactMap { sessionPresentations[$0] },
+            navigatorPills: navigatorPills, visibleSessionIDs: visibleSessionIDs
+        ).overflowSessionIDs.count
+        for (id, panel) in sessionPanels {
+            guard let frame = frames[.session(id)], let pill = sessionPresentations[id] else {
+                panel.orderOut(nil)
+                continue
+            }
+            renderSession(panel, pill: pill, label: proposedLabels[id] ?? fullTitle(pill.title))
+            panel.place(frame: frame)
+        }
+        for (id, panel) in usagePanels {
+            guard let frame = frames[.usage(id)], let glance = usagePresentations[id] else {
+                panel.orderOut(nil)
+                continue
+            }
+            renderUsage(panel, glance: glance)
+            panel.place(frame: frame)
+        }
+        if let frame = frames[.overflow], currentOverflowCount > 0 {
+            let panel = overflowPanel ?? NativePillPanel()
+            overflowPanel = panel
+            panel.alphaValue = presentationIsVisible ? layoutOpacity : 0
+            renderOverflow(panel, count: currentOverflowCount)
+            panel.place(frame: frame)
+        } else {
             overflowPanel?.orderOut(nil)
             dismissOverflowPopover()
         }
+        if !usagePanels.values.contains(where: { $0.isVisible }) { dismissUsagePopover() }
         capturePanelHitSnapshot()
         updatePresentationVisibility()
+        if presentationIsVisible, let delay = presentation.nextUpdateDelay {
+            let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+                Task { @MainActor in self?.updateLayoutFrames() }
+            }
+            layoutTransitionTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        }
     }
 
     private enum LayoutElement {
@@ -1299,34 +1386,22 @@ final class NativeMenuController: NSObject {
         }
     }
 
-    private func place(
-        elements: [LayoutElement],
-        startX: CGFloat,
-        y: CGFloat,
-        spacing: CGFloat,
-        labels: [String: String],
-        padding: CGFloat
-    ) {
+    private func layoutFrames(
+        elements: [LayoutElement], startX: CGFloat, y: CGFloat, spacing: CGFloat
+    ) -> [NativeMenuPanelTarget: CGRect] {
         var x = startX
+        var frames: [NativeMenuPanelTarget: CGRect] = [:]
         for element in elements {
-            let frame = CGRect(x: x, y: y, width: element.width, height: pillHeight)
+            let target: NativeMenuPanelTarget
             switch element {
-            case .session(let id, _):
-                guard let pill = sessionPresentations[id], let panel = sessionPanels[id] else { break }
-                renderSession(panel, pill: pill, label: labels[id] ?? fullTitle(pill.title))
-                panel.place(frame: frame)
-            case .overflow(let count, _):
-                let panel = overflowPanel ?? NativePillPanel()
-                overflowPanel = panel
-                renderOverflow(panel, count: count)
-                panel.place(frame: frame)
-            case .usage(let id, _):
-                guard let glance = usagePresentations[id], let panel = usagePanels[id] else { break }
-                renderUsage(panel, glance: glance)
-                panel.place(frame: frame)
+            case .session(let id, _): target = .session(id)
+            case .overflow: target = .overflow
+            case .usage(let id, _): target = .usage(id)
             }
+            frames[target] = CGRect(x: x, y: y, width: element.width, height: pillHeight)
             x += element.width + spacing
         }
+        return frames
     }
 
     private func renderSession(_ panel: NativePillPanel, pill: NativeHelperPill, label: String) {
@@ -1611,6 +1686,11 @@ final class NativeMenuController: NSObject {
     }
 
     private func hidePresentation() {
+        layoutTransitionTimer?.invalidate()
+        layoutTransitionTimer = nil
+        layoutTransition = NativeMenuLayoutTransition()
+        layoutOpacity = 1
+        proposedFrames = [:]
         renderedDisplayID = nil
         renderedScreenFrame = nil
         panelHitSnapshot = nil
