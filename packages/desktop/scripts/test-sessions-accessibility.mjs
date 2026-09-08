@@ -9,7 +9,8 @@ const now = Date.parse("2026-08-22T10:00:00.000Z");
 const sessions = Array.from({ length: 30 }, (_, index) => ({
   id: `session-${index}`,
   title: `Agent session ${index}`,
-  subtitle: "Accessibility test row",
+  subtitle: index === 0 ? "Managed by Agent Room · Agent is working" : "Accessibility test row",
+  managedBy: index === 0 ? "Agent Room" : undefined,
   source: index % 2 ? "Pi" : "Codex",
   project: "agent-visor",
   owner: index % 2 ? "Ghostty" : "Codex",
@@ -105,6 +106,8 @@ async function run() {
   assert(new Set(frames.primaryWidths).size === 1, "owner rows keep one fixed frame");
   assert(new Set(frames.chatLefts).size === 1, "Chat actions keep one aligned column");
   assert(frames.disjoint, "owner and Chat actions do not overlap");
+  assert(await window.webContents.executeJavaScript(`Boolean(document.querySelector('[aria-label*="Managed by Agent Room"]'))`),
+    "managed-session ownership is accessible on its row");
 
   await window.webContents.executeJavaScript(`document.querySelector('[aria-label*="Open in"]')?.click()`);
   await waitUntil(() => ownerActions === 1);
@@ -243,6 +246,17 @@ async function run() {
   );
   assert(darkChatCanvas === darkSessionsCanvas,
     `Chat and Sessions share the dark canvas (${darkSessionsCanvas} → ${darkChatCanvas})`);
+
+  await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Back to Sessions"]')?.click()`);
+  await window.webContents.executeJavaScript(`(() => {
+    const input = document.querySelector('[aria-label="Search sessions"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, 'Managed by Agent Room');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await waitFor(window, `Boolean(document.querySelector('[aria-label="1 search results"]'))`);
+  assert(await window.webContents.executeJavaScript(`Boolean(document.querySelector('[aria-label*="Agent session updated,"][aria-label*="Managed by Agent Room"]'))`),
+    "managed sessions remain searchable by their managing app");
 
   console.log("Sessions accessibility PASS: action labels, disjoint frames, aligned columns, shared canvas, and retained browser state.");
   } finally {

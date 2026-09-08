@@ -405,7 +405,7 @@ function SessionRow({
   return (
     <View nativeID={rowId(session.id)} style={rowStyles.row}>
       <Pressable
-        accessibilityLabel={`${session.title}, ${sectionTitle}, ${session.source}, ${session.project}, ${actionLabel}`}
+        accessibilityLabel={`${session.title}, ${sectionTitle}, ${session.source}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}`}
         accessibilityRole="button"
         accessibilityState={{ selected: cursor }}
         disabled={!primary}

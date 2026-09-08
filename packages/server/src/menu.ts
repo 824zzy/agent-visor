@@ -79,16 +79,19 @@ export function menuPresentation(
       || left.id.localeCompare(right.id));
   const navigatorPills = ordered.slice(0, 512).map(presentationPill);
   const pills = ordered
-    // Headless Codex exec records are useful in the navigator, but they are
-    // machine-owned work and must not compete with user-facing sessions for
-    // ambient menu-bar space or Ready attention.
-    .filter((session) => session.sessionClass !== "automation")
+    // Automation and app-managed conversations stay in the navigator, while
+    // direct conversations receive ambient menu-bar space and Ready attention.
+    .filter(isAmbientSession)
     .filter((session) => session.canOpenOwner
       || (session.section !== "history" && session.canEnterChat))
     .slice(0, 64)
     .map(presentationPill);
 
   return { pills, navigatorPills, usageGlances };
+}
+
+function isAmbientSession(session: SessionSnapshot["sessions"][number]): boolean {
+  return session.sessionClass !== "automation" && !session.managedBy;
 }
 
 function presentationPill(
@@ -117,12 +120,13 @@ function presentationPill(
     },
     phase: session.section,
     priority,
-    defaultOverflowEligible: session.sessionClass !== "automation",
+    defaultOverflowEligible: isAmbientSession(session),
     accessibilityLabel: [
       title,
       phaseLabel[session.section],
       session.source,
       session.project,
+      ...(session.managedBy ? [`Managed by ${session.managedBy}`] : []),
     ].join(", "),
   };
 }

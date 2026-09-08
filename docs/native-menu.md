@@ -40,7 +40,7 @@ Needs you, Ready, and Working rows are active pill candidates. A History row wit
 
 The daemon sends active candidates first and recent shortcuts second. The helper renders recent shortcuts with the muted History treatment and packs the complete ordered physical list into the available menu-bar space.
 
-`+N` counts every bounded, default-overflow-eligible navigator row that is not visible. This includes physical candidates that do not fit and eligible navigator-only rows; searchable-only automation is excluded. The helper reserves space for that total before it places physical pills, so a complete navigator remains reachable even when all physical candidates fit.
+`+N` counts every bounded, default-overflow-eligible navigator row that is not visible. This includes physical candidates that do not fit and eligible navigator-only rows; searchable-only automation and app-managed sessions are excluded. The helper reserves space for that total before it places physical pills, so a complete navigator remains reachable even when all physical candidates fit.
 
 Ponytail: a change to the observed window, History eligibility, or overflow count must update the provider, menu-presentation, packer, and overflow-snapshot tests together. Do not restore a source-specific History exclusion at the presentation seam.
 
@@ -78,6 +78,13 @@ enter physical pill packing, Ready attention, notifications, Dock badges, or
 the normal `+N` overflow set. Their ambient catalog label is
 `Codex automation · <project>`; the raw automation prompt is not a pill title.
 
+Agent Room backing sessions remain in Sessions and navigator search, labelled
+`Managed by Agent Room`, but do not enter physical pills or the default `+N`
+count/list. Their actual lifecycle and existing source/Chat actions remain intact.
+The daemon uses the latest matching Codex `session_meta.originator` record, not
+the title or working directory. A later client record identifying Codex Desktop
+restores normal pill eligibility. Unknown/missing client identity stays visible;
+Visor does not infer an ownership transfer from merely viewing a transcript.
 
 Visible items retain their normal labels, up to 20 characters plus an ellipsis. Untitled Codex rows use `Codex · <project>` so distinct sessions do not share one fallback label. The helper uses `+N` instead of compact or tight labels.
 

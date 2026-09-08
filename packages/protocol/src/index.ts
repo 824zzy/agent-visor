@@ -99,6 +99,8 @@ export const sessionSummarySchema = z.object({
   cwd: z.string().min(1),
   section: sessionSectionSchema,
   sessionClass: sessionClassSchema.optional(),
+  /** Recorded managing client; independent of the provider used for navigation. */
+  managedBy: z.literal("Agent Room").optional(),
   attentionTier: sessionAttentionTierSchema.optional(),
   /** State used for actions; section remains a list/attention presentation. */
   sessionState: sessionStateSchema.optional(),

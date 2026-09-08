@@ -2,7 +2,7 @@ import type { NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import path from "node:path";
 import type { DiscoveredProviderSession, ProviderAdapter } from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
-import { CodexLifecycleReader } from "./codex-lifecycle.js";
+import { CodexTranscriptReader } from "./codex-lifecycle.js";
 import {
   isRecord, iso, ownerForProcess, processInstanceToken, terminalTargetForProcess,
 } from "./shared.js";
@@ -49,7 +49,7 @@ export class CodexProvider implements ProviderAdapter {
     expiresAt: number;
     value: Promise<NonNullable<DiscoveredProviderSession["chatSettingsCatalog"]> | undefined>;
   }>();
-  private readonly lifecycleReader = new CodexLifecycleReader();
+  private readonly transcriptReader = new CodexTranscriptReader();
 
   constructor(private readonly environment: ProviderEnvironment) {}
 
@@ -168,9 +168,11 @@ export class CodexProvider implements ProviderAdapter {
     const storedTitle = indexTitles.get(thread.id) || thread.title;
     const title = storedTitle || await codexRolloutTitle(this.environment, thread.rolloutPath);
     const rolloutStamp = await this.environment.stamp(thread.rolloutPath);
-    const codexLifecycle = owner === "Codex" && !terminalTarget
-      ? await this.lifecycleReader.read(this.environment, thread.id, thread.rolloutPath)
+    const transcript = owner === "Codex" && !terminalTarget
+      ? await this.transcriptReader.read(this.environment, thread.id, thread.rolloutPath)
       : undefined;
+    const codexLifecycle = transcript?.lifecycle;
+    const managedBy = transcript?.originator === "Agent Room" ? "Agent Room" as const : undefined;
     // A completed turn remains a usable conversation. Ambient list freshness
     // is an attention policy and must never turn an open thread into History.
     const section = thread.archived
@@ -199,6 +201,7 @@ export class CodexProvider implements ProviderAdapter {
       // does not prevent reading it; send/cancel authority is checked separately.
       canEnterChat: true,
       sessionClass,
+      ...(managedBy ? { managedBy } : {}),
       chatPath: thread.rolloutPath,
       messageTransport: "codex_app_server",
       ...(owner === "Codex" && !terminalTarget

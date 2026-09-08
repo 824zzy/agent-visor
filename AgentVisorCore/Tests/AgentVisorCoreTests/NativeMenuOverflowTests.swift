@@ -18,14 +18,16 @@ final class NativeMenuOverflowTests: XCTestCase {
             project: "Archive",
             defaultOverflowEligible: false
         )
+        let managed = pill("managed", title: "hi", project: "Codes", defaultOverflowEligible: false)
         let snapshot = NativeMenuOverflowSnapshot(
             menuPills: [visible],
-            navigatorPills: [visible, navigatorOnly, automation],
+            navigatorPills: [visible, navigatorOnly, automation, managed],
             visibleSessionIDs: ["visible"]
         )
 
         XCTAssertEqual(snapshot.overflowSessionIDs, ["chat"])
         XCTAssertEqual(snapshot.selection(query: "").orderedSessionIDs, ["chat"])
+        XCTAssertEqual(snapshot.selection(query: "hi").orderedSessionIDs.first, "managed")
     }
 
     func testOmittedNavigatorOnlyEligibilityPreservesLegacyOverflowBehavior() {

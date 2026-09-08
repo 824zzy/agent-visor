@@ -17,6 +17,7 @@ class StatusEnvironment extends LiveProviderEnvironment {
   modifiedAt = this.clock;
   unavailable = false;
   terminal = false;
+  title = "Desktop task";
 
   constructor() { super("/fixture"); }
   override now() { return new Date(this.clock); }
@@ -35,7 +36,7 @@ class StatusEnvironment extends LiveProviderEnvironment {
   }
   override async read() { return undefined; }
   override async sqlite() {
-    return [{ id: sessionId, cwd, rollout_path: rollout, title: "Desktop task",
+    return [{ id: sessionId, cwd, rollout_path: rollout, title: this.title,
       updated_at: this.modifiedAt / 1_000, archived: 0, source: this.terminal ? "cli" : "vscode" }];
   }
   override async scanLinePrefixes(
@@ -73,6 +74,75 @@ function setup() {
 }
 
 describe("Codex desktop lifecycle status", () => {
+  const metadata = (originator: string, id = sessionId) => JSON.stringify({
+    timestamp: "2026-08-30T21:45:25.000Z", type: "session_meta",
+    payload: { id, originator, source: "vscode", base_instructions: { text: "x".repeat(20_000) } },
+  }) + "\n";
+
+  it("keeps Agent Room sessions searchable but out of pills and default overflow", async () => {
+    const { environment, repository } = setup();
+    environment.title = "hi\n\nInstruction author: local:fixture";
+    environment.content = metadata("Agent Room");
+    environment.append("task_started", "turn-1");
+    environment.append("task_complete", "turn-1");
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions).toMatchObject([{
+      id: sessionId, title: "hi", sessionClass: "interactive", managedBy: "Agent Room",
+      section: "ready", subtitle: "Managed by Agent Room · Ready to continue",
+      canOpenOwner: true, canEnterChat: true,
+    }]);
+    const presentation = menuPresentation(snapshot, []);
+    expect(presentation.pills).toEqual([]);
+    expect(presentation.navigatorPills).toMatchObject([{
+      id: sessionId, defaultOverflowEligible: false,
+    }]);
+    expect(await new CodexProvider(environment).resolve(sessionId)).toMatchObject({ managedBy: "Agent Room" });
+  });
+
+  it("restores pill visibility when a later client record identifies direct Codex use", async () => {
+    const { environment, repository } = setup();
+    environment.content = metadata("Agent Room");
+    environment.append("task_started", "turn-1");
+    expect(menuPresentation(await repository.refresh(), []).pills).toEqual([]);
+    environment.content += metadata("Codex Desktop");
+    environment.modifiedAt += 1;
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions[0]?.managedBy).toBeUndefined();
+    expect(snapshot.sessions[0]?.subtitle).toBe("Agent is working");
+    expect(menuPresentation(snapshot, []).pills.map(({ id }) => id)).toEqual([sessionId]);
+  });
+
+  it.each([
+    "", metadata("Codex Desktop"), metadata("Unknown client"),
+    metadata("Agent Room", "another-session"),
+    JSON.stringify({ type: "response_item", payload: { text: metadata("Agent Room") } }) + "\n",
+  ])("does not hide sessions without matching Agent Room metadata (%#)", async (content) => {
+    const { environment, repository } = setup();
+    environment.title = "hi";
+    environment.content = content;
+    environment.append("task_started", "turn-1");
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions[0]?.managedBy).toBeUndefined();
+    expect(menuPresentation(snapshot, []).pills.map(({ id }) => id)).toEqual([sessionId]);
+  });
+
+  it("classifies metadata-only sessions and waits for complete client records", async () => {
+    const { environment, repository } = setup();
+    environment.content = metadata("Agent Room");
+    expect((await repository.refresh()).sessions[0]).toMatchObject({
+      managedBy: "Agent Room", section: "history",
+    });
+    const direct = metadata("Codex Desktop");
+    environment.content += direct.slice(0, -1);
+    expect((await repository.refresh()).sessions[0]?.managedBy).toBe("Agent Room");
+    environment.content += "\n";
+    expect((await repository.refresh()).sessions[0]?.managedBy).toBeUndefined();
+    // Replacing/truncating the transcript must not reuse the old client identity.
+    environment.content = "";
+    environment.append("task_started", "new-turn");
+    expect(menuPresentation(await repository.refresh(), []).pills.map(({ id }) => id)).toEqual([sessionId]);
+  });
+
   it("reads real UTF-8 transcript deltas across oversized content and partial writes", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "codex-status-"));
     const codex = path.join(directory, ".codex");

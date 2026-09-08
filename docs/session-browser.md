@@ -1,7 +1,7 @@
 # Sessions Browser Interaction Design
 
 Status: Accepted
-Last reviewed: 2026-09-07
+Last reviewed: 2026-09-08
 
 ## Purpose
 
@@ -31,6 +31,11 @@ Ready sessions share one section and one combined count. Unacknowledged completi
 Rows sort by activity date descending within each group, then by stable session ID. The Ready section applies that ordering separately within its unacknowledged and acknowledged rows. A newer lower-priority row never jumps above a higher-priority group.
 
 Search matches title, preview, project, source, owner, and path. Title matches rank before metadata matches; equally ranked rows use the same recency and stable-ID ordering as the empty-query view.
+
+Agent Room backing sessions remain searchable and keep their current status and
+source/Chat actions. Their subtitle and accessible row label say `Managed by
+Agent Room`. They are excluded from menu-bar pills and the default `+N` count,
+using the latest recorded Codex client identity rather than their title or project.
 
 The browser merges:
 

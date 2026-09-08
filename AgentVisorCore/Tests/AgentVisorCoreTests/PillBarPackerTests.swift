@@ -2,6 +2,24 @@ import XCTest
 @testable import AgentVisorCore
 
 final class PillBarPackerTests: XCTestCase {
+    func testManagedOnlyCatalogDoesNotReserveAnOverflowPill() {
+        let managed = NativeHelperPill(
+            id: "managed", title: "hi", phase: .ready,
+            defaultOverflowEligible: false, priority: 0,
+            accessibilityLabel: "hi, Managed by Agent Room"
+        )
+        let snapshot = NativeMenuOverflowSnapshot(
+            menuPills: [], navigatorPills: [managed], visibleSessionIDs: []
+        )
+        let result = PillBarPacker.pack(
+            candidates: [], leftMax: 100, rightMax: 100, pillSpacing: 4,
+            supplementalHiddenCount: snapshot.overflowSessionIDs.count,
+            overflowPillWidthFor: { _ in 30 }
+        )
+        XCTAssertEqual(result.hiddenCount, 0)
+        XCTAssertEqual(result.leftVisibleIds + result.rightVisibleIds, [])
+    }
+
     // T1 tracer bullet: empty candidates → empty result.
     func testEmptyCandidatesReturnsEmptyResult() {
         let result = PillBarPacker.pack(
