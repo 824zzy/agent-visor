@@ -1,7 +1,7 @@
 # Sessions Browser Interaction Design
 
 Status: Accepted
-Last reviewed: 2026-07-31
+Last reviewed: 2026-09-07
 
 ## Purpose
 
@@ -19,17 +19,16 @@ The `+N` popover is not a compact copy of this browser. It shows only sessions o
 
 ## Data And Ordering
 
-With an empty query, rows use the same attention order as the menu-bar pills:
+With an empty query, the browser shows four sections:
 
 1. `Needs you` (`needsAttention`)
-2. Unacknowledged `Ready to continue` (`ready`)
+2. `Ready to continue` (`ready`)
 3. `In progress` (`working`)
-4. Acknowledged `Ready to continue` (`acknowledgedReady`)
-5. `History` (`recent`)
+4. `History` (`recent`)
 
-When both Ready tiers are present, they render as separate `Ready to continue` groups on either side of `In progress`. Opening a Ready row acknowledges only that completion and moves it to the lower Ready group without changing its lifecycle state.
+Ready sessions share one section and one combined count. Unacknowledged completions appear first within that section, followed by acknowledged completions. Opening a Ready row acknowledges only that completion and moves it within the same section without changing its lifecycle state. The menu-bar pill priority order remains independent of browser section grouping.
 
-Rows sort by activity date descending within each group, then by stable session ID. A newer lower-priority row never jumps above a higher-priority group.
+Rows sort by activity date descending within each group, then by stable session ID. The Ready section applies that ordering separately within its unacknowledged and acknowledged rows. A newer lower-priority row never jumps above a higher-priority group.
 
 Search matches title, preview, project, source, owner, and path. Title matches rank before metadata matches; equally ranked rows use the same recency and stable-ID ordering as the empty-query view.
 

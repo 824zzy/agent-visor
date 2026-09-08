@@ -57,19 +57,21 @@ describe("groupSessions", () => {
     ).toEqual(["In progress"]);
   });
 
-  it("matches the pill attention order for acknowledged Ready completions", () => {
+  it("keeps one Ready group with unseen completions first and newest first within each tier", () => {
     const freshReady = {
       ...session("fresh-ready", "ready", "2026-08-22T10:00:00.000Z"),
       attentionTier: "ready" as const,
     };
     const acknowledgedReady = {
-      ...session("acknowledged-ready", "ready", "2026-08-22T09:00:00.000Z"),
+      ...session("acknowledged-ready", "ready", "2026-08-22T12:00:00.000Z"),
       attentionTier: "acknowledged_ready" as const,
     };
 
     const groups = groupSessions([
       acknowledgedReady,
       session("working", "working", "2026-08-22T08:00:00.000Z"),
+      { ...freshReady, id: "older-unseen", updatedAt: "2026-08-22T09:00:00.000Z" },
+      { ...acknowledgedReady, id: "older-seen", updatedAt: "2026-08-22T11:00:00.000Z" },
       freshReady,
     ]);
 
@@ -77,10 +79,27 @@ describe("groupSessions", () => {
       id,
       sessions: rows.map(({ id }) => id),
     }))).toEqual([
-      { id: "ready", sessions: ["fresh-ready"] },
+      { id: "ready", sessions: ["fresh-ready", "older-unseen", "acknowledged-ready", "older-seen"] },
       { id: "working", sessions: ["working"] },
-      { id: "acknowledged_ready", sessions: ["acknowledged-ready"] },
     ]);
+    expect(groups.map(({ title }) => title)).toEqual(["Ready to continue", "In progress"]);
+  });
+
+  it("keeps acknowledged completions in Ready when there are no unseen completions", () => {
+    const groups = groupSessions([{
+      ...session("seen", "ready", "2026-08-22T12:00:00.000Z"),
+      attentionTier: "acknowledged_ready",
+    }]);
+    expect(groups.map(({ id, title }) => ({ id, title })))
+      .toEqual([{ id: "ready", title: "Ready to continue" }]);
+  });
+
+  it("preserves a Ready automation's History attention placement", () => {
+    const groups = groupSessions([{
+      ...session("scheduled", "ready", "2026-08-22T12:00:00.000Z"),
+      attentionTier: "history",
+    }]);
+    expect(groups.map(({ id }) => id)).toEqual(["history"]);
   });
 
   it("uses source-first actions with capability-safe fallbacks", () => {

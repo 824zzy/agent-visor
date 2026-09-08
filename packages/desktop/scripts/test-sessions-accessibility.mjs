@@ -15,6 +15,7 @@ const sessions = Array.from({ length: 30 }, (_, index) => ({
   owner: index % 2 ? "Ghostty" : "Codex",
   cwd: "/tmp/agent-visor",
   section: ["needs_you", "ready", "working", "history"][index % 4],
+  attentionTier: index % 8 === 1 ? "acknowledged_ready" : undefined,
   updatedAt: new Date(now - index * 60_000).toISOString(),
   canOpenOwner: true,
   canEnterChat: index !== 5 && index !== 29,
@@ -60,6 +61,18 @@ async function run() {
   try {
   await window.loadFile(path.resolve(directory, "../../app/dist/index.html"));
   await waitFor(window, `document.querySelectorAll('[aria-label*="Open in"]').length >= 30`);
+  const readyGroups = await window.webContents.executeJavaScript(`(() => ({
+    headings: [...document.querySelectorAll('#sessions-canvas *')]
+      .filter((element) => !element.children.length && element.textContent === 'Ready to continue').length,
+    rows: [...document.querySelectorAll('[aria-label*="Open in"]')]
+      .map((element) => element.getAttribute('aria-label'))
+      .filter((label) => label.includes(', Ready to continue,'))
+      .map((label) => label.split(',')[0]),
+  }))()`);
+  assert(readyGroups.headings === 1, "Ready completions share one visible section heading");
+  assert(JSON.stringify(readyGroups.rows) === JSON.stringify(
+    [5, 13, 21, 29, 1, 9, 17, 25].map((index) => `Agent session ${index}`),
+  ), "the merged Ready section lists unseen completions first, then seen completions by recency");
   const titleBarRegion = await window.webContents.executeJavaScript(`(() => {
     const element = document.elementFromPoint(window.innerWidth / 2, 16);
     return element ? getComputedStyle(element).getPropertyValue('-webkit-app-region') : '';

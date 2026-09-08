@@ -1,18 +1,17 @@
-import type { SessionAttentionTier, SessionSummary } from "@agent-visor/protocol";
+import type { SessionSection, SessionSummary } from "@agent-visor/protocol";
 
 const sections: ReadonlyArray<{
-  id: SessionAttentionTier;
+  id: SessionSection;
   title: string;
 }> = [
   { id: "needs_you", title: "Needs you" },
   { id: "ready", title: "Ready to continue" },
   { id: "working", title: "In progress" },
-  { id: "acknowledged_ready", title: "Ready to continue" },
   { id: "history", title: "History" },
 ];
 
 export type SessionGroup = {
-  id: SessionAttentionTier | "results";
+  id: SessionSection | "results";
   title: string;
   sessions: SessionSummary[];
 };
@@ -25,8 +24,11 @@ export type SessionSelection = {
 export function groupSessions(sessions: SessionSummary[]): SessionGroup[] {
   return sections.flatMap((section) => {
     const matching = sessions
-      .filter((session) => (session.attentionTier ?? session.section) === section.id)
-      .sort(compareSessions);
+      .filter((session) => {
+        const tier = session.attentionTier ?? session.section;
+        return (tier === "acknowledged_ready" ? "ready" : tier) === section.id;
+      })
+      .sort(section.id === "ready" ? compareReadySessions : compareSessions);
 
     return matching.length === 0 ? [] : [{ ...section, sessions: matching }];
   });
@@ -117,4 +119,10 @@ function searchRank(session: SessionSummary, needle: string): number {
 
 function compareSessions(left: SessionSummary, right: SessionSummary): number {
   return right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id);
+}
+
+function compareReadySessions(left: SessionSummary, right: SessionSummary): number {
+  return Number(left.attentionTier === "acknowledged_ready")
+    - Number(right.attentionTier === "acknowledged_ready")
+    || compareSessions(left, right);
 }

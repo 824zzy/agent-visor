@@ -46,6 +46,14 @@ public struct NativeMenuReadyAttention {
         pill.phase == .ready && acknowledgedReadyIDs.contains(pill.id)
     }
 
+    public func statusStaleness(pill: NativeHelperPill, now: Date) -> Double {
+        ReadyAttentionPolicy.statusStaleness(
+            isReady: pill.phase == .ready,
+            activityAt: pill.inspector.flatMap { NativeHelperTimestamp.parse($0.activityAt) },
+            now: now
+        )
+    }
+
     public func opacity(id: String, phase: NativeHelperPillPhase, now: Date) -> Double {
         guard let phaseChangedAt = phaseChangedAtByID[id] else { return 1 }
         return ReadyAttentionPolicy.pulseOpacity(
