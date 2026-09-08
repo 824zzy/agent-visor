@@ -16,7 +16,6 @@ export type AlfredItem = {
   valid: boolean;
 };
 
-const tiers = ["needs_you", "ready", "working", "acknowledged_ready", "history"];
 const labels: Record<string, string> = {
   needs_you: "Needs you", ready: "Ready", working: "Working", history: "Recent",
 };
@@ -33,7 +32,6 @@ export function alfredResults(snapshot: SessionSnapshot, query: string) {
       words.every((word) => session.title.toLocaleLowerCase().includes(word)) ? 0 : 1
     );
     return rank(left) - rank(right)
-      || tiers.indexOf(left.attentionTier ?? left.section) - tiers.indexOf(right.attentionTier ?? right.section)
       || right.updatedAt.localeCompare(left.updatedAt)
       || left.id.localeCompare(right.id);
   });
