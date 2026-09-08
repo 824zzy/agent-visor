@@ -85,28 +85,52 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
         XCTAssertEqual(attention.acknowledgedReadyIDs, [])
     }
 
-    func testUnseenCompletionDoesNotFadeWithAge() {
+    func testReadyColorFadesWithAgeWithoutAcknowledgingTheCompletion() {
         let activityAt = Date(timeIntervalSinceReferenceDate: 1_000)
         let readyPill = pill(.ready, activityAt: activityAt)
         let later = activityAt.addingTimeInterval(24 * 60 * 60)
         var attention = NativeMenuReadyAttention()
         attention.present(previousPhases: [:], pills: [readyPill], now: later)
+        XCTAssertEqual(attention.statusStaleness(pill: readyPill, now: activityAt), 0)
+        XCTAssertEqual(attention.statusStaleness(
+            pill: readyPill, now: activityAt.addingTimeInterval(21 * 60)
+        ), 0.5, accuracy: 0.001)
+        XCTAssertEqual(attention.statusStaleness(
+            pill: readyPill, now: activityAt.addingTimeInterval(42 * 60)
+        ), 1)
+        XCTAssertEqual(attention.statusStaleness(pill: readyPill, now: later), 1)
         XCTAssertFalse(attention.isAcknowledged(readyPill))
         XCTAssertFalse(attention.hasActivePulse(pills: [readyPill], now: later))
     }
 
-    func testOpeningCompletionMutesItImmediatelyAndNextCompletionIsUnseen() {
+    func testOpeningCompletionKeepsItsColorAgeAndNextCompletionIsUnseen() {
         let now = Date(timeIntervalSinceReferenceDate: 1_000)
         let readyPill = pill(.ready, activityAt: now)
         var attention = NativeMenuReadyAttention()
         attention.present(previousPhases: [:], pills: [readyPill], now: now)
         attention.acknowledgeReady(id: "session")
         XCTAssertTrue(attention.isAcknowledged(readyPill))
+        XCTAssertEqual(attention.statusStaleness(
+            pill: readyPill, now: now.addingTimeInterval(21 * 60)
+        ), 0.5, accuracy: 0.001)
+        XCTAssertFalse(attention.hasActivePulse(pills: [readyPill], now: now))
 
         attention.present(previousPhases: ["session": .ready], pills: [pill(.working)], now: now)
         attention.present(previousPhases: ["session": .working], pills: [readyPill], now: now)
         XCTAssertFalse(attention.isAcknowledged(readyPill))
         XCTAssertTrue(attention.hasActivePulse(pills: [readyPill], now: now))
+    }
+
+    func testMissingFutureAndNonReadyActivityDoNotInventAge() {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000)
+        let attention = NativeMenuReadyAttention()
+        XCTAssertEqual(attention.statusStaleness(pill: pill(.ready), now: now), 0)
+        XCTAssertEqual(attention.statusStaleness(
+            pill: pill(.ready, activityAt: now.addingTimeInterval(60)), now: now
+        ), 0)
+        XCTAssertEqual(attention.statusStaleness(
+            pill: pill(.working, activityAt: now.addingTimeInterval(-3600)), now: now
+        ), 0)
     }
 
     func testPresentedAcknowledgmentWinsEvenWhenHelperMissedTheReadyBoundary() {
