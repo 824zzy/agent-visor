@@ -24,8 +24,9 @@ the workflow configuration. Do not point it at another user's profile.
 ## Behavior
 
 - Matches come from the running app's current session summaries, including Recent sessions.
-- All query words must match. Matches in the title lead, followed by Agent Visor's
-  attention order and recent activity. Up to 100 matches appear; keep typing to narrow them.
+- All query words must match. Matches in the title lead, then the latest session
+  activity sorts first. With no query, the most recent activity leads. Status stays
+  visible but does not affect ordering. Up to 100 matches appear; keep typing to narrow them.
 - Results refresh every two seconds while the search remains open.
 - Sessions without an available original owner remain visible but cannot be opened.
 - Selecting a result calls the app's existing `focusSession` path, including its

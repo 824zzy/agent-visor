@@ -58,16 +58,26 @@ describe("Alfred session search", () => {
     expect(JSON.stringify(alfredResults(snapshot(), ""))).not.toContain("Private transcript preview");
   });
 
-  it("ranks title matches before metadata matches, then preserves attention and recency", () => {
+  it("ranks title matches before metadata matches, then uses recency regardless of status", () => {
     const sessions = [
-      session({ id: "metadata", title: "Something else", project: "browser", section: "needs_you" }),
+      session({ id: "metadata", title: "Something else", project: "browser", section: "needs_you",
+        updatedAt: "2026-09-07T23:00:00.000Z" }),
       session({ id: "older", section: "ready", updatedAt: "2026-09-06T20:00:00.000Z" }),
       session({ id: "working" }),
-      session({ id: "seen", section: "ready", attentionTier: "acknowledged_ready" }),
-      session({ id: "newer", section: "ready" }),
+      session({ id: "seen", section: "ready", attentionTier: "acknowledged_ready",
+        updatedAt: "2026-09-07T21:00:00.000Z" }),
+      session({ id: "recent", section: "history", updatedAt: "2026-09-07T22:00:00.000Z" }),
     ];
     expect(alfredResults(snapshot(sessions), "browser").items.map((item) => item.arg))
-      .toEqual(["newer", "older", "working", "seen", "metadata"]);
+      .toEqual(["recent", "seen", "working", "older", "metadata"]);
+    expect(alfredResults(snapshot(sessions), "").items.map((item) => item.arg))
+      .toEqual(["metadata", "recent", "seen", "working", "older"]);
+  });
+
+  it("uses a stable session ID order when relevance and activity timestamps tie", () => {
+    const sessions = [session({ id: "b" }), session({ id: "a", section: "history" })];
+    expect(alfredResults(snapshot(sessions), "browser").items.map((item) => item.arg))
+      .toEqual(["a", "b"]);
   });
 
   it("preserves exact IDs for duplicate and Unicode titles and disables missing owners", () => {
