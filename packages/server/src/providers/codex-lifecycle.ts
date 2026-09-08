@@ -14,16 +14,21 @@ type Checkpoint = {
   size: number;
   modifiedAt: number;
   offset: number;
-  lifecycle?: CodexLifecycle;
+  state: CodexTranscriptState;
 };
 
-/** Desktop turn boundaries are authoritative even when a lifecycle hook is lost. */
-export class CodexLifecycleReader {
+type CodexTranscriptState = {
+  lifecycle?: CodexLifecycle;
+  originator?: string;
+};
+
+/** Read turn boundaries and client identity together, without retaining content. */
+export class CodexTranscriptReader {
   private readonly checkpoints = new Map<string, Checkpoint>();
 
   async read(
     environment: ProviderEnvironment, sessionId: string, file: string,
-  ): Promise<CodexLifecycle | undefined> {
+  ): Promise<CodexTranscriptState | undefined> {
     const stamp = await environment.stamp(file);
     if (!stamp) return undefined;
     const previous = this.checkpoints.get(sessionId);
@@ -32,12 +37,20 @@ export class CodexLifecycleReader {
       && (stamp.size > previous.size || modifiedAt === previous.modifiedAt)
       ? previous : undefined;
     if (checkpoint?.offset === stamp.size && checkpoint.modifiedAt === modifiedAt) {
-      return checkpoint.lifecycle;
+      return checkpoint.state;
     }
-    let lifecycle = checkpoint?.lifecycle;
+    let lifecycle = checkpoint?.state.lifecycle;
+    let originator = checkpoint?.state.originator;
     const offset = await environment.scanLinePrefixes(file, lifecyclePrefixBytes, (line) => {
       try {
         const value = lifecycleRecord(line);
+        if (isRecord(value) && value.type === "session_meta" && isRecord(value.payload)
+          && value.payload.id === sessionId) {
+          // Use the latest recorded client, not the first prompt or project name.
+          originator = typeof value.payload.originator === "string"
+            && value.payload.originator.length <= 256 ? value.payload.originator : undefined;
+          return;
+        }
         if (!isRecord(value) || value.type !== "event_msg" || !isRecord(value.payload)
           || typeof value.timestamp !== "string" || !Number.isFinite(Date.parse(value.timestamp))) return;
         const type = value.payload.type;
@@ -63,12 +76,13 @@ export class CodexLifecycleReader {
     // ponytail: retain only bounded metadata, never prompts or tool output.
     // The offset stops at a newline. Partial writes/read failures are retried,
     // while unchanged transcripts and already-consumed bytes are not rescanned.
+    const state = { lifecycle, originator };
     this.checkpoints.delete(sessionId);
-    this.checkpoints.set(sessionId, { file, size: stamp.size, modifiedAt, offset, lifecycle });
+    this.checkpoints.set(sessionId, { file, size: stamp.size, modifiedAt, offset, state });
     while (this.checkpoints.size > 200) {
       this.checkpoints.delete(this.checkpoints.keys().next().value!);
     }
-    return lifecycle;
+    return state;
   }
 }
 
@@ -76,6 +90,15 @@ function lifecycleRecord(line: string): unknown {
   try { return JSON.parse(line); }
   catch {
     if (Buffer.byteLength(line) < lifecyclePrefixBytes) return undefined;
+    // Session identity precedes the potentially huge instructions object.
+    // Parse that complete header as JSON; never search inside prompt content.
+    const instructions = /,\s*"base_instructions"\s*:/.exec(line);
+    if (instructions) {
+      try {
+        const header: unknown = JSON.parse(line.slice(0, instructions.index) + "}}");
+        if (isRecord(header) && header.type === "session_meta") return header;
+      } catch { /* Unknown metadata layouts remain unclassified. */ }
+    }
     // Codex puts identity before last_agent_message, which can be megabytes.
     // Match only the emitted root envelope, never marker-like text in content.
     const header = /^\{\s*"timestamp"\s*:\s*("(?:[^"\\]|\\.)*")\s*,\s*(?:"ordinal"\s*:\s*\d+\s*,\s*)?"type"\s*:\s*"event_msg"\s*,\s*"payload"\s*:\s*\{\s*"type"\s*:\s*"(task_started|task_complete|turn_aborted)"\s*,\s*"turn_id"\s*:\s*("(?:[^"\\]|\\.)*")\s*[,}]/.exec(line);

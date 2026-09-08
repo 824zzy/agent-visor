@@ -68,6 +68,7 @@ export type DiscoveredProviderSession = {
   canEnterChat: boolean;
   /** Provider-owned interaction class used by ambient attention surfaces. */
   sessionClass?: SessionClass;
+  managedBy?: SessionSummary["managedBy"];
   authority?: number;
   chatPath?: string;
   controlTarget?: SessionControlTarget;
@@ -3233,7 +3234,10 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
     .map((session): SessionSummary => ({
       id: session.id,
       title: sessionDisplayTitle(session.title) || `${providerNames[session.provider]} session`,
-      subtitle: session.subtitle?.trim() ?? "",
+      subtitle: [
+        ...(session.managedBy ? [`Managed by ${session.managedBy}`] : []),
+        session.subtitle?.trim(),
+      ].filter(Boolean).join(" · "),
       source: providerNames[session.provider],
       project: session.project?.trim() || path.basename(session.cwd) || session.cwd,
       owner: session.owner,
@@ -3243,6 +3247,7 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
       canOpenOwner: session.canOpenOwner,
       canEnterChat: session.canEnterChat,
       ...(session.sessionClass ? { sessionClass: session.sessionClass } : {}),
+      ...(session.managedBy ? { managedBy: session.managedBy } : {}),
       ...(session.conversationState || session.turnState
         ? { sessionState: resolveSessionState(session) } : {}),
       ...(session.stateRevision !== undefined ? { stateRevision: session.stateRevision } : {}),
