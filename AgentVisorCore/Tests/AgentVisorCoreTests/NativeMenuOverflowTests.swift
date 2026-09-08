@@ -4,6 +4,18 @@ import XCTest
 @testable import AgentVisorCore
 
 final class NativeMenuOverflowTests: XCTestCase {
+    func testOldUnarchivedConversationRemainsInOverflowAndSearch() {
+        let old = pill(
+            "old", title: "donut-feature-parity", project: "Donut",
+            activityAt: "2026-01-01T00:00:00.000Z", defaultOverflowEligible: true
+        )
+        let snapshot = NativeMenuOverflowSnapshot(
+            menuPills: [], navigatorPills: [old], visibleSessionIDs: []
+        )
+        XCTAssertEqual(snapshot.overflowSessionIDs, ["old"])
+        XCTAssertEqual(snapshot.selection(query: "feature-parity").orderedSessionIDs, ["old"])
+    }
+
     func testNavigatorOnlyEligibleSessionsArePartOfDefaultOverflow() {
         let visible = pill("visible", title: "Visible migration", project: "Personal")
         let navigatorOnly = pill(

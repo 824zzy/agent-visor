@@ -25,6 +25,17 @@ type CodexTranscriptState = {
 /** Read turn boundaries and client identity together, without retaining content. */
 export class CodexTranscriptReader {
   private readonly checkpoints = new Map<string, Checkpoint>();
+  private checkpointLimit = 200;
+
+  retain(sessionIds: string[]): void {
+    const retained = new Set(sessionIds);
+    for (const id of this.checkpoints.keys()) {
+      if (!retained.has(id)) this.checkpoints.delete(id);
+    }
+    // Keep one small checkpoint per catalog record so catalogs larger than
+    // one page do not re-read every transcript on every refresh.
+    this.checkpointLimit = Math.max(200, retained.size);
+  }
 
   async read(
     environment: ProviderEnvironment, sessionId: string, file: string,
@@ -79,7 +90,7 @@ export class CodexTranscriptReader {
     const state = { lifecycle, originator };
     this.checkpoints.delete(sessionId);
     this.checkpoints.set(sessionId, { file, size: stamp.size, modifiedAt, offset, state });
-    while (this.checkpoints.size > 200) {
+    while (this.checkpoints.size > this.checkpointLimit) {
       this.checkpoints.delete(this.checkpoints.keys().next().value!);
     }
     return state;

@@ -227,13 +227,15 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
         ["-readonly", "-cmd", ".timeout 500", "-json", database, sql],
         { deadlineMs: 1_500, maxOutputBytes: 5 * 1_048_576 },
       );
-      if (result.status !== "success" || !result.stdout.trim()) return [];
+      if (result.status !== "success") throw new Error("Provider database read failed");
+      if (!result.stdout.trim()) return [];
       try {
         const value: unknown = JSON.parse(result.stdout);
-        return Array.isArray(value) ? value : [];
+        if (Array.isArray(value)) return value;
       } catch {
-        return [];
+        throw new Error("Invalid provider database response");
       }
+      throw new Error("Invalid provider database response");
     });
   }
 
