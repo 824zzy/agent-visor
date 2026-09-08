@@ -34,7 +34,7 @@ Needs you items come first, then In progress, unseen Ready completions, seen Rea
 
 ### Pill-surface selection contract
 
-Provider discovery owns observed-session recency. Codex, Cursor, and Zed use the configured observed-agent window, which defaults to 42 hours. The menu selector does not apply a second clock or a provider-specific History ban.
+Codex direct conversations remain eligible until archived, including idle and unloaded conversations. Discovery pages through the unarchived catalog and requires an existing rollout; age never removes a direct conversation. Cursor, Zed, and Codex automation still use the configured observed-agent window, which defaults to 42 hours. The menu selector does not apply a second age cutoff.
 
 Needs you, Ready, and Working rows are active pill candidates. A History row with an exact source action is a recent-shortcut candidate. A History row that has only Chat remains navigator-only because it has no safe physical-pill action.
 
@@ -70,7 +70,7 @@ The inspector retains Swift’s layout, typography, native arrow, and shadow. Se
 
 Chat-only transcript history remains navigator-only in Sessions and does not crowd the menu bar.
 
-Source-backed Codex history inside the observed-session window remains a dimmed recent pill candidate and opens its exact `codex://threads/<id>` source. Older or Chat-only history remains available through Sessions and More Sessions. Active headless Codex jobs require a thread-catalog record and rollout before source activation. Hook-only internal tasks stay hidden.
+Unarchived source-backed Codex history remains a dimmed pill candidate and opens its exact `codex://threads/<id>` source regardless of age. Archiving removes the conversation from the normal Sessions catalog and pills on the next successful refresh; an already-open Chat keeps its separate read-only archival state. Active headless Codex jobs require a thread-catalog record and rollout before source activation. Hook-only internal tasks stay hidden.
 
 Codex `exec` rows are classified as machine-owned automation. They remain in
 the bounded navigator catalog for search and read-only inspection, but never

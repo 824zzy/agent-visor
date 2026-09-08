@@ -22,14 +22,15 @@ type CodexRow = {
   source: string;
 };
 
-const threadsSQL = `
+const catalogPageSize = 200;
+const threadsSQL = (offset: number, automationCutoff: number): string => `
 select id, rollout_path, cwd, substr(title, 1, 500) as title,
        updated_at, archived, source
 from threads
 where archived = 0
-   or (archived = 1 and updated_at >= strftime('%s','now') - 86400)
-order by updated_at desc
-limit 200`;
+  and (source in ('vscode', 'cli') or (source = 'exec' and updated_at >= ${automationCutoff}))
+order by id
+limit ${catalogPageSize} offset ${offset}`;
 
 const threadByIDSQL = (id: string): string => `
 select id, rollout_path, cwd, substr(title, 1, 500) as title,
@@ -43,7 +44,6 @@ const maxSettingsCatalogCWDs = 64;
 
 export class CodexProvider implements ProviderAdapter {
   readonly id = "codex" as const;
-  private lastRows: CodexRow[] = [];
   private readonly modelCatalogCache: ModelCatalogCache = {};
   private readonly settingsCatalogByCWD = new Map<string, {
     expiresAt: number;
@@ -56,9 +56,18 @@ export class CodexProvider implements ProviderAdapter {
   async discover(): Promise<DiscoveredProviderSession[]> {
     const database = await codexDatabase(this.environment);
     if (!database) return [];
-    const queried = rows(await this.environment.sqlite(database, threadsSQL));
-    if (queried.length > 0) this.lastRows = queried;
-    const candidates = queried.length > 0 ? queried : this.lastRows;
+    const candidates: CodexRow[] = [];
+    const automationCutoff = Math.floor(
+      (this.environment.now().valueOf() - this.environment.observedWindowMs) / 1_000,
+    );
+    for (let offset = 0; ; offset += catalogPageSize) {
+      const page = await this.environment.sqlite(database, threadsSQL(offset, automationCutoff));
+      candidates.push(...rows(page).filter((thread) => !thread.archived));
+      if (page.length < catalogPageSize) break;
+    }
+    // A successful empty catalog is authoritative. The repository retains the
+    // previous snapshot only when a read fails, never after the last archival.
+    this.transcriptReader.retain(candidates.map((thread) => thread.id));
     const indexTitles = await codexIndexTitles(this.environment);
     const modelCatalog = await codexModelCatalog(this.environment, this.modelCatalogCache);
     const processes = await this.environment.processes();
@@ -93,18 +102,13 @@ export class CodexProvider implements ProviderAdapter {
       ));
     }
 
-    const cutoff = this.environment.now().valueOf() - this.environment.observedWindowMs;
     for (const thread of candidates) {
       if (usedThreads.has(thread.id)
-        || (thread.source !== "vscode" && thread.source !== "exec")) continue;
+        || !["vscode", "cli", "exec"].includes(thread.source)) continue;
       if (thread.cwd.includes(".claude-mem") || thread.cwd.includes("observer-sessions")) continue;
-      if (thread.rolloutPath.includes("/archived_sessions/")) continue;
       const rollout = await this.environment.stamp(thread.rolloutPath);
       if (!rollout) continue;
-      const active = thread.archived
-        ? Math.abs(this.environment.now().valueOf() - rollout.modifiedAt.valueOf()) <= 120_000
-        : thread.updatedAt * 1_000 >= cutoff;
-      if (!active) continue;
+      if (thread.source === "exec" && thread.updatedAt < automationCutoff) continue;
       results.push(await this.session(thread, indexTitles, "Codex", modelCatalog));
     }
 
@@ -112,9 +116,8 @@ export class CodexProvider implements ProviderAdapter {
   }
 
   /**
-   * Opening a chat is an exact lookup. It must not inherit discover()'s
-   * bounded ambient freshness window, or an older unarchived conversation
-   * would appear to have ended merely because it was quiet.
+   * Opening a chat is an exact lookup, including an already-open conversation
+   * that was archived and removed from the normal catalog.
    */
   async resolve(sessionId: string): Promise<DiscoveredProviderSession | undefined> {
     const database = await codexDatabase(this.environment);

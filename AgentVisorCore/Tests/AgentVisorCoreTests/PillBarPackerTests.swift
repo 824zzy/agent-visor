@@ -2,6 +2,17 @@ import XCTest
 @testable import AgentVisorCore
 
 final class PillBarPackerTests: XCTestCase {
+    func testLargeUnarchivedCatalogCountsEveryOmittedSession() {
+        let result = PillBarPacker.pack(
+            candidates: [.init(id: "working", pillWidth: 50)],
+            leftMax: 100, rightMax: 100, pillSpacing: 4,
+            supplementalHiddenCount: 205,
+            overflowPillWidthFor: { _ in 40 }
+        )
+        XCTAssertEqual(result.leftVisibleIds + result.rightVisibleIds, ["working"])
+        XCTAssertEqual(result.hiddenCount, 205)
+    }
+
     func testManagedOnlyCatalogDoesNotReserveAnOverflowPill() {
         let managed = NativeHelperPill(
             id: "managed", title: "hi", phase: .ready,

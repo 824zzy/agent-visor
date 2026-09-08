@@ -40,9 +40,11 @@ using the latest recorded Codex client identity rather than their title or proje
 The browser merges:
 
 - current navigable sessions from all supported sources;
-- saved, non-archived Codex Desktop tasks with real rollout evidence;
+- all saved, non-archived direct Codex tasks with real rollout evidence, including idle/unloaded tasks and tasks older than the observed-session window;
 - saved Pi sessions with a valid session header and renderable active-branch transcript evidence;
 - no metadata-only or fabricated history rows.
+
+Codex archival is the normal visibility boundary, not elapsed time. A successful empty catalog clears previous rows; a failed database read retains the last successful snapshot until recovery. The native menu keeps its existing bounded presentation (64 physical candidates and 512 navigator rows); the full Sessions browser is not limited to those native batches.
 
 ## Interaction State
 

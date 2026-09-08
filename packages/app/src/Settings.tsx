@@ -321,6 +321,7 @@ export function Settings({
             onIncrease={() => update({ observedWindowHours: Math.min(168, settings.observedWindowHours + 1) })}
             styles={styles}
           />
+          <Text style={styles.detail}>Codex conversations remain visible until archived.</Text>
         </Section> : null}
         </ScrollView>
       </View>

@@ -463,7 +463,7 @@ describe("live provider adapters", () => {
     expect((await repository.refresh()).sessions).toEqual([]);
   });
 
-  it("applies the shared 42-hour observed window before menu selection", async () => {
+  it("keeps unarchived Codex conversations beyond the observed window", async () => {
     const environment = new FixtureEnvironment();
     const database = `${home}/.codex/sqlite/state_5.sqlite`;
     const recentRollout = `${home}/.codex/sessions/recent.jsonl`;
@@ -500,7 +500,7 @@ describe("live provider adapters", () => {
 
     const sessions = await new CodexProvider(environment).discover();
 
-    expect(sessions.map(({ id }) => id)).toEqual(["recent-codex"]);
+    expect(sessions.map(({ id }) => id)).toEqual(["recent-codex", "old-codex"]);
   });
 
   it("discovers authoritative headless Codex jobs", async () => {
