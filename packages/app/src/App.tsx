@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Image,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -24,11 +23,13 @@ import {
 import { Chat } from "./Chat";
 import { CONTENT_RAIL_INSET, contentRailStyle } from "./content-rail";
 import { Settings } from "./Settings";
+import { SessionViewport } from "./SessionViewport";
 import {
   moveSessionCursor,
   reconcileSessionCursor,
   relativeSessionAge,
   sessionAction,
+  sessionPresentation,
   selectSessions,
 } from "./session-groups";
 import { palettes, type Palette } from "./theme";
@@ -193,7 +194,7 @@ function SessionBrowser({
     () => createStyles(palette, contentScale, compact),
     [compact, contentScale, palette],
   );
-  const selection = useMemo(() => selectSessions(sessions, query), [query, sessions]);
+  const selection = useMemo(() => selectSessions(sessions, query, now), [now, query, sessions]);
   const visibleIds = selection.orderedSessions.map(({ id }) => id);
   const visibleKey = visibleIds.join("\0");
   const cursorSession = selection.orderedSessions.find(({ id }) => id === cursorId);
@@ -222,13 +223,22 @@ function SessionBrowser({
   }, [revealRequest]);
 
   useEffect(() => {
-    if (active) requestAnimationFrame(() => searchRef.current?.focus());
-    else setCommandHeld(false);
+    if (active) {
+      setNow(new Date());
+      requestAnimationFrame(() => searchRef.current?.focus());
+    } else setCommandHeld(false);
   }, [active]);
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(timer);
+    const refresh = () => setNow(new Date());
+    const timer = setInterval(refresh, 60_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, []);
 
   useEffect(() => {
@@ -306,22 +316,26 @@ function SessionBrowser({
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={browserStyles.list} style={browserStyles.scroller}>
+      <SessionViewport
+        contentContainerStyle={browserStyles.list}
+        style={browserStyles.scroller}
+        query={query}
+        orderKey={selection.groups.map(group => `${group.id}:${group.sessions.map(({ id }) => id).join("\0")}`).join("\n")}
+      >
         <View style={browserStyles.rail}>
-          {selection.groups.map((group) => (
-            <View key={group.id}>
-              <View style={browserStyles.sectionHeader}>
+          {selection.groups.flatMap((group) => [
+              <View key={`header:${group.id}`} style={browserStyles.sectionHeader}>
                 <Text style={browserStyles.sectionTitle}>{group.title}</Text>
                 <Text style={browserStyles.count}>{group.sessions.length}</Text>
-              </View>
-              {group.sessions.map((session) => (
+              </View>,
+              ...group.sessions.map((session) => (
                 <SessionRow
                   active={active}
                   commandHeld={commandHeld}
                   compact={compact}
                   cursor={session.id === cursorId}
                   hotkeyPosition={visibleIds.indexOf(session.id)}
-                  key={session.id}
+                  key={`session:${session.id}`}
                   now={now}
                   onActivate={(alternate) => activateSession(session, alternate, onOpenChat)}
                   onOpenChat={() => onOpenChat(session)}
@@ -329,12 +343,11 @@ function SessionBrowser({
                   session={session}
                   styles={browserStyles}
                 />
-              ))}
-            </View>
-          ))}
+              )),
+          ])}
           {!visibleIds.length ? <EmptyState query={query} styles={browserStyles} /> : null}
         </View>
-      </ScrollView>
+      </SessionViewport>
 
       <View style={browserStyles.footer}>
         <View style={[browserStyles.railRow, browserStyles.footerRail]}>
@@ -397,15 +410,13 @@ function SessionRow({
   const primary = sessionAction(session);
   const hasSeparateChat = session.canOpenOwner && session.canEnterChat;
   const actionLabel = primary === "owner" ? `Open in ${session.owner}` : "Open Chat";
-  const sectionTitle = {
-    needs_you: "Needs you", ready: "Ready to continue", working: "In progress", history: "History",
-  }[session.section];
+  const presentation = sessionPresentation(session, now);
   const logo = agentImage(session.source);
 
   return (
     <View nativeID={rowId(session.id)} style={rowStyles.row}>
       <Pressable
-        accessibilityLabel={`${session.title}, ${sectionTitle}, ${session.source}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}`}
+        accessibilityLabel={`${session.title}, ${presentation.title}, ${session.source}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}`}
         accessibilityRole="button"
         accessibilityState={{ selected: cursor }}
         disabled={!primary}
@@ -419,7 +430,7 @@ function SessionRow({
           pressed && rowStyles.pressed,
         ]}
       >
-        <View style={[rowStyles.statusSlot, { backgroundColor: sectionColor(session.section, palette) }]} />
+        <View style={[rowStyles.statusSlot, { backgroundColor: sectionColor(presentation.section, palette) }]} />
         {logo ? (
           <Image accessibilityIgnoresInvertColors accessibilityLabel="" source={logo} style={rowStyles.logo} />
         ) : (
@@ -431,7 +442,7 @@ function SessionRow({
             <Chip label={session.source} styles={rowStyles} />
             {!compact ? <Chip label={session.project} styles={rowStyles} /> : null}
           </View>
-          <Text numberOfLines={1} style={rowStyles.subtitle}>{session.subtitle || session.cwd}</Text>
+          <Text numberOfLines={1} style={rowStyles.subtitle}>{presentation.subtitle || session.cwd}</Text>
         </View>
         <Text style={rowStyles.age}>{relativeSessionAge(session.updatedAt, now)}</Text>
         <View style={rowStyles.hotkeySlot}>
