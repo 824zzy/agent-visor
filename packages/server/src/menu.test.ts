@@ -188,7 +188,7 @@ describe("menu presentation", () => {
     }).success).toBe(true);
   });
 
-  it("puts work before old unseen completions in physical pills and overflow candidates", () => {
+  it("keeps urgent work first and sorts completed pills by activity regardless of acknowledgment", () => {
     const presentation = menuPresentation({
       ...snapshot,
       sessions: [
@@ -201,7 +201,7 @@ describe("menu presentation", () => {
     }, []);
 
     for (const pills of [presentation.pills, presentation.navigatorPills]) {
-      expect(pills.map(({ id }) => id)).toEqual(["approval", "work", "old-unseen", "seen", "history"]);
+      expect(pills.map(({ id }) => id)).toEqual(["approval", "work", "seen", "old-unseen", "history"]);
       expect(pills.map(({ priority }) => priority)).toEqual([0, 1, 2, 3, 4]);
     }
   });

@@ -1,50 +1,11 @@
 public enum NativeMenuSessionOrder {
-    public static func resolve(
-        displayedIDs: [String],
-        previousPhases: [String: NativeHelperPillPhase],
-        presentedPills: [NativeHelperPill]
-    ) -> [String] {
-        let presentedIDs = presentedPills.map(\.id)
-        guard displayedIDs.count == Set(displayedIDs).count,
-              presentedIDs.count == Set(presentedIDs).count,
-              Set(displayedIDs) == Set(presentedIDs),
-              presentedPills.allSatisfy({ previousPhases[$0.id] == $0.phase }) else {
-            return presentedIDs
-        }
-        return displayedIDs
-    }
-
-    public static func applyingReadyAcknowledgments(
-        displayedIDs: [String],
-        phases: [String: NativeHelperPillPhase],
-        acknowledgedReadyIDs: Set<String>
-    ) -> [String] {
-        displayedIDs.enumerated().sorted { left, right in
-            let leftTier = tier(
-                id: left.element,
-                phase: phases[left.element],
-                acknowledgedReadyIDs: acknowledgedReadyIDs
-            )
-            let rightTier = tier(
-                id: right.element,
-                phase: phases[right.element],
-                acknowledgedReadyIDs: acknowledgedReadyIDs
-            )
-            return leftTier == rightTier ? left.offset < right.offset : leftTier < rightTier
-        }.map(\.element)
-    }
-
-    private static func tier(
-        id: String,
-        phase: NativeHelperPillPhase?,
-        acknowledgedReadyIDs: Set<String>
-    ) -> Int {
-        switch phase {
-        case .needsYou: 0
-        case .working: 1
-        case .ready: acknowledgedReadyIDs.contains(id) ? 3 : 2
-        case .history: 4
-        case nil: 5
-        }
+    /// The daemon owns priority. Interaction stability belongs to the layout transition,
+    /// not a second ordering policy that can retain an obsolete completion order.
+    /// The wire priority is the daemon's final ordinal, not a phase or attention tier.
+    public static func orderedPills(_ pills: [NativeHelperPill]) -> [NativeHelperPill] {
+        var seenIDs = Set<String>()
+        return pills.sorted { lhs, rhs in
+            lhs.priority == rhs.priority ? lhs.id < rhs.id : lhs.priority < rhs.priority
+        }.filter { seenIDs.insert($0.id).inserted }
     }
 }

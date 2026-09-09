@@ -35,7 +35,7 @@ Codex, terminals, editors, and other hosts.
 
 Agent Visor answers three questions from one menu-bar workspace:
 
-- **What needs me?** Needs attention and unseen Ready sessions lead, followed by Working, seen Ready, and Recent work.
+- **What needs me?** Needs attention and Working pills lead, followed by completed sessions ordered by recent activity, then History shortcuts.
 - **Where was I?** Recent work stays searchable even when it no longer fits in the menu bar.
 - **How do I continue?** Return to the owning application or terminal, or open the supported Agent Visor Chat view.
 
@@ -52,7 +52,7 @@ state. Active sessions take priority, recent sessions fill available space, and
 <code>+N</code> opens sessions that do not fit.
 
 - Click to return to the original owner.
-- Opening a Ready session acknowledges that completion and moves its pill behind Working without changing its Ready status.
+- Opening a Ready session acknowledges that completion and stops its pulse without changing its rank or Ready status.
 - Option-click to enter the session's Chat in Agent Visor.
 - Hover for full title, source, model, reasoning effort, execution policy, context usage, path, and freshness when the source provides them.
 - Hold the configured shortcut modifiers to reveal numbered sessions, then press a number to jump directly.
@@ -142,8 +142,8 @@ Agent Visor keeps four independent facts for an opened conversation:
    answer, ready for input, or unknown.
 3. **Route**: the exact provider route is available, waiting for a running
    turn, or unavailable.
-4. **Attention**: completion acknowledgment and recency determine list order
-   and notification state.
+4. **Attention**: completion acknowledgment controls attention indicators;
+   phase and activity recency determine list order.
 
 The Sessions list uses attention and recency. They do not end a conversation
 and they do not decide whether Chat can send or stop. A quiet or acknowledged

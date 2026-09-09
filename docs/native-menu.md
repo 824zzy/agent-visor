@@ -30,7 +30,7 @@ Full-screen detection uses native `AXFullScreen` evidence on the selected displa
 
 ## Session items
 
-Needs you items come first, then In progress, unseen Ready completions, seen Ready completions, and source-backed recent History shortcuts. The daemon and helper use the same attention order.
+Needs you items come first, then In progress, all Ready completions, and source-backed recent History shortcuts. Each group sorts by authoritative activity (`updatedAt`) newest first, then stable session ID. Seen and unseen completions share one priority group; acknowledgment controls the pulse, not position. The daemon assigns priority and the helper adopts it without a second ordering policy.
 
 ### Pill-surface selection contract
 
@@ -44,7 +44,7 @@ The daemon sends active candidates first and recent shortcuts second. The helper
 
 Ponytail: a change to the observed window, History eligibility, or overflow count must update the provider, menu-presentation, packer, and overflow-snapshot tests together. Do not restore a source-specific History exclusion at the presentation seam.
 
-A normal click immediately opens the selected task and marks its Ready completion seen. The new priority order is deferred while the pointer remains over either pill strip, a press begun there remains held, session shortcut modifiers are held, or a native popover is open. Gaps between pills count as part of the strip; the notch does not.
+A normal click immediately opens the selected task and marks its Ready completion seen. Acknowledgment alone does not reorder pills. Layout changes from activity, phase, or membership updates are deferred while the pointer remains over either pill strip, a press begun there remains held, session shortcut modifiers are held, or a native popover is open. Gaps between pills count as part of the strip; the notch does not.
 
 After 120 milliseconds outside the interaction, pills slide to their new positions over 240 milliseconds with smooth acceleration and deceleration. The clicked pill stays in front where paths cross; overlapping capsules use solid backgrounds so labels remain readable. Native window stacking and click routing share that same order. Pointer re-entry pauses at the last rendered positions, and leaving resumes toward the latest layout. Reduce Motion retains the interaction hold and applies the deferred layout without animation.
 
@@ -52,7 +52,7 @@ Motion is clipped to each safe menu-bar lane without compressing the button cont
 
 The rendered layout determines click targets, visible shortcut numbers, and overflow membership. Seen state, colors, and provider updates continue during the hold. Removed sessions disappear immediately. If screen or menu/tray geometry makes the held frames unsafe, safe placement takes precedence over the hold. Screen changes and hiding cancel pending motion.
 
-In progress stays ahead of unseen and seen completions once the layout settles. Activity-only refreshes preserve positions within each attention tier.
+In progress stays ahead of completed work once the layout settles. Activity-only refreshes adopt the new recency order after the interaction hold, even when every session keeps the same phase.
 
 An observed transition into Ready pulses its status dot for up to seven minutes. Initial snapshots do not invent completions, and acknowledgment stops the pulse.
 
@@ -94,7 +94,7 @@ The popover freezes that layout while open. The placeholder reads “Search N re
 
 Rows open the exact source session when one is available. An ownerless Chat-capable row opens Chat as its primary normal-click/Return action. Footer actions open Sessions or Settings, and a second `+N` activation closes the popover.
 
-Phase and membership changes adopt the new priority order. Existing panels move or update in place without replacing their native buttons.
+Activity, phase, and membership changes adopt the daemon's new priority order. Existing panels move or update in place without replacing their native buttons.
 
 The status colors match the released sRGB roles:
 

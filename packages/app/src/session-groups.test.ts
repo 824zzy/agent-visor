@@ -145,7 +145,7 @@ describe("groupSessions", () => {
     ).toEqual(["In progress"]);
   });
 
-  it("keeps one Ready group with unseen completions first and newest first within each tier", () => {
+  it("keeps one Ready group ordered by recent activity across seen and unseen completions", () => {
     const freshReady = {
       ...session("fresh-ready", "ready", "2026-08-22T10:00:00.000Z"),
       attentionTier: "ready" as const,
@@ -167,7 +167,7 @@ describe("groupSessions", () => {
       id,
       sessions: rows.map(({ id }) => id),
     }))).toEqual([
-      { id: "ready", sessions: ["fresh-ready", "older-unseen", "acknowledged-ready", "older-seen"] },
+      { id: "ready", sessions: ["acknowledged-ready", "older-seen", "fresh-ready", "older-unseen"] },
       { id: "working", sessions: ["working"] },
     ]);
     expect(groups.map(({ title }) => title)).toEqual(["Ready to continue", "In progress"]);

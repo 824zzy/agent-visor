@@ -7,7 +7,8 @@ const attentionOrder = {
   needs_you: 0,
   working: 1,
   ready: 2,
-  acknowledged_ready: 3,
+  // Acknowledgment stops the pulse; it does not outrank recent completed work.
+  acknowledged_ready: 2,
   history: 4,
 } as const;
 
