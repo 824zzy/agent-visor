@@ -26,13 +26,13 @@ With an empty query, the browser shows four sections:
 3. `In progress` (`working`)
 4. `History` (`recent`)
 
-Ready sessions with activity in the last seven days share one section and one combined count. Unacknowledged completions appear first within that section, followed by acknowledged completions. Opening a Ready row marks it as acknowledged and moves it within the same section without changing its lifecycle state. The menu-bar pill priority order remains independent of browser section grouping.
+Ready sessions with activity in the last seven days share one section and one combined count, ordered by activity newest first regardless of acknowledgment. Opening a Ready row marks it as acknowledged without changing its rank or lifecycle state. The menu-bar pill priority order remains independent of browser section grouping.
 
 Completed conversations older than seven days appear in History with a gray dot and `Completed` subtitle. The exact seven-day boundary remains Ready. Grouping, row text, status color, and accessibility labels use the same browser presentation, including search results. Agent Room records retain their management label. Working turns and pending approvals do not become completed merely because they are old.
 
 Freshness is recalculated every minute and on window focus, visibility changes, and return to Sessions, even if the provider snapshot has not changed. Regrouping preserves the top visible session and its offset, subject to the scroll bounds, plus the keyboard target and query. This presentation does not archive conversations or change source/Chat capabilities, turn state, route ownership, or open drafts.
 
-Rows sort by activity date descending within each group, then by stable session ID. The Ready section applies that ordering separately within its unacknowledged and acknowledged rows. A newer lower-priority row never jumps above a higher-priority group.
+Rows sort by activity date descending within each group, then by stable session ID. A newer lower-priority row never jumps above a higher-priority group.
 
 Search matches title, preview, project, source, owner, and path. Title matches rank before metadata matches; equally ranked rows use the same recency and stable-ID ordering as the empty-query view.
 

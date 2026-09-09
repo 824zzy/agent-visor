@@ -41,7 +41,7 @@ export function groupSessions(sessions: SessionSummary[], now = new Date()): Ses
   return sections.flatMap((section) => {
     const matching = sessions
       .filter((session) => sessionPresentation(session, now).section === section.id)
-      .sort(section.id === "ready" ? compareReadySessions : compareSessions);
+      .sort(compareSessions);
 
     return matching.length === 0 ? [] : [{ ...section, sessions: matching }];
   });
@@ -132,10 +132,4 @@ function searchRank(session: SessionSummary, needle: string, now: Date): number 
 
 function compareSessions(left: SessionSummary, right: SessionSummary): number {
   return right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id);
-}
-
-function compareReadySessions(left: SessionSummary, right: SessionSummary): number {
-  return Number(left.attentionTier === "acknowledged_ready")
-    - Number(right.attentionTier === "acknowledged_ready")
-    || compareSessions(left, right);
 }

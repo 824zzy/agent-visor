@@ -470,10 +470,7 @@ final class NativeMenuController: NSObject {
             registerShortcuts()
         }
 
-        var seenSessionIDs = Set<String>()
-        let orderedPills = pills.sorted { lhs, rhs in
-            lhs.priority == rhs.priority ? lhs.id < rhs.id : lhs.priority < rhs.priority
-        }.filter { seenSessionIDs.insert($0.id).inserted }
+        let orderedPills = NativeMenuSessionOrder.orderedPills(pills)
         let previousPhases = sessionPresentations.mapValues(\.phase)
         let pillsByID = Dictionary(uniqueKeysWithValues: orderedPills.map { ($0.id, $0) })
         readyAttention.present(
@@ -481,16 +478,7 @@ final class NativeMenuController: NSObject {
             pills: orderedPills,
             now: Date()
         )
-        displayedSessionIDs = NativeMenuSessionOrder.resolve(
-            displayedIDs: displayedSessionIDs,
-            previousPhases: previousPhases,
-            presentedPills: orderedPills
-        )
-        displayedSessionIDs = NativeMenuSessionOrder.applyingReadyAcknowledgments(
-            displayedIDs: displayedSessionIDs,
-            phases: pillsByID.mapValues(\.phase),
-            acknowledgedReadyIDs: readyAttention.acknowledgedReadyIDs
-        )
+        displayedSessionIDs = orderedPills.map(\.id)
         for id in sessionPanels.keys where pillsByID[id] == nil {
             if sessionPopoverID == id { dismissSessionPopover() }
             sessionPanels.removeValue(forKey: id)?.close()
@@ -500,10 +488,7 @@ final class NativeMenuController: NSObject {
         }
         sessionPresentations = pillsByID
         sessionHoverState.retain(sessionIDs: Set(pillsByID.keys))
-        var seenNavigatorIDs = Set<String>()
-        self.navigatorPills = navigatorPills.sorted { lhs, rhs in
-            lhs.priority == rhs.priority ? lhs.id < rhs.id : lhs.priority < rhs.priority
-        }.filter { seenNavigatorIDs.insert($0.id).inserted }
+        self.navigatorPills = NativeMenuSessionOrder.orderedPills(navigatorPills)
 
         var seenUsageIDs = Set<String>()
         let orderedUsage = usageGlances.sorted { lhs, rhs in
@@ -764,11 +749,6 @@ final class NativeMenuController: NSObject {
         updateLayoutFrames()
         if sessionPresentations[id]?.phase == .ready {
             readyAttention.acknowledgeReady(id: id)
-            displayedSessionIDs = NativeMenuSessionOrder.applyingReadyAcknowledgments(
-                displayedIDs: displayedSessionIDs,
-                phases: sessionPresentations.mapValues(\.phase),
-                acknowledgedReadyIDs: readyAttention.acknowledgedReadyIDs
-            )
             layoutPresentation()
             refreshReadyPulse()
         }

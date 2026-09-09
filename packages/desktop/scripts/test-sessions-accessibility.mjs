@@ -72,8 +72,25 @@ async function run() {
   }))()`);
   assert(readyGroups.headings === 1, "Ready completions share one visible section heading");
   assert(JSON.stringify(readyGroups.rows) === JSON.stringify(
-    [5, 13, 21, 29, 1, 9, 17, 25].map((index) => `Agent session ${index}`),
-  ), "the merged Ready section lists unseen completions first, then seen completions by recency");
+    [1, 5, 9, 13, 17, 21, 25, 29].map((index) => `Agent session ${index}`),
+  ), "the merged Ready section lists all completions by recency regardless of acknowledgment");
+  const readyLabels = `[...document.querySelectorAll('[aria-label*="Open in"]')]
+    .map(element => element.getAttribute('aria-label')).filter(label => label.includes(', Ready to continue,'))`;
+  snapshot = {
+    ...snapshot, revision: snapshot.revision + 1,
+    sessions: sessions.map(session => session.id === "session-29"
+      ? { ...session, updatedAt: new Date(now).toISOString(), attentionTier: "acknowledged_ready" }
+      : session),
+  };
+  for (const subscriber of subscribers) subscriber(snapshot);
+  await waitFor(window, `${readyLabels}[0]?.startsWith('Agent session 29,')`);
+  const refreshedReady = await window.webContents.executeJavaScript(`${readyLabels}.map(label => label.split(',')[0])`);
+  assert(JSON.stringify(refreshedReady) === JSON.stringify(
+    [29, 1, 5, 9, 13, 17, 21, 25].map(index => `Agent session ${index}`),
+  ), "same-phase activity updates move a seen completion ahead of older unseen work");
+  snapshot = { ...snapshot, revision: snapshot.revision + 1, sessions };
+  for (const subscriber of subscribers) subscriber(snapshot);
+  await waitFor(window, `${readyLabels}[0]?.startsWith('Agent session 1,')`);
   const titleBarRegion = await window.webContents.executeJavaScript(`(() => {
     const element = document.elementFromPoint(window.innerWidth / 2, 16);
     return element ? getComputedStyle(element).getPropertyValue('-webkit-app-region') : '';
@@ -136,7 +153,7 @@ async function run() {
   })()`);
   snapshot = {
     ...snapshot,
-    revision: 2,
+    revision: snapshot.revision + 1,
     sessions: snapshot.sessions.map((session, index) => index ? session : { ...session, title: "Agent session updated" }),
   };
   for (const subscriber of subscribers) subscriber(snapshot);

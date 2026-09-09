@@ -2,104 +2,83 @@ import XCTest
 @testable import AgentVisorCore
 
 final class NativeMenuSessionOrderTests: XCTestCase {
-    func testKeepsPositionsAcrossRecencyOnlyReordering() {
-        XCTAssertEqual(
-            NativeMenuSessionOrder.resolve(
-                displayedIDs: ["session-a", "session-b"],
-                previousPhases: ["session-a": .ready, "session-b": .ready],
-                presentedPills: [pill("session-b", .ready), pill("session-a", .ready)]
-            ),
-            ["session-a", "session-b"]
-        )
+    func testAdoptsPresentedRecencyOrderWithoutAPhaseChange() {
+        let before = [pill("old", .ready, 0), pill("agi-poc", .ready, 1)]
+        let after = [pill("old", .ready, 1), pill("agi-poc", .ready, 0)]
+        XCTAssertEqual(NativeMenuSessionOrder.orderedPills(before).map(\.id), ["old", "agi-poc"])
+        XCTAssertEqual(NativeMenuSessionOrder.orderedPills(after).map(\.id), ["agi-poc", "old"])
     }
 
-    func testWorkingPrecedesUnseenAndSeenCompletionsWithoutDisturbingPeers() {
-        XCTAssertEqual(
-            NativeMenuSessionOrder.applyingReadyAcknowledgments(
-                displayedIDs: ["needs", "ready-a", "ready-b", "working", "history"],
-                phases: [
-                    "needs": .needsYou,
-                    "ready-a": .ready,
-                    "ready-b": .ready,
-                    "working": .working,
-                    "history": .history,
-                ],
-                acknowledgedReadyIDs: ["ready-a"]
-            ),
-            ["needs", "working", "ready-b", "ready-a", "history"]
-        )
+    func testAcknowledgmentStopsThePulseWithoutDemotingTheCompletedPill() {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000)
+        let pills = [pill("old-unseen", .ready, 1), pill("new", .ready, 0)]
+        var attention = NativeMenuReadyAttention()
+        attention.present(previousPhases: ["new": .working, "old-unseen": .ready], pills: pills, now: now)
+        XCTAssertTrue(attention.hasActivePulse(pills: pills, now: now))
+        attention.acknowledgeReady(id: "new")
+        XCTAssertFalse(attention.hasActivePulse(pills: pills, now: now))
+        let acknowledged = [pills[0], pill("new", .ready, 0, acknowledged: true)]
+        XCTAssertEqual(NativeMenuSessionOrder.orderedPills(acknowledged).map(\.id), ["new", "old-unseen"])
     }
 
-    func testSamePhaseRefreshAppliesAttentionOrderWhileKeepingPeerPositions() {
-        let pills = [pill("ready-b", .ready), pill("ready-a", .ready),
-                     pill("work-b", .working), pill("work-a", .working)]
-        let phases = Dictionary(uniqueKeysWithValues: pills.map { ($0.id, $0.phase) })
-        let stableIDs = NativeMenuSessionOrder.resolve(
-            displayedIDs: ["ready-a", "ready-b", "work-a", "work-b"],
-            previousPhases: phases,
-            presentedPills: pills
-        )
-        let unseen = NativeMenuSessionOrder.applyingReadyAcknowledgments(
-            displayedIDs: stableIDs, phases: phases, acknowledgedReadyIDs: []
-        )
-        XCTAssertEqual(unseen, ["work-a", "work-b", "ready-a", "ready-b"])
-        let seen = NativeMenuSessionOrder.applyingReadyAcknowledgments(
-            displayedIDs: unseen, phases: phases, acknowledgedReadyIDs: ["ready-a"]
-        )
-        XCTAssertEqual(seen, ["work-a", "work-b", "ready-b", "ready-a"])
+    func testRecencyUpdatePreservesTheClickedTargetUntilTheSlideSettles() {
+        let before = [pill("old", .ready, 0), pill("agi-poc", .ready, 1, acknowledged: true)]
+        let after = [pill("old", .ready, 1), pill("agi-poc", .ready, 0, acknowledged: true)]
+        let lane = CGRect(x: 0, y: 0, width: 200, height: 24)
+        let pointer = CGPoint(x: 30, y: 12)
+        var transition = NativeMenuLayoutTransition()
+        func update(_ pills: [NativeHelperPill], pointer: CGPoint? = nil, now: TimeInterval)
+            -> NativeMenuLayoutTransition.Presentation {
+            let frames = Dictionary(uniqueKeysWithValues: NativeMenuSessionOrder.orderedPills(pills)
+                .enumerated().map { index, pill in
+                    (NativeMenuPanelTarget.session(pill.id), CGRect(x: index * 84, y: 0, width: 80, height: 24))
+                })
+            return transition.update(proposedFrames: frames, availableTargets: Set(frames.keys),
+                safeAreas: [lane], pointer: pointer, mouseDown: false, shortcutsHeld: false,
+                popoverOpen: false, reduceMotion: false, preferredTarget: .session("old"), now: now)
+        }
+        let initial = update(before, now: 0)
+        let held = update(after, pointer: pointer, now: 1)
+        XCTAssertEqual(held.frames, initial.frames)
+        XCTAssertEqual(held.frames[.session("old")]?.minX, 0)
+        _ = update(after, now: 2)
+        _ = update(after, now: 2.12)
+        XCTAssertTrue(update(after, now: 2.24).isMoving)
+        let settled = update(after, now: 2.37)
+        XCTAssertEqual(settled.frames[.session("agi-poc")]?.minX, 0)
+        XCTAssertEqual(settled.frames[.session("old")]?.minX, 84)
+        XCTAssertFalse(settled.isMoving)
     }
 
-    func testPackingOverflowAndShortcutsShareTheWorkingFirstOrder() {
-        let pills = [pill("unseen", .ready), pill("seen", .ready),
-                     pill("working", .working), pill("needs", .needsYou), pill("history", .history)]
-        let byID = Dictionary(uniqueKeysWithValues: pills.map { ($0.id, $0) })
-        let ordered = NativeMenuSessionOrder.applyingReadyAcknowledgments(
-            displayedIDs: pills.map(\.id), phases: byID.mapValues(\.phase),
-            acknowledgedReadyIDs: ["seen"]
-        )
+    func testPackingOverflowAndShortcutsShareThePresentedPriority() {
+        let pills = [pill("old-unseen", .ready, 3), pill("agi-poc", .ready, 2, acknowledged: true),
+                     pill("working", .working, 1), pill("needs", .needsYou, 0), pill("history", .history, 4)]
+        let ordered = NativeMenuSessionOrder.orderedPills(pills)
         let packed = PillBarPacker.pack(
-            candidates: ordered.map { .init(id: $0, pillWidth: 60) },
-            leftMax: 170, rightMax: 0, pillSpacing: 4,
+            candidates: ordered.map { .init(id: $0.id, pillWidth: 60) },
+            leftMax: 234, rightMax: 0, pillSpacing: 4,
             overflowPillWidthFor: { _ in 30 }
         )
         let visible = packed.leftVisibleIds + packed.rightVisibleIds
-        XCTAssertEqual(visible, ["needs", "working"])
-        XCTAssertEqual(packed.hiddenIds, ["unseen", "seen", "history"])
+        XCTAssertEqual(visible, ["needs", "working", "agi-poc"])
+        XCTAssertEqual(packed.hiddenIds, ["old-unseen", "history"])
         let shortcut = NativeMenuShortcutSnapshot(visibleSessionIDs: visible)
-        XCTAssertEqual(shortcut.sessionID(at: 1), "working")
-        let overflow = NativeMenuOverflowSnapshot(
-            pills: ordered.compactMap { byID[$0] }, visibleSessionIDs: Set(visible)
-        )
-        XCTAssertEqual(overflow.selection(query: "").orderedSessionIDs, packed.hiddenIds)
+        XCTAssertEqual(shortcut.sessionID(at: 2), "agi-poc")
+        let overflow = NativeMenuOverflowSnapshot(pills: ordered, visibleSessionIDs: Set(visible))
+        XCTAssertEqual(overflow.selection(query: "").orderedSessionIDs, ["old-unseen", "history"])
         XCTAssertEqual(overflow.overflowSessionIDs.count, packed.hiddenCount)
     }
 
-    func testAdoptsPresentedOrderAfterPhaseOrMembershipChanges() {
-        XCTAssertEqual(
-            NativeMenuSessionOrder.resolve(
-                displayedIDs: ["session-b", "session-a"],
-                previousPhases: ["session-a": .ready, "session-b": .ready],
-                presentedPills: [pill("session-a", .ready), pill("session-b", .working)]
-            ),
-            ["session-a", "session-b"]
-        )
-        XCTAssertEqual(
-            NativeMenuSessionOrder.resolve(
-                displayedIDs: ["session-a", "session-b"],
-                previousPhases: ["session-a": .ready, "session-b": .working],
-                presentedPills: [pill("session-c", .ready), pill("session-a", .ready)]
-            ),
-            ["session-c", "session-a"]
-        )
+    func testEqualPrioritiesHaveDeterministicIDsAndDuplicateTargetsAreRemoved() {
+        let pills = [pill("b", .ready, 1), pill("a", .ready, 1), pill("a", .ready, 2)]
+        XCTAssertEqual(NativeMenuSessionOrder.orderedPills(pills).map(\.id), ["a", "b"])
+        XCTAssertEqual(NativeMenuSessionOrder.orderedPills(pills.reversed()).map(\.id), ["a", "b"])
     }
 
-    private func pill(_ id: String, _ phase: NativeHelperPillPhase) -> NativeHelperPill {
-        NativeHelperPill(
-            id: id,
-            title: id,
-            phase: phase,
-            priority: 0,
-            accessibilityLabel: id
-        )
+    private func pill(_ id: String, _ phase: NativeHelperPillPhase, _ priority: Int,
+                      acknowledged: Bool = false) -> NativeHelperPill {
+        NativeHelperPill(id: id, title: id, phase: phase,
+            attentionTier: acknowledged ? .acknowledgedReady : nil,
+            priority: priority, accessibilityLabel: id)
     }
 }
