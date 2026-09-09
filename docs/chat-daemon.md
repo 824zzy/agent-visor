@@ -22,9 +22,9 @@ the lifecycle phase: Desktop rows are `interactive`, live CLI rows are
 rows remain searchable in Sessions and the navigator as read-only records, but
 they are excluded from physical menu-bar pills and ambient Ready attention.
 
-Codex Desktop sessions with an available canonical transcript expose **Open Chat** in every section, including **History**, regardless of inactivity age. Reading a conversation is separate from controlling its provider: historical conversations remain read-only, and opening Chat does not grant send, cancel, or approval authority.
+Codex Desktop sessions with an available canonical transcript expose **Open Chat** in every section, including **History**, regardless of inactivity age. Reading a conversation is separate from controlling its provider: browser History placement does not make an open conversation read-only. Send, cancel, and approval authority still require the corresponding verified provider route.
 
-The provider's separate observed-session window, archive exclusions, and missing-transcript checks still bound discovery; this entry rule does not add older or undiscovered sessions to the list. Historical Pi records with valid conversation content remain readable. Unsupported providers do not gain Chat entry, and host-specific control restrictions remain unchanged.
+All unarchived direct Codex conversations with valid rollout evidence remain discoverable regardless of age. Archive exclusions and missing-transcript checks still apply. Historical Pi records with valid conversation content remain readable. Unsupported providers do not gain Chat entry, and host-specific control restrictions remain unchanged.
 
 ## Authoritative metadata
 
@@ -128,7 +128,7 @@ Codex resumes the exact thread through `codex app-server`, then starts a text an
 
 The daemon keeps that app-server process until the turn completes. Command, file, permission, and question requests use the shared Chat response controls.
 
-Cursor, Zed-hosted, historical, and sessions without verified control metadata remain read only.
+Cursor, Zed-hosted, and sessions without verified control metadata remain read only. Browser age and History grouping alone do not remove control from an open conversation.
 
 The renderer reports that limit instead of exposing a composer that cannot deliver.
 

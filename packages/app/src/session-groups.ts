@@ -21,28 +21,41 @@ export type SessionSelection = {
   orderedSessions: SessionSummary[];
 };
 
-export function groupSessions(sessions: SessionSummary[]): SessionGroup[] {
+/** Browser presentation never changes the provider state or action capabilities. */
+export function sessionPresentation(session: SessionSummary, now = new Date()) {
+  const tier = session.attentionTier ?? session.section;
+  let section: SessionSection = tier === "acknowledged_ready" ? "ready" : tier;
+  const turn = session.sessionState?.turn;
+  const completed = session.section === "ready" && (turn === undefined || turn === "ready");
+  if (section === "ready" && completed
+    && Date.parse(session.updatedAt) < now.valueOf() - 7 * 24 * 60 * 60 * 1_000) {
+    section = "history";
+  }
+  const subtitle = section === "history" && completed
+    ? `${session.managedBy ? `Managed by ${session.managedBy} · ` : ""}Completed`
+    : session.subtitle;
+  return { section, title: sections.find(({ id }) => id === section)!.title, subtitle };
+}
+
+export function groupSessions(sessions: SessionSummary[], now = new Date()): SessionGroup[] {
   return sections.flatMap((section) => {
     const matching = sessions
-      .filter((session) => {
-        const tier = session.attentionTier ?? session.section;
-        return (tier === "acknowledged_ready" ? "ready" : tier) === section.id;
-      })
+      .filter((session) => sessionPresentation(session, now).section === section.id)
       .sort(section.id === "ready" ? compareReadySessions : compareSessions);
 
     return matching.length === 0 ? [] : [{ ...section, sessions: matching }];
   });
 }
 
-export function selectSessions(sessions: SessionSummary[], query: string): SessionSelection {
+export function selectSessions(sessions: SessionSummary[], query: string, now = new Date()): SessionSelection {
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) {
-    const groups = groupSessions(sessions);
+    const groups = groupSessions(sessions, now);
     return { groups, orderedSessions: groups.flatMap(({ sessions }) => sessions) };
   }
 
   const matches = sessions
-    .map((session) => ({ session, rank: searchRank(session, needle) }))
+    .map((session) => ({ session, rank: searchRank(session, needle, now) }))
     .filter(({ rank }) => rank < 2)
     .sort((left, right) => left.rank - right.rank || compareSessions(left.session, right.session))
     .map(({ session }) => session);
@@ -111,9 +124,9 @@ export function relativeSessionAge(updatedAt: string, now = new Date()): string 
   return `${Math.floor(hours / 24)}d`;
 }
 
-function searchRank(session: SessionSummary, needle: string): number {
+function searchRank(session: SessionSummary, needle: string, now: Date): number {
   if (session.title.toLocaleLowerCase().includes(needle)) return 0;
-  return [session.subtitle, session.source, session.project, session.owner, session.cwd]
+  return [session.subtitle, sessionPresentation(session, now).subtitle, session.source, session.project, session.owner, session.cwd]
     .some((value) => value.toLocaleLowerCase().includes(needle)) ? 1 : 2;
 }
 

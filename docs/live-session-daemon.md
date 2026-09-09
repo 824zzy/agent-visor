@@ -53,10 +53,13 @@ resets the checkpoint. The first read streams the existing transcript; later
 refreshes scan only appended bytes. It never retains message or tool bodies.
 
 Updates use the existing three-second discovery cycle, including when Chat is
-closed or the daemon restarts. Recent completed turns show Ready for 30 minutes,
-then History; this does not change the configurable observed-session window,
-source navigation, or Open Chat. An open turn is not declared completed by an
-inactivity timer.
+closed or the daemon restarts. The daemon retains the completed turn's Ready
+state independently of list age. The full Sessions browser presents completed
+conversations older than seven days as History; native menus separately filter
+to seven days of activity. All unarchived direct Codex conversations with valid
+rollout evidence remain in the browser catalog. Presentation age does not change
+source navigation, Open Chat, or send authority. An open turn is not declared
+completed by an inactivity timer.
 
 ### Provider recovery and clients
 

@@ -14,7 +14,7 @@
     "test:export": "node scripts/test-exported-renderer.mjs",
     "test:native-services": "electron scripts/test-native-services-accessibility.mjs",
     "test:clean-profile": "node scripts/test-clean-profile.mjs && electron scripts/test-native-services-accessibility.mjs",
-    "test:sessions": "electron scripts/e2e",
+    "test:sessions": "electron scripts/e2e && electron scripts/e2e --freshness",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

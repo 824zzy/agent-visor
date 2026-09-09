@@ -5,7 +5,7 @@ import { startServer } from "../../server/dist/server.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const token = "sessions-accessibility-test-token-00000000000000000000";
-const now = Date.parse("2026-08-22T10:00:00.000Z");
+const now = Date.now();
 const sessions = Array.from({ length: 30 }, (_, index) => ({
   id: `session-${index}`,
   title: `Agent session ${index}`,
