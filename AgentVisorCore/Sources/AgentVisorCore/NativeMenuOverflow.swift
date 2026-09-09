@@ -214,7 +214,7 @@ public struct NativeMenuOverflowView: View {
         NativeMenuSearchField(
             text: $query,
             focusRequest: searchFocusRequest,
-            placeholder: SessionNavigatorSummaryPolicy.searchPlaceholder(
+            placeholder: SessionNavigatorSummaryPolicy.recentSearchPlaceholder(
                 totalSessionCount: snapshot.pills.count
             )
         )
@@ -376,7 +376,7 @@ private struct NativeMenuSearchField: NSViewRepresentable {
     func makeNSView(context: Context) -> NSSearchField {
         let field = NativeMenuFirstMouseSearchField()
         field.delegate = context.coordinator
-        field.setAccessibilityLabel("Search sessions")
+        field.setAccessibilityLabel("Search recent sessions")
         return field
     }
 

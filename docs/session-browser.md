@@ -44,7 +44,7 @@ The browser merges:
 - saved Pi sessions with a valid session header and renderable active-branch transcript evidence;
 - no metadata-only or fabricated history rows.
 
-Codex archival is the normal visibility boundary, not elapsed time. A successful empty catalog clears previous rows; a failed database read retains the last successful snapshot until recovery. The native menu keeps its existing bounded presentation (64 physical candidates and 512 navigator rows); the full Sessions browser is not limited to those native batches.
+Codex archival is the normal visibility boundary, not elapsed time. A successful empty catalog clears previous rows; a failed database read retains the last successful snapshot until recovery. The native menu shows only conversations with activity in the last seven days, including popover search, and keeps its existing bounds (64 physical candidates and 512 navigator rows); the full Sessions browser is not limited to those native batches.
 
 ## Interaction State
 

@@ -51,6 +51,12 @@ final class SessionNavigatorSummaryPolicyTests: XCTestCase {
         )
     }
 
+    func testRecentMenuSearchCopy() {
+        XCTAssertEqual(SessionNavigatorSummaryPolicy.recentSearchPlaceholder(totalSessionCount: 15), "Search 15 recent sessions")
+        XCTAssertEqual(SessionNavigatorSummaryPolicy.recentSearchPlaceholder(totalSessionCount: 1), "Search 1 recent session")
+        XCTAssertEqual(SessionNavigatorSummaryPolicy.recentSearchPlaceholder(totalSessionCount: -1), "Search 0 recent sessions")
+    }
+
     func testOverflowCopySeparatesQuickSearchFromTheFullBrowser() {
         XCTAssertEqual(SessionNavigatorSummaryPolicy.overflowTitle, "More Sessions")
         XCTAssertEqual(SessionNavigatorSummaryPolicy.searchTitle, "Search Sessions")

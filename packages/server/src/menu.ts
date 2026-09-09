@@ -70,8 +70,12 @@ export function nativeActionFor(event: NativeHelperEvent, snapshot: SessionSnaps
 export function menuPresentation(
   snapshot: SessionSnapshot,
   usageGlances: NativeHelperUsageGlance[],
+  now = Date.now(),
 ) {
+  // Bound both native surfaces without truncating the full Sessions catalog.
+  const cutoff = now - 7 * 24 * 60 * 60 * 1_000;
   const ordered = snapshot.sessions
+    .filter((session) => Date.parse(session.updatedAt) >= cutoff)
     .filter((session) => session.canOpenOwner || session.canEnterChat)
     .sort((left, right) => attentionOrder[left.attentionTier ?? left.section]
       - attentionOrder[right.attentionTier ?? right.section]

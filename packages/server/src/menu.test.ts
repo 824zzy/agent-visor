@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nativeHelperRequestSchema, type SessionSnapshot } from "@agent-visor/protocol";
 import { activateMenuPill, menuPresentation, nativeActionFor } from "./menu.js";
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-08-22T22:00:00Z"));
+});
+afterEach(() => vi.useRealTimers());
 
 const snapshot: SessionSnapshot = {
   type: "session_snapshot",
@@ -391,5 +397,31 @@ describe("menu presentation", () => {
       action: "open_chat",
       sessionId: "chat-only-normal-click",
     });
+  });
+});
+
+
+describe("native menu activity window", () => {
+  it("caps both surfaces at seven days across phases and leaves the full catalog intact", () => {
+    const now = Date.parse("2026-09-08T12:00:00Z");
+    const cutoff = now - 7 * 24 * 60 * 60 * 1_000;
+    const sessions = (["needs_you", "working", "ready", "history"] as const).flatMap((section) =>
+      [cutoff - 1, cutoff, cutoff + 1].map((time, index) => ({
+        ...snapshot.sessions[0]!, id: `${section}-${index}`, section,
+        updatedAt: new Date(time).toISOString(),
+      })));
+    sessions.push({ ...sessions[0]!, id: "invalid", updatedAt: "invalid" });
+    const catalog = { ...snapshot, sessions };
+    const before = structuredClone(catalog);
+    const menu = menuPresentation(catalog, [], now);
+    for (const rows of [menu.pills, menu.navigatorPills]) {
+      expect(rows).toHaveLength(8);
+      expect(rows.every(({ id }) => id.endsWith("-1") || id.endsWith("-2"))).toBe(true);
+    }
+    expect(catalog).toEqual(before);
+    // Time alone expires the boundary rows; fresh activity returns an older row.
+    expect(menuPresentation(catalog, [], now + 1).navigatorPills).toHaveLength(4);
+    sessions[0]!.updatedAt = new Date(now).toISOString();
+    expect(menuPresentation(catalog, [], now).pills.some(({ id }) => id === "needs_you-0")).toBe(true);
   });
 });

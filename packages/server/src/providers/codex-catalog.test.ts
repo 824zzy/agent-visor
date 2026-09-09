@@ -48,7 +48,7 @@ describe("Codex unarchived catalog", () => {
       const snapshot = await repository.refresh();
       expect(snapshot.sessions).toHaveLength(206);
       expect(snapshot.sessions.some(({ id }) => id === "direct-204")).toBe(true);
-      const menu = menuPresentation(snapshot, []);
+      const menu = menuPresentation(snapshot, [], updated * 1_000);
       expect(menu.navigatorPills.find(({ id }) => id === "direct-204")?.defaultOverflowEligible).toBe(true);
       expect(menu.pills.every(({ id }) => id.startsWith("direct-"))).toBe(true);
       expect(menu.navigatorPills.find(({ id }) => id === "managed")?.defaultOverflowEligible).toBe(false);
