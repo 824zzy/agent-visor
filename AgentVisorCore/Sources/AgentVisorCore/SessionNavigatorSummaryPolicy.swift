@@ -57,6 +57,11 @@ public enum SessionNavigatorSummaryPolicy {
         return "Search all \(count) \(count == 1 ? "session" : "sessions")"
     }
 
+    public static func recentSearchPlaceholder(totalSessionCount: Int) -> String {
+        let count = max(0, totalSessionCount)
+        return "Search \(count) recent \(count == 1 ? "session" : "sessions")"
+    }
+
     public static func searchHeaderText(
         matchCount: Int,
         totalSessionCount: Int

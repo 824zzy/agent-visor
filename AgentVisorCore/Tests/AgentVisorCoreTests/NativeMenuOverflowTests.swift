@@ -127,7 +127,7 @@ final class NativeMenuOverflowTests: XCTestCase {
         root.layoutSubtreeIfNeeded()
 
         let views = allSubviews(of: root)
-        XCTAssertTrue(views.contains { $0.accessibilityLabel() == "Search sessions" })
+        XCTAssertTrue(views.contains { $0.accessibilityLabel() == "Search recent sessions" })
         let hidden = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
             $0.accessibilityLabel() == "Hidden review, in progress"
         })

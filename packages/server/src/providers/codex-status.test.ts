@@ -91,7 +91,7 @@ describe("Codex desktop lifecycle status", () => {
       section: "ready", subtitle: "Managed by Agent Room · Ready to continue",
       canOpenOwner: true, canEnterChat: true,
     }]);
-    const presentation = menuPresentation(snapshot, []);
+    const presentation = menuPresentation(snapshot, [], environment.clock);
     expect(presentation.pills).toEqual([]);
     expect(presentation.navigatorPills).toMatchObject([{
       id: sessionId, defaultOverflowEligible: false,
@@ -103,13 +103,13 @@ describe("Codex desktop lifecycle status", () => {
     const { environment, repository } = setup();
     environment.content = metadata("Agent Room");
     environment.append("task_started", "turn-1");
-    expect(menuPresentation(await repository.refresh(), []).pills).toEqual([]);
+    expect(menuPresentation(await repository.refresh(), [], environment.clock).pills).toEqual([]);
     environment.content += metadata("Codex Desktop");
     environment.modifiedAt += 1;
     const snapshot = await repository.refresh();
     expect(snapshot.sessions[0]?.managedBy).toBeUndefined();
     expect(snapshot.sessions[0]?.subtitle).toBe("Agent is working");
-    expect(menuPresentation(snapshot, []).pills.map(({ id }) => id)).toEqual([sessionId]);
+    expect(menuPresentation(snapshot, [], environment.clock).pills.map(({ id }) => id)).toEqual([sessionId]);
   });
 
   it.each([
@@ -123,7 +123,7 @@ describe("Codex desktop lifecycle status", () => {
     environment.append("task_started", "turn-1");
     const snapshot = await repository.refresh();
     expect(snapshot.sessions[0]?.managedBy).toBeUndefined();
-    expect(menuPresentation(snapshot, []).pills.map(({ id }) => id)).toEqual([sessionId]);
+    expect(menuPresentation(snapshot, [], environment.clock).pills.map(({ id }) => id)).toEqual([sessionId]);
   });
 
   it("classifies metadata-only sessions and waits for complete client records", async () => {
@@ -140,7 +140,7 @@ describe("Codex desktop lifecycle status", () => {
     // Replacing/truncating the transcript must not reuse the old client identity.
     environment.content = "";
     environment.append("task_started", "new-turn");
-    expect(menuPresentation(await repository.refresh(), []).pills.map(({ id }) => id)).toEqual([sessionId]);
+    expect(menuPresentation(await repository.refresh(), [], environment.clock).pills.map(({ id }) => id)).toEqual([sessionId]);
   });
 
   it("reads real UTF-8 transcript deltas across oversized content and partial writes", async () => {
@@ -299,7 +299,7 @@ describe("Codex desktop lifecycle status", () => {
       attentionTier: "ready",
       canEnterChat: true,
     }]);
-    expect(menuPresentation(snapshot, []).pills).toMatchObject([{
+    expect(menuPresentation(snapshot, [], environment.clock).pills).toMatchObject([{
       id: sessionId,
       phase: "ready",
       attentionTier: "ready",
@@ -368,7 +368,7 @@ describe("Codex desktop lifecycle status", () => {
     const snapshot = await repository.refresh();
 
     expect(snapshot.sessions[0]?.section).toBe("working");
-    expect(menuPresentation(snapshot, []).pills[0]?.phase).toBe("working");
+    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("working");
   });
 
   it("clears Running after Codex records an interrupted turn without a Stop hook", async () => {
@@ -382,6 +382,6 @@ describe("Codex desktop lifecycle status", () => {
 
     expect(snapshot.sessions).toMatchObject([{ id: sessionId, section: "ready",
       canOpenOwner: true, canEnterChat: true }]);
-    expect(menuPresentation(snapshot, []).pills).toMatchObject([{ id: sessionId, phase: "ready" }]);
+    expect(menuPresentation(snapshot, [], environment.clock).pills).toMatchObject([{ id: sessionId, phase: "ready" }]);
   });
 });

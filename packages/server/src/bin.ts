@@ -70,6 +70,7 @@ let unsubscribeNotifications: (() => void) | undefined;
 let unsubscribePiRestoration: (() => void) | undefined;
 let unsubscribeSettings: (() => void) | undefined;
 let usageTimer: NodeJS.Timeout | undefined;
+let menuTimer: NodeJS.Timeout | undefined;
 let permissionTimer: NodeJS.Timeout | undefined;
 let updateTimer: NodeJS.Timeout | undefined;
 let usageGlances: NativeHelperUsageGlance[] = [];
@@ -145,6 +146,9 @@ if (nativeHelperExecutable) {
       )
         .catch((error: unknown) => console.warn(`Agent Visor menu update failed: ${String(error)}`));
     };
+    // Age eligibility can change even when the session snapshot is unchanged.
+    menuTimer = setInterval(presentNativeMenu, 60_000);
+    menuTimer.unref();
     unsubscribeMenu = repository.subscribe(presentNativeMenu);
     unsubscribeSettings = settings.subscribe(presentNativeMenu);
     presentNativeMenu();
@@ -246,6 +250,7 @@ async function refresh(): Promise<void> {
 async function stop(): Promise<void> {
   clearInterval(refreshTimer);
   if (usageTimer) clearInterval(usageTimer);
+  if (menuTimer) clearInterval(menuTimer);
   if (permissionTimer) clearInterval(permissionTimer);
   if (updateTimer) clearInterval(updateTimer);
   unsubscribeMenu?.();
