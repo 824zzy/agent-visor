@@ -4,6 +4,7 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import net, { type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { saveNativeHelperDiagnostic } from "./native-helper-diagnostics.js";
 import {
   NATIVE_HELPER_MAX_FRAME_BYTES,
   NATIVE_HELPER_MAX_TEXT_BYTES,
@@ -261,7 +262,10 @@ export class NativeHelperProcess implements NativeHelperAdapter {
   private buffer = Buffer.alloc(0);
   private closed = false;
   private failure: Error | undefined;
+  private diagnosticWrite: Promise<void> | undefined;
+  private readonly diagnosticRoot = process.env.AGENT_VISOR_DATA_DIR;
   private readonly pending = new Map<string, {
+    method: string;
     resolve: (response: Exclude<NativeHelperResponse, { type: "event" }>) => void;
     reject: (error: Error) => void;
     deadline: NodeJS.Timeout;
@@ -427,6 +431,7 @@ export class NativeHelperProcess implements NativeHelperAdapter {
         await exited;
       }
     }
+    await this.diagnosticWrite;
     await rm(this.root, { recursive: true, force: true });
     if (invalidationError) throw invalidationError;
   }
@@ -453,6 +458,7 @@ export class NativeHelperProcess implements NativeHelperAdapter {
         reject(new Error(`The native helper did not answer ${method}.`));
       }, 3_000);
       this.pending.set(id, {
+        method,
         resolve: (response) => {
           if (response.ok) resolve(response);
           else reject(new Error(response.error.message));
@@ -465,10 +471,12 @@ export class NativeHelperProcess implements NativeHelperAdapter {
   }
 
   private ingest(data: Buffer): void {
+    if (this.closed || this.failure) return;
     this.buffer = Buffer.concat([this.buffer, data]);
     while (this.buffer.length >= 4) {
       const size = this.buffer.readUInt32BE(0);
       if (size > NATIVE_HELPER_MAX_FRAME_BYTES) {
+        this.recordProtocolError("oversized_frame", size);
         this.fail(new Error("The native helper sent an oversized frame."));
         return;
       }
@@ -477,13 +485,15 @@ export class NativeHelperProcess implements NativeHelperAdapter {
       this.buffer = this.buffer.subarray(size + 4);
       let value: unknown;
       try { value = JSON.parse(raw.toString("utf8")); } catch {
-        this.fail(new Error("The native helper sent invalid JSON."));
-        return;
+        this.recordProtocolError("invalid_json", size);
+        this.rejectInvalidMessage(new Error("The native helper sent invalid JSON."));
+        continue;
       }
       const parsed = nativeHelperResponseSchema.safeParse(value);
       if (!parsed.success) {
-        this.fail(new Error("The native helper sent an invalid response."));
-        return;
+        this.recordProtocolError("invalid_response", size, value, parsed.error.issues);
+        this.rejectInvalidMessage(new Error("The native helper sent an invalid response."), value);
+        continue;
       }
       if ("type" in parsed.data) {
         this.onEvent(parsed.data);
@@ -497,9 +507,45 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     }
   }
 
+  /** A complete frame can be discarded without losing the next frame boundary. */
+  private rejectInvalidMessage(error: Error, value?: unknown): void {
+    const id = isRecord(value) && typeof value.id === "string" ? value.id : undefined;
+    if (id !== undefined) {
+      const pending = this.pending.get(id);
+      if (pending) {
+        clearTimeout(pending.deadline);
+        this.pending.delete(id);
+        pending.reject(error);
+      }
+      return;
+    }
+    if (isRecord(value) && value.type === "event") return;
+    // Without a response identity, in-flight actions have an uncertain outcome.
+    // Reject them once; never replay terminal input or approval actions.
+    this.rejectPending(error);
+  }
+
+  private recordProtocolError(
+    kind: Parameters<typeof saveNativeHelperDiagnostic>[1],
+    size: number,
+    value?: unknown,
+    issues: Parameters<typeof saveNativeHelperDiagnostic>[4] = [],
+  ): void {
+    if (this.diagnosticWrite) return;
+    this.diagnosticWrite = saveNativeHelperDiagnostic(
+      this.diagnosticRoot ?? this.root, kind, size, value, issues,
+      [...this.pending.values()].map(pending => pending.method),
+    ).catch(() => { console.warn("Agent Visor could not save native helper protocol diagnostics."); });
+  }
+
   private fail(error: Error): void {
-    if (this.closed) return;
+    if (this.closed || this.failure) return;
     this.failure = error;
+    this.buffer = Buffer.alloc(0);
+    this.rejectPending(error);
+  }
+
+  private rejectPending(error: Error): void {
     for (const pending of this.pending.values()) {
       clearTimeout(pending.deadline);
       pending.reject(error);

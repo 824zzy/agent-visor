@@ -897,6 +897,26 @@ describe("SessionRepository", () => {
     });
   });
 
+  it("advertises Claude owner navigation only after discovery supplies its target", async () => {
+    let records: DiscoveredProviderSession[] = [];
+    const repository = new SessionRepository([{ id: "claude_code", discover: async () => records }]);
+    const focus = vi.fn(async () => {});
+    repository.setControls({ focus });
+    const hook: HookSessionEvent = {
+      sessionId: "claude-starting", provider: "claude_code", cwd: live.cwd,
+      event: "SessionStart", status: "idle", receivedAt: live.updatedAt,
+      pid: 42, tty: "ttys001",
+    };
+    expect(repository.applyHook(hook).sessions[0]?.canOpenOwner).toBe(false);
+    records = [{
+      ...live, id: hook.sessionId, provider: "claude_code", owner: "Ghostty",
+      controlTarget: { kind: "terminal", target: { application: "Ghostty", pid: 42, tty: "ttys001", cwd: live.cwd } },
+    }];
+    expect((await repository.refresh()).sessions[0]?.canOpenOwner).toBe(true);
+    expect(await repository.focusSession(hook.sessionId)).toBeUndefined();
+    expect(focus).toHaveBeenCalledOnce();
+  });
+
   it("presents and answers Claude questions through the pending hook", async () => {
     const repository = new SessionRepository([]);
     repository.applyHook({

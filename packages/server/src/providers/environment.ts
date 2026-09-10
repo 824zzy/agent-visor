@@ -74,23 +74,33 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
       this.startedAtByPID.clear();
       this.processSnapshotExpiresAt = Date.now() + 1_000;
     }
-    this.processSnapshot ??= machineWork.run(async () => {
-      const result = await runProcess(
-        "/bin/ps",
-        ["-axo", "pid=,ppid=,tty=,comm=,args="],
-        { deadlineMs: 1_000, maxOutputBytes: 4 * 1_048_576 },
-      );
-      if (result.status !== "success") return [];
-      return result.stdout.split("\n").flatMap((line) => {
-        const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s*(.*)$/.exec(line);
+    // macOS truncates comm when it precedes another column, even with -ww.
+    // Put each variable-width field last and join by PID; executable paths
+    // can contain spaces and must never be reconstructed from argv text.
+    this.processSnapshot ??= Promise.all([
+      "pid=,ppid=,tty=,comm=", "pid=,args=",
+    ].map(fields => machineWork.run(() => runProcess(
+      "/bin/ps", ["-axww", "-o", fields],
+      { deadlineMs: 1_000, maxOutputBytes: 4 * 1_048_576 },
+    )))).then(([commands, args]) => {
+      if (commands?.status !== "success" || args?.status !== "success") return [];
+      const argumentsByPID = new Map(args.stdout.split("\n").flatMap(line => {
+        const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+        return match ? [[Number(match[1]), match[2] ?? ""] as const] : [];
+      }));
+      return commands.stdout.split("\n").flatMap((line) => {
+        const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/.exec(line);
         if (!match) return [];
+        const pid = Number(match[1]);
+        const args = argumentsByPID.get(pid);
+        if (args === undefined) return [];
         const rawTTY = match[3];
         return [{
-          pid: Number(match[1]),
+          pid,
           parentPID: Number(match[2]),
           tty: rawTTY && !["?", "??", "-"].includes(rawTTY) ? rawTTY : undefined,
           command: match[4] ?? "",
-          arguments: match[5] ?? "",
+          arguments: args,
         }];
       });
     });

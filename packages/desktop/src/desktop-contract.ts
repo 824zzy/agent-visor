@@ -107,6 +107,10 @@ export function nativeActionFromDaemonMessage(value: unknown): NativeAction | un
       : undefined;
   }
   if (message.action === "open_session_url" && typeof message.url === "string") {
+    if (/^claude:\/\/claude\.ai\/epitaxy\/local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(message.url)
+      && !/[\r\n]/.test(message.url)) {
+      return { action: "open_session_url", url: message.url };
+    }
     try {
       const url = new URL(message.url);
       return url.protocol === "codex:" && url.hostname === "threads"

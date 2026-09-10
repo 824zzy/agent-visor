@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { ProviderAdapter, DiscoveredProviderSession } from "../sessions.js";
-import type { ProviderEnvironment } from "./environment.js";
+import type { FileStamp, ProviderEnvironment } from "./environment.js";
+import { ClaudeDesktopSessions } from "./claude-desktop.js";
 import {
   applicationTargetForProcess, isRecord, iso, ownerForProcess, processInstanceToken,
   terminalTargetForProcess,
@@ -18,16 +19,25 @@ const readyStatuses = new Set([
   "idle", "ready", "waiting", "waiting_for_input", "awaiting_input",
 ]);
 
+type TranscriptSummary = { customTitle: string; firstUser: string; completed: boolean };
+const emptySummary: TranscriptSummary = { customTitle: "", firstUser: "", completed: false };
+
 export class ClaudeProvider implements ProviderAdapter {
   readonly id = "claude_code" as const;
+  private readonly summaries = new Map<string, { size: number; modifiedAt: number; summary: TranscriptSummary }>();
+  private readonly desktopSessions: ClaudeDesktopSessions;
 
-  constructor(private readonly environment: ProviderEnvironment) {}
+  constructor(private readonly environment: ProviderEnvironment) {
+    this.desktopSessions = new ClaudeDesktopSessions(environment);
+  }
 
   async discover(): Promise<DiscoveredProviderSession[]> {
     const directory = path.join(this.environment.home, ".claude", "sessions");
     const processes = await this.environment.processes();
     const byPID = new Map(processes.map((process) => [process.pid, process]));
     const results: DiscoveredProviderSession[] = [];
+    const transcripts = new Set<string>();
+    const desktopProfiles = new Map<string, ReturnType<ClaudeDesktopSessions["read"]>>();
 
     for (const file of await this.environment.directory(directory)) {
       const match = /^(\d+)\.json$/.exec(file);
@@ -52,6 +62,7 @@ export class ClaudeProvider implements ProviderAdapter {
       if (cwd.includes(".claude-mem") || cwd.includes("observer-sessions")) continue;
 
       const transcript = claudeTranscriptPath(this.environment.home, sessionID, cwd);
+      transcripts.add(transcript);
       const transcriptStamp = await this.environment.stamp(transcript);
       if (!process.tty && entrypoint.includes("vscode")) {
         if (!transcriptStamp
@@ -59,7 +70,7 @@ export class ClaudeProvider implements ProviderAdapter {
             > this.environment.observedWindowMs) continue;
       }
       const metadataStamp = await this.environment.stamp(metadataPath);
-      const title = string(metadata.name) || await claudeTranscriptTitle(this.environment, transcript);
+      const summary = await this.transcriptSummary(transcript, transcriptStamp);
       const owner = process.tty
         ? ownerForProcess(pid, processes)
         : entrypoint.includes("vscode") ? "Cursor" : "Claude";
@@ -74,35 +85,68 @@ export class ClaudeProvider implements ProviderAdapter {
         processStartToken,
       );
       const applicationTarget = applicationTargetForProcess(process.pid, processes);
+      const desktopProfile = !terminalTarget && applicationTarget?.bundleIdentifier === "com.anthropic.claudefordesktop"
+        ? entrypoint === "claude-desktop-3p" ? "Claude-3p"
+          : entrypoint === "claude-desktop" ? "Claude" : undefined
+        : undefined;
+      if (desktopProfile && !desktopProfiles.has(desktopProfile)) {
+        desktopProfiles.set(desktopProfile, this.desktopSessions.read(desktopProfile));
+      }
+      const desktopSession = desktopProfile
+        ? (await desktopProfiles.get(desktopProfile))?.get(sessionID) : undefined;
+      const title = desktopSession?.title || summary.customTitle || string(metadata.name) || summary.firstUser;
       const turnState = status === "busy"
         ? "working" as const
-        : readyStatuses.has(status) ? "ready" as const : "unknown" as const;
+        : readyStatuses.has(status) ? "ready" as const
+        : !status && !process.tty && entrypoint.startsWith("claude-desktop") && summary.completed
+          ? "ready" as const : "unknown" as const;
+      const section = turnState === "unknown" ? "history" as const : turnState;
+      const controlTarget = terminalTarget
+        ? { kind: "terminal" as const, target: terminalTarget }
+        : desktopSession ? { kind: "url" as const, url: desktopSession.url }
+        : applicationTarget ? { kind: "application" as const, target: applicationTarget } : undefined;
 
       results.push({
         id: sessionID,
         provider: "claude_code",
         title: title || undefined,
-        subtitle: status === "busy" ? "Claude Code is working" : "Claude Code session",
+        subtitle: turnState === "working" ? "Claude Code is working"
+          : turnState === "ready" ? "Ready to continue" : "Check Claude for current status",
         cwd,
         owner,
-        section: "working",
+        section,
         updatedAt: iso(transcriptStamp?.modifiedAt ?? metadataStamp?.modifiedAt ?? this.environment.now()),
-        canOpenOwner: true,
+        canOpenOwner: controlTarget !== undefined,
         canEnterChat: true,
         sessionClass: terminalTarget ? "terminal" : "interactive",
         conversationState: "open",
         turnState,
         chatPath: transcript,
-        ...(terminalTarget ? {
-          controlTarget: { kind: "terminal" as const, target: terminalTarget },
-          messageTransport: "terminal" as const,
-        } : applicationTarget ? {
-          controlTarget: { kind: "application" as const, target: applicationTarget },
-        } : {}),
+        ...(controlTarget ? { controlTarget } : {}),
+        ...(terminalTarget ? { messageTransport: "terminal" as const } : {}),
       });
     }
 
+    for (const file of this.summaries.keys()) {
+      if (!transcripts.has(file)) this.summaries.delete(file);
+    }
     return results;
+  }
+
+  private async transcriptSummary(file: string, stamp: FileStamp | undefined): Promise<TranscriptSummary> {
+    const previous = this.summaries.get(file);
+    if (stamp && previous?.size === stamp.size && previous.modifiedAt === stamp.modifiedAt.valueOf()) {
+      return previous.summary;
+    }
+    const summary = await claudeTranscriptSummary(this.environment, file);
+    if (summary && stamp) {
+      // Re-read only changed transcripts and retain only active-session
+      // summaries. Do not cache read failures; they must be recoverable.
+      this.summaries.set(file, { size: stamp.size, modifiedAt: stamp.modifiedAt.valueOf(), summary });
+    } else {
+      this.summaries.delete(file);
+    }
+    return summary ?? emptySummary;
   }
 }
 
@@ -111,23 +155,40 @@ function claudeTranscriptPath(home: string, sessionID: string, cwd: string): str
   return path.join(home, ".claude", "projects", project, `${sessionID}.jsonl`);
 }
 
-async function claudeTranscriptTitle(
+async function claudeTranscriptSummary(
   environment: ProviderEnvironment,
   transcriptPath: string,
-): Promise<string> {
+): Promise<TranscriptSummary | undefined> {
   const content = await environment.readHeadTail(transcriptPath);
-  if (!content) return "";
-  const lines = `${content.head}\n${content.tail}`.split("\n");
+  if (!content) return undefined;
   let firstUser = "";
   let customTitle = "";
-  for (const line of lines) {
-    let value: unknown;
-    try { value = JSON.parse(line); } catch { continue; }
-    if (!isRecord(value)) continue;
-    if (value.type === "custom-title") customTitle = string(value.customTitle || value.title);
-    if (!firstUser && value.type === "user") firstUser = claudeUserText(value);
+  let completed = false;
+  for (const chunk of [content.head, content.tail]) {
+    // The head may contain an old completed turn. Only the current tail can
+    // prove completion; a large/partial newer message must clear old evidence.
+    completed = false;
+    for (const line of chunk.split("\n")) {
+      let value: unknown;
+      try { value = JSON.parse(line); } catch {
+        if (line.trim()) completed = false;
+        continue;
+      }
+      if (!isRecord(value) || value.isSidechain === true) continue;
+      if (value.type === "custom-title") customTitle = string(value.customTitle || value.title);
+      if (!firstUser && value.type === "user") firstUser = claudeUserText(value);
+      // Only an explicit completed assistant turn is a recovery signal. Tool
+      // calls, partial streams and later user input invalidate older completion;
+      // bookkeeping records (titles, summaries, etc.) do not create activity.
+      if (value.type === "user" && value.isMeta !== true) completed = false;
+      if (value.type === "assistant") {
+        const message = isRecord(value.message) ? value.message : undefined;
+        completed = message?.stop_reason === "end_turn";
+      }
+      if (value.type === "system" && value.subtype === "turn_duration") completed = true;
+    }
   }
-  return customTitle || firstUser;
+  return { customTitle, firstUser, completed };
 }
 
 function claudeUserText(value: Record<string, unknown>): string {

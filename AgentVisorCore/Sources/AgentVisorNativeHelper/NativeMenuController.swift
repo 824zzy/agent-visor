@@ -1435,6 +1435,7 @@ final class NativeMenuController: NSObject {
             pill.id,
             label,
             pill.phase.rawValue,
+            pill.accessibilityLabel,
             shortcutPosition.map(String.init) ?? "",
         ].joined(separator: "|")
         guard panel.renderKey != key else { return }
@@ -1456,6 +1457,9 @@ final class NativeMenuController: NSObject {
                     intent: self?.activationIntent(for: modifiers) ?? .standard
                 )
             },
+            accessibilityLabel: pill.accessibilityLabel,
+            accessibilityHelp: "Open session in source app",
+            accessibilityAction: { [weak self] in self?.activateSession(pill.id) },
             onHoverChange: { [weak self] hovering in
                 self?.handleSessionHover(pill.id, hovering: hovering)
             }
@@ -1482,6 +1486,7 @@ final class NativeMenuController: NSObject {
             identifier: glance.id,
             onActivate: { [weak self] _ in self?.activateUsage(glance.id) },
             accessibilityLabel: glance.accessibilityLabel,
+            accessibilityHelp: "Open usage details",
             accessibilityAction: { [weak self] in self?.activateUsage(glance.id) }
         )
     }
@@ -1500,7 +1505,10 @@ final class NativeMenuController: NSObject {
             image: showsShortcut ? keycapImage(0) : nil,
             tooltip: "Open \(count) more sessions",
             identifier: "overflow",
-            onActivate: { [weak self] _ in self?.activateOverflow() }
+            onActivate: { [weak self] _ in self?.activateOverflow() },
+            accessibilityLabel: "More sessions, \(count) sessions",
+            accessibilityHelp: "Open session menu",
+            accessibilityAction: { [weak self] in self?.activateOverflow() }
         )
     }
 
@@ -1516,6 +1524,7 @@ final class NativeMenuController: NSObject {
         borderAlpha: CGFloat = 0,
         onActivate: ((NSEvent.ModifierFlags) -> Void)?,
         accessibilityLabel: String? = nil,
+        accessibilityHelp: String? = nil,
         accessibilityAction: (() -> Void)? = nil,
         onHoverChange: ((Bool) -> Void)? = nil
     ) {
@@ -1530,9 +1539,7 @@ final class NativeMenuController: NSObject {
         panel.pillButton.identifier = NSUserInterfaceItemIdentifier(identifier)
         panel.pillButton.setAccessibilityElement(accessibilityLabel != nil)
         panel.pillButton.setAccessibilityLabel(accessibilityLabel)
-        panel.pillButton.setAccessibilityHelp(
-            accessibilityLabel == nil ? nil : "Open usage details"
-        )
+        panel.pillButton.setAccessibilityHelp(accessibilityHelp)
         panel.pillButton.onAccessibilityActivate = accessibilityAction
         panel.pillButton.normalBackgroundColor = .black.withAlphaComponent(backgroundAlpha)
         panel.pillButton.layer?.backgroundColor = panel.pillButton.normalBackgroundColor.cgColor
