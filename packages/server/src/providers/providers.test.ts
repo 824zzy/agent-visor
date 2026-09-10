@@ -13,8 +13,12 @@ import type {
 } from "./environment.js";
 import { PiProvider } from "./pi.js";
 import { ZedProvider } from "./zed.js";
-import { processInstanceToken } from "./shared.js";
+import { applicationTargetForProcess, processInstanceToken } from "./shared.js";
 import { SessionRepository, type DiscoveredProviderSession } from "../sessions.js";
+import { activateMenuPill, menuPresentation } from "../menu.js";
+import { NativeSessionControls } from "../session-controls.js";
+import { FakeNativeHelper } from "../native-helper.js";
+import { ClaudeDesktopSessions } from "./claude-desktop.js";
 
 const home = "/Users/me";
 const cwd = `${home}/Codes/agent-visor`;
@@ -120,6 +124,180 @@ describe("live provider adapters", () => {
     }));
 
     expect(await new ClaudeProvider(environment).discover()).toEqual([]);
+  });
+
+  it.each(["claude-desktop", "claude-desktop-3p"])("discovers %s conversations with real titles and a GUI click target", async (entrypoint) => {
+    const environment = new FixtureEnvironment();
+    const reads = vi.spyOn(environment, "readHeadTail");
+    environment.processRows = [
+      ...[42, 43].map(pid => ({ pid, parentPID: 8, command: `${home}/Library/Application Support/Claude-3p/claude-code/2.1.255/claude.app/Contents/MacOS/claude`, arguments: "claude" })),
+      { pid: 8, parentPID: 7, command: "/Applications/Claude.app/Contents/Helpers/disclaimer", arguments: "disclaimer" },
+      { pid: 7, parentPID: 1, command: "/Applications/Claude.app/Contents/MacOS/Claude", arguments: "Claude" },
+    ];
+    environment.directories.set(`${home}/.claude/sessions`, ["42.json", "43.json"]);
+    for (const [pid, title] of [[42, "Greeting"], [43, "Loaded skills in context"]] as const) {
+      const metadata = `${home}/.claude/sessions/${pid}.json`;
+      const transcript = `${home}/.claude/projects/-Users-me-Codes-agent-visor/claude-${pid}.jsonl`;
+      environment.files.set(metadata, JSON.stringify({ sessionId: `claude-${pid}`, cwd, kind: "interactive", entrypoint, name: `codes-${pid}` }));
+      environment.stamps.set(metadata, { modifiedAt: now, size: 100 });
+      const body = [
+        { type: "custom-title", customTitle: title },
+        { type: "user", message: { content: "Hello" } },
+        { type: "assistant", message: { content: [{ type: "text", text: "Done" }], stop_reason: "end_turn" } },
+      ].map(value => JSON.stringify(value)).join("\n");
+      environment.headTails.set(transcript, { head: body, tail: body });
+      environment.stamps.set(transcript, { modifiedAt: now, size: body.length });
+    }
+    const repository = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
+    const focused = vi.fn(async () => {});
+    repository.setControls({ focus: focused });
+    await repository.refresh();
+    const presentation = menuPresentation(repository.current(), [], now.valueOf());
+    expect(presentation.pills.map(p => p.title).sort()).toEqual(["Greeting", "Loaded skills in context"]);
+    expect(presentation.pills.every(p => p.phase === "ready")).toBe(true);
+    const effects = vi.fn();
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: "claude-42" }, repository, effects);
+    expect(focused).toHaveBeenCalledWith(expect.objectContaining({
+      controlTarget: { kind: "application", target: { pid: 7, bundleIdentifier: "com.anthropic.claudefordesktop" } },
+    }));
+    expect(effects).not.toHaveBeenCalled();
+    await repository.refresh();
+    expect(reads).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not mistake a worker or its arguments for the owning application", () => {
+    expect(applicationTargetForProcess(42, [{
+      pid: 42, parentPID: 1,
+      command: `${home}/Library/Application Support/Claude-3p/claude-code/2.1.255/claude.app/Contents/MacOS/claude`,
+      arguments: "claude --prompt /Applications/Claude.app/Contents/MacOS/Claude",
+    }])).toBeUndefined();
+  });
+
+  it.each(["claude-desktop", "claude-desktop-3p"])("opens distinct %s conversations in the same app and uses their current Desktop titles", async (entrypoint) => {
+    const environment = new FixtureEnvironment();
+    const profile = entrypoint.endsWith("-3p") ? "Claude-3p" : "Claude";
+    const root = `${home}/Library/Application Support/${profile}/claude-code-sessions`;
+    const account = "11111111-1111-4111-8111-111111111111";
+    const org = "22222222-2222-4222-8222-222222222222";
+    const directory = `${root}/${account}/${org}`;
+    const ids = ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"];
+    const localIds = ["local_cccccccc-cccc-4ccc-8ccc-cccccccccccc", "local_dddddddd-dddd-4ddd-8ddd-dddddddddddd"];
+    const titles = ["Renamed first conversation", "Second conversation"];
+    environment.processRows = [
+      ...[42, 43].map(pid => ({ pid, parentPID: 8, command: `${home}/Library/Application Support/${profile}/claude-code/2.1.255/claude.app/Contents/MacOS/claude`, arguments: "claude" })),
+      { pid: 8, parentPID: 7, command: "/Applications/Claude.app/Contents/Helpers/disclaimer", arguments: "disclaimer" },
+      { pid: 7, parentPID: 1, command: "/Applications/Claude.app/Contents/MacOS/Claude", arguments: "Claude" },
+    ];
+    environment.directories.set(`${home}/.claude/sessions`, ["42.json", "43.json"]);
+    environment.directories.set(root, [account]);
+    environment.directories.set(`${root}/${account}`, [org]);
+    environment.directories.set(directory, localIds.map(id => `${id}.json`));
+    for (const [index, id] of ids.entries()) {
+      environment.files.set(`${home}/.claude/sessions/${42 + index}.json`, JSON.stringify({ sessionId: id, cwd, kind: "interactive", entrypoint, status: "idle", name: "Old name" }));
+      environment.files.set(`${directory}/${localIds[index]}.json`, JSON.stringify({ sessionId: localIds[index], cliSessionId: id, title: titles[index], isArchived: false }));
+      environment.stamps.set(`${directory}/${localIds[index]}.json`, { modifiedAt: now, size: 200 });
+    }
+    const provider = new ClaudeProvider(environment);
+    const repository = new SessionRepository([provider], { now: () => now });
+    const helper = new FakeNativeHelper();
+    const urls: string[] = [];
+    repository.setControls(new NativeSessionControls(helper, undefined, undefined, async url => { urls.push(url); }));
+    await repository.refresh();
+    const effects = vi.fn();
+    for (const id of ids) await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: id }, repository, effects);
+    expect(urls).toEqual(localIds.map(id => `claude://claude.ai/epitaxy/${id}`));
+    expect(helper.focusRequests).toEqual([]);
+    expect(effects).not.toHaveBeenCalled();
+    expect(menuPresentation(repository.current(), [], now.valueOf()).pills.map(p => p.title)).toEqual(titles);
+
+    // Desktop renames and removals must not leave a cached destination behind.
+    const first = `${directory}/${localIds[0]}.json`;
+    environment.files.set(first, JSON.stringify({ sessionId: localIds[0], cliSessionId: ids[0], title: "Renamed again" }));
+    environment.stamps.set(first, { modifiedAt: new Date(now.valueOf() + 1), size: 201 });
+    expect((await provider.discover()).find(s => s.id === ids[0])?.title).toBe("Renamed again");
+    environment.directories.set(directory, []);
+    expect((await provider.discover()).every(s => s.controlTarget?.kind === "application")).toBe(true);
+  });
+
+  it("does not choose an archived, ambiguous, malformed, or different-profile Desktop destination", async () => {
+    const environment = new FixtureEnvironment();
+    const root = `${home}/Library/Application Support/Claude-3p/claude-code-sessions`;
+    const account = "11111111-1111-4111-8111-111111111111";
+    const org = "22222222-2222-4222-8222-222222222222";
+    const directory = `${root}/${account}/${org}`;
+    const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const localId = `local_${id}`;
+    const file = `${directory}/${localId}.json`;
+    environment.directories.set(root, [account, "../invalid"]);
+    environment.directories.set(`${root}/${account}`, [org]);
+    environment.directories.set(directory, [`${localId}.json`]);
+    const valid = { sessionId: localId, cliSessionId: id, title: "Current name" };
+    const catalog = new ClaudeDesktopSessions(environment);
+    let revision = 0;
+    const write = (value: unknown) => {
+      environment.files.set(file, typeof value === "string" ? value : JSON.stringify(value));
+      environment.stamps.set(file, { modifiedAt: new Date(now.valueOf() + revision++), size: 200 });
+    };
+    write(valid);
+    expect((await catalog.read("Claude-3p")).get(id)?.title).toBe("Current name");
+    expect((await catalog.read("Claude")).size).toBe(0);
+    for (const invalid of [
+      { ...valid, isArchived: true }, { ...valid, isArchived: "true" },
+      { ...valid, sessionId: "local_other" }, { ...valid, cliSessionId: "../unsafe" },
+      '{"sessionId":',
+    ]) {
+      write(invalid);
+      expect((await catalog.read("Claude-3p")).size).toBe(0);
+    }
+    write(valid);
+    const otherId = "local_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    environment.directories.set(directory, [`${localId}.json`, `${otherId}.json`]);
+    environment.files.set(`${directory}/${otherId}.json`, JSON.stringify({ ...valid, sessionId: otherId }));
+    environment.stamps.set(`${directory}/${otherId}.json`, { modifiedAt: now, size: 200 });
+    expect((await catalog.read("Claude-3p")).size).toBe(0);
+  });
+
+  it.each([
+    { status: undefined, records: [], section: "history", turnState: "unknown" },
+    { status: undefined, records: [{ type: "assistant", message: { stop_reason: "end_turn" } }], section: "ready", turnState: "ready" },
+    { status: undefined, records: [{ type: "assistant", message: { stop_reason: "end_turn" } }, { type: "assistant", message: { stop_reason: "tool_use", content: [{ type: "tool_use", name: "Bash" }] } }], section: "history", turnState: "unknown" },
+    { status: undefined, records: [{ type: "assistant", message: { stop_reason: "end_turn" } }, { type: "user", message: { content: "Continue" } }], section: "history", turnState: "unknown" },
+    { status: "busy", records: [{ type: "assistant", message: { stop_reason: "end_turn" } }], section: "working", turnState: "working" },
+    { status: "idle", records: [], section: "ready", turnState: "ready" },
+    { status: "unrecognized", records: [{ type: "assistant", message: { stop_reason: "end_turn" } }], section: "history", turnState: "unknown" },
+  ])("keeps Claude state honest without a live status: $status / $turnState", async ({ status, records, section, turnState }) => {
+    const environment = new FixtureEnvironment();
+    environment.processRows = terminalProcesses.map(p => ({ ...p, tty: undefined }));
+    environment.directories.set(`${home}/.claude/sessions`, ["42.json"]);
+    environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({ sessionId: "claude-1", cwd, kind: "interactive", entrypoint: "claude-desktop-3p", status }));
+    const transcript = `${home}/.claude/projects/-Users-me-Codes-agent-visor/claude-1.jsonl`;
+    const body = records.map(value => JSON.stringify(value)).join("\n");
+    environment.headTails.set(transcript, { head: body, tail: body });
+    expect(await new ClaudeProvider(environment).discover()).toMatchObject([{ section, turnState }]);
+  });
+
+  it("does not revive a completed Claude turn when a later transcript write is partial", async () => {
+    const environment = new FixtureEnvironment();
+    environment.processRows = terminalProcesses.map(p => ({ ...p, tty: undefined }));
+    environment.directories.set(`${home}/.claude/sessions`, ["42.json"]);
+    environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({ sessionId: "claude-1", cwd, kind: "interactive", entrypoint: "claude-desktop" }));
+    environment.headTails.set(`${home}/.claude/projects/-Users-me-Codes-agent-visor/claude-1.jsonl`, {
+      head: JSON.stringify({ type: "assistant", message: { stop_reason: "end_turn" } }),
+      tail: '{"type":"assistant","message":{"content":',
+    });
+    expect(await new ClaudeProvider(environment).discover()).toMatchObject([{ section: "history", turnState: "unknown" }]);
+  });
+
+  it("does not enable terminal input from transcript completion alone", async () => {
+    const environment = new FixtureEnvironment();
+    environment.processRows = terminalProcesses;
+    environment.directories.set(`${home}/.claude/sessions`, ["42.json"]);
+    environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({ sessionId: "claude-1", cwd, kind: "interactive", entrypoint: "cli" }));
+    const body = JSON.stringify({ type: "assistant", message: { stop_reason: "end_turn" } });
+    environment.headTails.set(`${home}/.claude/projects/-Users-me-Codes-agent-visor/claude-1.jsonl`, { head: body, tail: body });
+    const repository = new SessionRepository([new ClaudeProvider(environment)]);
+    await repository.refresh();
+    expect(repository.current().sessions[0]?.sessionState?.turn).toBe("unknown");
   });
 
   it("reads Pi identity and its active transcript name", async () => {

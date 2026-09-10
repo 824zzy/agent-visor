@@ -343,6 +343,22 @@ describe("desktop launch contract", () => {
     })).toBeUndefined();
   });
 
+  it("allows only an exact existing Claude Desktop session link", () => {
+    const url = "claude://claude.ai/epitaxy/local_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const action = (url: string) => nativeActionFromDaemonMessage({ type: "native_action", action: "open_session_url", url });
+    expect(action(url)).toEqual({ action: "open_session_url", url });
+    for (const invalid of [
+      "claude://code/continue?session=last",
+      "claude://code/continue?session=local_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "claude://code/new?prompt=run-this",
+      "claude://resume?session=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      url + "?prompt=run-this", url + "?session=last", url + "#fragment", url + "\n",
+      url.replace("claude.ai/", "claude.ai.evil/"), url.replace("claude.ai/", "user@claude.ai/"),
+      url.replace("claude:", "https:"), url.replace("local_", ""),
+      url.replace("/epitaxy/", "/epitaxy/../"),
+    ]) expect(action(invalid)).toBeUndefined();
+  });
+
   it("allows only known owner applications", () => {
     expect(ownerApplication("Ghostty")).toBe("Ghostty");
     expect(ownerApplication("Claude Code")).toBe("Claude");

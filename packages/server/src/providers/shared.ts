@@ -35,12 +35,14 @@ export function applicationTargetForProcess(
   const visited = new Set<number>();
   while (current && !visited.has(current.pid)) {
     visited.add(current.pid);
-    const identity = `${current.command} ${current.arguments}`.toLowerCase();
-    const bundleIdentifier = identity.includes("/claude.app/")
+    // Match the GUI executable, not its embedded CLI/helper or a path quoted
+    // in the prompt. Claude Desktop also ships a lowercase claude.app worker.
+    const command = current.command;
+    const bundleIdentifier = command.endsWith("/Claude.app/Contents/MacOS/Claude")
       ? "com.anthropic.claudefordesktop"
-      : identity.includes("/cursor.app/")
+      : command.endsWith("/Cursor.app/Contents/MacOS/Cursor")
         ? "com.todesktop.230313mzl4w4u92"
-        : identity.includes("/zed") && identity.includes(".app/")
+        : /\/Zed(?: Preview| Nightly| Dev)?\.app\/Contents\/MacOS\/zed$/.test(command)
           ? "dev.zed.Zed"
           : undefined;
     if (bundleIdentifier) return { pid: current.pid, bundleIdentifier };

@@ -2798,20 +2798,7 @@ function applyHooks(
     }
     if (hook.provider === "codex" || hook.provider === "pi"
       || (hook.provider === "claude_code" && !hook.tty)) continue;
-    sessions.push({
-      id: hook.sessionId,
-      provider: hook.provider,
-      cwd: hook.cwd,
-      owner: hookOwner(hook),
-      section: phase.section,
-      turnState: phase.turnState,
-      subtitle: phase.subtitle,
-      updatedAt: hook.activityAt ?? hook.receivedAt,
-      canOpenOwner: Boolean(hook.pid || hook.tty),
-      canEnterChat: hookCanEnterChat(hook),
-      sessionClass: hook.tty ? "terminal" : "interactive",
-      chatPath: hook.sessionFile,
-    });
+    sessions.push({ ...hookSession(hook), subtitle: phase.subtitle });
   }
   return sessions;
 }
@@ -2969,7 +2956,9 @@ function hookSession(hook: HookSessionEvent): DiscoveredProviderSession {
     section: hookPhase(hook).section,
     turnState: hookPhase(hook).turnState,
     updatedAt: hook.activityAt ?? hook.receivedAt,
-    canOpenOwner: hook.provider !== "codex" && Boolean(hook.pid || hook.tty),
+    // A hook carries lifecycle facts, not a validated navigation target.
+    // Discovery supplies the owner capability after resolving that target.
+    canOpenOwner: false,
     canEnterChat: hookCanEnterChat(hook),
     sessionClass: hook.tty ? "terminal" : "interactive",
     chatPath: hook.sessionFile,
