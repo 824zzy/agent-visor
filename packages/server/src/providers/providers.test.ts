@@ -69,6 +69,131 @@ const terminalProcesses: ProcessRecord[] = [
   { pid: 7, parentPID: 1, tty: "ttys001", command: "/Applications/Ghostty.app/Contents/MacOS/ghostty", arguments: "ghostty" },
 ];
 
+function claudeDesktopStateFixture() {
+  const environment = new FixtureEnvironment();
+  const id = "claude-completion";
+  const transcript = `${home}/.claude/projects/-Users-me-Codes-agent-visor/${id}.jsonl`;
+  environment.processRows = [
+    { pid: 42, parentPID: 7, command: `${home}/Library/Application Support/Claude-3p/claude-code/claude`, arguments: "claude" },
+    { pid: 7, parentPID: 1, command: "/Applications/Claude.app/Contents/MacOS/Claude", arguments: "Claude" },
+  ];
+  environment.directories.set(`${home}/.claude/sessions`, ["42.json"]);
+  environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({
+    sessionId: id, cwd, kind: "interactive", entrypoint: "claude-desktop-3p", name: "Claude completion",
+  }));
+  const provider = new ClaudeProvider(environment);
+  const repository = new SessionRepository([provider], { now: () => now });
+  let revision = 0;
+  return {
+    repository,
+    setTranscript(records: unknown[]) {
+      const tail = records.map(record => JSON.stringify(record)).join("\n") + "\n";
+      environment.headTails.set(transcript, { head: "", tail });
+      // Bookkeeping can change mtime after a response without starting a turn.
+      environment.stamps.set(transcript, { modifiedAt: now, size: ++revision });
+    },
+    hook(event: string, status: string, receivedAt: string) {
+      return repository.applyHook({ sessionId: id, cwd, provider: "claude_code", event, status, receivedAt });
+    },
+    expectPhase(phase: "working" | "ready" | "needs_you") {
+      const snapshot = repository.current();
+      expect(snapshot.sessions).toMatchObject([{ section: phase, attentionTier: phase }]);
+      expect(menuPresentation(snapshot, [], now.valueOf()).pills).toMatchObject([{ phase }]);
+    },
+  };
+}
+
+describe("Claude Desktop turn reconciliation", () => {
+  const user = (timestamp: string) => ({ type: "user", timestamp, message: { role: "user", content: "A prompt" } });
+  const done = (timestamp: string) => ({
+    type: "assistant", timestamp,
+    message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "Done" }] },
+  });
+
+  it.each([false, true])("settles a completed turn without a Stop hook across Sessions and pills (chat opened: %s)", async (chatOpened) => {
+    const fixture = claudeDesktopStateFixture();
+    fixture.setTranscript([user("2026-08-22T07:58:00.000Z")]);
+    await fixture.repository.refresh();
+    fixture.hook("PostToolUse", "processing", "2026-08-22T07:58:30.000Z");
+    fixture.expectPhase("working");
+    if (chatOpened) {
+      expect(await fixture.repository.chatOpened("claude-completion", "test-lease")).toBeUndefined();
+    }
+
+    fixture.setTranscript([
+      user("2026-08-22T07:58:00.000Z"), done("2026-08-22T07:59:00.000Z"),
+      { type: "custom-title", customTitle: "Renamed result" },
+    ]);
+    await fixture.repository.refresh();
+    fixture.expectPhase("ready");
+    expect(fixture.repository.current().sessions[0]?.updatedAt).toBe("2026-08-22T07:59:00.000Z");
+    await fixture.repository.refresh();
+    fixture.expectPhase("ready");
+  });
+
+  it.each([
+    ["Notification", "notification"], ["SubagentStop", "processing"], ["FutureBookkeepingEvent", "unknown"],
+  ])("keeps %s from reopening a completed parent turn", async (event, status) => {
+    const fixture = claudeDesktopStateFixture();
+    fixture.setTranscript([done("2026-08-22T07:59:00.000Z")]);
+    await fixture.repository.refresh();
+    fixture.hook("Stop", "waiting_for_input", "2026-08-22T07:59:01.000Z");
+    const before = fixture.repository.current();
+    fixture.hook(event, status, "2026-08-22T07:59:03.000Z");
+    fixture.expectPhase("ready");
+    expect(fixture.repository.current()).toEqual(before);
+  });
+
+  it("preserves a new turn and approval while the previous completion remains in the transcript", async () => {
+    const fixture = claudeDesktopStateFixture();
+    fixture.setTranscript([done("2026-08-22T07:57:00.000Z")]);
+    await fixture.repository.refresh();
+    fixture.hook("UserPromptSubmit", "processing", "2026-08-22T07:58:00.000Z");
+    fixture.expectPhase("working");
+    fixture.hook("Notification", "notification", "2026-08-22T07:58:01.000Z");
+    await fixture.repository.refresh();
+    fixture.expectPhase("working");
+    fixture.hook("PermissionRequest", "waiting_for_approval", "2026-08-22T07:58:10.000Z");
+    fixture.expectPhase("needs_you");
+    fixture.hook("Notification", "notification", "2026-08-22T07:58:11.000Z");
+    await fixture.repository.refresh();
+    fixture.expectPhase("needs_you");
+  });
+
+  it("does not treat sidechain output or metadata as a new parent turn", async () => {
+    const fixture = claudeDesktopStateFixture();
+    fixture.setTranscript([
+      done("2026-08-22T07:59:00.000Z"),
+      { ...user("2026-08-22T07:59:10.000Z"), isMeta: true },
+      { type: "assistant", isSidechain: true, timestamp: "2026-08-22T07:59:20.000Z", message: { stop_reason: "tool_use" } },
+      { type: "last-prompt", timestamp: "2026-08-22T07:59:30.000Z" },
+    ]);
+    await fixture.repository.refresh();
+    fixture.expectPhase("ready");
+    expect(fixture.repository.current().sessions[0]?.updatedAt).toBe("2026-08-22T07:59:00.000Z");
+  });
+
+  it("drops older completion evidence when a newer main-thread record has no valid timestamp", async () => {
+    const fixture = claudeDesktopStateFixture();
+    fixture.setTranscript([done("2026-08-22T07:57:00.000Z"), user("invalid")]);
+    await fixture.repository.refresh();
+    expect(fixture.repository.current().sessions[0]?.sessionState?.turn).toBe("unknown");
+  });
+
+  it("does not let the previous Stop hook hide a newer transcript turn", async () => {
+    const fixture = claudeDesktopStateFixture();
+    fixture.setTranscript([done("2026-08-22T07:57:00.000Z")]);
+    await fixture.repository.refresh();
+    fixture.hook("Stop", "waiting_for_input", "2026-08-22T07:57:01.000Z");
+    fixture.expectPhase("ready");
+    fixture.setTranscript([done("2026-08-22T07:57:00.000Z"), user("2026-08-22T07:58:00.000Z")]);
+    await fixture.repository.refresh();
+    fixture.expectPhase("working");
+    fixture.hook("SubagentStop", "processing", "2026-08-22T07:58:03.000Z");
+    fixture.expectPhase("working");
+  });
+});
+
 describe("live provider adapters", () => {
   it("keeps Claude names in Claude metadata", async () => {
     const environment = new FixtureEnvironment();
@@ -282,7 +407,7 @@ describe("live provider adapters", () => {
     environment.directories.set(`${home}/.claude/sessions`, ["42.json"]);
     environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({ sessionId: "claude-1", cwd, kind: "interactive", entrypoint: "claude-desktop" }));
     environment.headTails.set(`${home}/.claude/projects/-Users-me-Codes-agent-visor/claude-1.jsonl`, {
-      head: JSON.stringify({ type: "assistant", message: { stop_reason: "end_turn" } }),
+      head: JSON.stringify({ type: "assistant", timestamp: "2026-08-22T07:59:00.000Z", message: { stop_reason: "end_turn" } }),
       tail: '{"type":"assistant","message":{"content":',
     });
     expect(await new ClaudeProvider(environment).discover()).toMatchObject([{ section: "history", turnState: "unknown" }]);
@@ -293,7 +418,7 @@ describe("live provider adapters", () => {
     environment.processRows = terminalProcesses;
     environment.directories.set(`${home}/.claude/sessions`, ["42.json"]);
     environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({ sessionId: "claude-1", cwd, kind: "interactive", entrypoint: "cli" }));
-    const body = JSON.stringify({ type: "assistant", message: { stop_reason: "end_turn" } });
+    const body = JSON.stringify({ type: "assistant", timestamp: "2026-08-22T07:59:00.000Z", message: { stop_reason: "end_turn" } });
     environment.headTails.set(`${home}/.claude/projects/-Users-me-Codes-agent-visor/claude-1.jsonl`, { head: body, tail: body });
     const repository = new SessionRepository([new ClaudeProvider(environment)]);
     await repository.refresh();

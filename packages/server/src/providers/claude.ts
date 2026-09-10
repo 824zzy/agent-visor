@@ -19,7 +19,12 @@ const readyStatuses = new Set([
   "idle", "ready", "waiting", "waiting_for_input", "awaiting_input",
 ]);
 
-type TranscriptSummary = { customTitle: string; firstUser: string; completed: boolean };
+type TranscriptSummary = {
+  customTitle: string;
+  firstUser: string;
+  completed: boolean;
+  lifecycle?: DiscoveredProviderSession["claudeLifecycle"];
+};
 const emptySummary: TranscriptSummary = { customTitle: "", firstUser: "", completed: false };
 
 export class ClaudeProvider implements ProviderAdapter {
@@ -95,11 +100,15 @@ export class ClaudeProvider implements ProviderAdapter {
       const desktopSession = desktopProfile
         ? (await desktopProfiles.get(desktopProfile))?.get(sessionID) : undefined;
       const title = desktopSession?.title || summary.customTitle || string(metadata.name) || summary.firstUser;
+      const desktopTranscript = !process.tty && entrypoint.startsWith("claude-desktop");
       const turnState = status === "busy"
         ? "working" as const
         : readyStatuses.has(status) ? "ready" as const
-        : !status && !process.tty && entrypoint.startsWith("claude-desktop") && summary.completed
-          ? "ready" as const : "unknown" as const;
+        : !status && desktopTranscript
+          ? summary.lifecycle?.phase ?? (summary.completed ? "ready" as const : "unknown" as const)
+          : "unknown" as const;
+      const claudeLifecycle = desktopTranscript && summary.lifecycle?.phase === turnState
+        ? summary.lifecycle : undefined;
       const section = turnState === "unknown" ? "history" as const : turnState;
       const controlTarget = terminalTarget
         ? { kind: "terminal" as const, target: terminalTarget }
@@ -115,12 +124,14 @@ export class ClaudeProvider implements ProviderAdapter {
         cwd,
         owner,
         section,
-        updatedAt: iso(transcriptStamp?.modifiedAt ?? metadataStamp?.modifiedAt ?? this.environment.now()),
+        updatedAt: claudeLifecycle?.observedAt
+          ?? iso(transcriptStamp?.modifiedAt ?? metadataStamp?.modifiedAt ?? this.environment.now()),
         canOpenOwner: controlTarget !== undefined,
         canEnterChat: true,
         sessionClass: terminalTarget ? "terminal" : "interactive",
         conversationState: "open",
         turnState,
+        ...(claudeLifecycle ? { claudeLifecycle } : {}),
         chatPath: transcript,
         ...(controlTarget ? { controlTarget } : {}),
         ...(terminalTarget ? { messageTransport: "terminal" as const } : {}),
@@ -164,14 +175,19 @@ async function claudeTranscriptSummary(
   let firstUser = "";
   let customTitle = "";
   let completed = false;
+  let lifecycle: TranscriptSummary["lifecycle"];
   for (const chunk of [content.head, content.tail]) {
     // The head may contain an old completed turn. Only the current tail can
     // prove completion; a large/partial newer message must clear old evidence.
     completed = false;
+    lifecycle = undefined;
     for (const line of chunk.split("\n")) {
       let value: unknown;
       try { value = JSON.parse(line); } catch {
-        if (line.trim()) completed = false;
+        if (line.trim()) {
+          completed = false;
+          lifecycle = undefined;
+        }
         continue;
       }
       if (!isRecord(value) || value.isSidechain === true) continue;
@@ -180,15 +196,23 @@ async function claudeTranscriptSummary(
       // Only an explicit completed assistant turn is a recovery signal. Tool
       // calls, partial streams and later user input invalidate older completion;
       // bookkeeping records (titles, summaries, etc.) do not create activity.
-      if (value.type === "user" && value.isMeta !== true) completed = false;
-      if (value.type === "assistant") {
+      if (value.type === "user" && value.isMeta !== true) {
+        completed = false;
+      } else if (value.type === "assistant") {
         const message = isRecord(value.message) ? value.message : undefined;
         completed = message?.stop_reason === "end_turn";
+      } else if (value.type === "system" && value.subtype === "turn_duration") {
+        completed = true;
+      } else {
+        continue;
       }
-      if (value.type === "system" && value.subtype === "turn_duration") completed = true;
+      const timestamp = Date.parse(string(value.timestamp));
+      lifecycle = Number.isFinite(timestamp)
+        ? { phase: completed ? "ready" : "working", observedAt: new Date(timestamp).toISOString() }
+        : undefined;
     }
   }
-  return { customTitle, firstUser, completed };
+  return { customTitle, firstUser, completed, ...(lifecycle ? { lifecycle } : {}) };
 }
 
 function claudeUserText(value: Record<string, unknown>): string {

@@ -77,6 +77,8 @@ export type DiscoveredProviderSession = {
   /** Codex app-server options verified for this session's working directory. */
   chatSettingsCatalog?: Pick<ChatSettings, "models" | "permissionProfiles">;
   codexLifecycle?: import("./providers/codex-lifecycle.js").CodexLifecycle;
+  /** Timestamped main-thread evidence from a live Claude Desktop transcript. */
+  claudeLifecycle?: { phase: "working" | "ready"; observedAt: string };
   /** Provider-confirmed lifetime, independent of list placement. */
   conversationState?: SessionConversationState;
   /** Current provider turn state, independent of attention ordering. */
@@ -2327,13 +2329,19 @@ export class SessionRepository {
     }
     if (!resolved) {
       if (!fallback) return undefined;
-      // Providers without an exact resolver retain their existing native
-      // evidence. A Codex resolver failure is different: keep the transcript
+      // Claude's live discovery also refreshes opened chats; opening one must
+      // not freeze its turn state. Keep other providers' retained route evidence.
+      // A Codex resolver failure is different: keep the transcript
       // record readable, but mark every action route unavailable until the
       // provider confirms the conversation again.
-      const record = fallbackProvider?.resolve
-        ? markResolutionUnavailable(fallback)
-        : fallback;
+      let record = fallback;
+      if (fallbackProvider?.resolve) {
+        record = markResolutionUnavailable(fallback);
+      } else if (fallback.provider === "claude_code") {
+        const discovered = this.lastByProvider.get(fallback.provider)
+          ?.find((session) => session.id === sessionId);
+        if (discovered) record = applyHooks([discovered], this.hookBySession)[0] ?? discovered;
+      }
       const copy = structuredClone(record);
       this.rememberOpenedSession(copy);
       this.chatBySession.set(sessionId, copy);
@@ -2457,6 +2465,10 @@ export class SessionRepository {
   }
 
   applyHook(event: HookSessionEvent): SessionSnapshot {
+    // Notifications and child-agent bookkeeping do not start a parent turn.
+    // Retain the last real lifecycle/approval event instead of replacing it.
+    if (event.provider === "claude_code" && !event.expectsResponse
+      && !claudeTurnHookEvents.has(event.event)) return this.current();
     const latestAt = this.latestHookAtBySession.get(event.sessionId);
     if (!latestAt || latestAt <= event.receivedAt) {
       this.latestHookAtBySession.set(event.sessionId, event.receivedAt);
@@ -2790,6 +2802,11 @@ function applyHooks(
           && hook.receivedAt >= existing.codexLifecycle.observedAt;
         if (!approvalDuringTurn) continue;
       }
+      // A missing Stop hook must not keep a completed Desktop turn working;
+      // conversely, an old Stop must not hide newer user/assistant activity.
+      // A fresh start or approval still wins while transcript discovery lags.
+      if (existing.claudeLifecycle
+        && Date.parse(hook.receivedAt) <= Date.parse(existing.claudeLifecycle.observedAt)) continue;
       existing.section = phase.section;
       existing.turnState = phase.turnState;
       existing.subtitle = phase.subtitle;
@@ -2906,6 +2923,12 @@ function transcriptModifiedAt(event: HookSessionEvent): string | undefined {
     return undefined;
   }
 }
+
+const claudeTurnHookEvents = new Set([
+  "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
+  "PostToolUse", "PostToolUseFailure", "PermissionRequest", "Stop", "StopFailure",
+  "PreCompact", "PostCompact",
+]);
 
 function hookPhase(event: HookSessionEvent): {
   section: SessionSection;
