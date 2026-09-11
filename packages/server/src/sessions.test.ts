@@ -573,6 +573,71 @@ describe("SessionRepository", () => {
     expect(after).toEqual(before);
   });
 
+  it("keeps Claude idle-prompt notifications phase-neutral for a Ready session", () => {
+    const repository = new SessionRepository([]);
+    const hook = {
+      sessionId: "claude-cli",
+      cwd: "/Users/me/Codes",
+      provider: "claude_code" as const,
+      pid: 63462,
+      tty: "/dev/ttys001",
+    };
+    const ready = repository.applyHook({
+      ...hook, event: "Stop", status: "waiting_for_input", receivedAt: "2026-09-11T20:00:00.000Z",
+    });
+    expect(ready.sessions[0]).toMatchObject({
+      section: "ready",
+      subtitle: "Ready to continue",
+      updatedAt: "2026-09-11T20:00:00.000Z",
+    });
+
+    // Claude Code repeats this notification about every minute while it
+    // waits for the user. It must not read as an approval request.
+    const after = repository.applyHook({
+      ...hook, event: "Notification", status: "waiting_for_input", receivedAt: "2026-09-11T20:01:00.000Z",
+    });
+    expect(after).toEqual(ready);
+  });
+
+  it("keeps Claude notifications phase-neutral while the agent is working", () => {
+    const repository = new SessionRepository([]);
+    const hook = {
+      sessionId: "claude-cli",
+      cwd: "/Users/me/Codes",
+      provider: "claude_code" as const,
+      pid: 63462,
+      tty: "/dev/ttys001",
+    };
+    const working = repository.applyHook({
+      ...hook, event: "PreToolUse", status: "processing", receivedAt: "2026-09-11T20:00:00.000Z",
+    });
+    expect(working.sessions[0]).toMatchObject({ section: "working" });
+
+    const after = repository.applyHook({
+      ...hook, event: "Notification", status: "notification", receivedAt: "2026-09-11T20:00:30.000Z",
+    });
+    expect(after).toEqual(working);
+  });
+
+  it("presents a lone Claude idle-prompt notification as Ready, not as an approval", () => {
+    const repository = new SessionRepository([]);
+    const snapshot = repository.applyHook({
+      sessionId: "claude-cli",
+      cwd: "/Users/me/Codes",
+      provider: "claude_code",
+      event: "Notification",
+      status: "waiting_for_input",
+      receivedAt: "2026-09-11T20:01:00.000Z",
+      pid: 63462,
+      tty: "/dev/ttys001",
+    });
+    expect(snapshot.sessions[0]).toMatchObject({
+      section: "ready",
+      subtitle: "Ready to continue",
+      updatedAt: "2026-09-11T20:01:00.000Z",
+    });
+  });
+
   it("clears old stuck Pi work without announcing late attention", async () => {
     const transcript = temporaryTranscript("2026-08-22T08:00:00.000Z");
     try {
