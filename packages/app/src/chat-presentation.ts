@@ -270,6 +270,18 @@ export function filterChatTurns(turns: ChatTurn[], rules: ChatVisibility): ChatT
   });
 }
 
+/**
+ * Default disclosure state for a grouped turn's "Worked" header, used until
+ * the user toggles it. Only a turn that is still running starts open, so its
+ * steps stay in view while they happen. A tool waiting for approval also
+ * keeps the turn open because it blocks progress. A finished turn always
+ * starts collapsed, even when one of its steps failed.
+ */
+export function isTurnExpandedByDefault(turn: ChatTurn): boolean {
+  return turn.live
+    || turn.work.some((item) => item.kind === "tool" && item.status === "waiting");
+}
+
 export function shouldGroupChatTurns(source: string, rules: ChatVisibility): boolean {
   if (source === "Claude Code") return rules.collapseClaudeTurns;
   if (source === "Codex") return rules.collapseCodexTurns;

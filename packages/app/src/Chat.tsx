@@ -28,6 +28,7 @@ import {
   filterChatTurns,
   groupChatTurns,
   historyImageDataURI,
+  isTurnExpandedByDefault,
   shouldGroupChatTurns,
 } from "./chat-presentation";
 import {
@@ -152,9 +153,7 @@ export function Chat({
   const [turnExpansionOverrides, setTurnExpansionOverrides] = useState<Record<string, boolean>>({});
   const timelineRows = useMemo<ChatTimelineRow[]>(
     () => grouped ? turns.flatMap((turn) => {
-      const expanded = turnExpansionOverrides[turn.id]
-        ?? (turn.live || turn.work.some((item) => item.kind === "tool"
-          && ["waiting", "error"].includes(item.status)));
+      const expanded = turnExpansionOverrides[turn.id] ?? isTurnExpandedByDefault(turn);
       const rows: ChatTimelineRow[] = [];
       if (turn.prompt) rows.push({
         type: "group-prompt",
