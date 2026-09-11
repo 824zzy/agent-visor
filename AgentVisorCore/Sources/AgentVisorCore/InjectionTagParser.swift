@@ -67,13 +67,13 @@ public enum InjectionTagParser {
         // Stripping them wholesale (as we used to) hid the user's own
         // message; render `<name> <args>` joined with a space, with any
         // remaining free-form text appended after a newline.
-        let commandName = extractAndRemoveTagBody(named: "command-name", in: &working)
-        let commandArgs = extractAndRemoveTagBody(named: "command-args", in: &working)
+        let commandName = TranscriptTagScanner.extractAndRemoveBody(named: "command-name", in: &working)
+        let commandArgs = TranscriptTagScanner.extractAndRemoveBody(named: "command-args", in: &working)
 
         // Pass 3: strip hidden tags. Order within hidden doesn't matter
         // because nothing is surfaced.
         for tag in hiddenTags {
-            stripAllOccurrences(of: tag, in: &working)
+            TranscriptTagScanner.stripAllOccurrences(of: tag, in: &working)
         }
 
         let remainder = working.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -100,16 +100,6 @@ public enum InjectionTagParser {
         return ParsedUserMessage(plainText: cleaned, attachments: attachments)
     }
 
-    /// Pull the inner body of the FIRST `<tag>…</tag>` block out of
-    /// `text`, removing the wrapper from the string. Returns nil if no
-    /// such tag exists. Trims whitespace from the body.
-    private static func extractAndRemoveTagBody(named tag: String, in text: inout String) -> String? {
-        guard let block = locateTagBlock(named: tag, in: text) else { return nil }
-        let body = block.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        text.removeSubrange(block.range)
-        return body.isEmpty ? nil : body
-    }
-
     // MARK: - Attachment extraction
 
     private struct AttachmentMatch {
@@ -133,7 +123,7 @@ public enum InjectionTagParser {
     }
 
     private static func matchOpenedFile(in text: String) -> AttachmentMatch? {
-        guard let tagBlock = locateTagBlock(named: "ide_opened_file", in: text) else { return nil }
+        guard let tagBlock = TranscriptTagScanner.locateBlock(named: "ide_opened_file", in: text) else { return nil }
         let path = extractOpenedFilePath(from: tagBlock.content)
         // Even if path extraction fails, we still remove the tag block
         // so it doesn't render as garbage; we just skip emitting an
@@ -151,7 +141,7 @@ public enum InjectionTagParser {
     }
 
     private static func matchSelection(in text: String) -> AttachmentMatch? {
-        guard let tagBlock = locateTagBlock(named: "ide_selection", in: text) else { return nil }
+        guard let tagBlock = TranscriptTagScanner.locateBlock(named: "ide_selection", in: text) else { return nil }
         let (path, startLine, endLine) = extractSelection(from: tagBlock.content)
         return AttachmentMatch(
             attachment: .selection(path: path ?? "", startLine: startLine, endLine: endLine),
@@ -218,39 +208,5 @@ public enum InjectionTagParser {
         }
 
         return (path, startLine, endLine)
-    }
-
-    // MARK: - Hidden-tag stripping
-
-    private static func stripAllOccurrences(of tag: String, in text: inout String) {
-        while let block = locateTagBlock(named: tag, in: text) {
-            text.removeSubrange(block.range)
-        }
-    }
-
-    // MARK: - Tag finder
-
-    private struct TagBlock {
-        let content: String
-        let range: Range<String.Index>
-    }
-
-    /// Find the first `<name>…</name>` block in the text. Match is
-    /// non-greedy on content (uses the first close after the open).
-    /// Tag names match case-sensitively and exactly — no attribute
-    /// support, no nesting.
-    private static func locateTagBlock(named tag: String, in text: String) -> TagBlock? {
-        let openTag = "<\(tag)>"
-        let closeTag = "</\(tag)>"
-        guard let openRange = text.range(of: openTag) else { return nil }
-        guard let closeRange = text.range(
-            of: closeTag,
-            range: openRange.upperBound..<text.endIndex
-        ) else { return nil }
-        let content = String(text[openRange.upperBound..<closeRange.lowerBound])
-        return TagBlock(
-            content: content,
-            range: openRange.lowerBound..<closeRange.upperBound
-        )
     }
 }
