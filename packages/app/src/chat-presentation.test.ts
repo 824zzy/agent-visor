@@ -11,6 +11,7 @@ import {
   filterChatItems,
   filterChatTurns,
   groupChatTurns,
+  isTurnExpandedByDefault,
   mergeChatLatest,
   mergeChatPage,
   mergeChatPages,
@@ -135,6 +136,30 @@ describe("Chat presentation", () => {
       { id: "user-1", prompt: { id: "user-1" }, work: [{ id: "thinking-1" }, { id: "tool-1" }], answers: [{ id: "answer-1" }], live: false },
       { id: "user-2", prompt: { id: "user-2" }, work: [{ id: "working-2" }], answers: [], live: true },
     ]);
+  });
+
+  it("starts a finished turn collapsed even when a step failed", () => {
+    const failed: ChatItem = { ...item("tool-1", "tool"), status: "error" } as ChatItem;
+    const [finished, live] = groupChatTurns([
+      item("user-1", "user"),
+      failed,
+      item("answer-1", "assistant"),
+      item("user-2", "user"),
+      item("tool-2", "tool"),
+    ]);
+
+    expect(finished).toMatchObject({ live: false, work: [{ status: "error" }] });
+    expect(isTurnExpandedByDefault(finished!)).toBe(false);
+    expect(isTurnExpandedByDefault(live!)).toBe(true);
+  });
+
+  it("keeps a turn open while a tool waits for approval", () => {
+    const waiting: ChatItem = { ...item("tool-1", "tool"), status: "waiting" } as ChatItem;
+    const [turn] = groupChatTurns([item("user-1", "user"), waiting]);
+    expect(isTurnExpandedByDefault(turn!)).toBe(true);
+
+    // Even if a system row makes the turn look finished, the blocking step wins.
+    expect(isTurnExpandedByDefault({ ...turn!, live: false })).toBe(true);
   });
 
   it("keeps structured agent activity visible when user messages are hidden", () => {
