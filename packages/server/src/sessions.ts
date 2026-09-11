@@ -1392,6 +1392,8 @@ export class SessionRepository {
           const current = this.snapshotValue.sessions.find((session) => session.id === event.sessionId);
           const recovered = piHeartbeatPresentation(event, current, previous);
           if (recovered) this.hookBySession.set(event.sessionId, recovered);
+        } else if (isPhaseNeutralNotification(event)) {
+          if (!previous) this.hookBySession.set(event.sessionId, notificationPresentation(event));
         } else {
           this.hookBySession.set(event.sessionId, structuredClone(event));
         }
@@ -1728,6 +1730,33 @@ function piHeartbeatPresentation(
   };
 }
 
+/**
+ * Claude Code emits `Notification` hooks as signals about a session, not as
+ * lifecycle transitions: an `idle_prompt` roughly every minute while it waits
+ * for the user, plus auth and elicitation events. The hook script reports the
+ * idle prompt as `waiting_for_input`, which would read as an approval request
+ * if it were treated as a phase. A notification therefore never moves a
+ * session between sections and never refreshes its recency; the previous
+ * lifecycle hook stays authoritative. This mirrors the Swift SessionStore,
+ * which skips phase transitions for notifications for the same reason.
+ */
+function isPhaseNeutralNotification(event: HookSessionEvent): boolean {
+  return event.event === "Notification" && !event.expectsResponse;
+}
+
+/**
+ * Presentation for a notification that arrives with no previous lifecycle
+ * hook (daemon restart, hook installed mid-session). An idle prompt is then
+ * the only evidence and it proves the agent is waiting for input, so it is
+ * recorded as a settled Stop. Anything else is kept as-is.
+ */
+function notificationPresentation(event: HookSessionEvent): HookSessionEvent {
+  if (event.status.trim().toLowerCase() === "waiting_for_input") {
+    return { ...structuredClone(event), event: "Stop", status: "idle" };
+  }
+  return structuredClone(event);
+}
+
 function transcriptModifiedAt(event: HookSessionEvent): string | undefined {
   if (!event.sessionFile) return undefined;
   try {
@@ -1740,6 +1769,10 @@ function transcriptModifiedAt(event: HookSessionEvent): string | undefined {
 function hookPhase(event: HookSessionEvent): { section: SessionSection; subtitle: string } {
   const status = event.status.trim().toLowerCase();
   if (event.event === "Stop") {
+    return { section: "ready", subtitle: "Ready to continue" };
+  }
+  if (isPhaseNeutralNotification(event) && status === "waiting_for_input") {
+    // An idle prompt: the agent waits for the user, not for an approval.
     return { section: "ready", subtitle: "Ready to continue" };
   }
   if (event.expectsResponse || event.event === "PermissionRequest"
