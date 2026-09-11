@@ -1863,9 +1863,10 @@ struct TurnDurationView: View {
 
 // MARK: - Recap Message
 
-/// Output of a TUI built-in like `/reload-plugins` or `/rename`. Mirrors
-/// claude-code's `⎿ <text>` styling so users see "what claude-code told
-/// me" in the same shape they'd see in the terminal.
+/// One line of a TUI built-in exchange like `/rename cc-misc`: the
+/// command as typed, then what claude-code printed (each its own row).
+/// Mirrors claude-code's `⎿ <text>` styling so users see "what claude-code
+/// told me" in the same shape they'd see in the terminal.
 struct LocalCommandOutputView: View {
     let text: String
     @Environment(\.chatFontScale) private var scale

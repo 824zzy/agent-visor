@@ -689,20 +689,21 @@ actor ConversationParser {
                             trigger: metadata?["trigger"] as? String
                         )
                     } else if subtype == "local_command", let raw = json["content"] as? String {
-                        // Output of a TUI built-in like /reload-plugins or
-                        // /rename. claude-code wraps the body in
-                        // <local-command-stdout>…</local-command-stdout> (or
-                        // …-stderr). Strip the wrapper and skip empty bodies
+                        // A TUI built-in like /rename writes up to two rows:
+                        // the invocation echo (`<command-name>…<command-args>`,
+                        // claude-code ≥ 2.1.268) and the output mirror
+                        // (`<local-command-stdout>…`). Show each piece as its
+                        // own local-command line so the raw pseudo-XML never
+                        // reaches the chat, and skip rows with nothing to show
                         // (`/clear` echoes an empty stdout that adds no signal).
-                        let body = Self.unwrapLocalCommandContent(raw)
-                        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !trimmed.isEmpty else { continue }
+                        let lines = ClaudeLocalCommandParser.parse(raw).displayLines
+                        guard !lines.isEmpty else { continue }
                         flushPendingCompact(state: &state, into: &newMessages)
                         let msg = ChatMessage(
                             id: uuid,
                             role: .system,
                             timestamp: timestamp,
-                            content: [.localCommandOutput(trimmed)]
+                            content: lines.map { .localCommandOutput($0) }
                         )
                         newMessages.append(msg)
                         state.messages.append(msg)
@@ -884,25 +885,6 @@ actor ConversationParser {
             return false
         }
         return content.contains("<command-name>/clear</command-name>")
-    }
-
-    /// Strip the <local-command-stdout>…</local-command-stdout> (or -stderr)
-    /// wrapper that claude-code adds around TUI-builtin output. Falls back
-    /// to the raw string if the open tag isn't found, so any future shape
-    /// shift still renders something instead of silently dropping the line.
-    static func unwrapLocalCommandContent(_ raw: String) -> String {
-        for tag in ["local-command-stdout", "local-command-stderr"] {
-            let open = "<\(tag)>"
-            let close = "</\(tag)>"
-            if let openRange = raw.range(of: open) {
-                let afterOpen = openRange.upperBound
-                if let closeRange = raw.range(of: close, range: afterOpen..<raw.endIndex) {
-                    return String(raw[afterOpen..<closeRange.lowerBound])
-                }
-                return String(raw[afterOpen...])
-            }
-        }
-        return raw
     }
 
     /// Build session file path
