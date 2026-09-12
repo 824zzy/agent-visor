@@ -208,6 +208,15 @@ Every surface uses the same phase meanings:
   `Working`; a newer assistant entry that has stopped changing becomes
   `Ready`; and any completed transcript quiet past the existing 30-minute
   stale ceiling becomes `Recent`.
+- Codex desktop threads use the same rule. Their `task_started`,
+  `task_complete`, and `turn_aborted` transcript markers are claims, not
+  liveness: a marker only counts as `Working` or `Ready` while the transcript
+  file itself changed within the 30-minute stale ceiling. A turn whose process
+  died right after `task_started` therefore becomes `Recent`, not a permanent
+  `Working` row. The shared constant lives in `@agent-visor/protocol`
+  (`TRANSCRIPT_STALE_CEILING_MS`) and mirrors Swift's
+  `TranscriptPhaseInferrer.defaultStaleCeiling`. Catalog membership is a
+  separate policy: dormant unarchived threads stay listed and openable.
 - Transcript fallback cannot override newer hook evidence or authoritative
   busy/terminal metadata. Pending approval, compaction, and ended states keep
   their stronger lifecycle semantics.

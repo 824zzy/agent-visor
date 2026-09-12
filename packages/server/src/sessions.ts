@@ -22,6 +22,7 @@ import {
   type SessionUnavailableReason,
   type SessionSnapshot,
   type SessionSummary,
+  TRANSCRIPT_STALE_CEILING_MS,
 } from "@agent-visor/protocol";
 import { randomUUID } from "node:crypto";
 import {
@@ -262,9 +263,9 @@ export type HookResponse = {
 };
 
 const piReadyRecoveryWindowMs = 90_000;
-// ponytail: keep this aligned with Swift's TranscriptPhaseInferrer.defaultStaleCeiling;
-// move the value into the shared protocol if another runtime needs to enforce the policy.
-const piHookReadyStaleCeilingMs = 30 * 60 * 1_000;
+// Shared with the Codex transcript policy; the protocol constant is the
+// TypeScript twin of Swift's TranscriptPhaseInferrer.defaultStaleCeiling.
+const piHookReadyStaleCeilingMs = TRANSCRIPT_STALE_CEILING_MS;
 const distantPast = "1970-01-01T00:00:00.000Z";
 const maxPiRuntimeLinks = 64;
 const maxPiRuntimeStateBytes = 1_048_576;
