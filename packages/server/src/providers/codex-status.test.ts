@@ -283,7 +283,7 @@ describe("Codex desktop lifecycle status", () => {
     expect((await repository.refresh()).sessions[0]?.section).toBe("working");
   });
 
-  it("keeps a dormant completed task as durable Ready with Open Chat", async () => {
+  it("moves a dormant completed task to Recent after the stale ceiling but keeps Open Chat", async () => {
     const { environment, repository, hook } = setup();
     environment.append("task_started", "turn-1");
     environment.append("task_complete", "turn-1");
@@ -295,15 +295,51 @@ describe("Codex desktop lifecycle status", () => {
 
     expect(snapshot.sessions).toMatchObject([{
       id: sessionId,
-      section: "ready",
-      attentionTier: "ready",
+      section: "history",
+      sessionState: { conversation: "open", turn: "ready" },
       canEnterChat: true,
     }]);
     expect(menuPresentation(snapshot, [], environment.clock).pills).toMatchObject([{
       id: sessionId,
-      phase: "ready",
-      attentionTier: "ready",
+      phase: "history",
     }]);
+  });
+
+  it("keeps a completed task Ready while it is still within the stale ceiling", async () => {
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn-1");
+    environment.append("task_complete", "turn-1");
+    environment.clock += 29 * 60_000;
+
+    expect((await repository.refresh()).sessions[0]).toMatchObject({ section: "ready", sessionState: { turn: "ready" } });
+  });
+
+  it("does not keep a dead turn Working once its transcript has been quiet past the stale ceiling", async () => {
+    // A thread whose process died right after task_started never writes a
+    // completion marker. Months later it must not read as "Agent is working".
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn-1");
+    expect((await repository.refresh()).sessions[0]?.section).toBe("working");
+
+    environment.clock += 65 * 24 * 60 * 60_000;
+
+    const [session] = (await repository.refresh()).sessions;
+    expect(session).toMatchObject({ id: sessionId, section: "history", canEnterChat: true });
+    expect(session?.sessionState?.turn).not.toBe("working");
+  });
+
+  it("keeps a live turn Working while its transcript keeps changing", async () => {
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn-1");
+    for (let step = 0; step < 6; step += 1) {
+      // Two hours of streaming writes, none of them a lifecycle marker.
+      environment.clock += 20 * 60_000;
+      environment.modifiedAt = environment.clock;
+      environment.content += JSON.stringify({ type: "event_msg",
+        timestamp: environment.now().toISOString(), payload: { type: "token_count" } }) + "\n";
+    }
+
+    expect((await repository.refresh()).sessions[0]).toMatchObject({ section: "working", sessionState: { turn: "working" } });
   });
 
   it("does not revive a completed turn from a duplicate start marker", async () => {

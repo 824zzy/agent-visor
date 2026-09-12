@@ -1,4 +1,4 @@
-import type { NativeHelperTerminalTarget } from "@agent-visor/protocol";
+import { transcriptPhase, type NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import path from "node:path";
 import type { DiscoveredProviderSession, ProviderAdapter } from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
@@ -174,13 +174,28 @@ export class CodexProvider implements ProviderAdapter {
     const transcript = owner === "Codex" && !terminalTarget
       ? await this.transcriptReader.read(this.environment, thread.id, thread.rolloutPath)
       : undefined;
-    const codexLifecycle = transcript?.lifecycle;
+    const lifecycle = transcript?.lifecycle;
     const managedBy = transcript?.originator === "Agent Room" ? "Agent Room" as const : undefined;
-    // A completed turn remains a usable conversation. Ambient list freshness
-    // is an attention policy and must never turn an open thread into History.
-    const section = thread.archived
-      ? "history"
-      : codexLifecycle?.phase ?? "history";
+    // Transcript markers are claims, not liveness. A desktop turn whose process
+    // died right after `task_started` never writes a completion marker, so the
+    // marker alone would read as Working for months. The shared stale ceiling
+    // (the same one Swift's TranscriptPhaseInferrer uses) decides whether the
+    // claim is still current; the transcript's own modification time is the
+    // clock because a long live turn keeps writing after its start marker.
+    // Catalog membership is a separate policy: a dormant thread stays listed
+    // and openable as Recent.
+    const phase = lifecycle
+      ? transcriptPhase({
+        marker: lifecycle.phase === "working" ? "started" : "completed",
+        transcriptModifiedAt: rolloutStamp?.modifiedAt,
+        now: this.environment.now(),
+      })
+      : "recent";
+    // A dead start marker is not lifecycle evidence: it must not gate hooks or
+    // report a turn in progress. A dormant completion is still a true "turn
+    // complete" fact, only too old to deserve Ready attention.
+    const codexLifecycle = phase === "recent" && lifecycle?.phase === "working" ? undefined : lifecycle;
+    const section = thread.archived || phase === "recent" ? "history" : phase;
     return {
       id: thread.id,
       provider: "codex",
