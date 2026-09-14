@@ -17,7 +17,7 @@ final class PTYSpawnerTests: XCTestCase {
         let primary = FileHandle(fileDescriptor: result.primaryFD, closeOnDealloc: false)
         try primary.write(contentsOf: Data("hello\n".utf8))
 
-        let received = readUntilContains("hello", fd: result.primaryFD, timeout: 3.0)
+        let received = readUntilContains("hello", fd: result.primaryFD, timeout: childOutputTimeout)
         XCTAssertTrue(received.contains("hello"),
                       "expected 'hello' echo, got: \(received.debugDescription)")
     }
@@ -36,7 +36,7 @@ final class PTYSpawnerTests: XCTestCase {
         let result = try PTYSpawner.spawn(executable: "/usr/bin/tty", arguments: [])
         defer { cleanup(result) }
 
-        let received = readUntilContains("/dev/", fd: result.primaryFD, timeout: 3.0)
+        let received = readUntilContains("/dev/", fd: result.primaryFD, timeout: childOutputTimeout)
         XCTAssertTrue(received.contains("/dev/"),
                       "expected /dev/<pty> from tty(1), got: \(received.debugDescription)")
         XCTAssertFalse(received.contains("not a tty"),
@@ -44,6 +44,14 @@ final class PTYSpawnerTests: XCTestCase {
     }
 
     // MARK: - helpers
+
+    /// How long a spawned child may take to produce its first output. Locally
+    /// this is ~20 ms. On a loaded GitHub macOS runner the child of
+    /// `testChildHasTTYOnStdout` has needed more than the previous 3 s
+    /// (4 failures in 12 runs, each with an empty read, none reproducible
+    /// locally). A dead PTY would still fail at this bound; a slow one no
+    /// longer does.
+    private let childOutputTimeout: TimeInterval = 15.0
 
     private func cleanup(_ result: PTYSpawner.SpawnResult) {
         kill(result.pid, SIGTERM)
