@@ -10,6 +10,7 @@ import {
   accessibleThinkingText,
   filterChatItems,
   filterChatTurns,
+  applyTurnLiveness,
   groupChatTurns,
   isTurnDurationItem,
   isTurnExpandedByDefault,
@@ -436,6 +437,35 @@ describe("Chat presentation", () => {
       ]);
       expect(turnDurationLabel(turn!)).toBe("7m 21s");
       expect(turnDurationLabel({ ...turn!, answers: [row("odd", "a while")] })).toBe("a while");
+    });
+  });
+  describe("applyTurnLiveness", () => {
+    const finishedLooking = () => groupChatTurns([
+      item("user-1", "user"), item("tool-1", "tool"), item("answer-1", "assistant"),
+      item("user-2", "user"), item("tool-2", "tool"), item("answer-2", "assistant"),
+    ]);
+    const workingLooking = () => groupChatTurns([item("user-1", "user"), item("tool-1", "tool")]);
+
+    it("keeps the last turn live while the daemon says the turn is working", () => {
+      // The agent posted text after a tool call but is still going.
+      expect(applyTurnLiveness(finishedLooking(), "working").map(({ live }) => live)).toEqual([false, true]);
+    });
+
+    it("never leaves a turn live once the daemon says the turn is ready", () => {
+      // The turn ended on a tool call; the transcript alone would say Working forever.
+      expect(workingLooking()[0]!.live).toBe(true);
+      expect(applyTurnLiveness(workingLooking(), "ready")[0]!.live).toBe(false);
+      expect(applyTurnLiveness(workingLooking(), "needs_you")[0]!.live).toBe(false);
+    });
+
+    it("keeps the transcript heuristic when the daemon does not know", () => {
+      expect(applyTurnLiveness(workingLooking(), "unknown")[0]!.live).toBe(true);
+      expect(applyTurnLiveness(workingLooking(), undefined)[0]!.live).toBe(true);
+    });
+
+    it("does not mark a text-only last turn live", () => {
+      const turns = groupChatTurns([item("user-1", "user"), item("answer-1", "assistant")]);
+      expect(applyTurnLiveness(turns, "working")[0]!.live).toBe(false);
     });
   });
 });
