@@ -585,11 +585,9 @@ function parseClaude(
     } else if (subtype === "compact_boundary") {
       addSystem(items, id, "compact_boundary", "Context compacted", timestamp, "compact");
     } else if (subtype === "local_command") {
-      const output = terminalOutputText(text(value.content))
-        .replace(/^<local-command-(?:stdout|stderr)>/, "")
-        .replace(/<\/local-command-(?:stdout|stderr)>$/, "")
-        .trim();
-      if (output) addSystem(items, id, "local_command_output", output, timestamp);
+      localCommandLines(terminalOutputText(text(value.content))).forEach((line, index) => {
+        addSystem(items, index === 0 ? id : `${id}-${index}`, "local_command_output", line, timestamp);
+      });
     }
     return;
   }
@@ -691,6 +689,33 @@ function claudeTransportItems(body: string, id: string, timestamp?: string): Cha
  * incomplete examples as authored content instead of treating arbitrary XML
  * as provider plumbing.
  */
+/**
+ * A TUI built-in such as `/rename foo` writes up to two `local_command`
+ * rows (Claude Code 2.1.268): the invocation echo
+ * `<command-name>/rename</command-name><command-message>…</command-message><command-args>foo</command-args>`
+ * and the output mirror `<local-command-stdout>Session renamed to: foo</local-command-stdout>`.
+ * Return the lines worth showing, in transcript order: the command as the
+ * user typed it, then what the built-in printed. Raw envelope markup never
+ * reaches the chat; a row with nothing to show yields no lines.
+ */
+function localCommandLines(content: string): string[] {
+  const outputs: string[] = [];
+  const remainder = content.replace(
+    /<local-command-(stdout|stderr)>([\s\S]*?)(?:<\/local-command-\1>|$)/g,
+    (_match, _tag, body: string) => {
+      const trimmed = body.trim();
+      if (trimmed) outputs.push(trimmed);
+      return "";
+    },
+  ).trim();
+  const lines: string[] = [];
+  if (remainder) {
+    const command = normalizeClaudeUserText(remainder).trim();
+    if (command && !/<\/?command-(?:name|message|args)>/.test(command)) lines.push(command);
+  }
+  return [...lines, ...outputs];
+}
+
 function normalizeClaudeUserText(body: string): string {
   const trimmed = body.trim();
   if (!trimmed.startsWith("<command-name>") && !trimmed.startsWith("<command-message>")) {

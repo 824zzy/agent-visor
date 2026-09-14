@@ -114,6 +114,26 @@ describe("provider Chat parsing", () => {
     expect(items[4]).toMatchObject({ kind: "user", images: [{ mimeType: "image/png", data: "iVBORw0KGgo=" }] });
   });
 
+  it("renders slash-command echo rows as the typed command, never as raw tags", () => {
+    const echo = "<command-name>/rename</command-name>\n            <command-message>rename</command-message>\n            <command-args>cc-misc</command-args>";
+    const items = parseChatLines("claude_code", [
+      JSON.stringify({ type: "system", subtype: "local_command", uuid: "echo", content: echo }),
+      JSON.stringify({ type: "system", subtype: "local_command", uuid: "out", content: "<local-command-stdout>Session renamed to: cc-misc</local-command-stdout>" }),
+      JSON.stringify({ type: "system", subtype: "local_command", uuid: "bare", content: "<command-name>/context</command-name>\n<command-message>context</command-message>\n<command-args></command-args>" }),
+      JSON.stringify({ type: "system", subtype: "local_command", uuid: "empty", content: "<local-command-stdout></local-command-stdout>" }),
+      JSON.stringify({ type: "system", subtype: "local_command", uuid: "both", content: `${echo}\n<local-command-stdout>done</local-command-stdout>` }),
+    ]);
+    expect(items.map((item) => item.kind === "system" ? [item.category, item.text] : item.kind)).toEqual([
+      ["local_command_output", "/rename cc-misc"],
+      ["local_command_output", "Session renamed to: cc-misc"],
+      ["local_command_output", "/context"],
+      ["local_command_output", "/rename cc-misc"],
+      ["local_command_output", "done"],
+    ]);
+    expect(items.map(({ id }) => id)).toEqual(["echo", "out", "bare", "both", "both-1"]);
+    for (const item of items) if (item.kind === "system") expect(item.text).not.toMatch(/<\/?command-/);
+  });
+
   it("preserves provider session metadata rows for visibility controls", () => {
     const claude = parseChatLines("claude_code", [
       JSON.stringify({ type: "system", subtype: "turn_duration", uuid: "duration", durationMs: 1_250 }),
