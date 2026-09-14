@@ -284,6 +284,28 @@ export function isTurnExpandedByDefault(turn: ChatTurn): boolean {
     || turn.work.some((item) => item.kind === "tool" && item.status === "waiting");
 }
 
+/**
+ * Liveness for the "Working…" header comes from the daemon, not from the
+ * transcript's shape. The transcript heuristic in `groupChatTurns` (native
+ * work with no trailing answer) reads "Worked" as soon as the agent posts
+ * any text after its first tool call, even while it keeps going, and reads
+ * "Working…" forever for a turn that ended on a tool call. When the daemon
+ * knows the session's turn state, that wins: only the last turn can be
+ * live, only while the turn is working, and only if it has native work.
+ * An unknown state keeps the heuristic.
+ */
+export function applyTurnLiveness(
+  turns: ChatTurn[],
+  turnState: "needs_you" | "ready" | "working" | "unknown" | undefined,
+): ChatTurn[] {
+  if (turnState === undefined || turnState === "unknown") return turns;
+  return turns.map((turn, index) => {
+    const last = index === turns.length - 1;
+    const hasNativeWork = turn.work.some((item) => item.kind === "thinking" || item.kind === "tool");
+    return { ...turn, live: last && turnState === "working" && hasNativeWork };
+  });
+}
+
 export function shouldGroupChatTurns(source: string, rules: ChatVisibility): boolean {
   if (source === "Claude Code") return rules.collapseClaudeTurns;
   if (source === "Codex") return rules.collapseCodexTurns;

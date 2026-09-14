@@ -25,6 +25,7 @@ import type {
 import { browserCommand } from "./browser-shortcuts";
 import {
   accessibleThinkingText,
+  applyTurnLiveness,
   chatMetadataRows,
   filterChatItems,
   filterChatTurns,
@@ -181,9 +182,12 @@ export function Chat({
     [canonicalItems, visibility],
   );
   const grouped = shouldGroupChatTurns(session.source, visibility);
+  const turnState = session.sessionState?.turn;
   const turns = useMemo(
-    () => grouped ? filterChatTurns(groupChatTurns(canonicalItems), visibility) : [],
-    [canonicalItems, grouped, visibility],
+    () => grouped
+      ? applyTurnLiveness(filterChatTurns(groupChatTurns(canonicalItems), visibility), turnState)
+      : [],
+    [canonicalItems, grouped, turnState, visibility],
   );
   const [turnExpansionOverrides, setTurnExpansionOverrides] = useState<Record<string, boolean>>({});
   const timelineRows = useMemo<ChatTimelineRow[]>(
