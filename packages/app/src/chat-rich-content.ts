@@ -18,11 +18,17 @@ export type ChatRichInline =
   | { kind: "local-reference"; text: string; href: string }
   | { kind: "math"; text: string };
 
+/** One list entry: its inline content plus an optional nested list. */
+export type ChatRichListItem = {
+  inlines: ChatRichInline[];
+  children?: Extract<ChatRichBlock, { kind: "list" }>;
+};
+
 export type ChatRichBlock =
   | { kind: "paragraph"; inlines: ChatRichInline[] }
   | { kind: "heading"; level: number; inlines: ChatRichInline[] }
   | { kind: "blockquote"; inlines: ChatRichInline[] }
-  | { kind: "list"; ordered: boolean; items: ChatRichInline[][] }
+  | { kind: "list"; ordered: boolean; items: ChatRichListItem[] }
   | { kind: "code"; language?: string; text: string }
   | { kind: "table"; header: ChatRichInline[][]; rows: ChatRichInline[][][] }
   | { kind: "math"; text: string }
@@ -466,24 +472,37 @@ function splitTableRow(line: string): string[] {
   return trimmed.split(/(?<!\\)\|/).map((cell) => cell.replace(/\\\|/g, "|").trim());
 }
 
+/**
+ * Parse a list starting at `start`. A marker indented deeper than the list's
+ * own markers opens a nested list under the previous item; a shallower or
+ * differently typed marker ends this list and hands control back up.
+ */
 function parseList(lines: string[], start: number): { block: Extract<ChatRichBlock, { kind: "list" }>; nextIndex: number } | undefined {
   const first = parseListItem(lines[start]!);
   if (!first) return undefined;
-  const items: ChatRichInline[][] = [parseChatRichInline(first.text)];
+  const items: ChatRichListItem[] = [{ inlines: parseChatRichInline(first.text) }];
   let index = start + 1;
   while (index < lines.length) {
     const next = parseListItem(lines[index]!);
-    if (!next || next.ordered !== first.ordered) break;
-    items.push(parseChatRichInline(next.text));
+    if (!next) break;
+    if (next.indent > first.indent) {
+      const nested = parseList(lines, index);
+      if (!nested) break;
+      items[items.length - 1]!.children = nested.block;
+      index = nested.nextIndex;
+      continue;
+    }
+    if (next.indent < first.indent || next.ordered !== first.ordered) break;
+    items.push({ inlines: parseChatRichInline(next.text) });
     index += 1;
   }
   return { block: { kind: "list", ordered: first.ordered, items }, nextIndex: index };
 }
 
-function parseListItem(line: string): { ordered: boolean; text: string } | undefined {
-  const match = /^ {0,3}((?:[-+*])|(?:\d+[.)]))\s+(.*)$/.exec(line);
+function parseListItem(line: string): { indent: number; ordered: boolean; text: string } | undefined {
+  const match = /^( *)((?:[-+*])|(?:\d+[.)]))\s+(.*)$/.exec(line);
   if (!match) return undefined;
-  return { ordered: /^\d/.test(match[1]!), text: match[2]! };
+  return { indent: match[1]!.length, ordered: /^\d/.test(match[2]!), text: match[3]! };
 }
 
 function parseLink(source: string, start: number): { inline: ChatRichInline; nextIndex: number } | undefined {
