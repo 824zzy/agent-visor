@@ -2941,7 +2941,7 @@ function hookPhase(event: HookSessionEvent): {
   }
   if (isPhaseNeutralNotification(event) && status === "waiting_for_input") {
     // An idle prompt: the agent waits for the user, not for an approval.
-    return { section: "ready", subtitle: "Ready to continue" };
+    return { section: "ready", turnState: "ready", subtitle: "Ready to continue" };
   }
   if (event.expectsResponse || event.event === "PermissionRequest"
     || status.includes("approval") || status === "waiting_for_input") {
