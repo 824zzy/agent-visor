@@ -11,12 +11,16 @@ import {
   filterChatItems,
   filterChatTurns,
   groupChatTurns,
+  isTurnDurationItem,
   isTurnExpandedByDefault,
   mergeChatLatest,
   mergeChatPage,
   mergeChatPages,
   parseChatText,
   shouldGroupChatTurns,
+  summarizeTurnWork,
+  turnActivityLabel,
+  turnDurationLabel,
 } from "./chat-presentation.js";
 
 const item = (
@@ -382,5 +386,56 @@ describe("Chat presentation", () => {
     const second = mergeChatLatest(first, [item("newer", "assistant")]);
     expect(second.map(({ id }) => id)).toEqual(["old", "new", "chat-history-gap", "newer"]);
     expect(second.filter(({ kind }) => kind === "system")).toHaveLength(1);
+  });
+  describe("turn header summary", () => {
+    const tool = (
+      id: string,
+      family: Extract<ChatItem, { kind: "tool" }>["family"],
+      status: Extract<ChatItem, { kind: "tool" }>["status"] = "success",
+    ): ChatItem => ({ id, kind: "tool", name: id, family, input: {}, status });
+
+    it("describes what a turn did, state-changing actions first", () => {
+      const activity = summarizeTurnWork([
+        item("think", "thinking"),
+        tool("r1", "read"), tool("r2", "glob"), tool("g1", "grep"),
+        tool("e1", "edit"), tool("w1", "write"), tool("e2", "edit"),
+        tool("b1", "bash"),
+      ]);
+      expect(activity).toMatchObject({ edited: 3, ran: 1, read: 2, searched: 1, failed: 0, tools: 7, steps: 8 });
+      expect(turnActivityLabel(activity)).toBe("Edited 3 files · Ran 1 command · +3 more");
+      expect(turnActivityLabel(activity, 4)).toBe("Edited 3 files · Ran 1 command · Read 2 files · Searched 1 search");
+    });
+
+    it("counts failed and interrupted tool calls", () => {
+      const activity = summarizeTurnWork([tool("b1", "bash", "error"), tool("b2", "bash", "interrupted"), tool("b3", "bash")]);
+      expect(activity.failed).toBe(2);
+      expect(turnActivityLabel(activity)).toBe("Ran 3 commands");
+    });
+
+    it("falls back to a step count when nothing is categorized", () => {
+      expect(turnActivityLabel(summarizeTurnWork([item("think", "thinking")]))).toBe("1 step");
+      expect(turnActivityLabel(summarizeTurnWork([tool("m1", "mcp"), tool("m2", "other"), tool("m3", undefined)]))).toBe("3 steps");
+    });
+
+    it("lifts the turn duration out of its system row", () => {
+      const duration: ChatItem = {
+        id: "duration", kind: "system", text: "Turn duration: 1m 31s", tone: "neutral", category: "turn_duration",
+      };
+      const [turn] = groupChatTurns([item("user-1", "user"), tool("b1", "bash"), item("answer", "assistant"), duration]);
+      expect(isTurnDurationItem(duration)).toBe(true);
+      expect(turnDurationLabel(turn!)).toBe("1m 31s");
+      expect(turnDurationLabel({ ...turn!, answers: [item("answer", "assistant")] })).toBeUndefined();
+    });
+
+    it("sums the durations of several assistant turns under one prompt", () => {
+      const row = (id: string, text: string): ChatItem =>
+        ({ id, kind: "system", text: `Turn duration: ${text}`, tone: "neutral", category: "turn_duration" });
+      const [turn] = groupChatTurns([
+        item("user-1", "user"), tool("b1", "bash"), item("a1", "assistant"), row("d1", "6m 37s"),
+        item("a2", "assistant"), row("d2", "42s"), item("a3", "assistant"), row("d3", "1.5s"),
+      ]);
+      expect(turnDurationLabel(turn!)).toBe("7m 21s");
+      expect(turnDurationLabel({ ...turn!, answers: [row("odd", "a while")] })).toBe("a while");
+    });
   });
 });

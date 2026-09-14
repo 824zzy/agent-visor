@@ -30,8 +30,12 @@ import {
   filterChatTurns,
   groupChatTurns,
   historyImageDataURI,
+  isTurnDurationItem,
   isTurnExpandedByDefault,
   shouldGroupChatTurns,
+  summarizeTurnWork,
+  turnActivityLabel,
+  turnDurationLabel,
 } from "./chat-presentation";
 import {
   chatToolPresentation,
@@ -110,7 +114,19 @@ import {
 type ChatTimelineRow =
   | { type: "item"; id: string; item: ChatItem }
   | { type: "group-prompt"; id: string; turnID: string; item: Extract<ChatItem, { kind: "user" }> }
-  | { type: "group-work-header"; id: string; turnID: string; count: number; live: boolean; expanded: boolean }
+  | {
+    type: "group-work-header";
+    id: string;
+    turnID: string;
+    count: number;
+    live: boolean;
+    expanded: boolean;
+    /** Elapsed time from the turn's duration row, folded into the header. */
+    duration?: string;
+    /** What the turn did: "Edited 3 files · Ran 1 command", or "N steps". */
+    label: string;
+    failed: number;
+  }
   | { type: "group-work-item"; id: string; turnID: string; item: ChatItem }
   | { type: "group-answer"; id: string; turnID: string; item: ChatItem };
 
@@ -182,14 +198,21 @@ export function Chat({
         turnID: turn.id,
         item: turn.prompt,
       });
-      if (turn.work.length) rows.push({
-        type: "group-work-header",
-        id: `turn-work-${turn.id}`,
-        turnID: turn.id,
-        count: turn.work.length,
-        live: turn.live,
-        expanded,
-      });
+      if (turn.work.length) {
+        const activity = summarizeTurnWork(turn.work);
+        const duration = turnDurationLabel(turn);
+        rows.push({
+          type: "group-work-header",
+          id: `turn-work-${turn.id}`,
+          turnID: turn.id,
+          count: turn.work.length,
+          live: turn.live,
+          expanded,
+          ...(duration ? { duration } : {}),
+          label: turnActivityLabel(activity),
+          failed: activity.failed,
+        });
+      }
       if (expanded) {
         for (const item of turn.work) rows.push({
           type: "group-work-item",
@@ -198,12 +221,17 @@ export function Chat({
           item,
         });
       }
-      for (const item of turn.answers) rows.push({
-        type: "group-answer",
-        id: item.id,
-        turnID: turn.id,
-        item,
-      });
+      for (const item of turn.answers) {
+        // The header carries the duration; a separate "Turn duration" row
+        // would split the work from its answer and repeat the number.
+        if (isTurnDurationItem(item)) continue;
+        rows.push({
+          type: "group-answer",
+          id: item.id,
+          turnID: turn.id,
+          item,
+        });
+      }
       return rows;
     }) : items.map((item) => ({ type: "item", id: item.id, item })),
     [grouped, items, turns, turnExpansionOverrides],
@@ -782,7 +810,11 @@ function renderChatTimelineRow(
             onPress={() => onToggleWork(row.turnID, !row.expanded)}
             style={styles.workHeader}
           >
-            <Text style={styles.workLabel}>{row.expanded ? "⌄" : "›"} {row.live ? "Working…" : `Worked · ${row.count} step${row.count === 1 ? "" : "s"}`}</Text>
+            <Text style={styles.workLabel}>
+              {row.expanded ? "⌄" : "›"} {row.live ? "Working…" : row.duration ? `Worked ${row.duration}` : "Worked"}
+              {row.label ? ` · ${row.label}` : ""}
+              {row.failed > 0 ? <Text style={styles.workLabelFailed}>{` · ${row.failed} failed`}</Text> : null}
+            </Text>
           </Pressable>
         </View>
       );
@@ -919,14 +951,16 @@ function RichMessageText({
   return (
     <View style={styles.messageText}>
       {document.blocks.map((block, index) => (
-        <RichBlockView key={`${block.kind}-${index}`} block={block} styles={styles} tone={tone} />
+        <RichBlockView key={`${block.kind}-${index}`} block={block} first={index === 0} styles={styles} tone={tone} />
       ))}
     </View>
   );
 }
 
-function RichBlockView({ block, styles, tone }: {
+function RichBlockView({ block, first = false, styles, tone }: {
   block: ChatRichBlock;
+  /** First block of a message: no extra space above a leading heading. */
+  first?: boolean;
   styles: ChatStyles;
   tone: "body" | "thinking";
 }) {
@@ -948,8 +982,8 @@ function RichBlockView({ block, styles, tone }: {
   if (block.kind === "table") {
     return (
       <View accessibilityLabel="Markdown table" style={styles.table}>
-        <View style={styles.tableRow}>
-          {block.header.map((cell, index) => <View key={`header-${index}`} style={styles.tableCell}><RichInlineText parts={cell} styles={styles} tone={tone} /></View>)}
+        <View style={[styles.tableRow, styles.tableHeaderRow]}>
+          {block.header.map((cell, index) => <View key={`header-${index}`} style={styles.tableCell}><RichInlineText parts={cell} strong styles={styles} tone={tone} /></View>)}
         </View>
         {block.rows.map((row, rowIndex) => (
           <View key={`row-${rowIndex}`} style={styles.tableRow}>
@@ -976,7 +1010,12 @@ function RichBlockView({ block, styles, tone }: {
     );
   }
   const style = block.kind === "heading"
-    ? [styles.body, styles.heading, tone === "thinking" && styles.thinkingText]
+    ? [
+      styles.body,
+      block.level <= 1 ? styles.heading1 : block.level === 2 ? styles.heading2 : styles.heading3,
+      first && styles.firstBlock,
+      tone === "thinking" && styles.thinkingText,
+    ]
     : block.kind === "blockquote"
       ? [styles.body, styles.blockquote, tone === "thinking" && styles.thinkingText]
       : [styles.body, tone === "thinking" && styles.thinkingText];
@@ -1008,15 +1047,18 @@ function ChatMath({ source, display = false, styles }: { source: string; display
 
 function RichInlineText({
   parts,
+  strong = false,
   styles,
   tone,
 }: {
   parts: ChatRichInline[];
+  /** Whole run in bold, e.g. a table header cell. */
+  strong?: boolean;
   styles: ChatStyles;
   tone: "body" | "thinking";
 }) {
   return (
-    <Text selectable style={[styles.inlineFlow, tone === "thinking" && styles.thinkingText]}>
+    <Text selectable style={[styles.inlineFlow, strong && styles.bold, tone === "thinking" && styles.thinkingText]}>
       {parts.map((part, index) => {
     if (part.kind === "strong") return <Text key={index} style={styles.bold}>{part.text}</Text>;
     if (part.kind === "emphasis") return <Text key={index} style={styles.emphasis}>{part.text}</Text>;
@@ -2329,11 +2371,14 @@ function createStyles(palette: ChatPalette, scale: number) {
     // Each grouped turn is split into bounded FlatList cells. These styles
     // retain the visual turn spacing without mounting a whole turn at once.
     turnPrompt: { paddingTop: 10 },
-    turnAnswer: { paddingTop: 10 },
+    // The answer is what the reader came for: a little more air above it,
+    // and the folded steps sit on a rule so they read as one group.
+    turnAnswer: { paddingTop: 14 },
     work: { paddingTop: 7 },
-    workItem: { paddingTop: 6 },
+    workItem: { borderLeftColor: palette.border, borderLeftWidth: 2, marginLeft: 4, paddingLeft: 12, paddingTop: 6 },
     workHeader: { alignSelf: "flex-start", minHeight: 30, paddingVertical: 6 },
-    workLabel: { color: palette.tertiary, fontSize: font(11), fontWeight: "600" },
+    workLabel: { color: palette.tertiary, fontSize: font(12), fontWeight: "600", lineHeight: font(18) },
+    workLabelFailed: { color: palette.error },
     activity: { maxWidth: "100%", minWidth: 0 },
     activityHeader: { alignSelf: "flex-start", minHeight: 30, paddingVertical: 6 },
     activityLabel: { color: palette.muted, fontSize: font(11), fontWeight: "600" },
@@ -2341,18 +2386,23 @@ function createStyles(palette: ChatPalette, scale: number) {
     userRow: { alignItems: "flex-end", paddingLeft: 60 },
     userBubble: { backgroundColor: palette.foreground + "12", borderRadius: 15, gap: 8, maxWidth: "82%", minWidth: 0, paddingHorizontal: 14, paddingVertical: 10 },
     assistant: { alignItems: "flex-start", maxWidth: "100%", minWidth: 0 },
-    messageText: { flex: 1, gap: 16, maxWidth: "100%", minWidth: 0 },
+    messageText: { flex: 1, gap: 12, maxWidth: "100%", minWidth: 0 },
     inlineFlow: { color: palette.foreground, flex: 1, flexShrink: 1, fontSize: font(14), lineHeight: font(22), maxWidth: "100%", minWidth: 0 },
     body: { color: palette.foreground, flexShrink: 1, fontSize: font(14), lineHeight: font(22), maxWidth: "100%", minWidth: 0 },
-    heading: { fontWeight: "700" },
+    // Heading scale: 18 / 16 / 15 over a 14 body, with air above so a
+    // heading opens a section instead of reading as a bold sentence.
+    heading1: { fontSize: font(18), fontWeight: "700", lineHeight: font(26), marginTop: 8 },
+    heading2: { fontSize: font(16), fontWeight: "700", lineHeight: font(24), marginTop: 8 },
+    heading3: { fontSize: font(15), fontWeight: "700", lineHeight: font(22), marginTop: 6 },
+    firstBlock: { marginTop: 0 },
     emphasis: { fontStyle: "italic" },
     strike: { textDecorationLine: "line-through" },
     chatLink: { color: palette.accent, textDecorationLine: "underline" },
     localReference: { color: palette.muted, fontFamily: "monospace", fontSize: font(12), textDecorationLine: "underline" },
     localReferenceFull: { fontSize: font(10) },
     bold: { fontWeight: "700" },
-    inlineCode: { backgroundColor: palette.card, fontFamily: "monospace", fontSize: font(12) },
-    inlineMath: { backgroundColor: palette.card, fontFamily: "monospace", fontSize: font(12), fontStyle: "italic" },
+    inlineCode: { backgroundColor: palette.inlineChip, borderRadius: 4, fontFamily: "monospace", fontSize: font(12), paddingHorizontal: 4, paddingVertical: 1 },
+    inlineMath: { backgroundColor: palette.inlineChip, borderRadius: 4, fontFamily: "monospace", fontSize: font(12), fontStyle: "italic", paddingHorizontal: 4, paddingVertical: 1 },
     blockquote: { borderLeftColor: palette.border, borderLeftWidth: 3, paddingLeft: 10 },
     list: { gap: 6, paddingLeft: 2 },
     listItem: { alignItems: "flex-start", flexDirection: "row", gap: 8, maxWidth: "100%", minWidth: 0 },
@@ -2361,15 +2411,15 @@ function createStyles(palette: ChatPalette, scale: number) {
     thinking: { paddingLeft: 0 },
     thinkingText: { color: palette.tertiary, fontSize: font(12), fontStyle: "italic", lineHeight: font(18) },
     systemRow: { maxWidth: "100%", width: "100%" },
-    system: { color: palette.tertiary, flexShrink: 1, fontSize: font(11), maxWidth: "100%", textAlign: "left" },
-    duration: { color: palette.tertiary, fontSize: font(11), letterSpacing: 0.1, lineHeight: font(16), paddingVertical: 4, textAlign: "left" },
+    system: { color: palette.tertiary, flexShrink: 1, fontSize: font(12), maxWidth: "100%", textAlign: "left" },
+    duration: { color: palette.tertiary, fontSize: font(12), letterSpacing: 0.1, lineHeight: font(17), paddingVertical: 4, textAlign: "left" },
     recap: { fontStyle: "italic" },
     localCommand: { color: palette.accent },
     compactBoundary: { alignItems: "center", gap: 6, width: "100%" },
     thematicBreak: { backgroundColor: palette.border, height: 1, marginVertical: 4, width: "100%" },
-    codeBlock: { backgroundColor: palette.card, borderRadius: 7, maxWidth: "100%", minWidth: 0, overflow: "hidden", padding: 10 },
+    codeBlock: { backgroundColor: palette.blockSurface, borderColor: palette.border, borderRadius: 7, borderWidth: 1, marginVertical: 4, maxWidth: "100%", minWidth: 0, overflow: "hidden", padding: 12 },
     codeLanguage: { color: palette.accent, fontFamily: "monospace", fontSize: font(10), fontWeight: "600", marginBottom: 5 },
-    code: { color: palette.foreground, flexShrink: 1, fontFamily: "monospace", fontSize: font(11), lineHeight: font(17), maxWidth: "100%", padding: 0 },
+    code: { color: palette.foreground, flexShrink: 1, fontFamily: "monospace", fontSize: font(12.5), lineHeight: font(19), maxWidth: "100%", padding: 0 },
     codeTokenPlain: { color: palette.foreground },
     codeTokenKeyword: { color: palette.accent, fontWeight: "600" },
     codeTokenString: { color: palette.ready },
@@ -2378,9 +2428,12 @@ function createStyles(palette: ChatPalette, scale: number) {
     codeTokenLiteral: { color: palette.foreground },
     math: { backgroundColor: palette.card, color: palette.foreground, fontFamily: "monospace", fontSize: font(12), padding: 8 },
     mathBlock: { alignItems: "center", backgroundColor: palette.card, borderRadius: 6, maxWidth: "100%", minHeight: 32, padding: 8, width: "100%" },
-    table: { borderColor: palette.border, borderRadius: 6, borderWidth: 1, maxWidth: "100%", overflow: "hidden" },
+    // Quiet tables: horizontal rules only, a tinted bold header row, and
+    // roomier cells, so the table informs without out-shouting the prose.
+    table: { borderBottomColor: palette.border, borderBottomWidth: 1, borderTopColor: palette.border, borderTopWidth: 1, marginVertical: 4, maxWidth: "100%" },
     tableRow: { borderBottomColor: palette.border, borderBottomWidth: 1, flexDirection: "row", maxWidth: "100%", minWidth: 0 },
-    tableCell: { flex: 1, minWidth: 0, paddingHorizontal: 8, paddingVertical: 6 },
+    tableHeaderRow: { backgroundColor: palette.blockSurface },
+    tableCell: { flex: 1, minWidth: 0, paddingHorizontal: 12, paddingVertical: 10 },
     tool: { paddingLeft: 0 },
     toolHeader: { alignItems: "center", flexDirection: "row", gap: 7, minHeight: 32 },
     toolStatus: { color: palette.ready, fontSize: font(11), width: 12 },

@@ -10,6 +10,8 @@ import {
   CHAT_IMAGE_SUPPORTED_MIME_TYPES,
   chatImageBase64Bytes,
   chatImageMimeForBytes,
+  formatDuration,
+  parseDuration,
 } from "@agent-visor/protocol";
 
 export type ChatMetadataRow = { label: string; value: string };
@@ -447,4 +449,109 @@ export function mergeChatPages(current: ChatItem[], incoming: ChatItem[]): ChatI
     ...incoming,
     ...current.filter(({ id }) => !incomingIDs.has(id)),
   ].map(({ id }) => byID.get(id)!);
+}
+
+// ---------------------------------------------------------------------------
+// Turn header summary
+// ---------------------------------------------------------------------------
+
+/**
+ * Buckets a turn's tool calls into a few human verbs so the collapsed
+ * "Worked" header can say what happened ("Edited 3 files · Ran 1 command")
+ * instead of a bare step count. Ported from the Swift ClaudeTurnActivity so
+ * both chats describe a turn the same way.
+ */
+export type ChatTurnActivity = {
+  edited: number;
+  ran: number;
+  read: number;
+  searched: number;
+  web: number;
+  delegated: number;
+  planned: number;
+  other: number;
+  /** Tool calls that ended in error or were interrupted. */
+  failed: number;
+  /** Every tool call, categorized or not. */
+  tools: number;
+  /** Every work item, including thinking and agent activity. */
+  steps: number;
+};
+
+export function summarizeTurnWork(work: ChatItem[]): ChatTurnActivity {
+  const activity: ChatTurnActivity = {
+    edited: 0, ran: 0, read: 0, searched: 0, web: 0, delegated: 0, planned: 0, other: 0,
+    failed: 0, tools: 0, steps: work.length,
+  };
+  for (const item of work) {
+    if (item.kind !== "tool") continue;
+    activity.tools += 1;
+    if (item.status === "error" || item.status === "interrupted") activity.failed += 1;
+    switch (item.family) {
+      case "edit": case "write": activity.edited += 1; break;
+      case "bash": case "bash_output": case "kill_shell": activity.ran += 1; break;
+      case "read": case "glob": activity.read += 1; break;
+      case "grep": activity.searched += 1; break;
+      case "web_fetch": case "web_search": activity.web += 1; break;
+      case "task": activity.delegated += 1; break;
+      case "plan_mode": activity.planned += 1; break;
+      default: activity.other += 1;
+    }
+  }
+  return activity;
+}
+
+/** Ordered clauses, highest-signal first: the actions that changed state lead. */
+export function turnActivityClauses(activity: ChatTurnActivity): string[] {
+  const clauses: string[] = [];
+  const add = (count: number, verb: string, singular: string, plural = `${singular}s`) => {
+    if (count > 0) clauses.push(`${verb} ${count} ${count === 1 ? singular : plural}`);
+  };
+  add(activity.edited, "Edited", "file");
+  add(activity.ran, "Ran", "command");
+  add(activity.read, "Read", "file");
+  add(activity.searched, "Searched", "search", "searches");
+  add(activity.web, "Fetched", "page");
+  add(activity.delegated, "Delegated", "task");
+  add(activity.planned, "Planned", "plan");
+  return clauses;
+}
+
+/**
+ * Header label: up to `maxClauses` clauses with the rest rolled into
+ * "+N more". Falls back to a step count so the header is never blank.
+ */
+export function turnActivityLabel(activity: ChatTurnActivity, maxClauses = 2): string {
+  const clauses = turnActivityClauses(activity);
+  if (!clauses.length) return `${activity.steps} step${activity.steps === 1 ? "" : "s"}`;
+  if (clauses.length <= maxClauses) return clauses.join(" · ");
+  const shown = clauses.slice(0, maxClauses);
+  const shownCount = shown.reduce(
+    (sum, clause) => sum + (Number.parseInt(clause.split(" ")[1] ?? "0", 10) || 0), 0,
+  );
+  const remainder = activity.tools - shownCount;
+  return remainder > 0 ? `${shown.join(" · ")} · +${remainder} more` : shown.join(" · ");
+}
+
+export function isTurnDurationItem(item: ChatItem): boolean {
+  return item.kind === "system" && item.category === "turn_duration";
+}
+
+/**
+ * Elapsed time for the turn, folded into the "Worked" header instead of a
+ * separate system row. One prompt can hold several assistant turns (a
+ * background task finishing re-enters the agent), each with its own duration
+ * row; those are summed. If a row cannot be parsed, its text is shown as-is.
+ */
+export function turnDurationLabel(turn: ChatTurn): string | undefined {
+  const rows = turn.answers.filter((item): item is Extract<ChatItem, { kind: "system" }> =>
+    isTurnDurationItem(item));
+  if (!rows.length) return undefined;
+  let total = 0;
+  for (const row of rows) {
+    const ms = parseDuration(row.text);
+    if (ms === undefined) return rows[rows.length - 1]!.text.replace(/^turn duration:\s*/i, "").trim() || undefined;
+    total += ms;
+  }
+  return formatDuration(total);
 }

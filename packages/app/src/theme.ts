@@ -15,6 +15,10 @@ export type Palette = typeof palettes.light;
 export type ChatPalette = Palette & {
   composerBorder: string;
   composerBorderFocused: string;
+  /** Fill for small inline chips (inline code, math): must read as a chip on the page. */
+  inlineChip: string;
+  /** Fill for larger inset surfaces (code blocks, table header): quieter than a chip. */
+  blockSurface: string;
 };
 
 // ponytail: Chat may tune content layers, but its root canvas must stay equal
@@ -33,6 +37,10 @@ export function createChatPalette(palette: Palette): ChatPalette {
     muted: isDark ? "#b7b7b1" : "#6c6c68",
     tertiary: isDark ? "#92928d" : "#70706b",
     accentWash: isDark ? "#ffffff10" : "#00000008",
+    // Translucent foreground tints, so they darken a light page and lighten a
+    // dark one. `card` is lighter than the light page and cannot serve here.
+    inlineChip: isDark ? "#ffffff1f" : "#00000016",
+    blockSurface: isDark ? "#ffffff0d" : "#0000000a",
   };
 }
 
