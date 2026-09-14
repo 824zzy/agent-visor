@@ -998,16 +998,7 @@ function RichBlockView({ block, first = false, styles, tone }: {
   }
   if (block.kind === "thematic-break") return <View accessibilityLabel="Markdown divider" style={styles.thematicBreak} />;
   if (block.kind === "list") {
-    return (
-      <View style={styles.list}>
-        {block.items.map((parts, index) => (
-          <View key={index} style={styles.listItem}>
-            <Text style={[styles.listMarker, block.ordered && styles.orderedListMarker]}>{block.ordered ? `${index + 1}.` : "•"}</Text>
-            <RichInlineText parts={parts} styles={styles} tone={tone} />
-          </View>
-        ))}
-      </View>
-    );
+    return <RichListView block={block} styles={styles} tone={tone} />;
   }
   const style = block.kind === "heading"
     ? [
@@ -1020,6 +1011,30 @@ function RichBlockView({ block, first = false, styles, tone }: {
       ? [styles.body, styles.blockquote, tone === "thinking" && styles.thinkingText]
       : [styles.body, tone === "thinking" && styles.thinkingText];
   return <Text selectable style={style}><RichInlineText parts={block.inlines} styles={styles} tone={tone} /></Text>;
+}
+
+function RichListView({ block, styles, tone }: {
+  block: Extract<ChatRichBlock, { kind: "list" }>;
+  styles: ChatStyles;
+  tone: "body" | "thinking";
+}) {
+  return (
+    <View style={styles.list}>
+      {block.items.map((item, index) => (
+        <View key={index} style={styles.listEntry}>
+          <View style={styles.listItem}>
+            <Text style={[styles.listMarker, block.ordered && styles.orderedListMarker]}>{block.ordered ? `${index + 1}.` : "•"}</Text>
+            <RichInlineText parts={item.inlines} styles={styles} tone={tone} />
+          </View>
+          {item.children ? (
+            <View style={styles.nestedList}>
+              <RichListView block={item.children} styles={styles} tone={tone} />
+            </View>
+          ) : null}
+        </View>
+      ))}
+    </View>
+  );
 }
 
 function ChatMath({ source, display = false, styles }: { source: string; display?: boolean; styles: ChatStyles }) {
@@ -2405,7 +2420,10 @@ function createStyles(palette: ChatPalette, scale: number) {
     inlineMath: { backgroundColor: palette.inlineChip, borderRadius: 4, fontFamily: "monospace", fontSize: font(12), fontStyle: "italic", paddingHorizontal: 4, paddingVertical: 1 },
     blockquote: { borderLeftColor: palette.border, borderLeftWidth: 3, paddingLeft: 10 },
     list: { gap: 6, paddingLeft: 2 },
+    listEntry: { gap: 6, maxWidth: "100%", minWidth: 0 },
     listItem: { alignItems: "flex-start", flexDirection: "row", gap: 8, maxWidth: "100%", minWidth: 0 },
+    // Nested lists indent under their parent's text, past the marker column.
+    nestedList: { paddingLeft: 18 },
     listMarker: { color: palette.tertiary, flexShrink: 0, fontSize: font(14), lineHeight: font(22) },
     orderedListMarker: { minWidth: 22 },
     thinking: { paddingLeft: 0 },

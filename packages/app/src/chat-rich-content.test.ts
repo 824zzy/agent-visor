@@ -38,13 +38,65 @@ describe("Chat rich content", () => {
         kind: "list",
         ordered: false,
         items: [
-          [{ kind: "strong", text: "ok" }],
-          [{ kind: "strike", text: "old" }],
+          { inlines: [{ kind: "strong", text: "ok" }] },
+          { inlines: [{ kind: "strike", text: "old" }] },
         ],
       },
       { kind: "code", language: "typescript", text: "const answer = 42;" },
       { kind: "math", text: "x^2" },
     ]);
+  });
+
+  it("nests indented list items under their parent", () => {
+    const document = parseChatRichText(
+      "- Changed files:\n  - `a.ts` adds the helper.\n  - `b.ts` uses it.\n- Tests: two new cases.\n\n1. First\n   1. Inner one\n   2. Inner two\n2. Second",
+    );
+    expect(document.blocks).toEqual([
+      {
+        kind: "list",
+        ordered: false,
+        items: [
+          {
+            inlines: [{ kind: "text", text: "Changed files:" }],
+            children: {
+              kind: "list",
+              ordered: false,
+              items: [
+                { inlines: [{ kind: "code", text: "a.ts" }, { kind: "text", text: " adds the helper." }] },
+                { inlines: [{ kind: "code", text: "b.ts" }, { kind: "text", text: " uses it." }] },
+              ],
+            },
+          },
+          { inlines: [{ kind: "text", text: "Tests: two new cases." }] },
+        ],
+      },
+      {
+        kind: "list",
+        ordered: true,
+        items: [
+          {
+            inlines: [{ kind: "text", text: "First" }],
+            children: {
+              kind: "list",
+              ordered: true,
+              items: [
+                { inlines: [{ kind: "text", text: "Inner one" }] },
+                { inlines: [{ kind: "text", text: "Inner two" }] },
+              ],
+            },
+          },
+          { inlines: [{ kind: "text", text: "Second" }] },
+        ],
+      },
+    ]);
+  });
+
+  it("ends a list when a shallower or differently typed marker follows", () => {
+    const document = parseChatRichText("- a\n  - b\n1. c");
+    expect(document.blocks.map((block) => block.kind === "list" ? [block.ordered, block.items.length] : block.kind))
+      .toEqual([[false, 1], [true, 1]]);
+    const [first] = document.blocks;
+    expect(first?.kind === "list" && first.items[0]?.children?.items.length).toBe(1);
   });
 
   it("parses safe inline links, emphasis, code, and inline math", () => {
