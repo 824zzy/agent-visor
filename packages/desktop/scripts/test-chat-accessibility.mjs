@@ -853,6 +853,13 @@ async function run() {
     width: 1_040,
     height: 760,
     webPreferences: {
+      // The window is never shown, so Chromium treats the page as hidden and
+      // suspends requestAnimationFrame and timers. Chat's tail pin, settle
+      // loop, and earlier-page anchor restore all run on animation frames;
+      // with throttling on, they only run when the runner happens to keep
+      // frames alive, which made "earlier-page prepend preserves the reader
+      // viewport" a coin flip in CI and a consistent failure locally.
+      backgroundThrottling: false,
       additionalArguments: [`--agent-visor-daemon=${server.url}`],
       contextIsolation: true,
       nodeIntegration: false,
@@ -1129,6 +1136,14 @@ async function run() {
     assert(expandedTail.retained > 0 && expandedTail.mounted < expandedTail.retained,
       `expanded grouped Chat history stays virtualized (${JSON.stringify(expandedTail)})`);
     await waitFor(window, `Boolean(document.getElementById(${JSON.stringify(anchorBefore?.id ?? "")})?.getClientRects().length)`);
+    // The anchor correction runs on an animation frame after FlatList lays out
+    // the new head rows. Wait for it (bounded) instead of sampling the frame
+    // before it lands; the settled re-check below still catches any late pin
+    // that moves the reader afterwards.
+    await waitFor(window, `(() => {
+      const row = document.getElementById(${JSON.stringify(anchorBefore?.id ?? "")});
+      return Boolean(row) && Math.abs(row.getBoundingClientRect().top - ${JSON.stringify(anchorBefore?.top ?? 0)}) <= 2;
+    })()`);
     const anchorAfter = await window.webContents.executeJavaScript(`(() => {
       const row = document.getElementById(${JSON.stringify(anchorBefore?.id ?? "")});
       const timeline = document.querySelector('[aria-label="Chat timeline"]');
