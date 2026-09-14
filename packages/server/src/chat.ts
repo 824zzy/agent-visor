@@ -11,6 +11,7 @@ import {
   type ChatMetadata,
   type ChatPage,
   type ChatSettings,
+  formatDuration,
 } from "@agent-visor/protocol";
 import { summaryWork } from "./machine.js";
 import { normalizeCodexAssistantText } from "./codex-assistant-text.js";
@@ -1287,12 +1288,6 @@ function addSystem(
   tone: Extract<ChatItem, { kind: "system" }>["tone"] = "neutral",
 ): void {
   items.push({ id, kind: "system", text: body, tone, category, timestamp });
-}
-
-function formatDuration(milliseconds: number): string {
-  return milliseconds < 1_000
-    ? `${milliseconds}ms`
-    : `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
 }
 
 function addTool(

@@ -1158,5 +1158,5 @@ export type SessionRouteState = z.infer<typeof sessionRouteStateSchema>;
 export type SessionRouteOwnership = z.infer<typeof sessionRouteOwnershipSchema>;
 export type SessionUnavailableReason = z.infer<typeof sessionUnavailableReasonSchema>;
 export type SessionState = z.infer<typeof sessionStateSchema>;
-
 export * from "./transcript-phase.js";
+export * from "./duration.js";
