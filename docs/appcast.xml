@@ -6,6 +6,48 @@
     <description>Agent Visor updates</description>
     <language>en</language>
     <item>
+      <title>v2.7.1</title>
+      <pubDate>Mon, 14 Sep 2026 21:09:56 +0000</pubDate>
+      <sparkle:version>55</sparkle:version>
+      <sparkle:shortVersionString>2.7.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumUpdateVersion>48</sparkle:minimumUpdateVersion>
+      <description><![CDATA[<h2>v2.7.1</h2>
+<h3>What’s new</h3>
+<ul>
+  <li><strong>Alfred session search.</strong> Find sessions from Alfred, sorted by relevance and recent activity, and open the owner application or terminal directly.</li>
+  <li><strong>Informative turn headers in Chat.</strong> A collapsed turn now says what it did and how long it took, for example “Worked 6m 2s · Edited 3 files · Ran 15 commands · 2 failed”, instead of “Worked · 10 steps”. The separate “Turn duration” row is gone.</li>
+  <li><strong>Readable Chat typography.</strong> Real heading sizes, tighter block spacing, quieter tables, visible inline-code chips, nested lists, and larger code and system text.</li>
+  <li><strong>Provider-backed composer controls.</strong> Composer menus follow the provider’s own capabilities, keep drafts when Codex owns the conversation, and report session state clearly.</li>
+</ul>
+<h3>Improvements and fixes</h3>
+<ul>
+  <li>Sessions no longer turn orange (“Needs attention”) one minute after every turn. Claude Code’s idle notifications never change a session’s phase.</li>
+  <li>Dead Codex desktop turns from months ago no longer show as “Agent is working”. Transcript markers expire after 30 minutes without new writes, and a completed Codex task moves to History after 30 minutes, matching Claude Desktop and the Swift app.</li>
+  <li>Finished turns start collapsed, even when a step failed. A turn stays open while the daemon reports it working, and a turn that ended on a tool call no longer reads as “Working…” forever.</li>
+  <li>Slash-command echoes such as <code>/rename</code> and <code>/context</code> render as the typed command instead of raw markup, in both the Swift and Electron chats.</li>
+  <li>Menu-bar pills: Working ranks before unseen completions, unseen completions stay green until activated, pill reordering slides instead of jumping, pills stay stable during clicks, and Agent Room sessions are hidden from pills. Native session menus show seven days of activity.</li>
+  <li>Session browser: completed sessions age into History and are ordered by recent activity, ready sessions share one heading with unseen completions first, Claude Desktop completion state and pill navigation are reconciled, and unarchived Codex conversations stay listed.</li>
+  <li>Chat delivery keeps reads independent of Codex writer ownership, acquires on Send, and releases after completion or Stop. The composer no longer shows the native focus outline.</li>
+</ul>
+<h3>Known limitations</h3>
+<ul>
+  <li>Inspect, hide, unhide, and custom-recording controls remain deferred.</li>
+  <li>Claude usage is hidden until a provider-authoritative credential route exists.</li>
+  <li>Cursor Chat is read-only. Zed-hosted Chat is read-only and exact sidebar/thread reveal is best effort. Auggie remains observe-only.</li>
+  <li>Automatic Pi session restoration after a physical macOS reboot has not completed real-machine acceptance.</li>
+  <li>Updates validate a newer version, matching HTTPS GitHub ZIP URL, and Ed25519 signature metadata, then open the GitHub release page for manual installation.</li>
+</ul>
+<p><strong>Rollback:</strong> install the previous Electron release, Agent Visor v2.7.0 build 54, from GitHub Releases. The Swift v2.6.1 build 53 remains available as the older rollback.</p>
+]]></description>
+      <enclosure
+        url="https://github.com/824zzy/agent-visor/releases/download/v2.7.1/AgentVisor-v2.7.1.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="7MYUGz00zOq1BfXMyQ3eBXaKXjd6jcoISXOskhghu3Rt23aRCMjYrGErpGRelKS/Ln7B82w82CMWpliRo3XxBw=="
+        length="122668880"
+      />
+    </item>
+    <item>
       <title>v2.7.0</title>
       <pubDate>Fri, 04 Sep 2026 16:05:53 +0000</pubDate>
       <sparkle:version>54</sparkle:version>
