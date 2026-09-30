@@ -230,6 +230,47 @@ describe("live provider adapters", () => {
     }]);
   });
 
+  it("excludes a pre-warmed Claude daemon spare that has no job yet", async () => {
+    const environment = new FixtureEnvironment();
+    const sessionId = "62c740e7-e6b2-45e6-aa6c-2f064dbdfd72";
+    const jobId = "62c740e7";
+    const executable = `${home}/.local/bin/claude`;
+    environment.processRows = [
+      { pid: 42, parentPID: 41, tty: "ttys001", command: `${home}/.local/share/claude/versions/2.1.285`, arguments: `${home}/.local/share/claude/versions/2.1.285 --session-id ${sessionId} --agent claude --inherit-permission-mode auto` },
+      { pid: 41, parentPID: 40, command: `${home}/.local/share/claude/versions/2.1.285`, arguments: `--bg-pty-host /tmp/claude/pty/${jobId}.sock -- ${home}/.local/share/claude/versions/2.1.285 --session-id ${sessionId}` },
+      { pid: 40, parentPID: 39, command: executable, arguments: `${executable} daemon run` },
+      { pid: 39, parentPID: 1, command: "/Applications/Ghostty.app/Contents/MacOS/ghostty", arguments: "ghostty" },
+    ];
+    environment.directories.set(`${home}/.claude/sessions`, ["42.json"]);
+    environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({
+      sessionId, cwd, kind: "bg", entrypoint: "cli", status: "idle", jobId, name: jobId, agent: "claude", spare: true,
+    }));
+
+    expect(await new ClaudeProvider(environment).discover()).toEqual([]);
+  });
+
+  it("drops hook-only sessions from pre-warmed Claude daemon spares", async () => {
+    const environment = new FixtureEnvironment();
+    const sessionId = "8601e33b-cc5a-4568-bccb-533338d12bfc";
+    environment.processRows = [
+      { pid: 42, parentPID: 41, tty: "ttys001", command: "claude", arguments: "claude bg-spare --bg-spare /tmp/claude/spare/8601e33b.claim.sock" },
+      { pid: 41, parentPID: 1, command: "/Applications/Ghostty.app/Contents/MacOS/ghostty", arguments: "ghostty" },
+    ];
+    environment.directories.set(`${home}/.claude/sessions`, ["42.json"]);
+    environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({
+      sessionId, cwd, kind: "bg", entrypoint: "cli", status: "idle", jobId: "8601e33b", name: "8601e33b", spare: true,
+    }));
+    const repository = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
+    const hook = { sessionId, cwd, tty: "ttys001", pid: 42, provider: "claude_code" as const, event: "SessionStart", status: "idle" };
+
+    // The spare's first hook can arrive before discovery has read its record.
+    repository.applyHook({ ...hook, receivedAt: now.toISOString() });
+    await repository.refresh();
+    expect(repository.current().sessions.map((session) => session.id)).not.toContain(sessionId);
+    repository.applyHook({ ...hook, event: "Stop", receivedAt: new Date(now.valueOf() + 1_000).toISOString() });
+    expect(repository.current().sessions.map((session) => session.id)).not.toContain(sessionId);
+  });
+
   it("excludes Claude SDK sessions", async () => {
     const environment = new FixtureEnvironment();
     const metadata = `${home}/.claude/sessions/42.json`;

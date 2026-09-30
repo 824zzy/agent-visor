@@ -234,6 +234,8 @@ export interface ProviderAdapter {
     DiscoveredProviderSession["chatSettingsCatalog"]
   >;
   noteHook?(event: HookSessionEvent): void;
+  /** Sessions the last discovery proved are not conversations; their hooks are dropped. */
+  hiddenSessionIds?(): ReadonlySet<string>;
 }
 
 export type HookSessionEvent = {
@@ -2460,12 +2462,14 @@ export class SessionRepository {
       .map((sessionId) => this.resolveExactSession(sessionId)));
     this.removeConcludedPiRuntimes();
     this.expireStalePiReadyHooks();
+    this.dropHiddenSessionHooks();
     const snapshot = this.publish(discovered.flat());
     this.publishPiRestoration();
     return snapshot;
   }
 
   applyHook(event: HookSessionEvent): SessionSnapshot {
+    if (this.isHiddenSession(event.provider, event.sessionId)) return this.current();
     // Notifications and child-agent bookkeeping do not start a parent turn.
     // Retain the last real lifecycle/approval event instead of replacing it.
     if (event.provider === "claude_code" && !event.expectsResponse
@@ -2576,6 +2580,19 @@ export class SessionRepository {
       const observedAt = Date.parse(hook.receivedAt);
       if (!Number.isFinite(observedAt) || now - observedAt <= piHookReadyStaleCeilingMs) continue;
       this.hookBySession.delete(sessionId);
+    }
+  }
+
+  private isHiddenSession(provider: ProviderID, sessionId: string): boolean {
+    return this.providers.find((candidate) => candidate.id === provider)
+      ?.hiddenSessionIds?.().has(sessionId) === true;
+  }
+
+  // A hook can arrive before discovery has read the session's record, so
+  // hide it again once discovery proves it is not a conversation.
+  private dropHiddenSessionHooks(): void {
+    for (const [sessionId, hook] of this.hookBySession) {
+      if (this.isHiddenSession(hook.provider, sessionId)) this.hookBySession.delete(sessionId);
     }
   }
 

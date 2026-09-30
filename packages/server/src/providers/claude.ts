@@ -31,6 +31,7 @@ export class ClaudeProvider implements ProviderAdapter {
   readonly id = "claude_code" as const;
   private readonly summaries = new Map<string, { size: number; modifiedAt: number; summary: TranscriptSummary }>();
   private readonly desktopSessions: ClaudeDesktopSessions;
+  private spareSessionIds: ReadonlySet<string> = new Set();
 
   constructor(private readonly environment: ProviderEnvironment) {
     this.desktopSessions = new ClaudeDesktopSessions(environment);
@@ -43,6 +44,7 @@ export class ClaudeProvider implements ProviderAdapter {
     const results: DiscoveredProviderSession[] = [];
     const transcripts = new Set<string>();
     const desktopProfiles = new Map<string, ReturnType<ClaudeDesktopSessions["read"]>>();
+    const spares = new Set<string>();
 
     for (const file of await this.environment.directory(directory)) {
       const match = /^(\d+)\.json$/.exec(file);
@@ -62,6 +64,12 @@ export class ClaudeProvider implements ProviderAdapter {
       const kind = string(metadata.kind);
       const entrypoint = string(metadata.entrypoint).toLowerCase();
       const status = string(metadata.status).toLowerCase();
+      // The Claude daemon pre-warms an idle worker for the next background
+      // job. It has no conversation until claimed, when Claude drops the flag.
+      if (metadata.spare === true) {
+        if (sessionID) spares.add(sessionID);
+        continue;
+      }
       if (!sessionID || !cwd || kind !== "interactive") continue;
       if (entrypoint.startsWith("sdk") || terminalStatuses.has(status)) continue;
       if (cwd.includes(".claude-mem") || cwd.includes("observer-sessions")) continue;
@@ -141,7 +149,12 @@ export class ClaudeProvider implements ProviderAdapter {
     for (const file of this.summaries.keys()) {
       if (!transcripts.has(file)) this.summaries.delete(file);
     }
+    this.spareSessionIds = spares;
     return results;
+  }
+
+  hiddenSessionIds(): ReadonlySet<string> {
+    return this.spareSessionIds;
   }
 
   private async transcriptSummary(file: string, stamp: FileStamp | undefined): Promise<TranscriptSummary> {
