@@ -982,6 +982,43 @@ describe("live provider adapters", () => {
     }]);
   });
 
+  it.each([true, false])("routes a Cursor history pill only to an existing workspace (exists: %s)", async (exists) => {
+    const environment = new FixtureEnvironment();
+    const projectKey = "Users-me-Codes-agent-visor";
+    const sessionsRoot = `${home}/.cursor/projects/${projectKey}/agent-transcripts`;
+    const transcript = `${sessionsRoot}/cursor-history/cursor-history.jsonl`;
+    environment.directories.set(`${home}/.cursor/projects`, [projectKey]);
+    environment.directories.set(home, ["Codes"]);
+    environment.directories.set(`${home}/Codes`, ["agent-visor"]);
+    if (exists) environment.directories.set(cwd, []);
+    environment.directories.set(sessionsRoot, ["cursor-history"]);
+    environment.stamps.set(transcript, { modifiedAt: now, size: 100 });
+    const body = JSON.stringify({ role: "user", message: { content: [{ type: "text", text: cwd }] } });
+    environment.headTails.set(transcript, { head: body, tail: body });
+    const opened = vi.fn(async () => {});
+    const repository = new SessionRepository([new CursorProvider(environment)], { now: () => now });
+    repository.setControls(new NativeSessionControls(
+      new FakeNativeHelper(), undefined, undefined, undefined, undefined, undefined, undefined, opened,
+    ));
+    await repository.refresh();
+    const snapshot = repository.current();
+    expect(snapshot.sessions[0]).toMatchObject({ canOpenOwner: exists, canEnterChat: true });
+    const presentation = menuPresentation(snapshot, [], now.valueOf());
+    const effects = vi.fn();
+    if (exists) {
+      await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: "cursor-history" }, repository, effects);
+      expect(opened).toHaveBeenCalledWith(cwd);
+      expect(effects).not.toHaveBeenCalled();
+      expect(presentation.pills[0]).toMatchObject({ owner: "Cursor", subtitle: "Cursor history · Opens workspace" });
+    } else {
+      expect(presentation.pills).toEqual([]);
+      expect(presentation.navigatorPills).toHaveLength(1);
+      await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: "cursor-history" }, repository, effects);
+      expect(effects).toHaveBeenCalledWith({ type: "native_action", action: "open_chat", sessionId: "cursor-history" });
+      expect(opened).not.toHaveBeenCalled();
+    }
+  });
+
   it("uses Cursor transcript content without sharing another provider parser", async () => {
     const environment = new FixtureEnvironment();
     const root = `${home}/.cursor/projects`;

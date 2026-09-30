@@ -1,36 +1,36 @@
 import CoreGraphics
 
-/// Maps one app's accessibility menu items to the display that holds the pills.
-/// macOS can expose those items on a different display from the target menu bar.
+/// Accepts one complete app menu before mapping it to the display with pills.
 public enum NativeMenuApplicationEdgePolicy {
     public static func rightEdge(
         targetScreen: CGRect,
         screens: [CGRect],
         menuItemFrames: [CGRect]
     ) -> CGFloat? {
-        let measuredScreens = screens.map { screen in
-            (
-                screen: screen,
-                items: menuItemFrames.filter { item in
-                    item.width > 0 && item.height > 0
-                        && item.origin.x.isFinite && item.origin.y.isFinite
-                        && screen.contains(CGPoint(x: item.midX, y: item.midY))
-                }
-            )
+        guard screens.contains(targetScreen), menuItemFrames.count >= 2 else { return nil }
+        let sources = screens.filter { screen in
+            menuItemFrames.allSatisfy { item in
+                item.width > 0 && item.height > 0
+                    && item.minX.isFinite && item.maxX.isFinite
+                    && item.minY.isFinite && item.maxY.isFinite
+                    && screen.contains(CGPoint(x: item.midX, y: item.midY))
+                    && item.minX >= screen.minX && item.maxX <= screen.maxX
+            }
         }
-        let source = measuredScreens.first { $0.screen == targetScreen && !$0.items.isEmpty }
-            ?? measuredScreens.max { $0.items.count < $1.items.count }
-        guard let source, !source.items.isEmpty else { return nil }
+        guard sources.count == 1, let source = sources.first else { return nil }
+        let items = menuItemFrames.sorted { $0.minX < $1.minX }
+        guard let first = items.first, let last = items.last,
+              first.minX - source.minX <= 80,
+              zip(items, items.dropFirst()).allSatisfy({
+                  let gap = $1.minX - $0.maxX
+                  return gap >= -0.5 && gap <= 50
+              }) else { return nil }
 
-        let items = source.items.sorted { $0.minX < $1.minX }
-        var maxRight = items[0].maxX
-        for index in 1..<items.count {
-            if items[index].minX - items[index - 1].maxX > 50 { break }
-            maxRight = max(maxRight, items[index].maxX)
-        }
-        let edge = source.screen == targetScreen
-            ? maxRight
-            : targetScreen.minX + maxRight - items[0].minX + 10
+        let width = last.maxX - source.minX
+        // A menu crowded against the source display may omit items that would
+        // fit on a wider target. Do not transfer that incomplete reading.
+        if source != targetScreen, source.maxX - last.maxX < 100 { return nil }
+        let edge = targetScreen.minX + width + (source == targetScreen ? 0 : 24)
         guard edge.isFinite, edge > targetScreen.minX, edge < targetScreen.maxX else { return nil }
         return edge
     }

@@ -12,13 +12,13 @@ Each panel contains one native button. Transparent menu-bar space has no Agent V
 
 Button actions and the Accessibility fallback use the live panel frames. No separate click-geometry cache can outlive its rendered capsule.
 
-The helper measures the active application menus, system tray, display, and physical notch. The shared `PillBarPacker` selects the visible priority prefix and overflow.
+The helper measures the active application menus, system tray, display, and physical notch. A left lane requires a complete, stable menu reading. Failed child reads, mixed-display frames, gaps, or an unresolved owner close that lane; there is no guessed app-menu width. A complete menu measured on another display transfers with 24 points of clearance, while a crowded source reading is rejected. The shared `PillBarPacker` selects the visible priority prefix and overflow.
 
 Display and application changes trigger immediate layout. A bounded half-second refresh covers menu-title and system-tray changes without rebuilding visible pills.
 
 ## Display and full-screen behavior
 
-Automatic placement prefers the built-in display, then the main display. A selected display matches its saved display ID, then its saved name after reconnection.
+Automatic placement prefers the built-in display, then the main display. A selected display follows its saved UUID across reconnection and reused display IDs. Older preferences match the ID and name together, then the name. If a selected monitor is unavailable, another external display is used temporarily without changing the saved preference.
 
 `Show on demand` is the default full-screen choice. Pills hide at rest and reveal at the selected screen’s top edge, while session modifiers are held, or while a native popover is open.
 
@@ -36,7 +36,7 @@ Needs you items come first, then In progress, all Ready completions, and source-
 
 Codex direct conversations remain in the full Sessions browser until archived, including idle and unloaded conversations. Discovery pages through the unarchived catalog and requires an existing rollout; age never removes a direct conversation. Cursor, Zed, and Codex automation still use the configured observed-agent window, which defaults to 42 hours. The native menu selector applies a seven-day activity window to both physical pills and the More Sessions catalog, including search, before the existing 64/512 bounds. This applies to every phase, using authoritative `updatedAt`; invalid activity timestamps are excluded. Older conversations remain in the full Sessions browser and re-enter the menu after fresh activity. A minute timer rechecks the cutoff even when the catalog is unchanged.
 
-Needs you, Ready, and Working rows are active pill candidates. A History row with an exact source action is a recent-shortcut candidate. A History row that has only Chat remains navigator-only because it has no safe physical-pill action.
+Needs you, Ready, and Working rows are active pill candidates. A History row with an available source action is a recent-shortcut candidate. A History row that has only Chat remains navigator-only because it has no safe physical-pill action.
 
 The daemon sends active candidates first and recent shortcuts second. The helper renders recent shortcuts with the muted History treatment and packs the complete ordered physical list into the available menu-bar space.
 
@@ -45,6 +45,8 @@ The daemon sends active candidates first and recent shortcuts second. The helper
 Ponytail: a change to the observed window, History eligibility, or overflow count must update the provider, menu-presentation, packer, and overflow-snapshot tests together. Do not restore a source-specific History exclusion at the presentation seam.
 
 A normal click immediately opens the selected task and marks its Ready completion seen. Acknowledgment alone does not reorder pills. Layout changes from activity, phase, or membership updates are deferred while the pointer remains over either pill strip, a press begun there remains held, session shortcut modifiers are held, or a native popover is open. Gaps between pills count as part of the strip; the notch does not.
+
+Cursor IDE history pills open their owning workspace through Cursor's document handler; they do not select an exact Agent conversation. Their subtitle says “Opens workspace.” Discovery advertises this action only for an existing workspace, and clicking rechecks that directory. A missing workspace keeps its readable transcript in the navigator. Cursor CLI sessions with a terminal target still focus that exact terminal.
 
 Claude Code background jobs have a private daemon PTY with no visible terminal tab. When live process metadata verifies the job and CLI executable, a normal pill click runs `claude attach <job-id>` in a new terminal window. A hook alone does not establish that attach route.
 
@@ -157,3 +159,7 @@ Run the native checks with:
 npm run test:native-helper
 npm run test:native-helper-usage
 ```
+
+## Placement diagnostics
+
+Set `AGENT_VISOR_MENU_DIAGNOSTICS=1` when launching the desktop app to log changed monitor UUIDs, menu-owner PIDs, measured edges, and lane widths under the `com.824zzy.AgentVisor.NativeHelper` subsystem. Diagnostics are off by default and contain no session titles or credentials.

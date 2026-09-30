@@ -3,6 +3,7 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import SwiftUI
+import os
 
 private final class NativePillButton: NSButton {
     var normalBackgroundColor = NSColor.black.withAlphaComponent(0.35)
@@ -432,6 +433,9 @@ final class NativeMenuController: NSObject {
     private let standardPadding: CGFloat = 7
     private let pressurePadding: CGFloat = 5
     private let edgePadding: CGFloat = 8
+    private let layoutLogger = Logger(subsystem: "com.824zzy.AgentVisor.NativeHelper", category: "layout")
+    private let layoutDiagnosticsEnabled = ProcessInfo.processInfo.environment["AGENT_VISOR_MENU_DIAGNOSTICS"] == "1"
+    private var lastLayoutDiagnostic: String?
 
     override init() {
         super.init()
@@ -1551,7 +1555,7 @@ final class NativeMenuController: NSObject {
         panel.pillButton.onHoverChange = onHoverChange
     }
 
-    private struct LayoutBounds {
+    struct LayoutBounds {
         let leftInnerEdge: CGFloat
         let rightInnerEdge: CGFloat
         let leftWidth: CGFloat
@@ -1561,43 +1565,82 @@ final class NativeMenuController: NSObject {
     }
 
     private func layoutBounds(on screen: NSScreen) -> LayoutBounds {
-        let screenFrame = screen.frame
+        let stableTrayEdge = stableItem.button?.window.flatMap {
+            $0.screen == screen ? $0.frame.minX : nil
+        }
+        let ownerPID = menuOwnerPID(on: screen)
+        let appMenuEdge = activeApplicationMenuRightEdge(on: screen, ownerPID: ownerPID)
+        let bounds = Self.layoutBounds(
+            screenFrame: screen.frame,
+            visibleFrame: screen.visibleFrame,
+            auxiliaryTopLeftArea: screen.auxiliaryTopLeftArea,
+            auxiliaryTopRightArea: screen.auxiliaryTopRightArea,
+            measuredAppMenuEdge: appMenuEdge,
+            measuredTrayEdge: statusTrayLeftEdge(on: screen) ?? stableTrayEdge,
+            pillHeight: pillHeight,
+            edgePadding: edgePadding,
+            standardSpacing: standardSpacing
+        )
+        if layoutDiagnosticsEnabled {
+            let identity = nativeHelperScreen(for: screen)
+            let diagnostic = "display=\(identity?.displayId ?? 0) uuid=\(identity?.displayUuid ?? "unknown")"
+                + " owner=\(ownerPID.map(String.init) ?? "unknown")"
+                + " menuEdge=\(appMenuEdge.map { String(Double($0)) } ?? "unknown")"
+                + " leftWidth=\(bounds.leftWidth) rightWidth=\(bounds.rightWidth)"
+            if diagnostic != lastLayoutDiagnostic {
+                lastLayoutDiagnostic = diagnostic
+                layoutLogger.notice("\(diagnostic, privacy: .public)")
+            }
+        }
+        return bounds
+    }
+
+    nonisolated static func layoutBounds(
+        screenFrame: CGRect,
+        visibleFrame: CGRect,
+        auxiliaryTopLeftArea: CGRect? = nil,
+        auxiliaryTopRightArea: CGRect? = nil,
+        measuredAppMenuEdge: CGFloat?,
+        measuredTrayEdge: CGFloat?,
+        pillHeight: CGFloat = 24,
+        edgePadding: CGFloat = 8,
+        standardSpacing: CGFloat = 4
+    ) -> LayoutBounds {
         var leftInnerEdge = screenFrame.midX
         var rightInnerEdge = screenFrame.midX
         var hasNotch = false
         if #available(macOS 12.0, *),
-           let left = screen.auxiliaryTopLeftArea,
-           let right = screen.auxiliaryTopRightArea,
+           let left = auxiliaryTopLeftArea,
+           let right = auxiliaryTopRightArea,
            right.minX - left.maxX > 4 {
             leftInnerEdge = left.maxX
             rightInnerEdge = right.minX
             hasNotch = true
         }
         let innerPadding = hasNotch ? edgePadding : standardSpacing / 2
-        let appMenuEdge = activeApplicationMenuRightEdge(on: screen)
-            ?? screenFrame.minX + min(520, screenFrame.width * 0.4)
-        let stableTrayEdge = stableItem.button?.window.flatMap {
-            $0.screen == screen ? $0.frame.minX : nil
-        }
-        let trayEdge = statusTrayLeftEdge(on: screen)
-            ?? stableTrayEdge
+        // Unknown or stale menu measurements never authorize a left lane.
+        let leftWidth = measuredAppMenuEdge.flatMap { edge -> CGFloat? in
+            guard edge.isFinite, edge > screenFrame.minX, edge < screenFrame.maxX else { return nil }
+            return max(0, leftInnerEdge - innerPadding - edge)
+        } ?? 0
+        let trayEdge = measuredTrayEdge
             ?? screenFrame.maxX - min(360, screenFrame.width * 0.25)
         let menuHeight = min(
             40,
-            max(pillHeight, screenFrame.maxY - screen.visibleFrame.maxY)
+            max(pillHeight, screenFrame.maxY - visibleFrame.maxY)
         )
         return LayoutBounds(
             leftInnerEdge: leftInnerEdge,
             rightInnerEdge: rightInnerEdge,
-            leftWidth: max(0, leftInnerEdge - innerPadding - appMenuEdge),
+            leftWidth: leftWidth,
             rightWidth: max(0, trayEdge - rightInnerEdge - innerPadding),
             innerPadding: innerPadding,
             y: screenFrame.maxY - menuHeight + (menuHeight - pillHeight) / 2
         )
     }
 
-    private func activeApplicationMenuRightEdge(on screen: NSScreen) -> CGFloat? {
-        guard AXIsProcessTrusted(), let ownerPID = menuOwnerPID(on: screen) else { return nil }
+    private func activeApplicationMenuRightEdge(on screen: NSScreen, ownerPID: pid_t?) -> CGFloat? {
+        guard AXIsProcessTrusted(), let ownerPID else { return nil }
         let app = AXUIElementCreateApplication(ownerPID)
         var menuBarValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
@@ -1614,17 +1657,38 @@ final class NativeMenuController: NSObject {
             &childrenValue
         ) == .success,
         let children = childrenValue as? [AXUIElement] else { return nil }
-        let frames = children.compactMap { child -> CGRect? in
-            var roleValue: CFTypeRef?
-            if AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &roleValue)
-                == .success, roleValue as? String == "AXMenuExtra" { return nil }
-            return axFrame(child)
-        }
+        guard let frames = Self.menuItemFrames(
+            children: children,
+            readRole: { child in
+                var value: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &value)
+                    == .success else { return nil }
+                return value as? String
+            },
+            readFrame: axFrame
+        ) else { return nil }
+        // Application switches during the AX reads invalidate their geometry.
+        guard menuOwnerPID(on: screen) == ownerPID else { return nil }
         return NativeMenuApplicationEdgePolicy.rightEdge(
             targetScreen: cgScreenRect(for: screen),
             screens: NSScreen.screens.map(cgScreenRect),
             menuItemFrames: frames
         )
+    }
+
+    nonisolated static func menuItemFrames(
+        children: [AXUIElement],
+        readRole: (AXUIElement) -> String?,
+        readFrame: (AXUIElement) -> CGRect?
+    ) -> [CGRect]? {
+        var frames: [CGRect] = []
+        for child in children {
+            guard let role = readRole(child) else { return nil }
+            guard role == kAXMenuBarItemRole as String else { continue }
+            guard let frame = readFrame(child) else { return nil }
+            frames.append(frame)
+        }
+        return frames
     }
 
     private func menuOwnerPID(on screen: NSScreen) -> pid_t? {
@@ -1637,7 +1701,7 @@ final class NativeMenuController: NSObject {
             ? frontmost?.processIdentifier : nil
         guard let windows = CGWindowListCopyWindowInfo(
                   [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-              ) as? [[String: Any]] else { return frontmostPID }
+              ) as? [[String: Any]] else { return nil }
 
         let target = cgScreenRect(for: screen)
         func isOnTarget(_ window: [String: Any]) -> Bool {
@@ -1661,13 +1725,14 @@ final class NativeMenuController: NSObject {
                 hasBundleIdentifier: !(app?.bundleIdentifier?.isEmpty ?? true)
             )
         }.flatMap { $0[kCGWindowOwnerPID as String] as? pid_t }
-        return MenuBarOwnerResolver.owner(
+        let owner = MenuBarOwnerResolver.resolve(
             frontmostPid: frontmostPID,
             frontmostHasWindowOnTargetScreen: frontmostHasWindow,
             topmostOnTargetPid: topmostPID,
             separateSpaces: true,
             isSingleScreen: false
         )
+        return owner.isConfident ? owner.ownerPid : nil
     }
 
     private func statusTrayLeftEdge(on screen: NSScreen) -> CGFloat? {

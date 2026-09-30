@@ -55,6 +55,7 @@ export type SessionControlTarget =
   | { kind: "application"; target: NativeHelperFocusTarget }
   | { kind: "terminal"; target: NativeHelperTerminalTarget }
   | { kind: "codex_thread"; target: NativeHelperCodexThreadTarget }
+  | { kind: "cursor_workspace"; cwd: string }
   | { kind: "claude_background"; target: {
     jobId: string; cwd: string; executable: string;
     application: "Ghostty" | "iTerm2" | "Terminal";

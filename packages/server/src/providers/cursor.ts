@@ -116,20 +116,24 @@ async function cursorSession(
   titleCache: Map<string, { signature: string; title: string }>,
   terminalTarget?: NativeHelperTerminalTarget,
 ): Promise<DiscoveredProviderSession> {
+  const workspaceAvailable = !terminalTarget && path.isAbsolute(transcript.cwd)
+    && transcript.cwd !== "/" && await environment.isDirectory(transcript.cwd);
   return {
     id: transcript.id,
     provider: "cursor",
     title: await cursorTranscriptTitle(environment, transcript, titleCache) || undefined,
-    subtitle: section === "history" ? "From Cursor history" : "Cursor session",
+    subtitle: workspaceAvailable ? "Cursor history · Opens workspace"
+      : section === "history" ? "From Cursor history" : "Cursor session",
     cwd: transcript.cwd,
     owner,
     section,
     updatedAt: iso(transcript.modifiedAt),
-    canOpenOwner: true,
+    canOpenOwner: !!terminalTarget || workspaceAvailable,
     canEnterChat: true,
     sessionClass: terminalTarget ? "terminal" : "interactive",
     chatPath: transcript.path,
-    ...(terminalTarget ? { controlTarget: { kind: "terminal" as const, target: terminalTarget } } : {}),
+    ...(terminalTarget ? { controlTarget: { kind: "terminal" as const, target: terminalTarget } }
+      : workspaceAvailable ? { controlTarget: { kind: "cursor_workspace" as const, cwd: transcript.cwd } } : {}),
   };
 }
 
