@@ -793,6 +793,7 @@ describe("Agent Visor daemon", () => {
         appearance: "dark" as const, contentScale: 1, pillsEnabled: true,
         pillScreen: { mode: "automatic" as const }, fullScreenPolicy: "onDemand" as const,
         codexUsageGlanceEnabled: true, claudeUsageGlanceEnabled: false,
+        codexHomes: [], ignoredCodexHomes: [],
         notificationSound: "Pop" as const, hotkeyTrigger: "shift" as const,
         customHotkeyCombo: null, sessionShortcutModifierFamily: "optionCommand" as const,
         editorPreference: "auto" as const, observedWindowHours: 42, launchAtLogin: false,
@@ -803,6 +804,7 @@ describe("Agent Visor daemon", () => {
         id: "claude" as const, name: "Claude Code", available: true,
         installed: false, control: "toggle" as const,
       }],
+      codexHomes: [],
       pillScreens: [{
         displayId: 1, name: "Built-in Retina Display", isBuiltIn: true, isMain: true,
       }],

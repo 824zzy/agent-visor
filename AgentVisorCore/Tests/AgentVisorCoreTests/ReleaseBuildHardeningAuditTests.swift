@@ -338,7 +338,7 @@ final class ReleaseBuildHardeningAuditTests: XCTestCase {
 
         XCTAssertTrue(
             info.contains(
-                "Agent Visor uses automation to focus and control the terminal session you choose."
+                "Agent Visor uses automation to open the agent session you choose in its owning app or terminal."
             )
         )
         XCTAssertFalse(info.contains("when you click a session in the sidebar"))

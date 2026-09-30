@@ -281,6 +281,27 @@ describe("native session controls", () => {
     expect(urls).toEqual(["codex://threads/019f3931-ec11-7f31-8400-1c8624aa9e4d"]);
   });
 
+  it("sends a verified Codex thread to the native helper without opening a default URL", async () => {
+    const helper = new FakeNativeHelper();
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-controls-test-"));
+    roots.push(root);
+    const urls: string[] = [];
+    const controls = new NativeSessionControls(
+      helper, root, undefined, async (url) => { urls.push(url); },
+    );
+    const target = {
+      pid: 70220, home: "/Users/me/.codex-copilot",
+      threadId: "019f3931-ec11-7f31-8400-1c8624aa9e4d",
+    };
+    await controls.focus(session({
+      id: `codex:${"a".repeat(64)}:${target.threadId}`,
+      provider: "codex", messageTransport: undefined,
+      controlTarget: { kind: "codex_thread", target },
+    }));
+    expect(helper.codexThreadRequests).toEqual([target]);
+    expect(urls).toEqual([]);
+  });
+
   it("delivers Claude images as private path pastes before text", async () => {
     const helper = new FakeNativeHelper();
     const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-controls-test-"));

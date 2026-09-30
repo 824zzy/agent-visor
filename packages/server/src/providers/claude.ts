@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { ProviderAdapter, DiscoveredProviderSession } from "../sessions.js";
-import type { FileStamp, ProviderEnvironment } from "./environment.js";
+import type { FileStamp, ProcessRecord, ProviderEnvironment } from "./environment.js";
 import { ClaudeDesktopSessions } from "./claude-desktop.js";
 import {
   applicationTargetForProcess, isRecord, iso, ownerForProcess, processInstanceToken,
@@ -51,7 +51,7 @@ export class ClaudeProvider implements ProviderAdapter {
       if (!match) continue;
       const pid = Number(match[1]);
       const process = byPID.get(pid);
-      if (!process || !path.basename(process.command).toLowerCase().includes("claude")) continue;
+      if (!process) continue;
       const metadataPath = path.join(directory, file);
       const raw = await this.environment.read(metadataPath, 256 * 1_024);
       if (!raw) continue;
@@ -70,9 +70,14 @@ export class ClaudeProvider implements ProviderAdapter {
         if (sessionID) spares.add(sessionID);
         continue;
       }
-      if (!sessionID || !cwd || kind !== "interactive") continue;
+      if (!sessionID || !cwd || (kind !== "interactive" && kind !== "bg")) continue;
       if (entrypoint.startsWith("sdk") || terminalStatuses.has(status)) continue;
       if (cwd.includes(".claude-mem") || cwd.includes("observer-sessions")) continue;
+      const backgroundTarget = kind === "bg"
+        ? claudeBackgroundTarget(process, byPID, sessionID, string(metadata.jobId), cwd, entrypoint, this.environment.home)
+        : undefined;
+      if (kind === "bg" ? !backgroundTarget
+        : !path.basename(process.command).toLowerCase().includes("claude")) continue;
 
       const transcript = claudeTranscriptPath(this.environment.home, sessionID, cwd);
       transcripts.add(transcript);
@@ -91,12 +96,14 @@ export class ClaudeProvider implements ProviderAdapter {
         pid,
         await this.environment.processStartedAt(pid),
       );
-      const terminalTarget = terminalTargetForProcess(
+      // A background worker's tty is a private daemon PTY, not a visible
+      // terminal tab. It must be attached through Claude's CLI instead.
+      const terminalTarget = kind === "interactive" ? terminalTargetForProcess(
         process,
         cwd,
         processes,
         processStartToken,
-      );
+      ) : undefined;
       const applicationTarget = applicationTargetForProcess(process.pid, processes);
       const desktopProfile = !terminalTarget && applicationTarget?.bundleIdentifier === "com.anthropic.claudefordesktop"
         ? entrypoint === "claude-desktop-3p" ? "Claude-3p"
@@ -107,7 +114,11 @@ export class ClaudeProvider implements ProviderAdapter {
       }
       const desktopSession = desktopProfile
         ? (await desktopProfiles.get(desktopProfile))?.get(sessionID) : undefined;
-      const title = desktopSession?.title || summary.customTitle || string(metadata.name) || summary.firstUser;
+      const metadataName = string(metadata.name);
+      const title = desktopSession?.title || summary.customTitle
+        || (backgroundTarget && (!metadataName || metadataName === backgroundTarget.jobId)
+          ? `Claude Code · ${backgroundTarget.jobId}` : metadataName)
+        || summary.firstUser;
       const desktopTranscript = !process.tty && entrypoint.startsWith("claude-desktop");
       const turnState = status === "busy"
         ? "working" as const
@@ -118,7 +129,9 @@ export class ClaudeProvider implements ProviderAdapter {
       const claudeLifecycle = desktopTranscript && summary.lifecycle?.phase === turnState
         ? summary.lifecycle : undefined;
       const section = turnState === "unknown" ? "history" as const : turnState;
-      const controlTarget = terminalTarget
+      const controlTarget = backgroundTarget
+        ? { kind: "claude_background" as const, target: backgroundTarget }
+        : terminalTarget
         ? { kind: "terminal" as const, target: terminalTarget }
         : desktopSession ? { kind: "url" as const, url: desktopSession.url }
         : applicationTarget ? { kind: "application" as const, target: applicationTarget } : undefined;
@@ -136,7 +149,7 @@ export class ClaudeProvider implements ProviderAdapter {
           ?? iso(transcriptStamp?.modifiedAt ?? metadataStamp?.modifiedAt ?? this.environment.now()),
         canOpenOwner: controlTarget !== undefined,
         canEnterChat: true,
-        sessionClass: terminalTarget ? "terminal" : "interactive",
+        sessionClass: terminalTarget || backgroundTarget ? "terminal" : "interactive",
         conversationState: "open",
         turnState,
         ...(claudeLifecycle ? { claudeLifecycle } : {}),
@@ -172,6 +185,38 @@ export class ClaudeProvider implements ProviderAdapter {
     }
     return summary ?? emptySummary;
   }
+}
+
+function claudeBackgroundTarget(
+  process: ProcessRecord,
+  byPID: Map<number, ProcessRecord>,
+  sessionID: string,
+  jobId: string,
+  cwd: string,
+  entrypoint: string,
+  home: string,
+): { jobId: string; cwd: string; executable: string; application: "Ghostty" | "iTerm2" | "Terminal" } | undefined {
+  if (entrypoint !== "cli" || !path.isAbsolute(cwd)
+    || !/^[0-9a-f]{8}$/i.test(jobId) || !sessionID.toLowerCase().startsWith(jobId.toLowerCase())
+    || !process.arguments.includes(`--session-id ${sessionID}`)
+    || !process.arguments.includes("--agent claude")) return undefined;
+  const application = ownerForProcess(process.pid, [...byPID.values()]);
+  if (application !== "Ghostty" && application !== "iTerm2" && application !== "Terminal") return undefined;
+  let parent = byPID.get(process.parentPID);
+  const visited = new Set<number>();
+  let executable: string | undefined;
+  while (parent && !visited.has(parent.pid)) {
+    visited.add(parent.pid);
+    if (path.basename(parent.command) === "claude" && path.isAbsolute(parent.command)
+      && !parent.command.includes(".app/")) {
+      executable = parent.command;
+      break;
+    }
+    parent = byPID.get(parent.parentPID);
+  }
+  if (!executable && process.command.startsWith(path.join(home, ".local/share/claude/versions") + path.sep)
+    && /^\d+\.\d+\.\d+$/.test(path.basename(process.command))) executable = process.command;
+  return executable ? { jobId, cwd, executable, application } : undefined;
 }
 
 function claudeTranscriptPath(home: string, sessionID: string, cwd: string): string {

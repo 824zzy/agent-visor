@@ -1597,9 +1597,8 @@ final class NativeMenuController: NSObject {
     }
 
     private func activeApplicationMenuRightEdge(on screen: NSScreen) -> CGFloat? {
-        guard AXIsProcessTrusted(),
-              let application = NSWorkspace.shared.frontmostApplication else { return nil }
-        let app = AXUIElementCreateApplication(application.processIdentifier)
+        guard AXIsProcessTrusted(), let ownerPID = menuOwnerPID(on: screen) else { return nil }
+        let app = AXUIElementCreateApplication(ownerPID)
         var menuBarValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
             app,
@@ -1615,10 +1614,60 @@ final class NativeMenuController: NSObject {
             &childrenValue
         ) == .success,
         let children = childrenValue as? [AXUIElement] else { return nil }
+        let frames = children.compactMap { child -> CGRect? in
+            var roleValue: CFTypeRef?
+            if AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &roleValue)
+                == .success, roleValue as? String == "AXMenuExtra" { return nil }
+            return axFrame(child)
+        }
+        return NativeMenuApplicationEdgePolicy.rightEdge(
+            targetScreen: cgScreenRect(for: screen),
+            screens: NSScreen.screens.map(cgScreenRect),
+            menuItemFrames: frames
+        )
+    }
+
+    private func menuOwnerPID(on screen: NSScreen) -> pid_t? {
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        let screens = NSScreen.screens
+        guard NSScreen.screensHaveSeparateSpaces, screens.count > 1 else {
+            return frontmost?.processIdentifier
+        }
+        let frontmostPID = frontmost?.activationPolicy == .regular
+            ? frontmost?.processIdentifier : nil
+        guard let windows = CGWindowListCopyWindowInfo(
+                  [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+              ) as? [[String: Any]] else { return frontmostPID }
+
         let target = cgScreenRect(for: screen)
-        return children.compactMap(axFrame).filter {
-            target.contains(CGPoint(x: $0.midX, y: $0.midY))
-        }.map(\.maxX).max()
+        func isOnTarget(_ window: [String: Any]) -> Bool {
+            guard let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds) else { return false }
+            return target.contains(CGPoint(x: frame.midX, y: frame.midY))
+        }
+        let frontmostHasWindow = windows.contains { window in
+            (window[kCGWindowLayer as String] as? Int) == 0
+                && (window[kCGWindowOwnerPID as String] as? pid_t) == frontmostPID
+                && isOnTarget(window)
+        }
+        let topmostPID = windows.first { window in
+            guard let pid = window[kCGWindowOwnerPID as String] as? pid_t else { return false }
+            let app = NSRunningApplication(processIdentifier: pid)
+            return MenuBarOwnerCandidatePolicy.canOwnTargetMenu(
+                windowLayer: window[kCGWindowLayer as String] as? Int ?? -1,
+                isOwnProcess: pid == getpid(),
+                isOnTargetScreen: isOnTarget(window),
+                isRegularApplication: app?.activationPolicy == .regular,
+                hasBundleIdentifier: !(app?.bundleIdentifier?.isEmpty ?? true)
+            )
+        }.flatMap { $0[kCGWindowOwnerPID as String] as? pid_t }
+        return MenuBarOwnerResolver.owner(
+            frontmostPid: frontmostPID,
+            frontmostHasWindowOnTargetScreen: frontmostHasWindow,
+            topmostOnTargetPid: topmostPID,
+            separateSpaces: true,
+            isSingleScreen: false
+        )
     }
 
     private func statusTrayLeftEdge(on screen: NSScreen) -> CGFloat? {
@@ -1672,37 +1721,12 @@ final class NativeMenuController: NSObject {
     }
 
     private func targetScreen() -> NSScreen? {
-        let screens = NSScreen.screens.compactMap { screen -> NativeHelperScreen? in
-            guard let displayId = (screen.deviceDescription[
-                NSDeviceDescriptionKey("NSScreenNumber")
-            ] as? NSNumber)?.uint32Value else { return nil }
-            return NativeHelperScreen(
-                displayId: displayId,
-                name: screen.localizedName,
-                isBuiltIn: CGDisplayIsBuiltin(displayId) != 0,
-                frame: nativeRectangle(screen.frame),
-                visibleFrame: nativeRectangle(screen.visibleFrame),
-                scale: screen.backingScaleFactor,
-                isMain: screen == NSScreen.main
-            )
-        }
+        let screens = NSScreen.screens.compactMap(nativeHelperScreen(for:))
         guard let displayId = NativeMenuScreenSelectionPolicy.resolve(
             preference: pillScreen,
             screens: screens
         ) else { return nil }
-        return NSScreen.screens.first {
-            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
-                .uint32Value == displayId
-        }
-    }
-
-    private func nativeRectangle(_ value: CGRect) -> NativeHelperRectangle {
-        NativeHelperRectangle(
-            x: value.origin.x,
-            y: value.origin.y,
-            width: value.width,
-            height: value.height
-        )
+        return NSScreen.screens.first { nativeDisplayID(of: $0) == displayId }
     }
 
     private func renderedGeometryIsFresh() -> Bool {

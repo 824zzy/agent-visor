@@ -65,7 +65,11 @@ Build and sign the helper with the existing identity:
 scripts/build-native-helper.sh
 ```
 
-Development uses `AgentVisor Dev`. Release validation can select the existing public identity:
+When the `AgentVisor Dev` identity is available, development uses it by default
+so rebuilding the helper keeps the same Accessibility identity. Otherwise the
+helper is signed ad hoc and may need Accessibility access again after a rebuild.
+Set `AV_NATIVE_HELPER_SIGN_IDENTITY` to an empty string to request ad-hoc signing
+explicitly. Release validation can select the existing public identity:
 
 ```sh
 AV_NATIVE_HELPER_SIGN_IDENTITY='AgentVisor Release' scripts/build-native-helper.sh

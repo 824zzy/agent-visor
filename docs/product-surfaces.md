@@ -155,6 +155,14 @@ The pill hover card is a compact session inspector. Its job is to confirm identi
 
 ## Model Identity And Presentation
 
+Codex Desktop sessions belong to a specific Codex home. The default `~/.codex`
+home keeps its existing session IDs; additional homes use an instance-scoped ID
+so equal thread UUIDs remain distinct. Pills and browser rows show the saved
+home label. Opening a session addresses its verified running Codex process;
+when that process is closed, the additional home's Chat remains readable but
+the owner action is unavailable. Additional homes cannot send through the
+default home's route. Settings lists each home's index and process status.
+
 A model identifier is provider data, not a human-facing label. Agent Visor preserves the raw identifier for matching, context-window resolution, and diagnostics while presenting the owning provider's canonical display name wherever that metadata is available.
 
 - Pi resolves the latest active-branch provider and model identifier through Pi's read-only `models-store.json` catalog. Codex resolves rollout model identifiers through Codex's read-only `models_cache.json` catalog. Agent Visor never creates, refreshes, or writes either catalog.

@@ -25,6 +25,7 @@ export interface ProviderEnvironment {
   processes(): Promise<ProcessRecord[]>;
   cwd(pid: number): Promise<string | undefined>;
   processStartedAt(pid: number): Promise<Date | undefined>;
+  codexDesktopCommand?(pid: number): Promise<string | undefined>;
   directory(path: string): Promise<string[]>;
   isDirectory(path: string): Promise<boolean>;
   stamp(path: string): Promise<FileStamp | undefined>;
@@ -141,6 +142,14 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
       this.startedAtByPID.set(pid, pending);
     }
     return pending;
+  }
+
+  async codexDesktopCommand(pid: number): Promise<string | undefined> {
+    const result = await machineWork.run(() => runProcess(
+      "/bin/ps", ["eww", "-p", String(pid), "-o", "command="],
+      { deadlineMs: 1_000, maxOutputBytes: 64 * 1_024 },
+    ));
+    return result.status === "success" ? result.stdout : undefined;
   }
 
   async directory(path: string): Promise<string[]> {

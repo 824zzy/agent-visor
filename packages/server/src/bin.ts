@@ -18,6 +18,8 @@ import { AgentConnectionsRepository } from "./agent-connections.js";
 import { NativeServicesRepository } from "./native-services.js";
 import { handleNotificationAction } from "./notification-actions.js";
 import { liveProviders } from "./providers/index.js";
+import { codexHomeStatuses } from "./providers/codex-instances.js";
+import { LiveProviderEnvironment } from "./providers/environment.js";
 import { startServer } from "./server.js";
 import { SessionRepository } from "./sessions.js";
 import { NativeSessionControls } from "./session-controls.js";
@@ -39,6 +41,7 @@ const settings = await SettingsRepository.open({
   root: dataRoot,
   readLegacy: () => readLegacyDefaults(settingsDomain, dataRoot),
 });
+const statusEnvironment = new LiveProviderEnvironment(os.homedir());
 if (process.env.AGENT_VISOR_LAUNCH_AT_LOGIN) {
   await settings.update({ launchAtLogin: process.env.AGENT_VISOR_LAUNCH_AT_LOGIN === "true" });
 }
@@ -46,6 +49,9 @@ const repository = new SessionRepository(
   liveProviders(
     os.homedir(),
     () => settings.current().observedWindowHours * 60 * 60 * 1_000,
+    () => settings.current().codexHomes,
+    (home) => settings.addDiscoveredCodexHome(home),
+    () => settings.current().ignoredCodexHomes,
   ),
   {
     piRuntimeStatePath: path.join(dataRoot, "pi-runtime-links.json"),
@@ -53,7 +59,8 @@ const repository = new SessionRepository(
     chatUsageGlance: async (session) => {
       // Claude usage remains absent until a provider-authoritative source is
       // available. Do not show Codex quota data on another provider's chat.
-      if (session.provider !== "codex" || !settings.current().codexUsageGlanceEnabled) {
+      if (session.provider !== "codex" || session.id.startsWith("codex:")
+        || !settings.current().codexUsageGlanceEnabled) {
         return undefined;
       }
       return chatUsageGlanceFromNative(await readCodexUsage());
@@ -197,6 +204,7 @@ try {
 nativeServices = new NativeServicesRepository({
   settings,
   helper: helperAdapter,
+  codexHomeStatuses: () => codexHomeStatuses(statusEnvironment, settings.current().codexHomes),
   connections: new AgentConnectionsRepository({
     home: os.homedir(), resources: integrationResources,
   }),

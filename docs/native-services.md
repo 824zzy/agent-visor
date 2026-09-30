@@ -67,7 +67,10 @@ The helper checks Accessibility with its stable signed identity.
 
 Settings can request Accessibility or open the macOS Accessibility settings page. The daemon refreshes the state every 15 seconds.
 
-Development helper builds use the existing `AgentVisor Dev` identity. Release builds continue to use `AgentVisor Release`.
+Development helper builds use the existing `AgentVisor Dev` identity when it is
+available. Other development builds use ad-hoc signing and may need a new
+Accessibility grant after rebuilding. Release builds continue to use
+`AgentVisor Release`.
 
 ## Notifications
 

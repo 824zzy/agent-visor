@@ -262,6 +262,21 @@ private func response(
             return application.activate()
                 ? .accepted(id: id)
                 : .error(id: id, code: .failed, message: "The requested application could not be focused.")
+        case .openCodexThread(let id, let target):
+            let result = DispatchQueue.main.sync {
+                MainActor.assumeIsolated { NativeCodexThreadController.open(target) }
+            }
+            switch result {
+            case .opened:
+                return .accepted(id: id)
+            case .focused:
+                return .error(
+                    id: id, code: .failed,
+                    message: "Codex opened, but did not select the thread. Select it in that Codex window."
+                )
+            case .unavailable:
+                return .error(id: id, code: .failed, message: "The owning Codex process is unavailable.")
+            }
         }
     } catch {
         return .error(
@@ -273,28 +288,7 @@ private func response(
 }
 
 private func screenTopology() -> [NativeHelperScreen] {
-    NSScreen.screens.compactMap { screen in
-        guard let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
-                as? UInt32 else { return nil }
-        return NativeHelperScreen(
-            displayId: displayID,
-            name: screen.localizedName,
-            isBuiltIn: CGDisplayIsBuiltin(displayID) != 0,
-            frame: rectangle(screen.frame),
-            visibleFrame: rectangle(screen.visibleFrame),
-            scale: screen.backingScaleFactor,
-            isMain: screen == NSScreen.main
-        )
-    }
-}
-
-private func rectangle(_ value: NSRect) -> NativeHelperRectangle {
-    NativeHelperRectangle(
-        x: value.origin.x,
-        y: value.origin.y,
-        width: value.width,
-        height: value.height
-    )
+    NSScreen.screens.compactMap(nativeHelperScreen(for:))
 }
 
 private func requestID(in data: Data) -> String {

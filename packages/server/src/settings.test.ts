@@ -96,6 +96,31 @@ describe("settings repository", () => {
     expect(JSON.parse(await readFile(file, "utf8")).settings).toMatchObject(addedDefaults);
   });
 
+  it("preserves a saved display UUID across startup", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-settings-"));
+    roots.push(root);
+    const file = path.join(root, "settings.json");
+    await writeFile(file, JSON.stringify({
+      version: 1,
+      settings: {
+        pillScreen: {
+          mode: "specific", displayId: 5, name: "Studio Display",
+          displayUuid: "1A108786-48D9-48F8-9611-48282BDABE1F",
+        },
+      },
+      legacy: {},
+    }));
+
+    const repository = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
+
+    expect(repository.current().pillScreen).toEqual({
+      mode: "specific", displayId: 5, name: "Studio Display",
+      displayUuid: "1A108786-48D9-48F8-9611-48282BDABE1F",
+    });
+    expect(JSON.parse(await readFile(file, "utf8")).settings.pillScreen.displayUuid)
+      .toBe("1A108786-48D9-48F8-9611-48282BDABE1F");
+  });
+
   it("restores display settings from the preserved legacy plist", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-settings-"));
     roots.push(root);
@@ -160,5 +185,24 @@ describe("settings repository", () => {
     });
     await expect(repository.update({ contentScale: 4 } as never)).rejects.toThrow();
     expect(repository.current().contentScale).toBe(2.5);
+  });
+
+  it("stores distinct canonical Codex homes and honors removal across restarts", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-settings-"));
+    roots.push(root);
+    const home = path.join(root, "copilot");
+    const repository = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
+    await repository.update({ codexHomes: [{ path: `${home}/../copilot`, label: "Copilot" }] });
+    expect(repository.current().codexHomes).toEqual([{ path: home, label: "Copilot" }]);
+    await expect(repository.update({ codexHomes: [
+      { path: home, label: "First" }, { path: `${home}/.`, label: "Second" },
+    ] })).rejects.toThrow("distinct path");
+    await expect(repository.update({ codexHomes: [{ path: path.join(os.homedir(), ".codex"), label: "Native" }] }))
+      .rejects.toThrow("already included");
+    await repository.update({ codexHomes: [], ignoredCodexHomes: [home] });
+    const reopened = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
+    expect(reopened.current()).toMatchObject({ codexHomes: [], ignoredCodexHomes: [home] });
+    await reopened.update({ codexHomes: [{ path: home, label: "Restored" }] });
+    expect(reopened.current().ignoredCodexHomes).toEqual([]);
   });
 });

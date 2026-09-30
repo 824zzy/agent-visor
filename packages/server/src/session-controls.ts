@@ -36,6 +36,7 @@ import type {
   SessionRouteRecoveryResult,
 } from "./sessions.js";
 import { normalizeChatText } from "./chat.js";
+import { openClaudeBackgroundSession, type ClaudeBackgroundTarget } from "./claude-background.js";
 import { isVerifiableProcessInstanceToken } from "./providers/shared.js";
 import { isTerminalRoute, resolveSessionState, sessionTurnState } from "./session-state.js";
 
@@ -121,6 +122,7 @@ export class NativeSessionControls implements SessionControls {
       sessionId: string,
       deliveryId?: string,
     ) => boolean | Promise<boolean> = stopCodexTurn,
+    private readonly openClaudeBackground: (target: ClaudeBackgroundTarget) => Promise<void> = openClaudeBackgroundSession,
   ) {
     this.imageLeases = new ChatImageLeaseStore({ root: imageRoot });
   }
@@ -195,6 +197,8 @@ export class NativeSessionControls implements SessionControls {
         }
       }
       if (control.kind === "url") await this.openURL(control.url);
+      else if (control.kind === "codex_thread") await this.helper.openCodexThread(control.target);
+      else if (control.kind === "claude_background") await this.openClaudeBackground(control.target);
       else if (control.kind === "terminal") await this.helper.focusTerminal(control.target);
       else await this.helper.focus(control.target);
     });

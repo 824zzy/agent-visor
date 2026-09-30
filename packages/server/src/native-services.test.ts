@@ -141,6 +141,43 @@ describe("native services", () => {
     }]);
   });
 
+  it("pins a legacy screen only when its ID and name match the live monitor", async () => {
+    const officeUuid = "1A108786-48D9-48F8-9611-48282BDABE1F";
+    const office = {
+      displayId: 5, displayUuid: officeUuid, name: "DELL P3424WEB", isBuiltIn: false,
+      frame: { x: 0, y: 0, width: 3440, height: 1440 },
+      visibleFrame: { x: 0, y: 0, width: 3440, height: 1415 },
+      scale: 1, isMain: true,
+    };
+    const start = async (name: string) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-native-services-"));
+      roots.push(root);
+      const settings = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
+      await settings.update({ pillScreen: { mode: "specific", displayId: 5, name } });
+      const services = new NativeServicesRepository({
+        settings,
+        helper: new FakeNativeHelper({ trusted: true, screens: [office] }),
+        connections: new AgentConnectionsRepository({
+          home: path.join(root, "home"), resources: path.join(root, "resources"),
+        }),
+        currentVersion: "2.7.0",
+        checkUpdates: async () => ({ status: "up_to_date", currentVersion: "2.7.0" }),
+        emitDesktop: () => undefined,
+      });
+      await services.start();
+      return { preference: settings.current().pillScreen, screens: services.current().pillScreens };
+    };
+
+    const matched = await start("DELL P3424WEB");
+    expect(matched.preference).toEqual({
+      mode: "specific", displayId: 5, name: "DELL P3424WEB", displayUuid: officeUuid,
+    });
+    expect(matched.screens[0]?.displayUuid).toBe(officeUuid);
+    expect((await start("XZ322QU V3")).preference).toEqual({
+      mode: "specific", displayId: 5, name: "XZ322QU V3",
+    });
+  });
+
   it("repairs permissions, persists settings, and emits desktop effects", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-native-services-"));
     roots.push(root);

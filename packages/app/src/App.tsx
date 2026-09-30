@@ -412,11 +412,13 @@ function SessionRow({
   const actionLabel = primary === "owner" ? `Open in ${session.owner}` : "Open Chat";
   const presentation = sessionPresentation(session, now);
   const logo = agentImage(session.source);
+  const sourceLabel = session.source === "Codex" && session.owner.startsWith("Codex ·")
+    ? session.owner : session.source;
 
   return (
     <View nativeID={rowId(session.id)} style={rowStyles.row}>
       <Pressable
-        accessibilityLabel={`${session.title}, ${presentation.title}, ${session.source}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}`}
+        accessibilityLabel={`${session.title}, ${presentation.title}, ${sourceLabel}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}`}
         accessibilityRole="button"
         accessibilityState={{ selected: cursor }}
         disabled={!primary}
@@ -439,7 +441,7 @@ function SessionRow({
         <View style={rowStyles.identity}>
           <View style={rowStyles.titleLine}>
             <Text numberOfLines={1} style={rowStyles.title}>{session.title}</Text>
-            <Chip label={session.source} styles={rowStyles} />
+            <Chip label={sourceLabel} styles={rowStyles} />
             {!compact ? <Chip label={session.project} styles={rowStyles} /> : null}
           </View>
           <Text numberOfLines={1} style={rowStyles.subtitle}>{presentation.subtitle || session.cwd}</Text>
@@ -516,7 +518,13 @@ function activateSession(
 
 async function openOwner(session: SessionSummary): Promise<void> {
   if (!session.canOpenOwner) return;
-  if (!await focusSession(session.id)) window.agentVisor?.openOwner(session.owner);
+  const result = await focusSession(session.id);
+  if (result.ok) return;
+  if (session.source === "Codex") {
+    window.alert(result.error ?? "Could not open this thread in its owning Codex window.");
+    return;
+  }
+  window.agentVisor?.openOwner(session.owner);
 }
 
 function footerLabel(action: "owner" | "chat"): string {

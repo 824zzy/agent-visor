@@ -46,6 +46,8 @@ Ponytail: a change to the observed window, History eligibility, or overflow coun
 
 A normal click immediately opens the selected task and marks its Ready completion seen. Acknowledgment alone does not reorder pills. Layout changes from activity, phase, or membership updates are deferred while the pointer remains over either pill strip, a press begun there remains held, session shortcut modifiers are held, or a native popover is open. Gaps between pills count as part of the strip; the notch does not.
 
+Claude Code background jobs have a private daemon PTY with no visible terminal tab. When live process metadata verifies the job and CLI executable, a normal pill click runs `claude attach <job-id>` in a new terminal window. A hook alone does not establish that attach route.
+
 After 120 milliseconds outside the interaction, pills slide to their new positions over 240 milliseconds with smooth acceleration and deceleration. The clicked pill stays in front where paths cross; overlapping capsules use solid backgrounds so labels remain readable. Native window stacking and click routing share that same order. Pointer re-entry pauses at the last rendered positions, and leaving resumes toward the latest layout. Reduce Motion retains the interaction hold and applies the deferred layout without animation.
 
 Motion is clipped to each safe menu-bar lane without compressing the button content. A pill changing sides exits its source lane before entering the destination lane; it never travels through the notch. Pills entering or leaving overflow pass through their lane edge. Updates during a slide coalesce into the next move.

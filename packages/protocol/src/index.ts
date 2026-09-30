@@ -370,12 +370,18 @@ const customHotkeyComboSchema = z.string()
       && (modifiers > 0 || macFunctionKeyCodes.has(keyCode));
   });
 
+// CGDisplayCreateUUIDFromDisplayID is not guaranteed to produce an RFC 4122 UUID.
+export const displayUuidSchema = z.string().regex(
+  /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/,
+);
+
 export const pillScreenSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("automatic") }).strict(),
   z.object({
     mode: z.literal("specific"),
     displayId: z.number().int().nonnegative().max(4_294_967_295),
     name: z.string().min(1).max(128),
+    displayUuid: displayUuidSchema.optional(),
   }).strict(),
 ]);
 
@@ -423,6 +429,11 @@ export const appSettingsSchema = z.object({
   pillScreen: pillScreenSchema,
   fullScreenPolicy: z.enum(["onDemand", "alwaysHide", "alwaysShow"]),
   codexUsageGlanceEnabled: z.boolean(),
+  codexHomes: z.array(z.object({
+    path: z.string().regex(/^(?:\/|~\/)/).max(1_024),
+    label: z.string().min(1).max(64),
+  }).strict()).max(8).default([]),
+  ignoredCodexHomes: z.array(z.string().regex(/^(?:\/|~\/)/).max(1_024)).max(32).default([]),
   claudeUsageGlanceEnabled: z.boolean(),
   notificationSound: z.enum([
     "None", "Pop", "Ping", "Tink", "Glass", "Blow", "Bottle", "Frog",
@@ -445,6 +456,7 @@ export const appSettingsPatchSchema = appSettingsSchema.partial().strict();
 
 export const pillScreenOptionSchema = z.object({
   displayId: z.number().int().nonnegative().max(4_294_967_295),
+  displayUuid: displayUuidSchema.optional(),
   name: z.string().min(1).max(128),
   isBuiltIn: z.boolean(),
   isMain: z.boolean(),
@@ -467,6 +479,10 @@ export const nativeServicesStateSchema = z.object({
     notifications: z.enum(["not_determined", "denied", "authorized"]),
   }).strict(),
   agents: z.array(agentConnectionSchema).max(5),
+  codexHomes: z.array(z.object({
+    path: z.string().min(1).max(1_024),
+    status: z.enum(["running", "saved", "missing", "unreadable"]),
+  }).strict()).max(9).default([]),
   pillScreens: z.array(pillScreenOptionSchema).max(16),
   update: z.object({
     status: z.enum(["idle", "checking", "up_to_date", "available", "error"]),
@@ -902,6 +918,12 @@ export const nativeHelperFocusTargetSchema = z.object({
   windowId: z.number().int().nonnegative().max(4_294_967_295).optional(),
 }).strict();
 
+export const nativeHelperCodexThreadTargetSchema = z.object({
+  pid: z.number().int().positive().max(2_147_483_647),
+  home: z.string().startsWith("/").max(1_024),
+  threadId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+}).strict();
+
 export const nativeHelperTerminalTargetSchema = z.object({
   application: z.enum(["Ghostty", "iTerm2", "Terminal"]),
   /** Owning agent process identity; TTY names alone can be reused. */
@@ -1001,6 +1023,11 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
   }).strict(),
   z.object({
     ...helperEnvelope,
+    method: z.literal("open_codex_thread"),
+    params: z.object({ target: nativeHelperCodexThreadTargetSchema }).strict(),
+  }).strict(),
+  z.object({
+    ...helperEnvelope,
     method: z.literal("focus_terminal"),
     params: z.object({ target: nativeHelperTerminalTargetSchema }).strict(),
   }).strict(),
@@ -1027,6 +1054,7 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
 
 export const nativeHelperScreenSchema = z.object({
   displayId: z.number().int().nonnegative().max(4_294_967_295),
+  displayUuid: displayUuidSchema.optional(),
   name: z.string().min(1).max(128),
   isBuiltIn: z.boolean(),
   frame: rectangleSchema,
@@ -1129,6 +1157,7 @@ export type ClientMessage = z.infer<typeof clientMessageSchema>;
 export type DaemonError = z.infer<typeof daemonErrorSchema>;
 export type HookEvent = z.infer<typeof hookEventSchema>;
 export type NativeHelperFocusTarget = z.infer<typeof nativeHelperFocusTargetSchema>;
+export type NativeHelperCodexThreadTarget = z.infer<typeof nativeHelperCodexThreadTargetSchema>;
 export type NativeHelperNotificationPermission = z.infer<
   typeof nativeHelperNotificationPermissionSchema
 >;

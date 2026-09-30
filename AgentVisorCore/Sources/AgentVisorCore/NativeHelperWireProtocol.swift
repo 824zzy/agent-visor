@@ -231,6 +231,23 @@ public struct NativeHelperFocusTarget: Codable, Equatable {
     }
 }
 
+public struct NativeHelperCodexThreadTarget: Codable, Equatable {
+    public let pid: Int32
+    public let home: String
+    public let threadId: String
+
+    public init(pid: Int32, home: String, threadId: String) {
+        self.pid = pid
+        self.home = home
+        self.threadId = threadId
+    }
+
+    public var isValid: Bool {
+        pid > 0 && home.hasPrefix("/") && home.utf8.count <= 1_024
+            && UUID(uuidString: threadId) != nil
+    }
+}
+
 public enum NativeHelperHotkeyTrigger: String, Codable, Equatable {
     case off
     case cmd
@@ -249,6 +266,8 @@ public struct NativeHelperPillScreen: Codable, Equatable {
     public let mode: Mode
     public let displayId: UInt32?
     public let name: String?
+    /// Stable per-monitor identity; macOS can reuse a display ID across docks.
+    public let displayUuid: String?
 
     public static let automatic = NativeHelperPillScreen(
         mode: .automatic,
@@ -256,14 +275,24 @@ public struct NativeHelperPillScreen: Codable, Equatable {
         name: nil
     )
 
-    public static func specific(displayId: UInt32, name: String) -> Self {
-        NativeHelperPillScreen(mode: .specific, displayId: displayId, name: name)
+    public static func specific(
+        displayId: UInt32,
+        name: String,
+        displayUuid: String? = nil
+    ) -> Self {
+        NativeHelperPillScreen(
+            mode: .specific,
+            displayId: displayId,
+            name: name,
+            displayUuid: displayUuid
+        )
     }
 
-    public init(mode: Mode, displayId: UInt32?, name: String?) {
+    public init(mode: Mode, displayId: UInt32?, name: String?, displayUuid: String? = nil) {
         self.mode = mode
         self.displayId = displayId
         self.name = name
+        self.displayUuid = displayUuid
     }
 }
 
@@ -342,6 +371,7 @@ public enum NativeHelperRequest: Equatable {
         customHotkeyCombo: KeyCombo?
     )
     case focus(id: String, target: NativeHelperFocusTarget)
+    case openCodexThread(id: String, target: NativeHelperCodexThreadTarget)
     case focusTerminal(id: String, target: NativeHelperTerminalTarget)
     case sendTerminal(id: String, target: NativeHelperTerminalTarget, text: String, submit: Bool)
     case cancelTerminal(id: String, target: NativeHelperTerminalTarget)
@@ -355,6 +385,7 @@ public enum NativeHelperRequest: Equatable {
              .reconcilePiRestoration(let id, _), .requestAccessibility(let id),
              .openAccessibilitySettings(let id),
              .presentPills(let id, _, _, _, _, _, _, _, _), .focus(let id, _),
+             .openCodexThread(let id, _),
              .focusTerminal(let id, _), .sendTerminal(let id, _, _, _),
              .cancelTerminal(let id, _), .cyclePermissionMode(let id, _):
             id
@@ -370,7 +401,7 @@ public enum NativeHelperRequest: Equatable {
 
         let requiredKeys: Set<String> = [
             "present_pills", "reconcile_notifications", "reconcile_pi_restoration",
-                "focus", "focus_terminal", "send_terminal",
+                "focus", "open_codex_thread", "focus_terminal", "send_terminal",
                 "cancel_terminal", "cycle_permission_mode",
         ].contains(method)
             ? ["version", "id", "method", "params"]
@@ -497,6 +528,12 @@ public enum NativeHelperRequest: Equatable {
                 throw NativeHelperWireError.invalidRequest
             }
             return .focus(id: wire.id, target: target)
+        case "open_codex_thread":
+            guard let params = wire.params,
+                  Set(params.keys) == ["target"],
+                  let target = params.codexThreadTarget,
+                  target.isValid else { throw NativeHelperWireError.invalidRequest }
+            return .openCodexThread(id: wire.id, target: target)
         case "focus_terminal":
             guard let params = wire.params,
                   Set(params.keys) == ["target"],
@@ -546,6 +583,7 @@ public struct NativeHelperRectangle: Codable, Equatable {
 
 public struct NativeHelperScreen: Codable, Equatable {
     public let displayId: UInt32
+    public let displayUuid: String?
     public let name: String
     public let isBuiltIn: Bool
     public let frame: NativeHelperRectangle
@@ -555,6 +593,7 @@ public struct NativeHelperScreen: Codable, Equatable {
 
     public init(
         displayId: UInt32,
+        displayUuid: String? = nil,
         name: String,
         isBuiltIn: Bool,
         frame: NativeHelperRectangle,
@@ -563,6 +602,7 @@ public struct NativeHelperScreen: Codable, Equatable {
         isMain: Bool
     ) {
         self.displayId = displayId
+        self.displayUuid = displayUuid
         self.name = name
         self.isBuiltIn = isBuiltIn
         self.frame = frame
@@ -819,6 +859,11 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         let keys = Set(target.keys)
         return keys == ["pid", "bundleIdentifier"]
             || keys == ["pid", "bundleIdentifier", "windowId"]
+    case "open_codex_thread":
+        guard let params = object["params"] as? [String: Any],
+              Set(params.keys) == ["target"],
+              let target = params["target"] as? [String: Any] else { return false }
+        return Set(target.keys) == ["pid", "home", "threadId"]
     case "focus_terminal":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys) == ["target"],
@@ -878,6 +923,7 @@ private struct WireParameters: Decodable {
     let hotkeyTrigger: String?
     let customHotkeyCombo: String?
     let target: NativeHelperFocusTarget?
+    let codexThreadTarget: NativeHelperCodexThreadTarget?
     let terminalTarget: NativeHelperTerminalTarget?
     let text: String?
     let submit: Bool?
@@ -937,6 +983,9 @@ private struct WireParameters: Decodable {
             forKey: .init("customHotkeyCombo")
         )
         target = try? container.decodeIfPresent(NativeHelperFocusTarget.self, forKey: .init("target"))
+        codexThreadTarget = try? container.decodeIfPresent(
+            NativeHelperCodexThreadTarget.self, forKey: .init("target")
+        )
         terminalTarget = try? container.decodeIfPresent(
             NativeHelperTerminalTarget.self,
             forKey: .init("target")
@@ -960,17 +1009,20 @@ private func hasStrictPillScreenFields(_ value: Any) -> Bool {
           let mode = screen["mode"] as? String else { return false }
     return mode == "automatic"
         ? Set(screen.keys) == ["mode"]
-        : mode == "specific" && Set(screen.keys) == ["mode", "displayId", "name"]
+        : mode == "specific"
+            && (Set(screen.keys) == ["mode", "displayId", "name"]
+                || Set(screen.keys) == ["mode", "displayId", "name", "displayUuid"])
 }
 
 private extension NativeHelperPillScreen {
     var isValid: Bool {
         switch mode {
         case .automatic:
-            return displayId == nil && name == nil
+            return displayId == nil && name == nil && displayUuid == nil
         case .specific:
             return displayId != nil
                 && (name.map { !$0.isEmpty && $0.count <= 128 } ?? false)
+                && (displayUuid.map { UUID(uuidString: $0) != nil } ?? true)
         }
     }
 }

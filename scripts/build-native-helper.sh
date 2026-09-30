@@ -4,11 +4,17 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PACKAGE_PATH="$PROJECT_DIR/AgentVisorCore"
 OUTPUT_DIR="${AV_NATIVE_HELPER_OUTPUT_DIR:-$PROJECT_DIR/build/native-helper}"
-IDENTITY="${AV_NATIVE_HELPER_SIGN_IDENTITY-}"
 TEAM_IDENTIFIER="${AV_NATIVE_HELPER_TEAM_ID-}"
 KEYCHAIN="${AV_KEYCHAIN:-$HOME/Library/Keychains/login.keychain-db}"
 VERSION="${AV_VERSION:-}"
 BUILD="${AV_BUILD:-}"
+
+IDENTITY="${AV_NATIVE_HELPER_SIGN_IDENTITY-}"
+if [[ -z ${AV_NATIVE_HELPER_SIGN_IDENTITY+x} ]] \
+    && security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null \
+        | grep -Fq '"AgentVisor Dev"'; then
+    IDENTITY="AgentVisor Dev"
+fi
 
 source "$PROJECT_DIR/scripts/lib/release-version.sh"
 release_load_version_config "$PROJECT_DIR"

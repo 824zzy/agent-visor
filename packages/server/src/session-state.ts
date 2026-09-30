@@ -93,7 +93,8 @@ export function resolveSessionState(
     return unavailable(conversation, turn, "provider_unavailable");
   }
 
-  if (session.owner === "Zed" || session.provider === "cursor") {
+  if ((session.provider === "codex" && session.id.startsWith("codex:"))
+    || session.owner === "Zed" || session.provider === "cursor") {
     return unavailable(conversation, turn, "owner_only");
   }
   if (session.canOpenOwner) return unavailable(conversation, turn, "owner_only");

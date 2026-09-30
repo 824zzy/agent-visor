@@ -39,6 +39,7 @@ export class CodexTranscriptReader {
 
   async read(
     environment: ProviderEnvironment, sessionId: string, file: string,
+    rawThreadId = sessionId,
   ): Promise<CodexTranscriptState | undefined> {
     const stamp = await environment.stamp(file);
     if (!stamp) return undefined;
@@ -56,7 +57,7 @@ export class CodexTranscriptReader {
       try {
         const value = lifecycleRecord(line);
         if (isRecord(value) && value.type === "session_meta" && isRecord(value.payload)
-          && value.payload.id === sessionId) {
+          && value.payload.id === rawThreadId) {
           // Use the latest recorded client, not the first prompt or project name.
           originator = typeof value.payload.originator === "string"
             && value.payload.originator.length <= 256 ? value.payload.originator : undefined;

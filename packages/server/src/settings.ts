@@ -1,5 +1,6 @@
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import {
   appSettingsPatchSchema,
   appSettingsSchema,
@@ -9,6 +10,7 @@ import {
   type AppSettingsPatch,
 } from "@agent-visor/protocol";
 import { runProcess } from "./machine.js";
+import { canonicalCodexHome } from "./providers/codex-instances.js";
 
 const defaults: AppSettings = {
   appearance: "dark",
@@ -17,6 +19,8 @@ const defaults: AppSettings = {
   pillScreen: { mode: "automatic" },
   fullScreenPolicy: "onDemand",
   codexUsageGlanceEnabled: true,
+  codexHomes: [],
+  ignoredCodexHomes: [],
   claudeUsageGlanceEnabled: true,
   notificationSound: "Pop",
   hotkeyTrigger: "shift",
@@ -81,7 +85,26 @@ export class SettingsRepository {
     const operation = this.updateQueue.then(async () => {
       const parsed = appSettingsPatchSchema.parse(patch);
       const previous = this.value;
-      const next = appSettingsSchema.parse({ ...previous, ...parsed });
+      const codexHomes = parsed.codexHomes
+        ? await Promise.all(parsed.codexHomes.map(async (home) => ({
+          path: await canonicalCodexHome(home.path), label: home.label.trim(),
+        }))) : previous.codexHomes;
+      if (new Set(codexHomes.map((home) => home.path)).size !== codexHomes.length) {
+        throw new Error("Each Codex home must have a distinct path.");
+      }
+      const nativeHome = await canonicalCodexHome(path.join(os.homedir(), ".codex"));
+      if (codexHomes.some((home) => home.path === nativeHome)) {
+        throw new Error("The default Codex home is already included.");
+      }
+      const ignoredCodexHomes = parsed.ignoredCodexHomes
+        ? await Promise.all(parsed.ignoredCodexHomes.map(canonicalCodexHome))
+        : previous.ignoredCodexHomes;
+      const next = appSettingsSchema.parse({
+        ...previous, ...parsed, codexHomes,
+        ignoredCodexHomes: [...new Set(ignoredCodexHomes)].filter(
+          (home) => !codexHomes.some((entry) => entry.path === home),
+        ),
+      });
       this.value = next;
       try {
         await this.save();
@@ -91,6 +114,22 @@ export class SettingsRepository {
       }
       for (const listener of this.listeners) listener(this.current());
       return this.current();
+    });
+    this.updateQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  addDiscoveredCodexHome(home: AppSettings["codexHomes"][number]): Promise<void> {
+    const operation = this.updateQueue.then(async () => {
+      if (this.value.codexHomes.some((entry) => entry.path === home.path)
+        || this.value.codexHomes.length >= 8) return;
+      const previous = this.value;
+      this.value = appSettingsSchema.parse({
+        ...previous, codexHomes: [...previous.codexHomes, home],
+        ignoredCodexHomes: previous.ignoredCodexHomes.filter((path) => path !== home.path),
+      });
+      try { await this.save(); } catch (error) { this.value = previous; throw error; }
+      for (const listener of this.listeners) listener(this.current());
     });
     this.updateQueue = operation.then(() => undefined, () => undefined);
     return operation;
@@ -195,6 +234,8 @@ function migrate(legacy: Record<string, unknown>): AppSettings {
     fullScreenPolicy: migratedFullScreenPolicy(legacy.fullScreenPolicy),
     codexUsageGlanceEnabled: boolean(legacy.codexUsageGlanceEnabled)
       ?? defaults.codexUsageGlanceEnabled,
+    codexHomes: [],
+    ignoredCodexHomes: [],
     claudeUsageGlanceEnabled: boolean(legacy.claudeUsageGlanceEnabled)
       ?? defaults.claudeUsageGlanceEnabled,
     notificationSound: oneOf(legacy.notificationSound, [

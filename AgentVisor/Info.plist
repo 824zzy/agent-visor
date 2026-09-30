@@ -17,10 +17,9 @@
     <key>NSHumanReadableCopyright</key>
     <string>Copyright 2025. All rights reserved.</string>
 
-    <!-- Required for NSAppleScript to send Apple Events to Ghostty (used to
-         focus the correct terminal pane when clicking a session pill). -->
+    <!-- Required for Apple Events sent to terminal and Codex owner processes. -->
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Agent Visor uses automation to focus and control the terminal session you choose.</string>
+	<string>Agent Visor uses automation to open the agent session you choose in its owning app or terminal.</string>
 
     <!-- Sparkle auto-updates -->
     <key>SUEnableAutomaticChecks</key>

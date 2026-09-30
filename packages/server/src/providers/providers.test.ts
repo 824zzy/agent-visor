@@ -230,6 +230,38 @@ describe("live provider adapters", () => {
     }]);
   });
 
+  it("opens a Claude background pill in its exact CLI session", async () => {
+    const environment = new FixtureEnvironment();
+    const sessionId = "69c752b0-5993-4a3b-a4da-2777293ac662";
+    const jobId = "69c752b0";
+    const executable = `${home}/.local/bin/claude`;
+    environment.processRows = [
+      { pid: 42, parentPID: 41, tty: "ttys001", command: `${home}/.local/share/claude/versions/2.1.285`, arguments: `${home}/.local/share/claude/versions/2.1.285 --session-id ${sessionId} --agent claude` },
+      { pid: 41, parentPID: 40, command: `${home}/.local/share/claude/versions/2.1.285`, arguments: `--bg-pty-host /tmp/claude/pty/${jobId}.sock -- ${home}/.local/share/claude/versions/2.1.285 --session-id ${sessionId}` },
+      { pid: 40, parentPID: 39, command: executable, arguments: `${executable} daemon run` },
+      { pid: 39, parentPID: 1, command: "/Applications/Ghostty.app/Contents/MacOS/ghostty", arguments: "ghostty" },
+    ];
+    environment.directories.set(`${home}/.claude/sessions`, ["42.json"]);
+    environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({
+      sessionId, cwd, kind: "bg", entrypoint: "cli", status: "idle", jobId, name: jobId,
+    }));
+    environment.stamps.set(`${home}/.claude/sessions/42.json`, { modifiedAt: now, size: 100 });
+    const repository = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
+    const opened = vi.fn(async () => {});
+    repository.setControls(new NativeSessionControls(
+      new FakeNativeHelper(), undefined, undefined, undefined, undefined, undefined, opened,
+    ));
+    await repository.refresh();
+    repository.applyHook({ sessionId, cwd, tty: "ttys001", provider: "claude_code", event: "Stop", status: "idle", receivedAt: now.toISOString() });
+
+    const pill = menuPresentation(repository.current(), [], now.valueOf()).pills.find(value => value.id === sessionId);
+    expect(pill).toMatchObject({ owner: "Ghostty", title: `Claude Code · ${jobId}` });
+    const effects = vi.fn();
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId }, repository, effects);
+    expect(opened).toHaveBeenCalledWith({ jobId, cwd, executable, application: "Ghostty" });
+    expect(effects).not.toHaveBeenCalled();
+  });
+
   it("excludes a pre-warmed Claude daemon spare that has no job yet", async () => {
     const environment = new FixtureEnvironment();
     const sessionId = "62c740e7-e6b2-45e6-aa6c-2f064dbdfd72";
@@ -611,13 +643,6 @@ describe("live provider adapters", () => {
       models: [{ slug: "gpt-5.6-sol", display_name: "GPT-5.6-Sol", context_window: 258_400 }],
     }));
     environment.stamps.set(models, { modifiedAt: now, size: environment.files.get(models)!.length });
-    environment.processRows = [{
-      pid: 50,
-      parentPID: 1,
-      command: "/Applications/Codex.app/Contents/MacOS/Codex",
-      arguments: "/Applications/Codex.app/Contents/MacOS/Codex",
-    }];
-
     let settingsReads = 0;
     environment.codexSettingsCatalog = async () => {
       settingsReads += 1;

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import {
   defaultChatVisibility,
   type AppSettings,
@@ -8,6 +8,7 @@ import {
   type NativeServicesState,
 } from "@agent-visor/protocol";
 import { browserCommand } from "./browser-shortcuts";
+import { pillScreenChoices } from "./pill-screen-choice";
 import type { Palette } from "./theme";
 
 const sounds = ["None", "Pop", "Ping", "Tink", "Glass"] as const;
@@ -141,10 +142,7 @@ export function Settings({
   }, [onBack]);
   if (!state) return <View style={styles.page}><Text style={styles.muted}>{error ?? "Loading settings…"}</Text></View>;
   const settings = state.settings;
-  const selectedPillScreen = settings.pillScreen.mode === "automatic"
-    ? "automatic" : String(settings.pillScreen.displayId);
-  const pillScreenValues = ["automatic", ...state.pillScreens.map(({ displayId }) => String(displayId))];
-  if (!pillScreenValues.includes(selectedPillScreen)) pillScreenValues.push(selectedPillScreen);
+  const pillScreen = pillScreenChoices(settings.pillScreen, state.pillScreens);
   const updateText = state.update.status === "available"
     ? `Version ${state.update.availableVersion} is available on GitHub Releases`
     : state.update.status === "up_to_date" ? "Agent Visor is up to date"
@@ -246,23 +244,13 @@ export function Settings({
           <ToggleRow label="Show session pills" value={settings.pillsEnabled} onPress={() => update({ pillsEnabled: !settings.pillsEnabled })} styles={styles} />
           <ChoiceRow
             label="Pill screen"
-            values={pillScreenValues}
-            value={selectedPillScreen}
-            labelFor={(value) => {
-              if (value === "automatic") return "Automatic";
-              return state.pillScreens.find(({ displayId }) => String(displayId) === value)?.name
-                ?? (settings.pillScreen.mode === "specific"
-                  ? `${settings.pillScreen.name} (Unavailable)` : value);
-            }}
+            values={pillScreen.values}
+            value={pillScreen.selected}
+            labelFor={pillScreen.labelFor}
+            disabledFor={(value) => value === "unavailable"}
             onChoose={(value) => {
-              const screen = state.pillScreens.find(({ displayId }) => String(displayId) === value);
-              if (screen) {
-                update({ pillScreen: {
-                  mode: "specific", displayId: screen.displayId, name: screen.name,
-                } });
-              } else if (value === "automatic") {
-                update({ pillScreen: { mode: "automatic" } });
-              }
+              const next = pillScreen.preferenceFor(value);
+              if (next) update({ pillScreen: next });
             }}
             styles={styles}
           />
@@ -322,11 +310,80 @@ export function Settings({
             styles={styles}
           />
           <Text style={styles.detail}>Codex conversations remain visible until archived.</Text>
+          <CodexHomes settings={settings} statuses={state.codexHomes} update={update} styles={styles} />
         </Section> : null}
         </ScrollView>
       </View>
     </View>
   );
+}
+
+function CodexHomes({ settings, statuses, update, styles }: {
+  settings: AppSettings;
+  statuses: NativeServicesState["codexHomes"];
+  update(patch: AppSettingsPatch): void;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const [homePath, setHomePath] = useState("");
+  const [label, setLabel] = useState("");
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [newLabel, setNewLabel] = useState("");
+  const saveLabel = (homePath: string) => {
+    const next = newLabel.trim();
+    if (next) update({ codexHomes: settings.codexHomes.map((item) =>
+      item.path === homePath ? { ...item, label: next } : item) });
+    setRenaming(null);
+  };
+  return <View>
+    <Text style={styles.homeHeading}>Codex Desktop homes</Text>
+    <Text style={styles.homeNote}>The default ~/.codex home is always included. Other running Codex profiles are added automatically. Their chats are read-only in Agent Visor.</Text>
+    <ValueRow label="Default Codex home" value={statuses[0]?.status ?? "Checking"} styles={styles} />
+    {settings.codexHomes.map((home) => <View key={home.path} style={styles.homeRow}>
+      {renaming === home.path ? <TextInput
+        accessibilityLabel={`Label for ${home.path}`}
+        maxLength={64} onChangeText={setNewLabel}
+        onSubmitEditing={() => saveLabel(home.path)}
+        style={styles.homeInput} value={newLabel}
+      /> : <View style={styles.grow}>
+        <Text style={styles.label}>{home.label}</Text>
+        <Text style={styles.detail}>{home.path} · {statuses.find((item) => item.path === home.path)?.status ?? "Checking"}</Text>
+      </View>}
+      <Pressable accessibilityLabel={`${renaming === home.path ? "Save label for" : "Rename"} ${home.label}`}
+        accessibilityRole="button" onPress={() => {
+          if (renaming === home.path) saveLabel(home.path);
+          else { setRenaming(home.path); setNewLabel(home.label); }
+        }} style={styles.smallButton}>
+        <Text style={styles.buttonText}>{renaming === home.path ? "Save" : "Rename"}</Text>
+      </Pressable>
+      <Pressable accessibilityLabel={`Remove ${home.label}`} accessibilityRole="button"
+        onPress={() => update({
+          codexHomes: settings.codexHomes.filter((item) => item.path !== home.path),
+          ignoredCodexHomes: [...settings.ignoredCodexHomes, home.path].slice(-32),
+        })}
+        style={styles.smallButton}><Text style={styles.buttonText}>Remove</Text></Pressable>
+    </View>)}
+    <View style={styles.homeRow}>
+      <TextInput accessibilityLabel="Codex home path" autoCapitalize="none" autoCorrect={false}
+        maxLength={1_024}
+        onChangeText={setHomePath} placeholder="/path/to/CODEX_HOME" placeholderTextColor={styles.detail.color}
+        style={styles.homeInput} value={homePath} />
+      <TextInput accessibilityLabel="Codex home label" maxLength={64} onChangeText={setLabel}
+        placeholder="Label" placeholderTextColor={styles.detail.color}
+        style={styles.homeInput} value={label} />
+      <Pressable accessibilityLabel="Add Codex home" accessibilityRole="button" style={styles.smallButton}
+        onPress={() => {
+          const selectedPath = homePath.trim();
+          if (!selectedPath || settings.codexHomes.some((home) => home.path === selectedPath)) return;
+          const selectedLabel = (label.trim()
+            || `Codex · ${selectedPath.split("/").filter(Boolean).at(-1) ?? "Other"}`).slice(0, 64);
+          update({
+            codexHomes: [...settings.codexHomes, { path: selectedPath, label: selectedLabel }],
+            ignoredCodexHomes: settings.ignoredCodexHomes.filter((path) => path !== selectedPath),
+          });
+          setHomePath(""); setLabel("");
+        }}><Text style={styles.buttonText}>Add</Text></Pressable>
+    </View>
+  </View>;
 }
 
 function ChatSettings({
@@ -385,8 +442,21 @@ function ActionRow({ label, detail, action, onPress, styles }: { label: string; 
   return <View style={styles.row}><View style={styles.grow}><Text style={styles.label}>{label}</Text><Text style={styles.detail}>{detail}</Text></View><Pressable accessibilityLabel={`${action} for ${label}`} accessibilityRole="button" onPress={onPress} style={styles.button}><Text style={styles.buttonText}>{action}</Text></Pressable></View>;
 }
 
-function ChoiceRow<T extends string>({ label, values, value, labelFor = (item) => item, onChoose, styles }: { label: string; values: readonly T[]; value: string; labelFor?(value: T): string; onChoose(value: T): void; styles: ReturnType<typeof createStyles> }) {
-  return <View style={styles.choiceRow}><Text style={styles.label}>{label}</Text><View style={styles.choices}>{values.map((item) => <Pressable key={item} accessibilityRole="button" accessibilityState={{ selected: item === value }} onPress={() => onChoose(item)} style={item === value ? styles.choiceSelected : styles.choice}><Text style={styles.buttonText}>{labelFor(item)}</Text></Pressable>)}</View></View>;
+function ChoiceRow<T extends string>({ label, values, value, labelFor = (item) => item, disabledFor = () => false, onChoose, styles }: { label: string; values: readonly T[]; value: string; labelFor?(value: T): string; disabledFor?(value: T): boolean; onChoose(value: T): void; styles: ReturnType<typeof createStyles> }) {
+  return <View style={styles.choiceRow}>
+    <Text style={styles.label}>{label}</Text>
+    <View style={styles.choices}>{values.map((item) => {
+      const disabled = disabledFor(item);
+      return <Pressable
+        key={item}
+        accessibilityRole="button"
+        accessibilityState={{ selected: item === value, disabled }}
+        disabled={disabled}
+        onPress={() => onChoose(item)}
+        style={[item === value ? styles.choiceSelected : styles.choice, disabled && { opacity: 0.5 }]}
+      ><Text style={styles.buttonText}>{labelFor(item)}</Text></Pressable>;
+    })}</View>
+  </View>;
 }
 
 function StepRow({ label, value, onDecrease, onIncrease, styles }: { label: string; value: string; onDecrease(): void; onIncrease(): void; styles: ReturnType<typeof createStyles> }) {
@@ -413,5 +483,9 @@ function createStyles(palette: Palette) {
     button: { backgroundColor: palette.card, borderRadius: 7, paddingHorizontal: 12, paddingVertical: 7 }, smallButton: { backgroundColor: palette.card, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 }, buttonText: { color: palette.foreground, fontSize: 12, fontWeight: "600" as const },
     choices: { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 7 }, choice: { backgroundColor: palette.card, borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7 }, choiceSelected: { backgroundColor: palette.accentWash, borderColor: palette.accent, borderRadius: 7, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 7 },
     step: { alignItems: "center" as const, flexDirection: "row" as const, gap: 10 }, muted: { color: palette.muted, margin: 30 }, error: { color: palette.error, marginBottom: 16 },
+    homeHeading: { color: palette.foreground, fontSize: 14, fontWeight: "700" as const, marginHorizontal: 16, marginTop: 18 },
+    homeNote: { color: palette.tertiary, fontSize: 11, marginHorizontal: 16, marginVertical: 8 },
+    homeRow: { alignItems: "center" as const, borderTopColor: palette.border, borderTopWidth: 1, flexDirection: "row" as const, gap: 8, padding: 12 },
+    homeInput: { borderColor: palette.border, borderRadius: 6, borderWidth: 1, color: palette.foreground, flex: 1, fontSize: 12, minWidth: 100, padding: 7 },
   };
 }

@@ -23,6 +23,8 @@ describe("native services messages", () => {
         pillScreen: { mode: "automatic" },
         fullScreenPolicy: "onDemand",
         codexUsageGlanceEnabled: true,
+        codexHomes: [],
+        ignoredCodexHomes: [],
         claudeUsageGlanceEnabled: false,
         notificationSound: "Pop",
         hotkeyTrigger: "shift",
@@ -38,6 +40,7 @@ describe("native services messages", () => {
         id: "claude", name: "Claude Code", available: true,
         installed: false, control: "toggle",
       }],
+      codexHomes: [],
       pillScreens: [{
         displayId: 1, name: "Built-in Retina Display", isBuiltIn: true, isMain: true,
       }],

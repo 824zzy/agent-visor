@@ -121,9 +121,9 @@ The companion app must be running with Alfred support enabled in its build.
 
 | Source | Discovery and status | Owner action | Chat capability |
 | --- | --- | --- | --- |
-| Claude Code | Local hooks, process metadata, and transcripts | Focus the detected terminal, Cursor, Zed, or Claude owner | Text, images, questions, and approvals when a verified route exists; history can be read-only |
+| Claude Code | Local hooks, process metadata, and transcripts | Focus the detected terminal, Cursor, Zed, or Claude owner; attach a verified background job in a new terminal window | Text, images, questions, and approvals when a verified route exists; history can be read-only |
 | Codex CLI | Rollouts, SQLite, process, TTY, and hook evidence | Focus the owning terminal | Provider-routed text and local images when the exact route is available; inactive or unsupported terminal routes explain their owner-only status |
-| Codex Desktop | Thread database plus exact opened-thread resolution; no supported Desktop-local writer endpoint is currently available | Open the verified <code>codex://threads/&lt;id&gt;</code> owner route | Chat is read-only until Send proves a route can be acquired. An owner-held thread rejects the send safely and preserves the draft; a locally owned route is released after the confirmed turn or Stop while Chat stays open |
+| Codex Desktop | Each detected Codex home has its own thread database and session identity | Send a thread link to its verified running Desktop process; the default home can use the system URL handler when no Codex Desktop process is running | The default home retains the existing guarded send route. Other homes are read-only in Agent Visor Chat |
 | Pi CLI | Process and tree-shaped transcript evidence plus an automatic local lifecycle integration | Focus the exact owning terminal | Text and ordered local-image paths when the verified terminal route is available; owner-only states remain explicit |
 | Cursor | Cursor-owned transcripts and terminal evidence | Focus the owning editor or terminal | Read-only history |
 | Zed-hosted agents | Zed database identity, title, workspace, and provider transcript | Focus Zed; exact thread reveal is best effort | Read-only history |
@@ -241,7 +241,7 @@ understood.
 2. Grant **Accessibility** when prompted. It is used for menu-bar geometry, global shortcuts, notifications, and supported app or terminal navigation.
 3. On macOS 15 or later, add Agent Visor under **System Settings > Privacy & Security > Full Disk Access**. This lets the app read transcripts under <code>~/.claude</code>, <code>~/.codex</code>, <code>~/.cursor</code>, and <code>~/.pi</code>.
 4. Start or open a supported agent session. Agent Visor discovers it when the source provides enough evidence.
-5. Open **Settings > Agents** to connect Claude Code, Codex, or Auggie. Pi is installed automatically when detected; Cursor is observed automatically and remains read-only.
+5. Open **Settings > Agents** to connect Claude Code, Codex, or Auggie. Running Codex Desktop profiles with a separate `CODEX_HOME` are discovered automatically; you can also add, rename, or remove a home there. Pi is installed automatically when detected; Cursor is observed automatically and remains read-only.
 6. Enable **Notifications** if you want Ready, approval, question, and Dock-badge notices.
 
 Pi requires no manual configuration. Agent Visor installs only its bundled

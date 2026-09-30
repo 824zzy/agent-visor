@@ -71,7 +71,7 @@ AGENT_VISOR_MIN_MACOS="$EXPECTED_MIN_MACOS"
 AGENT_VISOR_BUNDLE_IDENTIFIER="com.824zzy.AgentVisor"
 AGENT_VISOR_EXECUTABLE="Agent Visor"
 AGENT_VISOR_PRODUCT_NAME="Agent Visor"
-AGENT_VISOR_APPLE_EVENTS_USAGE_DESCRIPTION="Agent Visor uses automation to focus and control the terminal session you choose."
+AGENT_VISOR_APPLE_EVENTS_USAGE_DESCRIPTION="Agent Visor uses automation to open the agent session you choose in its owning app or terminal."
 AGENT_VISOR_THIRD_PARTY_LICENSES_DIR="ThirdPartyLicenses"
 EOF
 cat > "$TEMP_ROOT/Casks/agent-visor.rb" <<'EOF'

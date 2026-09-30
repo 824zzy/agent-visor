@@ -11,9 +11,9 @@ const sessions = Array.from({ length: 30 }, (_, index) => ({
   title: `Agent session ${index}`,
   subtitle: index === 0 ? "Managed by Agent Room · Agent is working" : "Accessibility test row",
   managedBy: index === 0 ? "Agent Room" : undefined,
-  source: index % 2 ? "Pi" : "Codex",
+  source: index % 2 ? "Codex" : "Pi",
   project: "agent-visor",
-  owner: index % 2 ? "Ghostty" : "Codex",
+  owner: index % 2 ? "Codex" : "Ghostty",
   cwd: "/tmp/agent-visor",
   section: ["needs_you", "ready", "working", "history"][index % 4],
   attentionTier: index % 8 === 1 ? "acknowledged_ready" : undefined,
@@ -130,6 +130,11 @@ async function run() {
   await waitUntil(() => ownerActions === 1);
   await window.webContents.executeJavaScript(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', metaKey: true, bubbles: true }))`);
   await waitUntil(() => ownerActions === 2);
+  await window.webContents.executeJavaScript(`window.__codexFocusError = null;
+    window.alert = (message) => { window.__codexFocusError = message; };
+    document.querySelector('[aria-label*="Open in Codex"]')?.click()`);
+  await waitFor(window, `window.__codexFocusError === 'Exact session focus is unavailable.'`);
+  assert(ownerActions === 2, "Codex focus failure never launches a second app");
 
   await window.webContents.executeJavaScript(`(() => {
     const input = document.querySelector('[aria-label="Search sessions"]');

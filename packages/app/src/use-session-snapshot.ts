@@ -42,11 +42,11 @@ export function observeSessionSnapshots(
   return () => connection.close();
 }
 
-export async function focusSession(sessionId: string): Promise<boolean> {
+export async function focusSession(sessionId: string): Promise<{ ok: boolean; error?: string }> {
   return new Promise((resolve) => {
     const socket = new WebSocket(daemonUrl());
     const id = `focus-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const deadline = setTimeout(() => finish(false), 5_000);
+    const deadline = setTimeout(() => finish({ ok: false }), 5_000);
     socket.addEventListener("open", () => {
       socket.send(JSON.stringify({ type: "focus_session", id, sessionId }));
     });
@@ -54,13 +54,13 @@ export async function focusSession(sessionId: string): Promise<boolean> {
       try {
         const parsed = serverMessageSchema.safeParse(JSON.parse(String(event.data)));
         if (parsed.success && parsed.data.type === "native_action_result" && parsed.data.id === id) {
-          finish(parsed.data.ok);
+          finish({ ok: parsed.data.ok, ...(parsed.data.error ? { error: parsed.data.error } : {}) });
         }
       } catch { /* wait for a valid result */ }
     });
-    socket.addEventListener("error", () => finish(false));
+    socket.addEventListener("error", () => finish({ ok: false }));
 
-    function finish(result: boolean): void {
+    function finish(result: { ok: boolean; error?: string }): void {
       clearTimeout(deadline);
       socket.close();
       resolve(result);

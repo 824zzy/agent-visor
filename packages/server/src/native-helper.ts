@@ -11,6 +11,7 @@ import {
   nativeHelperResponseSchema,
   type AppSettings,
   type NativeHelperFocusTarget,
+  type NativeHelperCodexThreadTarget,
   type NativeHelperNotification,
   type NativeHelperNotificationPermission,
   type NativeHelperPiRestorationCandidate,
@@ -47,6 +48,7 @@ export interface NativeHelperAdapter {
     fullScreenPolicy?: AppSettings["fullScreenPolicy"],
   ): Promise<void>;
   focus(target: NativeHelperFocusTarget): Promise<void>;
+  openCodexThread(target: NativeHelperCodexThreadTarget): Promise<void>;
   focusTerminal(target: NativeHelperTerminalTarget): Promise<void>;
   sendTerminal(target: NativeHelperTerminalTarget, text: string, submit: boolean): Promise<void>;
   cancelTerminal(target: NativeHelperTerminalTarget): Promise<void>;
@@ -105,6 +107,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export class FakeNativeHelper implements NativeHelperAdapter {
   readonly focusRequests: NativeHelperFocusTarget[] = [];
+  readonly codexThreadRequests: NativeHelperCodexThreadTarget[] = [];
   readonly terminalFocusRequests: NativeHelperTerminalTarget[] = [];
   readonly terminalSendRequests: Array<{ target: NativeHelperTerminalTarget; text: string; submit: boolean }> = [];
   readonly terminalCancelRequests: NativeHelperTerminalTarget[] = [];
@@ -214,6 +217,10 @@ export class FakeNativeHelper implements NativeHelperAdapter {
     this.focusRequests.push(structuredClone(target));
   }
 
+  async openCodexThread(target: NativeHelperCodexThreadTarget): Promise<void> {
+    this.codexThreadRequests.push(structuredClone(target));
+  }
+
   async focusTerminal(target: NativeHelperTerminalTarget): Promise<void> {
     this.terminalFocusRequests.push(structuredClone(target));
   }
@@ -243,6 +250,7 @@ export class UnavailableNativeHelper implements NativeHelperAdapter {
   async openAccessibilitySettings(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async presentPills(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async focus(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
+  async openCodexThread(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async focusTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async sendTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async cancelTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
@@ -387,6 +395,10 @@ export class NativeHelperProcess implements NativeHelperAdapter {
 
   async focus(target: NativeHelperFocusTarget): Promise<void> {
     await this.accepted("focus", { target });
+  }
+
+  async openCodexThread(target: NativeHelperCodexThreadTarget): Promise<void> {
+    await this.accepted("open_codex_thread", { target });
   }
 
   async focusTerminal(target: NativeHelperTerminalTarget): Promise<void> {

@@ -156,6 +156,15 @@ const requests = [
   },
   {
     version: 1,
+    id: "open-codex-thread",
+    method: "open_codex_thread",
+    params: { target: {
+      pid: 70220, home: "/Users/me/.codex-copilot",
+      threadId: "019f3931-ec11-7f31-8400-1c8624aa9e4d",
+    } },
+  },
+  {
+    version: 1,
     id: "send-terminal",
     method: "send_terminal",
     params: {
@@ -432,5 +441,27 @@ describe("native helper protocol", () => {
         error: { code: "invalid_request", message: "pid must be positive" },
       }).success,
     ).toBe(true);
+  });
+
+  it("carries a stable display UUID for a specific pill screen", () => {
+    const officeUuid = "1A108786-48D9-48F8-9611-48282BDABE1F";
+    const present = (pillScreen: unknown) => nativeHelperRequestSchema.safeParse({
+      version: 1, id: "pills", method: "present_pills", params: { pills: [], pillScreen },
+    }).success;
+
+    expect(present({
+      mode: "specific", displayId: 5, name: "DELL P3424WEB", displayUuid: officeUuid,
+    })).toBe(true);
+    expect(present({ mode: "specific", displayId: 5, name: "DELL", displayUuid: "not-a-uuid" })).toBe(false);
+    expect(present({ mode: "automatic", displayUuid: officeUuid })).toBe(false);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1, id: "screens", ok: true,
+      result: { type: "screen_topology", screens: [{
+        displayId: 5, displayUuid: officeUuid, name: "DELL P3424WEB", isBuiltIn: false,
+        frame: { x: 0, y: 0, width: 3440, height: 1440 },
+        visibleFrame: { x: 0, y: 0, width: 3440, height: 1415 },
+        scale: 1, isMain: true,
+      }] },
+    }).success).toBe(true);
   });
 });

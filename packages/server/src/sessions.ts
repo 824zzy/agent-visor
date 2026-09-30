@@ -12,6 +12,7 @@ import {
   type ChatSettingsPatch,
   type ChatSettingsUpdate,
   type NativeHelperFocusTarget,
+  type NativeHelperCodexThreadTarget,
   type NativeHelperPiRestorationUpdate,
   type NativeHelperTerminalTarget,
   type SessionClass,
@@ -53,6 +54,11 @@ export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "au
 export type SessionControlTarget =
   | { kind: "application"; target: NativeHelperFocusTarget }
   | { kind: "terminal"; target: NativeHelperTerminalTarget }
+  | { kind: "codex_thread"; target: NativeHelperCodexThreadTarget }
+  | { kind: "claude_background"; target: {
+    jobId: string; cwd: string; executable: string;
+    application: "Ghostty" | "iTerm2" | "Terminal";
+  } }
   | { kind: "url"; url: string };
 
 export type DiscoveredProviderSession = {

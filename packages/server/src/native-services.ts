@@ -29,6 +29,7 @@ export class NativeServicesRepository implements NativeServicesSource {
     settings: SettingsRepository;
     helper: NativeHelperAdapter;
     connections: AgentConnectionsRepository;
+    codexHomeStatuses?: () => Promise<NativeServicesState["codexHomes"]>;
     currentVersion: string;
     checkUpdates: () => Promise<UpdateState>;
     pendingAction?: (sessionId: string) => ChatPendingAction | undefined;
@@ -41,13 +42,20 @@ export class NativeServicesRepository implements NativeServicesSource {
       settings: options.settings.current(),
       permissions: { accessibility: "needed", notifications: "not_determined" },
       agents: options.connections.current(),
+      codexHomes: [],
       pillScreens: [],
       update: { status: "idle", currentVersion: options.currentVersion },
     };
   }
 
   async start(): Promise<void> {
-    this.options.settings.subscribe((settings) => this.publish({ settings }));
+    this.options.settings.subscribe((settings) => {
+      const homesChanged = JSON.stringify(settings.codexHomes) !== JSON.stringify(this.state.settings.codexHomes);
+      this.publish({ settings });
+      if (homesChanged) void this.refresh().catch((error: unknown) => {
+        console.warn(`Agent Visor Codex home status refresh failed: ${String(error)}`);
+      });
+    });
     await this.refresh();
     if (this.state.permissions.notifications === "not_determined") {
       await this.options.helper.requestNotifications().catch(() => undefined);
@@ -178,6 +186,7 @@ export class NativeServicesRepository implements NativeServicesSource {
     const accessibility = await this.options.helper.accessibilityStatus();
     const notifications = await this.options.helper.notificationStatus();
     const screens = await this.options.helper.screenTopology();
+    const codexHomes = await this.options.codexHomeStatuses?.().catch(() => []) ?? [];
     await this.options.connections.refresh();
     this.publish({
       permissions: {
@@ -185,9 +194,23 @@ export class NativeServicesRepository implements NativeServicesSource {
         notifications,
       },
       agents: this.options.connections.current(),
-      pillScreens: screens.map(({ displayId, name, isBuiltIn, isMain }) => ({
-        displayId, name, isBuiltIn, isMain,
+      codexHomes,
+      pillScreens: screens.map(({ displayId, displayUuid, name, isBuiltIn, isMain }) => ({
+        displayId, ...(displayUuid ? { displayUuid } : {}), name, isBuiltIn, isMain,
       })),
+    });
+    await this.addDisplayUuidToLegacyPillScreen();
+  }
+
+  // Upgrade an older ID-and-name preference only when both match a live screen.
+  private async addDisplayUuidToLegacyPillScreen(): Promise<void> {
+    const preference = this.options.settings.current().pillScreen;
+    if (preference.mode !== "specific" || preference.displayUuid) return;
+    const screen = this.state.pillScreens.find(({ displayId, name }) =>
+      displayId === preference.displayId && name === preference.name);
+    if (!screen?.displayUuid) return;
+    await this.options.settings.update({
+      pillScreen: { ...preference, displayUuid: screen.displayUuid },
     });
   }
 

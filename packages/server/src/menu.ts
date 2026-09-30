@@ -108,11 +108,13 @@ function presentationPill(
     : session.source === "Codex" && session.title === "Codex session"
     ? `Codex · ${session.project}`
     : session.title).slice(0, 256);
+  const sourceLabel = session.source === "Codex" && session.owner.startsWith("Codex ·")
+    ? session.owner : session.source;
   return {
     id: session.id,
     title,
     subtitle: session.subtitle,
-    source: session.source,
+    source: sourceLabel,
     project: session.project,
     ...(session.canOpenOwner ? { owner: session.owner } : {}),
     ...(session.attentionTier ? { attentionTier: session.attentionTier } : {}),
@@ -129,7 +131,7 @@ function presentationPill(
     accessibilityLabel: [
       title,
       phaseLabel[session.section],
-      session.source,
+      sourceLabel,
       session.project,
       ...(session.managedBy ? [`Managed by ${session.managedBy}`] : []),
     ].join(", "),

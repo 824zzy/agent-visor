@@ -140,6 +140,15 @@ try {
   }
   await adapter.notificationStatus();
   await adapter.reconcileNotifications([], false);
+  let rejectedWrongOwner = false;
+  try {
+    await adapter.openCodexThread({
+      pid: process.pid, home: "/tmp", threadId: "019f3931-ec11-7f31-8400-1c8624aa9e4d",
+    });
+  } catch (error) {
+    rejectedWrongOwner = String(error).includes("owning Codex process is unavailable");
+  }
+  if (!rejectedWrongOwner) throw new Error("Codex thread navigation accepted a non-Codex process");
   await adapter.presentPills([{
     id: "adapter-session",
     title: "Adapter session",

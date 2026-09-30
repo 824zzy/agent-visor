@@ -214,6 +214,8 @@ describe("session snapshot protocol", () => {
         pillScreen: { mode: "automatic" },
         fullScreenPolicy: "onDemand",
         codexUsageGlanceEnabled: true,
+        codexHomes: [],
+        ignoredCodexHomes: [],
         claudeUsageGlanceEnabled: false,
         notificationSound: "Pop",
         hotkeyTrigger: "shift",
@@ -229,6 +231,7 @@ describe("session snapshot protocol", () => {
         { id: "claude", name: "Claude Code", available: true, installed: true, control: "toggle" },
         { id: "cursor", name: "Cursor", available: true, installed: false, control: "read_only" },
       ],
+      codexHomes: [],
       pillScreens: [{
         displayId: 1, name: "Built-in Retina Display", isBuiltIn: true, isMain: true,
       }],

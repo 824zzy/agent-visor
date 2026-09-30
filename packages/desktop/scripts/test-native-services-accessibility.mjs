@@ -27,8 +27,10 @@ async function run() {
     revision: 1,
     settings: {
       appearance: "dark", contentScale: 1, pillsEnabled: true,
-      pillScreen: { mode: "automatic" }, fullScreenPolicy: "onDemand",
+      pillScreen: { mode: "specific", displayId: 5, name: "DELL P3424WEB" },
+      fullScreenPolicy: "onDemand",
       codexUsageGlanceEnabled: true, claudeUsageGlanceEnabled: false,
+      codexHomes: [], ignoredCodexHomes: [],
       notificationSound: "Pop", hotkeyTrigger: "shift", customHotkeyCombo: null,
       sessionShortcutModifierFamily: "optionCommand", editorPreference: "auto",
       observedWindowHours: 42, launchAtLogin: false,
@@ -39,9 +41,10 @@ async function run() {
       { id: "claude", name: "Claude Code", available: true, installed: false, control: "toggle" },
       { id: "pi", name: "Pi", available: true, installed: true, control: "automatic" },
     ],
+    codexHomes: [{ path: "/Users/test/.codex", status: "running" }],
     pillScreens: [
       { displayId: 1, name: "Built-in Retina Display", isBuiltIn: true, isMain: true },
-      { displayId: 5, name: "XZ322QU V3", isBuiltIn: false, isMain: false },
+      { displayId: 7, name: "XZ322QU V3", isBuiltIn: false, isMain: false },
     ],
     update: { status: "idle", currentVersion: "2.7.0" },
   };
@@ -130,9 +133,20 @@ async function run() {
     );
     await waitFor(window, `document.body.textContent.includes('Pill screen')
       && document.body.textContent.includes('Full-screen visibility')`);
-    await clickButton(window, "XZ322QU V3");
+    const screenSelection = await window.webContents.executeJavaScript(`Object.fromEntries(
+      [...document.querySelectorAll('[role="button"]')]
+        .filter((item) => ['XZ322QU V3 (Fallback)', 'DELL P3424WEB (Unavailable)']
+          .includes(item.textContent?.trim()))
+        .map((item) => [item.textContent.trim(), {
+          borderColor: item.style.borderColor, disabled: item.disabled,
+        }])
+    )`);
+    assert(Boolean(screenSelection['XZ322QU V3 (Fallback)']?.borderColor)
+      && screenSelection['DELL P3424WEB (Unavailable)']?.disabled === true,
+    `disconnected saved screen selects the active external fallback: ${JSON.stringify(screenSelection)}`);
+    await clickButton(window, "XZ322QU V3 (Fallback)");
     await waitUntil(() => actions.some((message) => message.type === "update_settings"
-      && message.patch.pillScreen?.displayId === 5));
+      && message.patch.pillScreen?.displayId === 7));
     await clickButton(window, "Always hide");
     await waitUntil(() => actions.some((message) => message.type === "update_settings"
       && message.patch.fullScreenPolicy === "alwaysHide"));
@@ -140,6 +154,24 @@ async function run() {
     await waitFor(window, `document.body.textContent.includes('Sound')`);
     await clickButton(window, "Agents");
     await waitFor(window, `document.body.textContent.includes('Observed session window')`);
+    await waitFor(window, `document.body.textContent.includes('Codex Desktop homes')`);
+    await fillInput(window, "Codex home path", "/tmp/agent-visor-copilot-fixture");
+    await fillInput(window, "Codex home label", "Codex · Copilot");
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Add Codex home"]').click()`);
+    await waitUntil(() => actions.some((message) => message.type === "update_settings"
+      && message.patch.codexHomes?.[0]?.label === "Codex · Copilot"));
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Rename Codex · Copilot"]'))`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Rename Codex · Copilot"]').click()`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Label for /tmp/agent-visor-copilot-fixture"]'))`);
+    await fillInput(window, "Label for /tmp/agent-visor-copilot-fixture", "Work Copilot");
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Save label for Codex · Copilot"]'))`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Save label for Codex · Copilot"]').click()`);
+    await waitUntil(() => actions.some((message) => message.type === "update_settings"
+      && message.patch.codexHomes?.[0]?.label === "Work Copilot"));
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Remove Work Copilot"]'))`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Remove Work Copilot"]').click()`);
+    await waitUntil(() => actions.some((message) => message.type === "update_settings"
+      && message.patch.ignoredCodexHomes?.includes("/tmp/agent-visor-copilot-fixture")));
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Connect for Claude Code"]').click()`);
     await waitUntil(() => actions.some((message) => message.type === "set_agent_connection"
       && message.agent === "claude" && message.enabled));
@@ -175,6 +207,15 @@ function assert(value, message) {
 async function clickButton(window, label) {
   await window.webContents.executeJavaScript(`[...document.querySelectorAll('[role="button"]')]
     .find((item) => item.textContent?.trim() === ${JSON.stringify(label)})?.click()`);
+}
+
+async function fillInput(window, label, value) {
+  await window.webContents.executeJavaScript(`(() => {
+    const input = document.querySelector('[aria-label=' + ${JSON.stringify(JSON.stringify(label))} + ']');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, ${JSON.stringify(value)});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
 }
 
 async function waitFor(window, expression) {

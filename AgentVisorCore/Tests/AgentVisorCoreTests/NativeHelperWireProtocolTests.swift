@@ -51,6 +51,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
             #"{"version":1,"id":"legacy-pills","method":"present_pills","params":{"pills":[{"id":"legacy","title":"Legacy","phase":"working","priority":2,"accessibilityLabel":"Legacy, in progress"}]}}"#,
             #"{"version":1,"id":"focus","method":"focus","params":{"target":{"pid":42,"bundleIdentifier":"com.mitchellh.ghostty","windowId":7}}}"#,
             #"{"version":1,"id":"focus-terminal","method":"focus_terminal","params":{"target":{"application":"Ghostty","pid":42,"processStartToken":"2026-08-22T08:00:00Z","tty":"ttys012","cwd":"/tmp/project"}}}"#,
+            #"{"version":1,"id":"open-codex-thread","method":"open_codex_thread","params":{"target":{"pid":70220,"home":"/Users/me/.codex-copilot","threadId":"019f3931-ec11-7f31-8400-1c8624aa9e4d"}}}"#,
             #"{"version":1,"id":"send-terminal","method":"send_terminal","params":{"target":{"application":"Ghostty","pid":42,"processStartToken":"2026-08-22T08:00:00Z","tty":"/dev/ttys012","cwd":"/tmp/project"},"text":"Continue","submit":true}}"#,
             #"{"version":1,"id":"cancel-terminal","method":"cancel_terminal","params":{"target":{"application":"Ghostty","pid":42,"processStartToken":"2026-08-22T08:00:00Z","tty":"/dev/ttys012","cwd":"/tmp/project"}}}"#,
             #"{"version":1,"id":"cycle-permission","method":"cycle_permission_mode","params":{"target":{"application":"Ghostty","pid":42,"processStartToken":"2026-08-22T08:00:00Z","tty":"/dev/ttys012","cwd":"/tmp/project"}}}"#,
@@ -61,7 +62,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
             [
                 "screens", "access", "notifications", "request-notifications",
                 "request-access", "open-access", "pi-restoration",
-                "pills", "legacy-pills", "focus", "focus-terminal", "send-terminal", "cancel-terminal", "cycle-permission",
+                "pills", "legacy-pills", "focus", "focus-terminal", "open-codex-thread", "send-terminal", "cancel-terminal", "cycle-permission",
             ]
         )
     }
@@ -118,6 +119,22 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(policy, .alwaysHide)
     }
 
+    func testDecodesDisplayUUIDInSpecificPillScreen() throws {
+        let uuid = "1A108786-48D9-48F8-9611-48282BDABE1F"
+        let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[],"pillScreen":{"mode":"specific","displayId":5,"name":"DELL P3424WEB","displayUuid":"\#(uuid)"}}}"#
+
+        let request = try NativeHelperRequest.decode(Data(json.utf8))
+        guard case .presentPills(_, _, _, _, _, let screen, _, _, _) = request else {
+            return XCTFail("Expected pills")
+        }
+        XCTAssertEqual(screen, .specific(displayId: 5, name: "DELL P3424WEB", displayUuid: uuid))
+    }
+
+    func testRejectsMalformedOrAutomaticDisplayUUID() {
+        assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[],"pillScreen":{"mode":"specific","displayId":5,"name":"DELL","displayUuid":"not-a-uuid"}}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[],"pillScreen":{"mode":"automatic","displayUuid":"1A108786-48D9-48F8-9611-48282BDABE1F"}}}"#)
+    }
+
     func testDecodesAuthoritativeUsagePopoverDetails() throws {
         let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[],"usageGlances":[{"id":"codex","heading":"Codex Usage","width":114,"label":"5h 82% | 7d 61%","detail":"Codex usage","tone":"normal","priority":100,"accessibilityLabel":"Codex usage","observedAt":"2026-08-24T12:00:00.000Z","windows":[{"title":"5 hour limit","remainingPercent":82,"tone":"normal","resetsAt":"2026-08-24T13:00:00.000Z"},{"title":"Weekly limit","remainingPercent":61,"tone":"normal"}],"resetCreditsAvailable":3,"stale":true}]}}"#
 
@@ -160,6 +177,8 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         assertInvalid(#"{"version":1,"id":"bad","method":"screen_topology","extra":true}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"focus","params":{"target":{"pid":0,"bundleIdentifier":""}}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"focus","params":{"target":{"pid":42,"bundleIdentifier":"app","provider":"Pi"}}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"open_codex_thread","params":{"target":{"pid":42,"home":"relative","threadId":"019f3931-ec11-7f31-8400-1c8624aa9e4d"}}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"open_codex_thread","params":{"target":{"pid":42,"home":"/tmp","threadId":"019f3931-ec11-7f31-8400-1c8624aa9e4d","url":"file:///tmp"}}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"focus_terminal","params":{"target":{"application":"Ghostty","tty":"/dev/null","cwd":"/"}}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"cancel_terminal","params":{"target":{"application":"Ghostty","pid":42,"tty":"ttys012","cwd":"/","extra":true}}}"#)
         assertInvalid(#"{"version":1,"id":"bad","method":"present_pills","params":{"pills":[{"id":"1","title":"A","subtitle":"Ready","source":"Pi","project":"agent-visor","owner":"Ghostty","phase":"ready","priority":1,"accessibilityLabel":"A","provider":"Pi"}],"usageGlances":[]}}"#)

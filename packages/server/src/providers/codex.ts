@@ -4,6 +4,10 @@ import type { DiscoveredProviderSession, ProviderAdapter } from "../sessions.js"
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
 import { CodexTranscriptReader } from "./codex-lifecycle.js";
 import {
+  canonicalCodexHome, codexDesktopBindings, codexInstanceID, codexSessionID,
+  codexThreadReference, isCodexDesktop, type CodexHome, type CodexInstance,
+} from "./codex-instances.js";
+import {
   isRecord, iso, ownerForProcess, processInstanceToken, terminalTargetForProcess,
 } from "./shared.js";
 
@@ -44,74 +48,115 @@ const maxSettingsCatalogCWDs = 64;
 
 export class CodexProvider implements ProviderAdapter {
   readonly id = "codex" as const;
-  private readonly modelCatalogCache: ModelCatalogCache = {};
+  private readonly modelCatalogCache = new Map<string, ModelCatalogCache>();
   private readonly settingsCatalogByCWD = new Map<string, {
     expiresAt: number;
     value: Promise<NonNullable<DiscoveredProviderSession["chatSettingsCatalog"]> | undefined>;
   }>();
   private readonly transcriptReader = new CodexTranscriptReader();
 
-  constructor(private readonly environment: ProviderEnvironment) {}
+  constructor(
+    private readonly environment: ProviderEnvironment,
+    private readonly configuredHomes: () => CodexHome[] = () => [],
+    private readonly saveDiscoveredHome?: (home: CodexHome) => Promise<void>,
+    private readonly ignoredHomes: () => string[] = () => [],
+  ) {}
+
+  private async instances(): Promise<CodexInstance[]> {
+    const nativeHome = await canonicalCodexHome(path.join(this.environment.home, ".codex"));
+    const desktopProcessRunning = (await this.environment.processes()).some(isCodexDesktop);
+    const bindings = await codexDesktopBindings(this.environment, nativeHome);
+    const homes: CodexInstance[] = [{
+      id: "native", path: nativeHome, label: "Codex", pid: bindings.get(nativeHome),
+      allowDefaultURL: !desktopProcessRunning,
+    }];
+    const seen = new Set([nativeHome]);
+    const ignored = new Set(await Promise.all(this.ignoredHomes().map(canonicalCodexHome)));
+    for (const home of this.configuredHomes()) {
+      const canonical = await canonicalCodexHome(home.path);
+      if (seen.has(canonical)) continue;
+      seen.add(canonical);
+      homes.push({
+        id: codexInstanceID(canonical, nativeHome), path: canonical,
+        label: home.label, pid: bindings.get(canonical),
+      });
+    }
+    for (const [home, pid] of bindings) {
+      if (seen.has(home) || ignored.has(home) || !await codexDatabase(this.environment, home)) continue;
+      seen.add(home);
+      const config = await this.environment.read(path.join(home, "config.toml"), 64 * 1_024);
+      const label = /^\s*model_provider\s*=\s*["']copilot_api["']/m.test(config ?? "")
+        ? "Codex · Copilot" : `Codex · ${path.basename(home)}`.slice(0, 64);
+      homes.push({ id: codexInstanceID(home, nativeHome), path: home, label, pid });
+      await this.saveDiscoveredHome?.({ path: home, label });
+    }
+    return homes;
+  }
 
   async discover(): Promise<DiscoveredProviderSession[]> {
-    const database = await codexDatabase(this.environment);
-    if (!database) return [];
-    const candidates: CodexRow[] = [];
+    const instances = await this.instances();
+    const results: DiscoveredProviderSession[] = [];
+    const retained: string[] = [];
     const automationCutoff = Math.floor(
       (this.environment.now().valueOf() - this.environment.observedWindowMs) / 1_000,
     );
-    for (let offset = 0; ; offset += catalogPageSize) {
-      const page = await this.environment.sqlite(database, threadsSQL(offset, automationCutoff));
-      candidates.push(...rows(page).filter((thread) => !thread.archived));
-      if (page.length < catalogPageSize) break;
-    }
-    // A successful empty catalog is authoritative. The repository retains the
-    // previous snapshot only when a read fails, never after the last archival.
-    this.transcriptReader.retain(candidates.map((thread) => thread.id));
-    const indexTitles = await codexIndexTitles(this.environment);
-    const modelCatalog = await codexModelCatalog(this.environment, this.modelCatalogCache);
     const processes = await this.environment.processes();
     const cliProcesses = processes.filter((process) =>
       process.tty
       && path.basename(process.command) === "codex"
       && !/(?:app|mcp|exec)-server/.test(process.arguments));
-    const usedThreads = new Set<string>();
-    const results: DiscoveredProviderSession[] = [];
-
-    for (const process of cliProcesses) {
-      const cwd = await this.environment.cwd(process.pid);
-      const thread = candidates
-        .filter((row) => row.source === "cli" && row.cwd === cwd && !usedThreads.has(row.id))
-        .sort((left, right) => right.updatedAt - left.updatedAt)[0];
-      if (!thread) continue;
-      usedThreads.add(thread.id);
-      results.push(await this.session(
-        thread,
-        indexTitles,
-        ownerForProcess(process.pid, processes),
-        modelCatalog,
-        terminalTargetForProcess(
-          process,
-          thread.cwd,
-          processes,
-          processInstanceToken(
-            process.pid,
-            await this.environment.processStartedAt(process.pid),
+    for (const instance of instances) {
+      const database = await codexDatabase(this.environment, instance.path);
+      if (!database) continue;
+      const candidates: CodexRow[] = [];
+      for (let offset = 0; ; offset += catalogPageSize) {
+        const page = await this.environment.sqlite(database, threadsSQL(offset, automationCutoff));
+        candidates.push(...rows(page).filter((thread) => !thread.archived));
+        if (page.length < catalogPageSize) break;
+      }
+      retained.push(...candidates.map((thread) => codexSessionID(instance.id, thread.id)));
+      this.transcriptReader.retain(retained);
+      const indexTitles = await codexIndexTitles(this.environment, instance.path);
+      const cache = this.modelCatalogCache.get(instance.id) ?? {};
+      this.modelCatalogCache.set(instance.id, cache);
+      const modelCatalog = await codexModelCatalog(this.environment, instance.path, cache);
+      const usedThreads = new Set<string>();
+      for (const process of instance.id === "native" ? cliProcesses : []) {
+        const cwd = await this.environment.cwd(process.pid);
+        const thread = candidates
+          .filter((row) => row.source === "cli" && row.cwd === cwd && !usedThreads.has(row.id))
+          .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+        if (!thread) continue;
+        usedThreads.add(thread.id);
+        results.push(await this.session(
+          instance, thread,
+          indexTitles,
+          ownerForProcess(process.pid, processes),
+          modelCatalog,
+          terminalTargetForProcess(
+            process,
+            thread.cwd,
+            processes,
+            processInstanceToken(
+              process.pid,
+              await this.environment.processStartedAt(process.pid),
+            ),
           ),
-        ),
-      ));
-    }
+        ));
+      }
 
-    for (const thread of candidates) {
-      if (usedThreads.has(thread.id)
-        || !["vscode", "cli", "exec"].includes(thread.source)) continue;
-      if (thread.cwd.includes(".claude-mem") || thread.cwd.includes("observer-sessions")) continue;
-      const rollout = await this.environment.stamp(thread.rolloutPath);
-      if (!rollout) continue;
-      if (thread.source === "exec" && thread.updatedAt < automationCutoff) continue;
-      results.push(await this.session(thread, indexTitles, "Codex", modelCatalog));
+      for (const thread of candidates) {
+        if (usedThreads.has(thread.id)
+          || !["vscode", "cli", "exec"].includes(thread.source)) continue;
+        if (thread.cwd.includes(".claude-mem") || thread.cwd.includes("observer-sessions")) continue;
+        const rollout = await this.environment.stamp(thread.rolloutPath);
+        if (!rollout) continue;
+        if (thread.source === "exec" && thread.updatedAt < automationCutoff) continue;
+        results.push(await this.session(instance, thread, indexTitles, instance.label, modelCatalog));
+      }
     }
-
+    // A successful empty catalog is authoritative after every configured home was read.
+    this.transcriptReader.retain(retained);
     return results;
   }
 
@@ -120,17 +165,23 @@ export class CodexProvider implements ProviderAdapter {
    * that was archived and removed from the normal catalog.
    */
   async resolve(sessionId: string): Promise<DiscoveredProviderSession | undefined> {
-    const database = await codexDatabase(this.environment);
-    if (!database || !sessionId.trim()) return undefined;
-    const thread = rows(await this.environment.sqlite(database, threadByIDSQL(sessionId)))[0];
-    if (!thread || thread.id !== sessionId) return undefined;
+    const reference = codexThreadReference(sessionId);
+    if (!reference) return undefined;
+    const instance = (await this.instances()).find((item) => item.id === reference.instanceID);
+    if (!instance) return undefined;
+    const database = await codexDatabase(this.environment, instance.path);
+    if (!database) return undefined;
+    const thread = rows(await this.environment.sqlite(database, threadByIDSQL(reference.threadID)))[0];
+    if (!thread || thread.id !== reference.threadID) return undefined;
     // A database row alone is not enough to prove that the opened transcript
     // still exists. Discovery applies the same evidence requirement.
     if (!await this.environment.stamp(thread.rolloutPath)) return undefined;
-    const indexTitles = await codexIndexTitles(this.environment);
-    const modelCatalog = await codexModelCatalog(this.environment, this.modelCatalogCache);
+    const indexTitles = await codexIndexTitles(this.environment, instance.path);
+    const cache = this.modelCatalogCache.get(instance.id) ?? {};
+    this.modelCatalogCache.set(instance.id, cache);
+    const modelCatalog = await codexModelCatalog(this.environment, instance.path, cache);
     const processes = await this.environment.processes();
-    const cliCandidates = thread.source === "cli"
+    const cliCandidates = instance.id === "native" && thread.source === "cli"
       ? await Promise.all(processes
         .filter((process) => process.tty
           && path.basename(process.command) === "codex"
@@ -150,29 +201,31 @@ export class CodexProvider implements ProviderAdapter {
       )
       : undefined;
     return this.session(
-      thread,
+      instance, thread,
       indexTitles,
-      cliProcess ? ownerForProcess(cliProcess.pid, processes) : "Codex",
+      cliProcess ? ownerForProcess(cliProcess.pid, processes) : instance.label,
       modelCatalog,
       terminalTarget,
     );
   }
 
   private async session(
+    instance: CodexInstance,
     thread: CodexRow,
     indexTitles: Map<string, string>,
     owner: string,
     modelCatalog?: DiscoveredProviderSession["modelCatalog"],
     terminalTarget?: NativeHelperTerminalTarget,
   ): Promise<DiscoveredProviderSession> {
+    const sessionID = codexSessionID(instance.id, thread.id);
     const sessionClass = thread.source === "exec"
       ? "automation" as const
       : thread.source === "cli" ? "terminal" as const : "interactive" as const;
     const storedTitle = indexTitles.get(thread.id) || thread.title;
     const title = storedTitle || await codexRolloutTitle(this.environment, thread.rolloutPath);
     const rolloutStamp = await this.environment.stamp(thread.rolloutPath);
-    const transcript = owner === "Codex" && !terminalTarget
-      ? await this.transcriptReader.read(this.environment, thread.id, thread.rolloutPath)
+    const transcript = !terminalTarget
+      ? await this.transcriptReader.read(this.environment, sessionID, thread.rolloutPath, thread.id)
       : undefined;
     const lifecycle = transcript?.lifecycle;
     const managedBy = transcript?.originator === "Agent Room" ? "Agent Room" as const : undefined;
@@ -196,13 +249,23 @@ export class CodexProvider implements ProviderAdapter {
     // complete" fact, only too old to deserve Ready attention.
     const codexLifecycle = phase === "recent" && lifecycle?.phase === "working" ? undefined : lifecycle;
     const section = thread.archived || phase === "recent" ? "history" : phase;
+    const desktopTarget: DiscoveredProviderSession["controlTarget"] = instance.pid
+      ? { kind: "codex_thread", target: {
+          pid: instance.pid, home: instance.path, threadId: thread.id,
+        } }
+      : instance.allowDefaultURL
+        ? { kind: "url", url: `codex://threads/${thread.id}` }
+        : undefined;
+    const controlTarget = terminalTarget
+      ? { kind: "terminal" as const, target: terminalTarget }
+      : desktopTarget;
     return {
-      id: thread.id,
+      id: sessionID,
       provider: "codex",
       title: title || undefined,
       subtitle: section !== "history"
         ? (section === "working" ? "Agent is working" : "Ready to continue")
-        : (owner === "Codex" ? "Codex app session" : "Codex CLI session"),
+        : (terminalTarget ? "Codex CLI session" : `${instance.label} app session`),
       cwd: thread.cwd,
       owner,
       section,
@@ -214,26 +277,25 @@ export class CodexProvider implements ProviderAdapter {
       ...(rolloutStamp
         ? { transcriptRevision: `${rolloutStamp.modifiedAt.valueOf()}:${rolloutStamp.size}` }
         : {}),
-      canOpenOwner: true,
+      canOpenOwner: controlTarget !== undefined,
       // Desktop discovery already requires an existing transcript. Inactivity
       // does not prevent reading it; send/cancel authority is checked separately.
       canEnterChat: true,
       sessionClass,
       ...(managedBy ? { managedBy } : {}),
       chatPath: thread.rolloutPath,
-      messageTransport: "codex_app_server",
-      ...(owner === "Codex" && !terminalTarget
+      ...(instance.id === "native" ? { messageTransport: "codex_app_server" as const } : {}),
+      ...(instance.id === "native" && !terminalTarget
         ? { routeState: "available" as const, routeOwnership: "unverified" as const }
         : {}),
       ...(modelCatalog ? { modelCatalog } : {}),
-      controlTarget: terminalTarget
-        ? { kind: "terminal", target: terminalTarget }
-        : { kind: "url", url: `codex://threads/${thread.id}` },
+      ...(controlTarget ? { controlTarget } : {}),
     };
   }
 
   async chatSettings(session: DiscoveredProviderSession): Promise<NonNullable<DiscoveredProviderSession["chatSettingsCatalog"]> | undefined> {
-    if (!this.environment.codexSettingsCatalog || session.provider !== "codex") return undefined;
+    if (!this.environment.codexSettingsCatalog || session.provider !== "codex"
+      || codexThreadReference(session.id)?.instanceID !== "native") return undefined;
     const now = Date.now();
     for (const [cwd, cached] of this.settingsCatalogByCWD) {
       if (cached.expiresAt <= now) this.settingsCatalogByCWD.delete(cwd);
@@ -254,10 +316,10 @@ export class CodexProvider implements ProviderAdapter {
   }
 }
 
-async function codexDatabase(environment: ProviderEnvironment): Promise<string | undefined> {
+async function codexDatabase(environment: ProviderEnvironment, home: string): Promise<string | undefined> {
   const candidates = [
-    path.join(environment.home, ".codex", "sqlite", "state_5.sqlite"),
-    path.join(environment.home, ".codex", "state_5.sqlite"),
+    path.join(home, "sqlite", "state_5.sqlite"),
+    path.join(home, "state_5.sqlite"),
   ];
   let best: { path: string; modifiedAt: number } | undefined;
   for (const candidate of candidates) {
@@ -292,9 +354,10 @@ function rows(values: unknown[]): CodexRow[] {
 
 async function codexModelCatalog(
   environment: ProviderEnvironment,
+  home: string,
   cache: ModelCatalogCache,
 ): Promise<DiscoveredProviderSession["modelCatalog"]> {
-  const file = path.join(environment.home, ".codex", "models_cache.json");
+  const file = path.join(home, "models_cache.json");
   const stamp = await environment.stamp(file);
   if (!stamp) {
     cache.signature = undefined;
@@ -325,9 +388,9 @@ async function codexModelCatalog(
   }
 }
 
-async function codexIndexTitles(environment: ProviderEnvironment): Promise<Map<string, string>> {
+async function codexIndexTitles(environment: ProviderEnvironment, home: string): Promise<Map<string, string>> {
   const content = await environment.read(
-    path.join(environment.home, ".codex", "session_index.jsonl"),
+    path.join(home, "session_index.jsonl"),
     5 * 1_048_576,
   );
   const titles = new Map<string, string>();
