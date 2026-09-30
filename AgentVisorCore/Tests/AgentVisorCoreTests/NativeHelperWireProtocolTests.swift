@@ -282,4 +282,17 @@ final class NativeHelperWireProtocolTests: XCTestCase {
     private func assertInvalid(_ json: String) {
         XCTAssertThrowsError(try NativeHelperRequest.decode(Data(json.utf8)))
     }
+
+    func testDecodesClaudeAttachAndRejectsUnsafeTargets() throws {
+        XCTAssertEqual(
+            try NativeHelperRequest.decode(Data(#"{"version":1,"id":"attach","method":"open_claude_attach","params":{"target":{"cwd":"/tmp/project","executable":"/Users/me/.local/bin/claude","jobId":"62c740e7"}}}"#.utf8)),
+            .openClaudeAttach(id: "attach", target: NativeHelperClaudeAttachTarget(
+                cwd: "/tmp/project", executable: "/Users/me/.local/bin/claude", jobId: "62c740e7"
+            ))
+        )
+        assertInvalid(#"{"version":1,"id":"bad","method":"open_claude_attach","params":{"target":{"cwd":"relative","executable":"/bin/claude","jobId":"62c740e7"}}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"open_claude_attach","params":{"target":{"cwd":"/tmp","executable":"claude","jobId":"62c740e7"}}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"open_claude_attach","params":{"target":{"cwd":"/tmp","executable":"/bin/claude","jobId":"62c740e7; rm"}}}"#)
+        assertInvalid(#"{"version":1,"id":"bad","method":"open_claude_attach","params":{"target":{"cwd":"/tmp","executable":"/bin/claude","jobId":"62c740e7","command":"sh"}}}"#)
+    }
 }

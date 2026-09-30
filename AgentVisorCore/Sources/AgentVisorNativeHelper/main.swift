@@ -235,6 +235,10 @@ private func response(
             return NativeTerminalController().focus(target)
                 ? .accepted(id: id)
                 : .error(id: id, code: .failed, message: "The requested terminal could not be focused.")
+        case .openClaudeAttach(let id, let target):
+            return NativeTerminalController().openClaudeAttach(target)
+                ? .accepted(id: id)
+                : .error(id: id, code: .failed, message: "Ghostty could not open the Claude background session.")
         case .sendTerminal(let id, let target, let text, let submit):
             return NativeTerminalController().send(text, to: target, submit: submit)
                 ? .accepted(id: id)

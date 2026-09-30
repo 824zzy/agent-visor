@@ -924,6 +924,12 @@ export const nativeHelperCodexThreadTargetSchema = z.object({
   threadId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
 }).strict();
 
+export const nativeHelperClaudeAttachTargetSchema = z.object({
+  cwd: z.string().startsWith("/").max(1_024),
+  executable: z.string().startsWith("/").max(1_024),
+  jobId: z.string().regex(/^[0-9a-f]{8}$/i),
+}).strict();
+
 export const nativeHelperTerminalTargetSchema = z.object({
   application: z.enum(["Ghostty", "iTerm2", "Terminal"]),
   /** Owning agent process identity; TTY names alone can be reused. */
@@ -1025,6 +1031,11 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
     ...helperEnvelope,
     method: z.literal("open_codex_thread"),
     params: z.object({ target: nativeHelperCodexThreadTargetSchema }).strict(),
+  }).strict(),
+  z.object({
+    ...helperEnvelope,
+    method: z.literal("open_claude_attach"),
+    params: z.object({ target: nativeHelperClaudeAttachTargetSchema }).strict(),
   }).strict(),
   z.object({
     ...helperEnvelope,
@@ -1158,6 +1169,7 @@ export type DaemonError = z.infer<typeof daemonErrorSchema>;
 export type HookEvent = z.infer<typeof hookEventSchema>;
 export type NativeHelperFocusTarget = z.infer<typeof nativeHelperFocusTargetSchema>;
 export type NativeHelperCodexThreadTarget = z.infer<typeof nativeHelperCodexThreadTargetSchema>;
+export type NativeHelperClaudeAttachTarget = z.infer<typeof nativeHelperClaudeAttachTargetSchema>;
 export type NativeHelperNotificationPermission = z.infer<
   typeof nativeHelperNotificationPermissionSchema
 >;

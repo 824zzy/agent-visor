@@ -12,6 +12,7 @@ import {
   type AppSettings,
   type NativeHelperFocusTarget,
   type NativeHelperCodexThreadTarget,
+  type NativeHelperClaudeAttachTarget,
   type NativeHelperNotification,
   type NativeHelperNotificationPermission,
   type NativeHelperPiRestorationCandidate,
@@ -49,6 +50,8 @@ export interface NativeHelperAdapter {
   ): Promise<void>;
   focus(target: NativeHelperFocusTarget): Promise<void>;
   openCodexThread(target: NativeHelperCodexThreadTarget): Promise<void>;
+  /** Attach to a Claude background job in a new window of the running terminal. */
+  openClaudeAttach(target: NativeHelperClaudeAttachTarget): Promise<void>;
   focusTerminal(target: NativeHelperTerminalTarget): Promise<void>;
   sendTerminal(target: NativeHelperTerminalTarget, text: string, submit: boolean): Promise<void>;
   cancelTerminal(target: NativeHelperTerminalTarget): Promise<void>;
@@ -108,6 +111,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export class FakeNativeHelper implements NativeHelperAdapter {
   readonly focusRequests: NativeHelperFocusTarget[] = [];
   readonly codexThreadRequests: NativeHelperCodexThreadTarget[] = [];
+  readonly claudeAttachRequests: NativeHelperClaudeAttachTarget[] = [];
   readonly terminalFocusRequests: NativeHelperTerminalTarget[] = [];
   readonly terminalSendRequests: Array<{ target: NativeHelperTerminalTarget; text: string; submit: boolean }> = [];
   readonly terminalCancelRequests: NativeHelperTerminalTarget[] = [];
@@ -221,6 +225,10 @@ export class FakeNativeHelper implements NativeHelperAdapter {
     this.codexThreadRequests.push(structuredClone(target));
   }
 
+  async openClaudeAttach(target: NativeHelperClaudeAttachTarget): Promise<void> {
+    this.claudeAttachRequests.push(structuredClone(target));
+  }
+
   async focusTerminal(target: NativeHelperTerminalTarget): Promise<void> {
     this.terminalFocusRequests.push(structuredClone(target));
   }
@@ -251,6 +259,7 @@ export class UnavailableNativeHelper implements NativeHelperAdapter {
   async presentPills(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async focus(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async openCodexThread(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
+  async openClaudeAttach(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async focusTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async sendTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async cancelTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
@@ -399,6 +408,10 @@ export class NativeHelperProcess implements NativeHelperAdapter {
 
   async openCodexThread(target: NativeHelperCodexThreadTarget): Promise<void> {
     await this.accepted("open_codex_thread", { target });
+  }
+
+  async openClaudeAttach(target: NativeHelperClaudeAttachTarget): Promise<void> {
+    await this.accepted("open_claude_attach", { target });
   }
 
   async focusTerminal(target: NativeHelperTerminalTarget): Promise<void> {

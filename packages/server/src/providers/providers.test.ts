@@ -247,9 +247,10 @@ describe("live provider adapters", () => {
     }));
     environment.stamps.set(`${home}/.claude/sessions/42.json`, { modifiedAt: now, size: 100 });
     const repository = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
+    const helper = new FakeNativeHelper();
     const opened = vi.fn(async () => {});
     repository.setControls(new NativeSessionControls(
-      new FakeNativeHelper(), undefined, undefined, undefined, undefined, undefined, opened,
+      helper, undefined, undefined, undefined, undefined, undefined, opened,
     ));
     await repository.refresh();
     repository.applyHook({ sessionId, cwd, tty: "ttys001", provider: "claude_code", event: "Stop", status: "idle", receivedAt: now.toISOString() });
@@ -258,8 +259,15 @@ describe("live provider adapters", () => {
     expect(pill).toMatchObject({ owner: "Ghostty", title: `Claude Code · ${jobId}` });
     const effects = vi.fn();
     await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId }, repository, effects);
-    expect(opened).toHaveBeenCalledWith({ jobId, cwd, executable, application: "Ghostty" });
+    // A second Ghostty instance would take over Ghostty's AppleScript, so the
+    // helper opens the attach window inside the running one.
+    expect(helper.claudeAttachRequests).toEqual([{ cwd, executable, jobId }]);
+    expect(opened).not.toHaveBeenCalled();
     expect(effects).not.toHaveBeenCalled();
+
+    helper.openClaudeAttach = async () => { throw new Error("Ghostty could not open the window."); };
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId }, repository, effects);
+    expect(opened).toHaveBeenCalledWith({ jobId, cwd, executable, application: "Ghostty" });
   });
 
   it("returns a Claude background pill to its already attached window", async () => {
@@ -301,7 +309,8 @@ describe("live provider adapters", () => {
     // A window closed after the last refresh must not strand the click.
     helper.focusTerminal = async () => { throw new Error("The terminal is gone."); };
     await activate();
-    expect(opened).toHaveBeenCalledWith({ jobId, cwd, executable, application: "Ghostty" });
+    expect(helper.claudeAttachRequests).toEqual([{ cwd, executable, jobId }]);
+    expect(opened).not.toHaveBeenCalled();
   });
 
   it("excludes a pre-warmed Claude daemon spare that has no job yet", async () => {

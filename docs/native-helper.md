@@ -34,6 +34,7 @@ Every request contains protocol `version: 1`, a non-empty `id`, and one method:
 - Each optional navigator row may carry `defaultOverflowEligible`. Explicit `true` rows that are not physical candidates contribute to the default `+N`; explicit `false` rows remain searchable-only (the automation contract). An omitted field preserves old-wire helper behavior: it is not inferred from catalog membership, while a hidden physical `pills` row still contributes to `+N`.
 - Each usage glance may include two bounded limit windows, fixed capsule width, per-window tone, reset times, reset-credit count, sync time, and stale state.
 - `focus_terminal` selects one allowlisted terminal through its exact TTY.
+- `open_claude_attach` runs `claude attach <jobId>` in a new window of the running Ghostty. It needs an absolute working directory and executable, and an eight-character hexadecimal job ID. It never starts a second Ghostty, because that copy would take over Ghostty's AppleScript and break `focus_terminal`.
 - `send_terminal` sends bounded text to that exact terminal and optionally submits it.
 - `focus` requires an exact process identifier and bundle identifier. A window identifier is optional.
 

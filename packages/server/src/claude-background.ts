@@ -11,7 +11,10 @@ export type ClaudeBackgroundTarget = {
   application: "Ghostty" | "iTerm2" | "Terminal";
 };
 
-/** Open the exact Claude background job in a new terminal, leaving its daemon running. */
+/**
+ * Open the exact Claude background job in a new Terminal.app window, leaving
+ * its daemon running. Ghostty windows are opened by the native helper instead.
+ */
 export async function openClaudeBackgroundSession(target: ClaudeBackgroundTarget): Promise<void> {
   if (!/^[0-9a-f]{8}$/i.test(target.jobId)
     || !path.isAbsolute(target.cwd) || !path.isAbsolute(target.executable)) {
@@ -19,14 +22,6 @@ export async function openClaudeBackgroundSession(target: ClaudeBackgroundTarget
   }
   if (!(await stat(target.cwd)).isDirectory()) throw new Error("The Claude project directory is unavailable.");
   await access(target.executable, constants.X_OK);
-
-  if (target.application === "Ghostty") {
-    const opened = await runProcess("/usr/bin/open", [
-      "-n", "-a", "Ghostty.app", "--args", `--working-directory=${target.cwd}`,
-      "-e", target.executable, "attach", target.jobId,
-    ], { deadlineMs: 5_000, maxOutputBytes: 4_096 });
-    if (opened.status === "success") return;
-  }
 
   // Terminal accepts a .command file without Apple Events permission. Keep
   // every value shell-quoted and have the script remove itself when it starts.

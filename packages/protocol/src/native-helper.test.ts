@@ -165,6 +165,12 @@ const requests = [
   },
   {
     version: 1,
+    id: "open-claude-attach",
+    method: "open_claude_attach",
+    params: { target: { cwd: "/tmp/project", executable: "/Users/me/.local/bin/claude", jobId: "62c740e7" } },
+  },
+  {
+    version: 1,
     id: "send-terminal",
     method: "send_terminal",
     params: {

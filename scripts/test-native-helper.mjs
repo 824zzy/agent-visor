@@ -149,6 +149,15 @@ try {
     rejectedWrongOwner = String(error).includes("owning Codex process is unavailable");
   }
   if (!rejectedWrongOwner) throw new Error("Codex thread navigation accepted a non-Codex process");
+  let rejectedMissingProject = false;
+  try {
+    await adapter.openClaudeAttach({
+      cwd: path.join(root, "missing-project"), executable: "/usr/bin/true", jobId: "62c740e7",
+    });
+  } catch (error) {
+    rejectedMissingProject = String(error).includes("could not open the Claude background session");
+  }
+  if (!rejectedMissingProject) throw new Error("Claude attach accepted a missing project directory");
   await adapter.presentPills([{
     id: "adapter-session",
     title: "Adapter session",

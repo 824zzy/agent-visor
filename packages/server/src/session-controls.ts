@@ -206,12 +206,30 @@ export class NativeSessionControls implements SessionControls {
           if (!attached) throw new Error("No attached terminal.");
           await this.helper.focusTerminal(attached);
         } catch {
-          await this.openClaudeBackground(target);
+          await this.attachClaudeBackground(target);
         }
       }
       else if (control.kind === "terminal") await this.helper.focusTerminal(control.target);
       else await this.helper.focus(control.target);
     });
+  }
+
+  // Ghostty gets a new window inside the running app through the helper.
+  // `open -n` would start a second Ghostty that takes over its AppleScript,
+  // so every later tab focus would search the wrong app. Terminal.app is the
+  // fallback when the helper cannot open the window.
+  private async attachClaudeBackground(target: ClaudeBackgroundTarget): Promise<void> {
+    if (target.application === "Ghostty") {
+      try {
+        await this.helper.openClaudeAttach({
+          cwd: target.cwd, executable: target.executable, jobId: target.jobId,
+        });
+        return;
+      } catch {
+        // Use the Terminal.app route below.
+      }
+    }
+    await this.openClaudeBackground(target);
   }
 
   send(

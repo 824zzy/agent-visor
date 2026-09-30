@@ -58,6 +58,15 @@ public final class NativeTerminalController {
         }
     }
 
+    /// Open `claude attach` in a new window of the running Ghostty.
+    public func openClaudeAttach(_ target: NativeHelperClaudeAttachTarget) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: target.cwd, isDirectory: &isDirectory),
+              isDirectory.boolValue,
+              FileManager.default.isExecutableFile(atPath: target.executable) else { return false }
+        return run(ClaudeGhosttyAttachScript.make(target: target)) == "ok"
+    }
+
     public func send(_ text: String, to target: NativeHelperTerminalTarget, submit: Bool) -> Bool {
         // Preflight before constructing or executing any AppleScript/PTY
         // write. This keeps an over-limit request atomic: callers receive a

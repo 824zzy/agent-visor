@@ -248,6 +248,25 @@ public struct NativeHelperCodexThreadTarget: Codable, Equatable {
     }
 }
 
+/// A Claude Code background job to attach to in a new terminal window.
+public struct NativeHelperClaudeAttachTarget: Codable, Equatable {
+    public let cwd: String
+    public let executable: String
+    public let jobId: String
+
+    public init(cwd: String, executable: String, jobId: String) {
+        self.cwd = cwd
+        self.executable = executable
+        self.jobId = jobId
+    }
+
+    public var isValid: Bool {
+        cwd.hasPrefix("/") && cwd.utf8.count <= 1_024
+            && executable.hasPrefix("/") && executable.utf8.count <= 1_024
+            && jobId.range(of: "^[0-9a-fA-F]{8}$", options: .regularExpression) != nil
+    }
+}
+
 public enum NativeHelperHotkeyTrigger: String, Codable, Equatable {
     case off
     case cmd
@@ -372,6 +391,7 @@ public enum NativeHelperRequest: Equatable {
     )
     case focus(id: String, target: NativeHelperFocusTarget)
     case openCodexThread(id: String, target: NativeHelperCodexThreadTarget)
+    case openClaudeAttach(id: String, target: NativeHelperClaudeAttachTarget)
     case focusTerminal(id: String, target: NativeHelperTerminalTarget)
     case sendTerminal(id: String, target: NativeHelperTerminalTarget, text: String, submit: Bool)
     case cancelTerminal(id: String, target: NativeHelperTerminalTarget)
@@ -385,7 +405,7 @@ public enum NativeHelperRequest: Equatable {
              .reconcilePiRestoration(let id, _), .requestAccessibility(let id),
              .openAccessibilitySettings(let id),
              .presentPills(let id, _, _, _, _, _, _, _, _), .focus(let id, _),
-             .openCodexThread(let id, _),
+             .openCodexThread(let id, _), .openClaudeAttach(let id, _),
              .focusTerminal(let id, _), .sendTerminal(let id, _, _, _),
              .cancelTerminal(let id, _), .cyclePermissionMode(let id, _):
             id
@@ -401,7 +421,7 @@ public enum NativeHelperRequest: Equatable {
 
         let requiredKeys: Set<String> = [
             "present_pills", "reconcile_notifications", "reconcile_pi_restoration",
-                "focus", "open_codex_thread", "focus_terminal", "send_terminal",
+                "focus", "open_codex_thread", "open_claude_attach", "focus_terminal", "send_terminal",
                 "cancel_terminal", "cycle_permission_mode",
         ].contains(method)
             ? ["version", "id", "method", "params"]
@@ -534,6 +554,12 @@ public enum NativeHelperRequest: Equatable {
                   let target = params.codexThreadTarget,
                   target.isValid else { throw NativeHelperWireError.invalidRequest }
             return .openCodexThread(id: wire.id, target: target)
+        case "open_claude_attach":
+            guard let params = wire.params,
+                  Set(params.keys) == ["target"],
+                  let target = params.claudeAttachTarget,
+                  target.isValid else { throw NativeHelperWireError.invalidRequest }
+            return .openClaudeAttach(id: wire.id, target: target)
         case "focus_terminal":
             guard let params = wire.params,
                   Set(params.keys) == ["target"],
@@ -864,6 +890,11 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
               Set(params.keys) == ["target"],
               let target = params["target"] as? [String: Any] else { return false }
         return Set(target.keys) == ["pid", "home", "threadId"]
+    case "open_claude_attach":
+        guard let params = object["params"] as? [String: Any],
+              Set(params.keys) == ["target"],
+              let target = params["target"] as? [String: Any] else { return false }
+        return Set(target.keys) == ["cwd", "executable", "jobId"]
     case "focus_terminal":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys) == ["target"],
@@ -924,6 +955,7 @@ private struct WireParameters: Decodable {
     let customHotkeyCombo: String?
     let target: NativeHelperFocusTarget?
     let codexThreadTarget: NativeHelperCodexThreadTarget?
+    let claudeAttachTarget: NativeHelperClaudeAttachTarget?
     let terminalTarget: NativeHelperTerminalTarget?
     let text: String?
     let submit: Bool?
@@ -985,6 +1017,9 @@ private struct WireParameters: Decodable {
         target = try? container.decodeIfPresent(NativeHelperFocusTarget.self, forKey: .init("target"))
         codexThreadTarget = try? container.decodeIfPresent(
             NativeHelperCodexThreadTarget.self, forKey: .init("target")
+        )
+        claudeAttachTarget = try? container.decodeIfPresent(
+            NativeHelperClaudeAttachTarget.self, forKey: .init("target")
         )
         terminalTarget = try? container.decodeIfPresent(
             NativeHelperTerminalTarget.self,
