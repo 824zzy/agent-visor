@@ -262,6 +262,48 @@ describe("live provider adapters", () => {
     expect(effects).not.toHaveBeenCalled();
   });
 
+  it("returns a Claude background pill to its already attached window", async () => {
+    const environment = new FixtureEnvironment();
+    const sessionId = "69c752b0-5993-4a3b-a4da-2777293ac662";
+    const jobId = "69c752b0";
+    const executable = `${home}/.local/bin/claude`;
+    const ghostty = "/Applications/Ghostty.app/Contents/MacOS/ghostty";
+    environment.processRows = [
+      { pid: 42, parentPID: 41, tty: "ttys001", command: `${home}/.local/share/claude/versions/2.1.285`, arguments: `${home}/.local/share/claude/versions/2.1.285 --session-id ${sessionId} --agent claude` },
+      { pid: 41, parentPID: 40, command: `${home}/.local/share/claude/versions/2.1.285`, arguments: `--bg-pty-host /tmp/claude/pty/${jobId}.sock -- ${home}/.local/share/claude/versions/2.1.285 --session-id ${sessionId}` },
+      { pid: 40, parentPID: 39, command: executable, arguments: `${executable} daemon run` },
+      { pid: 39, parentPID: 1, command: ghostty, arguments: "ghostty" },
+      { pid: 62, parentPID: 61, tty: "ttys051", command: "claude", arguments: `claude attach ${jobId}` },
+      { pid: 61, parentPID: 60, tty: "ttys051", command: "/usr/bin/login", arguments: `/usr/bin/login -flp user ${executable} attach ${jobId}` },
+      { pid: 60, parentPID: 1, command: ghostty, arguments: `${ghostty} --working-directory=${cwd} -e ${executable} attach ${jobId}` },
+    ];
+    environment.directories.set(`${home}/.claude/sessions`, ["42.json"]);
+    environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({
+      sessionId, cwd, kind: "bg", entrypoint: "cli", status: "idle", jobId, name: jobId,
+    }));
+    environment.stamps.set(`${home}/.claude/sessions/42.json`, { modifiedAt: now, size: 100 });
+    const repository = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
+    const helper = new FakeNativeHelper();
+    const opened = vi.fn(async () => {});
+    repository.setControls(new NativeSessionControls(
+      helper, undefined, undefined, undefined, undefined, undefined, opened,
+    ));
+    await repository.refresh();
+    repository.applyHook({ sessionId, cwd, tty: "ttys001", provider: "claude_code", event: "Stop", status: "idle", receivedAt: now.toISOString() });
+    const activate = () => activateMenuPill(
+      { version: 1, type: "event", event: "activate_pill", sessionId }, repository, vi.fn(),
+    );
+
+    await activate();
+    expect(helper.terminalFocusRequests).toMatchObject([{ application: "Ghostty", pid: 62, tty: "ttys051" }]);
+    expect(opened).not.toHaveBeenCalled();
+
+    // A window closed after the last refresh must not strand the click.
+    helper.focusTerminal = async () => { throw new Error("The terminal is gone."); };
+    await activate();
+    expect(opened).toHaveBeenCalledWith({ jobId, cwd, executable, application: "Ghostty" });
+  });
+
   it("excludes a pre-warmed Claude daemon spare that has no job yet", async () => {
     const environment = new FixtureEnvironment();
     const sessionId = "62c740e7-e6b2-45e6-aa6c-2f064dbdfd72";

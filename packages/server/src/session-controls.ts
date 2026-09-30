@@ -198,7 +198,17 @@ export class NativeSessionControls implements SessionControls {
       }
       if (control.kind === "url") await this.openURL(control.url);
       else if (control.kind === "codex_thread") await this.helper.openCodexThread(control.target);
-      else if (control.kind === "claude_background") await this.openClaudeBackground(control.target);
+      else if (control.kind === "claude_background") {
+        const { attached, ...target } = control.target;
+        // Return to the window already attached to this job. It may have
+        // closed since the last refresh, so opening a new one is the fallback.
+        try {
+          if (!attached) throw new Error("No attached terminal.");
+          await this.helper.focusTerminal(attached);
+        } catch {
+          await this.openClaudeBackground(target);
+        }
+      }
       else if (control.kind === "terminal") await this.helper.focusTerminal(control.target);
       else await this.helper.focus(control.target);
     });

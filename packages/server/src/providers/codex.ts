@@ -54,6 +54,7 @@ export class CodexProvider implements ProviderAdapter {
     value: Promise<NonNullable<DiscoveredProviderSession["chatSettingsCatalog"]> | undefined>;
   }>();
   private readonly transcriptReader = new CodexTranscriptReader();
+  private readonly lastSessionsByInstance = new Map<string, DiscoveredProviderSession[]>();
 
   constructor(
     private readonly environment: ProviderEnvironment,
@@ -106,54 +107,67 @@ export class CodexProvider implements ProviderAdapter {
       && path.basename(process.command) === "codex"
       && !/(?:app|mcp|exec)-server/.test(process.arguments));
     for (const instance of instances) {
-      const database = await codexDatabase(this.environment, instance.path);
-      if (!database) continue;
-      const candidates: CodexRow[] = [];
-      for (let offset = 0; ; offset += catalogPageSize) {
-        const page = await this.environment.sqlite(database, threadsSQL(offset, automationCutoff));
-        candidates.push(...rows(page).filter((thread) => !thread.archived));
-        if (page.length < catalogPageSize) break;
-      }
-      retained.push(...candidates.map((thread) => codexSessionID(instance.id, thread.id)));
-      this.transcriptReader.retain(retained);
-      const indexTitles = await codexIndexTitles(this.environment, instance.path);
-      const cache = this.modelCatalogCache.get(instance.id) ?? {};
-      this.modelCatalogCache.set(instance.id, cache);
-      const modelCatalog = await codexModelCatalog(this.environment, instance.path, cache);
-      const usedThreads = new Set<string>();
-      for (const process of instance.id === "native" ? cliProcesses : []) {
-        const cwd = await this.environment.cwd(process.pid);
-        const thread = candidates
-          .filter((row) => row.source === "cli" && row.cwd === cwd && !usedThreads.has(row.id))
-          .sort((left, right) => right.updatedAt - left.updatedAt)[0];
-        if (!thread) continue;
-        usedThreads.add(thread.id);
-        results.push(await this.session(
-          instance, thread,
-          indexTitles,
-          ownerForProcess(process.pid, processes),
-          modelCatalog,
-          terminalTargetForProcess(
-            process,
-            thread.cwd,
-            processes,
-            processInstanceToken(
-              process.pid,
-              await this.environment.processStartedAt(process.pid),
+      let found: DiscoveredProviderSession[] = [];
+      try {
+        const database = await codexDatabase(this.environment, instance.path);
+        if (!database) {
+          this.lastSessionsByInstance.delete(instance.id);
+          continue;
+        }
+        const candidates: CodexRow[] = [];
+        for (let offset = 0; ; offset += catalogPageSize) {
+          const page = await this.environment.sqlite(database, threadsSQL(offset, automationCutoff));
+          candidates.push(...rows(page).filter((thread) => !thread.archived));
+          if (page.length < catalogPageSize) break;
+        }
+        retained.push(...candidates.map((thread) => codexSessionID(instance.id, thread.id)));
+        this.transcriptReader.retain(retained);
+        const indexTitles = await codexIndexTitles(this.environment, instance.path);
+        const cache = this.modelCatalogCache.get(instance.id) ?? {};
+        this.modelCatalogCache.set(instance.id, cache);
+        const modelCatalog = await codexModelCatalog(this.environment, instance.path, cache);
+        const usedThreads = new Set<string>();
+        for (const process of instance.id === "native" ? cliProcesses : []) {
+          const cwd = await this.environment.cwd(process.pid);
+          const thread = candidates
+            .filter((row) => row.source === "cli" && row.cwd === cwd && !usedThreads.has(row.id))
+            .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+          if (!thread) continue;
+          usedThreads.add(thread.id);
+          found.push(await this.session(
+            instance, thread,
+            indexTitles,
+            ownerForProcess(process.pid, processes),
+            modelCatalog,
+            terminalTargetForProcess(
+              process,
+              thread.cwd,
+              processes,
+              processInstanceToken(
+                process.pid,
+                await this.environment.processStartedAt(process.pid),
+              ),
             ),
-          ),
-        ));
-      }
+          ));
+        }
 
-      for (const thread of candidates) {
-        if (usedThreads.has(thread.id)
-          || !["vscode", "cli", "exec"].includes(thread.source)) continue;
-        if (thread.cwd.includes(".claude-mem") || thread.cwd.includes("observer-sessions")) continue;
-        const rollout = await this.environment.stamp(thread.rolloutPath);
-        if (!rollout) continue;
-        if (thread.source === "exec" && thread.updatedAt < automationCutoff) continue;
-        results.push(await this.session(instance, thread, indexTitles, instance.label, modelCatalog));
+        for (const thread of candidates) {
+          if (usedThreads.has(thread.id)
+            || !["vscode", "cli", "exec"].includes(thread.source)) continue;
+          if (thread.cwd.includes(".claude-mem") || thread.cwd.includes("observer-sessions")) continue;
+          const rollout = await this.environment.stamp(thread.rolloutPath);
+          if (!rollout) continue;
+          if (thread.source === "exec" && thread.updatedAt < automationCutoff) continue;
+          found.push(await this.session(instance, thread, indexTitles, instance.label, modelCatalog));
+        }
+        this.lastSessionsByInstance.set(instance.id, found);
+      } catch {
+        // One unreadable home must not hide the others. Keep its last good
+        // read, the same way the repository keeps a failed provider's.
+        found = this.lastSessionsByInstance.get(instance.id) ?? [];
+        retained.push(...found.map((session) => session.id));
       }
+      results.push(...found);
     }
     // A successful empty catalog is authoritative after every configured home was read.
     this.transcriptReader.retain(retained);

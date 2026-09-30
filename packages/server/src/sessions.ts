@@ -58,6 +58,8 @@ export type SessionControlTarget =
   | { kind: "claude_background"; target: {
     jobId: string; cwd: string; executable: string;
     application: "Ghostty" | "iTerm2" | "Terminal";
+    /** A terminal already running `claude attach` for this job. */
+    attached?: NativeHelperTerminalTarget;
   } }
   | { kind: "url"; url: string };
 

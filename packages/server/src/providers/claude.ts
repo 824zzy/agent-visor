@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import type { ProviderAdapter, DiscoveredProviderSession } from "../sessions.js";
 import type { FileStamp, ProcessRecord, ProviderEnvironment } from "./environment.js";
 import { ClaudeDesktopSessions } from "./claude-desktop.js";
@@ -129,8 +130,11 @@ export class ClaudeProvider implements ProviderAdapter {
       const claudeLifecycle = desktopTranscript && summary.lifecycle?.phase === turnState
         ? summary.lifecycle : undefined;
       const section = turnState === "unknown" ? "history" as const : turnState;
+      const attached = backgroundTarget
+        ? await attachedTerminalTarget(backgroundTarget.jobId, backgroundTarget.cwd, processes, this.environment)
+        : undefined;
       const controlTarget = backgroundTarget
-        ? { kind: "claude_background" as const, target: backgroundTarget }
+        ? { kind: "claude_background" as const, target: { ...backgroundTarget, ...(attached ? { attached } : {}) } }
         : terminalTarget
         ? { kind: "terminal" as const, target: terminalTarget }
         : desktopSession ? { kind: "url" as const, url: desktopSession.url }
@@ -185,6 +189,25 @@ export class ClaudeProvider implements ProviderAdapter {
     }
     return summary ?? emptySummary;
   }
+}
+
+/** Find a terminal window already running `claude attach <jobId>`. */
+async function attachedTerminalTarget(
+  jobId: string,
+  jobCwd: string,
+  processes: ProcessRecord[],
+  environment: ProviderEnvironment,
+): Promise<NativeHelperTerminalTarget | undefined> {
+  for (const process of processes) {
+    const [program, verb, id] = process.arguments.trim().split(/\s+/);
+    if (path.basename(program ?? "") !== "claude" || verb !== "attach" || id !== jobId) continue;
+    const target = terminalTargetForProcess(
+      process, await environment.cwd(process.pid) ?? jobCwd, processes,
+      processInstanceToken(process.pid, await environment.processStartedAt(process.pid)),
+    );
+    if (target) return target;
+  }
+  return undefined;
 }
 
 function claudeBackgroundTarget(

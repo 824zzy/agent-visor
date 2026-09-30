@@ -22,6 +22,16 @@ class TwoDesktopEnvironment extends LiveProviderEnvironment {
   override async codexDesktopCommand(pid: number) { return this.commands.get(pid); }
 }
 
+class UnreadableHomeEnvironment extends TwoDesktopEnvironment {
+  unreadableHome: string | undefined;
+  override async sqlite(database: string, sql: string) {
+    if (this.unreadableHome && database.startsWith(this.unreadableHome)) {
+      throw new Error("Provider database read failed");
+    }
+    return super.sqlite(database, sql);
+  }
+}
+
 function createThread(home: string, title: string): string {
   mkdirSync(home, { recursive: true });
   const database = path.join(home, "state_5.sqlite");
@@ -99,6 +109,30 @@ describe("Codex Desktop instances", () => {
       expect((await provider.discover()).map((session) => session.id)).toEqual([threadID]);
       expect((await provider.resolve(threadID))?.canOpenOwner).toBe(false);
       expect(homes).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps other Codex homes when one home's database cannot be read", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "visor-codex-homes-"));
+    try {
+      createThread(path.join(root, ".codex"), "Native task");
+      createThread(path.join(root, "copilot"), "Copilot task");
+      const canonicalNative = await canonicalCodexHome(path.join(root, ".codex"));
+      const canonicalCopilot = await canonicalCodexHome(path.join(root, "copilot"));
+      const environment = new UnreadableHomeEnvironment(root, { now: () => new Date("2026-09-28T23:05:00Z") });
+      const provider = new CodexProvider(environment, () => [{ path: canonicalCopilot, label: "Codex · Copilot" }]);
+      const secondID = codexSessionID(codexInstanceID(canonicalCopilot, canonicalNative), threadID);
+
+      // A stopped Desktop copy can leave its WAL database unopenable read-only.
+      environment.unreadableHome = canonicalCopilot;
+      expect((await provider.discover()).map((session) => session.id)).toEqual([threadID]);
+
+      environment.unreadableHome = undefined;
+      expect((await provider.discover()).map((session) => session.id)).toEqual([threadID, secondID]);
+      environment.unreadableHome = canonicalCopilot;
+      expect((await provider.discover()).map((session) => session.id)).toEqual([threadID, secondID]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
