@@ -10,6 +10,7 @@
     "build": "npm run build --workspace=@agent-visor/protocol && npm run build --workspace=@agent-visor/server && npm run build --workspace=@agent-visor/app && npm run test:export --workspace=@agent-visor/desktop && npm run build --workspace=@agent-visor/desktop",
     "dev:desktop": "npm run dev --workspace=@agent-visor/desktop",
     "test": "npm run build --workspace=@agent-visor/protocol && npm run test --workspace=@agent-visor/protocol && npm run test --workspace=@agent-visor/server && npm run test --workspace=@agent-visor/app && npm run test --workspace=@agent-visor/desktop",
+    "test:daemon-lifetime": "npm run build --workspace=@agent-visor/protocol && npm run build --workspace=@agent-visor/server && node scripts/test-daemon-lifetime.mjs",
     "test:chat": "npm run build && npm run test:chat --workspace=@agent-visor/desktop",
     "test:chat-lifecycle": "npm run build && npm run test:chat-lifecycle --workspace=@agent-visor/desktop",
     "test:clean-profile": "npm run build && npm run test:clean-profile --workspace=@agent-visor/desktop",

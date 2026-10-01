@@ -36,6 +36,7 @@ const helper = spawn(helperExecutable, ["--socket", socketPath], {
   env: { ...process.env, AGENT_VISOR_DATA_DIR: dataRoot },
   stdio: ["ignore", "ignore", "pipe"],
 });
+const helperExited = new Promise((resolve) => helper.once("exit", (code, signal) => resolve({ code, signal })));
 let stderr = "";
 helper.stderr.on("data", (data) => { stderr += data.toString(); });
 
@@ -122,6 +123,19 @@ try {
     throw new Error("Pi restoration candidate was not persisted");
   }
 
+  // exchange ends its socket. The desktop-owned daemon also closes this
+  // connection on exit, so prove EOF terminates the helper without a kill.
+  let exitDeadline;
+  try {
+    const result = await Promise.race([
+      helperExited,
+      new Promise((_, reject) => {
+        exitDeadline = setTimeout(() => reject(new Error("Helper survived socket EOF")), 5_000);
+      }),
+    ]);
+    if (result.code !== 0 || result.signal !== null) throw new Error("Helper exited uncleanly after EOF");
+  } finally { clearTimeout(exitDeadline); }
+  console.log("Native helper EOF shutdown PASS.");
   console.log("Native helper wire PASS: secure socket, framing, topology, Accessibility, Pi restoration, menu pills, and validation.");
 } finally {
   if (helper.exitCode === null && helper.signalCode === null) {

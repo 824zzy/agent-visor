@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { NativeHelperUsageGlance } from "@agent-visor/protocol";
+import { runDaemon } from "./daemon-lifetime.js";
 import { runBackground } from "./background-task.js";
 import { stopCodexTurns } from "./codex-turn.js";
 import { startHookSocket, type RunningHookSocket } from "./hook-socket.js";
@@ -28,253 +29,264 @@ import { chatUsageGlanceFromNative, readCodexUsage } from "./usage.js";
 import { checkForUpdates } from "./updates.js";
 import { agentVisorVersion } from "./runtime-version.js";
 
-const requestedPort = Number.parseInt(process.env.AGENT_VISOR_PORT ?? "0", 10);
-const token = process.env.AGENT_VISOR_TOKEN ?? randomBytes(32).toString("base64url");
-const currentVersion = agentVisorVersion();
-const dataRoot = process.env.AGENT_VISOR_DATA_DIR
-  ?? path.join(os.homedir(), "Library/Application Support/Agent Visor");
-const settingsDomain = process.env.AGENT_VISOR_SETTINGS_DOMAIN ?? "com.824zzy.AgentVisor.Dev";
-const integrationResources = process.env.AGENT_VISOR_INTEGRATIONS_DIR ?? path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)), "../../../AgentVisor/Resources",
-);
-const settings = await SettingsRepository.open({
-  root: dataRoot,
-  readLegacy: () => readLegacyDefaults(settingsDomain, dataRoot),
-});
-const statusEnvironment = new LiveProviderEnvironment(os.homedir());
-if (process.env.AGENT_VISOR_LAUNCH_AT_LOGIN) {
-  await settings.update({ launchAtLogin: process.env.AGENT_VISOR_LAUNCH_AT_LOGIN === "true" });
-}
-const repository = new SessionRepository(
-  liveProviders(
-    os.homedir(),
-    () => settings.current().observedWindowHours * 60 * 60 * 1_000,
-    () => settings.current().codexHomes,
-    (home) => settings.addDiscoveredCodexHome(home),
-    () => settings.current().ignoredCodexHomes,
-  ),
-  {
-    piRuntimeStatePath: path.join(dataRoot, "pi-runtime-links.json"),
-    bootSessionUUID: await macBootSessionUUID(),
-    chatUsageGlance: async (session) => {
-      // Claude usage remains absent until a provider-authoritative source is
-      // available. Do not show Codex quota data on another provider's chat.
-      if (session.provider !== "codex" || session.id.startsWith("codex:")
-        || !settings.current().codexUsageGlanceEnabled) {
-        return undefined;
-      }
-      return chatUsageGlanceFromNative(await readCodexUsage());
+await runDaemon(async (lifetime) => {
+  let hookSocket: RunningHookSocket | undefined;
+  let alfredSocket: Awaited<ReturnType<typeof startAlfredSocket>> | undefined;
+  let nativeHelper: NativeHelperProcess | undefined;
+  let nativeServices: NativeServicesRepository | undefined;
+  let unsubscribeMenu: (() => void) | undefined;
+  let unsubscribeNotifications: (() => void) | undefined;
+  let unsubscribePiRestoration: (() => void) | undefined;
+  let unsubscribeSettings: (() => void) | undefined;
+  let usageTimer: NodeJS.Timeout | undefined;
+  let menuTimer: NodeJS.Timeout | undefined;
+  let permissionTimer: NodeJS.Timeout | undefined;
+  let updateTimer: NodeJS.Timeout | undefined;
+  let usageGlances: NativeHelperUsageGlance[] = [];
+  let usageRefreshing = false;
+  let presentNativeMenu = () => {};
+  let refreshUsage = async () => {};
+  let refreshing = false;
+
+  let sessionControls: NativeSessionControls | undefined;
+  let running: Awaited<ReturnType<typeof startServer>> | undefined;
+  let refreshTimer: NodeJS.Timeout | undefined;
+  lifetime.onStop(async () => {
+    for (const timer of [refreshTimer, usageTimer, menuTimer, permissionTimer, updateTimer]) {
+      clearInterval(timer);
+    }
+    unsubscribeMenu?.();
+    unsubscribeNotifications?.();
+    unsubscribePiRestoration?.();
+    unsubscribeSettings?.();
+    stopCodexTurns();
+    // A failed or slow close must not prevent closing the helper connection.
+    const results = await Promise.allSettled([
+      alfredSocket?.close(), sessionControls?.close(), hookSocket?.close(),
+      nativeHelper?.close(), running?.close(),
+    ]);
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+  });
+
+  const requestedPort = Number.parseInt(process.env.AGENT_VISOR_PORT ?? "0", 10);
+  const token = process.env.AGENT_VISOR_TOKEN ?? randomBytes(32).toString("base64url");
+  const currentVersion = agentVisorVersion();
+  const dataRoot = process.env.AGENT_VISOR_DATA_DIR
+    ?? path.join(os.homedir(), "Library/Application Support/Agent Visor");
+  const settingsDomain = process.env.AGENT_VISOR_SETTINGS_DOMAIN ?? "com.824zzy.AgentVisor.Dev";
+  const integrationResources = process.env.AGENT_VISOR_INTEGRATIONS_DIR ?? path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)), "../../../AgentVisor/Resources",
+  );
+  const settings = await SettingsRepository.open({
+    root: dataRoot,
+    readLegacy: () => readLegacyDefaults(settingsDomain, dataRoot),
+  });
+  if (lifetime.stopping) return;
+  const statusEnvironment = new LiveProviderEnvironment(os.homedir());
+  if (process.env.AGENT_VISOR_LAUNCH_AT_LOGIN) {
+    await settings.update({ launchAtLogin: process.env.AGENT_VISOR_LAUNCH_AT_LOGIN === "true" });
+  }
+  const repository = new SessionRepository(
+    liveProviders(
+      os.homedir(),
+      () => settings.current().observedWindowHours * 60 * 60 * 1_000,
+      () => settings.current().codexHomes,
+      (home) => settings.addDiscoveredCodexHome(home),
+      () => settings.current().ignoredCodexHomes,
+    ),
+    {
+      piRuntimeStatePath: path.join(dataRoot, "pi-runtime-links.json"),
+      bootSessionUUID: await macBootSessionUUID(),
+      chatUsageGlance: async (session) => {
+        // Claude usage remains absent until a provider-authoritative source is
+        // available. Do not show Codex quota data on another provider's chat.
+        if (session.provider !== "codex" || session.id.startsWith("codex:")
+          || !settings.current().codexUsageGlanceEnabled) {
+          return undefined;
+        }
+        return chatUsageGlanceFromNative(await readCodexUsage());
+      },
     },
-  },
-);
+  );
 
-let hookSocket: RunningHookSocket | undefined;
-let alfredSocket: Awaited<ReturnType<typeof startAlfredSocket>> | undefined;
-let nativeHelper: NativeHelperProcess | undefined;
-let nativeServices: NativeServicesRepository | undefined;
-let unsubscribeMenu: (() => void) | undefined;
-let unsubscribeNotifications: (() => void) | undefined;
-let unsubscribePiRestoration: (() => void) | undefined;
-let unsubscribeSettings: (() => void) | undefined;
-let usageTimer: NodeJS.Timeout | undefined;
-let menuTimer: NodeJS.Timeout | undefined;
-let permissionTimer: NodeJS.Timeout | undefined;
-let updateTimer: NodeJS.Timeout | undefined;
-let usageGlances: NativeHelperUsageGlance[] = [];
-let usageRefreshing = false;
-let presentNativeMenu = () => {};
-let refreshUsage = async () => {};
-let refreshing = false;
-
-const hookPath = process.env.AGENT_VISOR_HOOK_SOCKET ?? "/tmp/agent-visor.sock";
-try {
-  hookSocket = await startHookSocket({ socketPath: hookPath, repository });
-  console.log(`Agent Visor hook socket listening at ${hookPath}`);
-} catch (error) {
-  console.warn(`Agent Visor hook socket unavailable: ${String(error)}`);
-}
-
-const nativeHelperExecutable = process.env.AGENT_VISOR_NATIVE_HELPER;
-if (nativeHelperExecutable) {
+  if (lifetime.stopping) return;
+  const hookPath = process.env.AGENT_VISOR_HOOK_SOCKET ?? "/tmp/agent-visor.sock";
   try {
-    nativeHelper = await retryNativeHelperStart(() => NativeHelperProcess.start(nativeHelperExecutable, (event) => {
-      if (event.event === "notification_permission") {
-        nativeServices?.setNotificationPermission(event.status);
-        return;
-      }
-      if (event.event === "notification_action") {
-        if (event.action === "activate") {
-          repository.acknowledgeReady(event.sessionId);
-          const action = nativeActionFor(event, repository.current());
-          if (action) process.send?.(action);
+    hookSocket = await startHookSocket({ socketPath: hookPath, repository });
+    console.log(`Agent Visor hook socket listening at ${hookPath}`);
+  } catch (error) {
+    console.warn(`Agent Visor hook socket unavailable: ${String(error)}`);
+  }
+
+  if (lifetime.stopping) return;
+  const nativeHelperExecutable = process.env.AGENT_VISOR_NATIVE_HELPER;
+  if (nativeHelperExecutable) {
+    try {
+      nativeHelper = await retryNativeHelperStart(() => NativeHelperProcess.start(nativeHelperExecutable, (event) => {
+        if (lifetime.stopping) return;
+        if (event.event === "notification_permission") {
+          nativeServices?.setNotificationPermission(event.status);
           return;
         }
-        runBackground("notification action", () => handleNotificationAction({
-          type: "notification_action",
-          action: event.action === "approve" ? "allow" : "deny",
-          sessionId: event.sessionId,
-          toolUseId: event.toolUseId,
-        }, repository).then((error) => {
-          if (error) console.warn(`Agent Visor notification action failed: ${error}`);
-        }));
-        return;
-      }
-      if (event.event === "refresh_usage") {
-        runBackground("usage refresh", refreshUsage);
-        return;
-      }
-      if (event.event === "activate_pill") {
-        repository.acknowledgeReady(event.sessionId);
-        runBackground("session focus", () => activateMenuPill(
-          event, repository, (message) => process.send?.(message),
-        ));
-        return;
-      }
-      const action = nativeActionFor(event, repository.current());
-      if (action) process.send?.(action);
-    }));
-    presentNativeMenu = () => {
-      const preferences = settings.current();
-      const presentation = preferences.pillsEnabled
-        ? menuPresentation(
-          repository.current(),
-          preferences.codexUsageGlanceEnabled ? usageGlances : [],
-        )
-        : { pills: [], navigatorPills: [], usageGlances: [] };
-      void nativeHelper?.presentPills(
-        presentation.pills,
-        presentation.usageGlances,
-        preferences.sessionShortcutModifierFamily,
-        preferences.hotkeyTrigger,
-        preferences.customHotkeyCombo,
-        presentation.navigatorPills,
-        preferences.pillScreen,
-        preferences.fullScreenPolicy,
-      )
-        .catch((error: unknown) => console.warn(`Agent Visor menu update failed: ${String(error)}`));
-    };
-    // Age eligibility can change even when the session snapshot is unchanged.
-    menuTimer = setInterval(presentNativeMenu, 60_000);
-    menuTimer.unref();
-    unsubscribeMenu = repository.subscribe(presentNativeMenu);
-    unsubscribeSettings = settings.subscribe(presentNativeMenu);
-    presentNativeMenu();
-
-    refreshUsage = async () => {
-      if (!settings.current().codexUsageGlanceEnabled || usageRefreshing) return;
-      usageRefreshing = true;
-      const codex = await readCodexUsage().finally(() => { usageRefreshing = false; });
-      if (!codex) {
-        if (usageGlances.some((glance) => glance.stale !== true)) {
-          usageGlances = usageGlances.map((glance) => ({ ...glance, stale: true }));
-          presentNativeMenu();
+        if (event.event === "notification_action") {
+          if (event.action === "activate") {
+            repository.acknowledgeReady(event.sessionId);
+            const action = nativeActionFor(event, repository.current());
+            if (action) sendToDesktop(action);
+            return;
+          }
+          runBackground("notification action", () => handleNotificationAction({
+            type: "notification_action",
+            action: event.action === "approve" ? "allow" : "deny",
+            sessionId: event.sessionId,
+            toolUseId: event.toolUseId,
+          }, repository).then((error) => {
+            if (error) console.warn(`Agent Visor notification action failed: ${error}`);
+          }));
+          return;
         }
-        return;
-      }
-      usageGlances = [codex];
+        if (event.event === "refresh_usage") {
+          runBackground("usage refresh", refreshUsage);
+          return;
+        }
+        if (event.event === "activate_pill") {
+          repository.acknowledgeReady(event.sessionId);
+          runBackground("session focus", () => activateMenuPill(
+            event, repository, (message) => sendToDesktop(message),
+          ));
+          return;
+        }
+        const action = nativeActionFor(event, repository.current());
+        if (action) sendToDesktop(action);
+      }));
+      presentNativeMenu = () => {
+        const preferences = settings.current();
+        const presentation = preferences.pillsEnabled
+          ? menuPresentation(
+            repository.current(),
+            preferences.codexUsageGlanceEnabled ? usageGlances : [],
+          )
+          : { pills: [], navigatorPills: [], usageGlances: [] };
+        void nativeHelper?.presentPills(
+          presentation.pills,
+          presentation.usageGlances,
+          preferences.sessionShortcutModifierFamily,
+          preferences.hotkeyTrigger,
+          preferences.customHotkeyCombo,
+          presentation.navigatorPills,
+          preferences.pillScreen,
+          preferences.fullScreenPolicy,
+        )
+          .catch((error: unknown) => console.warn(`Agent Visor menu update failed: ${String(error)}`));
+      };
+      // Age eligibility can change even when the session snapshot is unchanged.
+      menuTimer = setInterval(presentNativeMenu, 60_000);
+      menuTimer.unref();
+      unsubscribeMenu = repository.subscribe(presentNativeMenu);
+      unsubscribeSettings = settings.subscribe(presentNativeMenu);
       presentNativeMenu();
-    };
-    runBackground("usage refresh", refreshUsage);
-    usageTimer = setInterval(() => runBackground("usage refresh", refreshUsage), 300_000);
-    usageTimer.unref();
-  } catch (error) {
-    console.warn(`Agent Visor native helper unavailable: ${String(error)}`);
+
+      refreshUsage = async () => {
+        if (!settings.current().codexUsageGlanceEnabled || usageRefreshing) return;
+        usageRefreshing = true;
+        const codex = await readCodexUsage().finally(() => { usageRefreshing = false; });
+        if (!codex) {
+          if (usageGlances.some((glance) => glance.stale !== true)) {
+            usageGlances = usageGlances.map((glance) => ({ ...glance, stale: true }));
+            presentNativeMenu();
+          }
+          return;
+        }
+        usageGlances = [codex];
+        presentNativeMenu();
+      };
+      runBackground("usage refresh", refreshUsage);
+      usageTimer = setInterval(() => runBackground("usage refresh", refreshUsage), 300_000);
+      usageTimer.unref();
+    } catch (error) {
+      console.warn(`Agent Visor native helper unavailable: ${String(error)}`);
+    }
   }
-}
 
-const helperAdapter = nativeHelper ?? new UnavailableNativeHelper();
-const sessionControls = new NativeSessionControls(
-  helperAdapter,
-  path.join(dataRoot, "chat-images"),
-  undefined,
-  async (url) => { process.send?.({ type: "native_action", action: "open_session_url", url }); },
-  (sessionId, pending, respond, generation) => repository.registerExternalAction(
-    sessionId, pending, respond, generation,
-  ),
-);
-repository.setControls(sessionControls);
-try {
-  alfredSocket = await startAlfredSocket({
-    socketPath: path.join(dataRoot, "alfred", "s.sock"),
-    source: repository,
-  });
-} catch (error) {
-  console.warn(`Agent Visor Alfred session search unavailable: ${String(error)}`);
-}
-nativeServices = new NativeServicesRepository({
-  settings,
-  helper: helperAdapter,
-  codexHomeStatuses: () => codexHomeStatuses(statusEnvironment, settings.current().codexHomes),
-  connections: new AgentConnectionsRepository({
-    home: os.homedir(), resources: integrationResources,
-  }),
-  currentVersion,
-  checkUpdates: () => checkForUpdates(currentVersion),
-  pendingAction: (sessionId) => repository.pendingAction(sessionId),
-  piRestorationUpdate: () => repository.piRestorationUpdate(),
-  emitDesktop: (effect) => process.send?.({ type: "native_effect", ...effect }),
-});
-await nativeServices.start();
-permissionTimer = setInterval(() => runBackground(
-  "native services refresh", () => nativeServices?.refresh() ?? Promise.resolve(),
-), 15_000);
-permissionTimer.unref();
-runBackground("update check", () => nativeServices?.checkForUpdates() ?? Promise.resolve());
-updateTimer = setInterval(() => runBackground(
-  "update check", () => nativeServices?.checkForUpdates() ?? Promise.resolve(),
-), 6 * 60 * 60_000);
-updateTimer.unref();
-unsubscribeNotifications = repository.subscribe((snapshot) => {
-  nativeServices?.reconcileSessions(snapshot);
-});
-unsubscribePiRestoration = repository.subscribePiRestoration(() => {
-  nativeServices?.reconcilePiRestoration();
-});
-nativeServices.reconcileSessions(repository.current());
-
-const running = await startServer({
-  port: requestedPort,
-  source: repository,
-  token,
-  nativeServices,
-});
-process.send?.({ type: "ready", url: running.url });
-console.log(`Agent Visor daemon listening at ${new URL(running.url).origin}`);
-
-runBackground("session refresh", refresh);
-const refreshTimer = setInterval(() => runBackground("session refresh", refresh), 3_000);
-refreshTimer.unref();
-
-async function refresh(): Promise<void> {
-  if (refreshing) return;
-  refreshing = true;
+  if (lifetime.stopping) return;
+  const helperAdapter = nativeHelper ?? new UnavailableNativeHelper();
+  sessionControls = new NativeSessionControls(
+    helperAdapter,
+    path.join(dataRoot, "chat-images"),
+    undefined,
+    async (url) => { sendToDesktop({ type: "native_action", action: "open_session_url", url }); },
+    (sessionId, pending, respond, generation) => repository.registerExternalAction(
+      sessionId, pending, respond, generation,
+    ),
+  );
+  repository.setControls(sessionControls);
   try {
-    await repository.refresh();
-  } finally {
-    refreshing = false;
+    alfredSocket = await startAlfredSocket({
+      socketPath: path.join(dataRoot, "alfred", "s.sock"),
+      source: repository,
+    });
+  } catch (error) {
+    console.warn(`Agent Visor Alfred session search unavailable: ${String(error)}`);
   }
-}
-
-async function stop(): Promise<void> {
-  clearInterval(refreshTimer);
-  if (usageTimer) clearInterval(usageTimer);
-  if (menuTimer) clearInterval(menuTimer);
-  if (permissionTimer) clearInterval(permissionTimer);
-  if (updateTimer) clearInterval(updateTimer);
-  unsubscribeMenu?.();
-  unsubscribeNotifications?.();
-  unsubscribePiRestoration?.();
-  unsubscribeSettings?.();
-  stopCodexTurns();
-  await alfredSocket?.close();
-  await sessionControls.close();
-  await hookSocket?.close();
-  await nativeHelper?.close().catch((error: unknown) => {
-    console.warn(`Agent Visor Pi restoration invalidation failed: ${String(error)}`);
+  if (lifetime.stopping) return;
+  nativeServices = new NativeServicesRepository({
+    settings,
+    helper: helperAdapter,
+    codexHomeStatuses: () => codexHomeStatuses(statusEnvironment, settings.current().codexHomes),
+    connections: new AgentConnectionsRepository({
+      home: os.homedir(), resources: integrationResources,
+    }),
+    currentVersion,
+    checkUpdates: () => checkForUpdates(currentVersion),
+    pendingAction: (sessionId) => repository.pendingAction(sessionId),
+    piRestorationUpdate: () => repository.piRestorationUpdate(),
+    emitDesktop: (effect) => sendToDesktop({ type: "native_effect", ...effect }),
   });
-  await running.close();
-  process.exit(0);
-}
+  await nativeServices.start();
+  if (lifetime.stopping) return;
+  permissionTimer = setInterval(() => runBackground(
+    "native services refresh", () => nativeServices?.refresh() ?? Promise.resolve(),
+  ), 15_000);
+  permissionTimer.unref();
+  runBackground("update check", () => nativeServices?.checkForUpdates() ?? Promise.resolve());
+  updateTimer = setInterval(() => runBackground(
+    "update check", () => nativeServices?.checkForUpdates() ?? Promise.resolve(),
+  ), 6 * 60 * 60_000);
+  updateTimer.unref();
+  unsubscribeNotifications = repository.subscribe((snapshot) => {
+    nativeServices?.reconcileSessions(snapshot);
+  });
+  unsubscribePiRestoration = repository.subscribePiRestoration(() => {
+    nativeServices?.reconcilePiRestoration();
+  });
+  nativeServices.reconcileSessions(repository.current());
+
+  running = await startServer({
+    port: requestedPort,
+    source: repository,
+    token,
+    nativeServices,
+  });
+  if (lifetime.stopping) return;
+  sendToDesktop({ type: "ready", url: running.url });
+  console.log(`Agent Visor daemon listening at ${new URL(running.url).origin}`);
+
+  runBackground("session refresh", refresh);
+  refreshTimer = setInterval(() => runBackground("session refresh", refresh), 3_000);
+  refreshTimer.unref();
+
+  async function refresh(): Promise<void> {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      await repository.refresh();
+    } finally {
+      refreshing = false;
+    }
+  }
+
+});
 
 async function macBootSessionUUID(): Promise<string | undefined> {
   const result = await runProcess(
@@ -289,5 +301,11 @@ async function macBootSessionUUID(): Promise<string | undefined> {
     : undefined;
 }
 
-process.once("SIGINT", () => runBackground("shutdown", stop));
-process.once("SIGTERM", () => runBackground("shutdown", stop));
+function sendToDesktop(message: object): void {
+  if (!process.connected) return;
+  // The connection may close between the check and write. Handle that race
+  // without an unhandled IPC error interrupting graceful cleanup.
+  process.send?.(message, (error) => {
+    if (error && process.connected) console.warn(`Agent Visor IPC failed: ${String(error)}`);
+  });
+}

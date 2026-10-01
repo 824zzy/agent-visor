@@ -40,6 +40,8 @@ jobs:
         run: npm run typecheck
       - name: JavaScript unit tests
         run: npm test
+      - name: Daemon ownership regression
+        run: npm run test:daemon-lifetime
       - name: Sessions E2E
         run: npm run test:sessions
       - name: Chat E2E

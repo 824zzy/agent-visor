@@ -335,6 +335,7 @@ Useful local checks:
 npm run build
 npm run typecheck
 npm test
+npm run test:daemon-lifetime
 npm run test:sessions
 npm run test:chat
 npm run test:chat-lifecycle

@@ -21,7 +21,7 @@ it("routes daemon background work through the rejection handler", () => {
 
   for (const label of [
     "notification action", "usage refresh", "session focus", "native services refresh",
-    "update check", "session refresh", "shutdown",
+    "update check", "session refresh",
   ]) {
     expect(bin).toMatch(new RegExp(`runBackground\\(\\s*\"${label}\"`));
   }
