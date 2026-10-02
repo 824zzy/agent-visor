@@ -76,7 +76,7 @@ describe("session snapshot protocol", () => {
     expect(sessionSnapshotSchema.parse(snapshot)).toEqual(snapshot);
   });
 
-  it("preserves the typed session class in snapshots", () => {
+  it("preserves the typed session class and ambient eligibility in snapshots", () => {
     const snapshot = {
       type: "session_snapshot",
       revision: 7,
@@ -90,6 +90,7 @@ describe("session snapshot protocol", () => {
         cwd: "/Users/me/Codes/agent-visor",
         section: "ready",
         sessionClass: "automation",
+        ambientEligible: false,
         updatedAt: "2026-08-22T08:00:00.000Z",
         canOpenOwner: true,
         canEnterChat: true,

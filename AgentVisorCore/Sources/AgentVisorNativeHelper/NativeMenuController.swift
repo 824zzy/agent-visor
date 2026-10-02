@@ -10,6 +10,7 @@ private final class NativePillButton: NSButton {
     var motionBackgroundColor: NSColor?
     var restingBackgroundColor: NSColor { motionBackgroundColor ?? normalBackgroundColor }
     var onActivate: ((NSEvent.ModifierFlags) -> Void)?
+    var onContextMenu: ((NSEvent) -> Void)?
     var onAccessibilityActivate: (() -> Void)?
     var onHoverChange: ((Bool) -> Void)?
     private var hoverTrackingArea: NSTrackingArea?
@@ -56,11 +57,27 @@ private final class NativePillButton: NSButton {
         onActivate?(event.modifierFlags)
     }
 
+    override func rightMouseDown(with event: NSEvent) {
+        onContextMenu?(event)
+    }
+
     func flash() {
         layer?.backgroundColor = NSColor.white.withAlphaComponent(0.25).cgColor
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
             self?.layer?.backgroundColor = self?.restingBackgroundColor.cgColor
         }
+    }
+}
+
+private final class NativeMenuActionTarget: NSObject {
+    private let action: () -> Void
+
+    init(action: @escaping () -> Void) {
+        self.action = action
+    }
+
+    @objc func invoke(_ sender: NSMenuItem) {
+        action()
     }
 }
 
@@ -475,7 +492,7 @@ final class NativeMenuController: NSObject {
         }
 
         let orderedPills = NativeMenuSessionOrder.orderedPills(pills)
-        let previousPhases = sessionPresentations.mapValues(\.phase)
+        let previousPhases = sessionPresentations.mapValues { NativeMenuDisplayPhase.phase(for: $0) }
         let pillsByID = Dictionary(uniqueKeysWithValues: orderedPills.map { ($0.id, $0) })
         readyAttention.present(
             previousPhases: previousPhases,
@@ -561,7 +578,9 @@ final class NativeMenuController: NSObject {
             let color = sessionPanels[id]?.pillButton.contentTintColor
                 ?? statusColor(for: pill, now: now)
             sessionPanels[id]?.pillButton.contentTintColor = color.withAlphaComponent(
-                readyAttention.opacity(id: id, phase: pill.phase, now: now)
+                readyAttention.opacity(
+                    id: id, phase: pill.phase, attentionTier: pill.attentionTier, now: now
+                )
             )
         }
     }
@@ -594,7 +613,9 @@ final class NativeMenuController: NSObject {
         for (id, pill) in sessionPresentations
         where pill.phase == .ready && shortcutSnapshot?.positions[id] == nil {
             sessionPanels[id]?.pillButton.contentTintColor = statusColor(for: pill, now: now)
-                .withAlphaComponent(readyAttention.opacity(id: id, phase: pill.phase, now: now))
+                .withAlphaComponent(readyAttention.opacity(
+                    id: id, phase: pill.phase, attentionTier: pill.attentionTier, now: now
+                ))
         }
     }
 
@@ -758,6 +779,26 @@ final class NativeMenuController: NSObject {
         }
         sessionPanels[id]?.pillButton.flash()
         emit(.activatePill(sessionId: id, intent: intent))
+    }
+
+    private func showSessionContextMenu(for id: String) {
+        guard let pill = sessionPresentations[id],
+              let intent = NativeMenuFailureDismissalPolicy.intent(for: pill) else { return }
+        sessionHoverState.pointerExited(id)
+        dismissSessionPopover()
+        let menu = NSMenu()
+        let target = NativeMenuActionTarget { [weak self] in
+            self?.activateSession(id, intent: intent)
+        }
+        let item = NSMenuItem(
+            title: "Dismiss failure",
+            action: #selector(NativeMenuActionTarget.invoke(_:)),
+            keyEquivalent: ""
+        )
+        item.target = target
+        item.representedObject = target
+        menu.addItem(item)
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
 
     private func activateOverflow() {
@@ -1439,12 +1480,14 @@ final class NativeMenuController: NSObject {
             pill.id,
             label,
             pill.phase.rawValue,
+            pill.attentionTier?.rawValue ?? "",
+            pill.failureAlert == true ? "failure-alert" : "",
             pill.accessibilityLabel,
             shortcutPosition.map(String.init) ?? "",
         ].joined(separator: "|")
         guard panel.renderKey != key else { return }
         panel.renderKey = key
-        let isRecent = pill.phase == .history
+        let isRecent = NativeMenuDisplayPhase.phase(for: pill) == .history
         configure(
             panel,
             title: label,
@@ -1466,12 +1509,17 @@ final class NativeMenuController: NSObject {
             accessibilityAction: { [weak self] in self?.activateSession(pill.id) },
             onHoverChange: { [weak self] hovering in
                 self?.handleSessionHover(pill.id, hovering: hovering)
-            }
+            },
+            onContextMenu: NativeMenuFailureDismissalPolicy.intent(for: pill) != nil
+                ? { [weak self] _ in self?.showSessionContextMenu(for: pill.id) }
+                : nil
         )
         if shortcutPosition == nil {
             let now = Date()
             panel.pillButton.contentTintColor = statusColor(for: pill, now: now).withAlphaComponent(
-                readyAttention.opacity(id: pill.id, phase: pill.phase, now: now)
+                readyAttention.opacity(
+                    id: pill.id, phase: pill.phase, attentionTier: pill.attentionTier, now: now
+                )
             )
         }
     }
@@ -1530,7 +1578,8 @@ final class NativeMenuController: NSObject {
         accessibilityLabel: String? = nil,
         accessibilityHelp: String? = nil,
         accessibilityAction: (() -> Void)? = nil,
-        onHoverChange: ((Bool) -> Void)? = nil
+        onHoverChange: ((Bool) -> Void)? = nil,
+        onContextMenu: ((NSEvent) -> Void)? = nil
     ) {
         let font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
         panel.renderedTitle = title
@@ -1553,6 +1602,7 @@ final class NativeMenuController: NSObject {
         panel.pillButton.action = nil
         panel.pillButton.onActivate = onActivate
         panel.pillButton.onHoverChange = onHoverChange
+        panel.pillButton.onContextMenu = onContextMenu
     }
 
     struct LayoutBounds {

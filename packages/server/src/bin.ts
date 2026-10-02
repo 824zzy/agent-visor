@@ -151,7 +151,7 @@ await runDaemon(async (lifetime) => {
           return;
         }
         if (event.event === "activate_pill") {
-          repository.acknowledgeReady(event.sessionId);
+          if (event.intent !== "dismiss") repository.acknowledgeReady(event.sessionId);
           runBackground("session focus", () => activateMenuPill(
             event, repository, (message) => sendToDesktop(message),
           ));

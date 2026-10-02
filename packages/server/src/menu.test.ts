@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { nativeHelperRequestSchema, type SessionSnapshot } from "@agent-visor/protocol";
+import {
+  nativeHelperRequestSchema,
+  TRANSCRIPT_STALE_CEILING_MS,
+  type SessionSnapshot,
+} from "@agent-visor/protocol";
 import { activateMenuPill, menuPresentation, nativeActionFor } from "./menu.js";
 
 beforeEach(() => {
@@ -81,6 +85,28 @@ const snapshot: SessionSnapshot = {
 };
 
 describe("menu presentation", () => {
+  it.each(["needs_you", "working", "ready", "history"] as const)(
+    "keeps retained %s jobs searchable without pills or default overflow", (section) => {
+      const catalog: SessionSnapshot = {
+        ...snapshot,
+        sessions: [...snapshot.sessions, {
+          ...snapshot.sessions[0]!, id: "retained", source: "Claude Code",
+          section, ambientEligible: false, updatedAt: "2026-08-22T22:00:00.000Z",
+        }],
+      };
+      const before = structuredClone(catalog);
+      const presentation = menuPresentation(catalog, []);
+      expect(presentation.pills.map(({ id }) => id)).not.toContain("retained");
+      expect(presentation.pills.map(({ id }) => id)).toEqual(
+        menuPresentation(snapshot, []).pills.map(({ id }) => id),
+      );
+      expect(presentation.navigatorPills).toContainEqual(expect.objectContaining({
+        id: "retained", phase: section, defaultOverflowEligible: false,
+      }));
+      expect(catalog).toEqual(before);
+    },
+  );
+
   it("reports rejected native pill focus instead of silently consuming the click", async () => {
     const dispatched: unknown[] = [];
     const focused: string[] = [];
@@ -186,6 +212,87 @@ describe("menu presentation", () => {
       method: "present_pills",
       params: presentation,
     }).success).toBe(true);
+  });
+
+  it("moves stale Claude Ready rows behind fresh completed work without changing turn evidence", () => {
+    const now = Date.parse("2026-08-22T22:00:00.000Z");
+    const sourceSnapshot = {
+      ...snapshot,
+      sessions: [
+        {
+          ...snapshot.sessions[4]!,
+          id: "fresh-claude",
+          source: "Claude Code",
+          updatedAt: new Date(now - TRANSCRIPT_STALE_CEILING_MS + 1).toISOString(),
+        },
+        {
+          ...snapshot.sessions[4]!,
+          id: "stale-claude",
+          source: "Claude Code",
+          updatedAt: new Date(now - TRANSCRIPT_STALE_CEILING_MS - 1).toISOString(),
+        },
+        {
+          ...snapshot.sessions[0]!,
+          id: "old-working-claude",
+          source: "Claude Code",
+          updatedAt: new Date(now - 8 * 60 * 60 * 1_000).toISOString(),
+        },
+      ],
+    } satisfies SessionSnapshot;
+    const before = structuredClone(sourceSnapshot);
+    const presentation = menuPresentation(sourceSnapshot, [], now);
+
+    expect(presentation.pills.map(({ id, phase, attentionTier }) => ({ id, phase, attentionTier }))).toEqual([
+      { id: "old-working-claude", phase: "working", attentionTier: undefined },
+      { id: "fresh-claude", phase: "ready", attentionTier: undefined },
+      { id: "stale-claude", phase: "ready", attentionTier: "history" },
+    ]);
+    expect(sourceSnapshot).toEqual(before);
+    expect(sourceSnapshot.sessions[1]).toMatchObject({
+      section: "ready",
+      subtitle: "Ready to continue",
+    });
+  });
+
+  it("lets newer non-Claude History outrank stale acknowledged Claude without rewriting source state", () => {
+    const now = Date.parse("2026-08-22T22:00:00.000Z");
+    const staleClaude: SessionSnapshot["sessions"][number] = {
+      ...snapshot.sessions[4]!,
+      id: "stale-claude",
+      source: "Claude Code",
+      attentionTier: "acknowledged_ready",
+      updatedAt: new Date(now - TRANSCRIPT_STALE_CEILING_MS - 1).toISOString(),
+      sessionState: {
+        conversation: "open",
+        turn: "ready",
+        route: "available",
+      },
+    };
+    const recentHistory: SessionSnapshot["sessions"][number] = {
+      ...snapshot.sessions[1]!,
+      id: "newer-history",
+      source: "Codex",
+      updatedAt: new Date(now - 5 * 60 * 1_000).toISOString(),
+    };
+    const sourceSnapshot = { ...snapshot, sessions: [staleClaude, recentHistory] };
+    const before = structuredClone(sourceSnapshot);
+    const presentation = menuPresentation(sourceSnapshot, [], now);
+
+    expect(presentation.pills.map(({ id }) => id)).toEqual([
+      "newer-history", "stale-claude",
+    ]);
+    expect(presentation.pills[1]).toMatchObject({
+      id: "stale-claude",
+      phase: "ready",
+      attentionTier: "history",
+      subtitle: "Ready to continue",
+    });
+    expect(sourceSnapshot).toEqual(before);
+    expect(sourceSnapshot.sessions[0]).toMatchObject({
+      section: "ready",
+      subtitle: "Ready to continue",
+      sessionState: { turn: "ready" },
+    });
   });
 
   it("keeps urgent work first and sorts completed pills by activity regardless of acknowledgment", () => {

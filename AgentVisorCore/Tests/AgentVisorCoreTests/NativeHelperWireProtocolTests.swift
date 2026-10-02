@@ -108,6 +108,17 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(navigatorPills.last?.defaultOverflowEligible, true)
     }
 
+    func testDecodesOptionalFailureAlertWithoutChangingLegacyPills() throws {
+        let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"failure","title":"Failed turn","phase":"needs_you","failureAlert":true,"priority":0,"accessibilityLabel":"Failed turn, needs you"},{"id":"blocked","title":"Approval needed","phase":"needs_you","priority":1,"accessibilityLabel":"Approval needed, needs you"}]}}"#
+
+        let request = try NativeHelperRequest.decode(Data(json.utf8))
+        guard case .presentPills(_, let pills, _, _, _, _, _, _, _) = request else {
+            return XCTFail("Expected pills")
+        }
+        XCTAssertEqual(pills.first?.failureAlert, true)
+        XCTAssertNil(pills.last?.failureAlert)
+    }
+
     func testDecodesDisplayAndFullScreenPreferences() throws {
         let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[],"pillScreen":{"mode":"specific","displayId":5,"name":"XZ322QU V3"},"fullScreenPolicy":"alwaysHide"}}"#
 
@@ -225,6 +236,10 @@ final class NativeHelperWireProtocolTests: XCTestCase {
             sessionId: "session-1",
             intent: .chat
         ).encoded()
+        let dismiss = try NativeHelperEvent.activatePill(
+            sessionId: "failed-session",
+            intent: .dismiss
+        ).encoded()
         let open = try NativeHelperEvent.openSessions.encoded()
         let toggle = try NativeHelperEvent.toggleSessions.encoded()
         let settings = try NativeHelperEvent.openSettings.encoded()
@@ -236,6 +251,7 @@ final class NativeHelperWireProtocolTests: XCTestCase {
             action: .approve
         ).encoded()
         let first = try XCTUnwrap(JSONSerialization.jsonObject(with: activation) as? [String: Any])
+        let dismissed = try XCTUnwrap(JSONSerialization.jsonObject(with: dismiss) as? [String: Any])
         let second = try XCTUnwrap(JSONSerialization.jsonObject(with: open) as? [String: Any])
         let third = try XCTUnwrap(JSONSerialization.jsonObject(with: toggle) as? [String: Any])
         let fourth = try XCTUnwrap(JSONSerialization.jsonObject(with: settings) as? [String: Any])
@@ -247,6 +263,9 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(first["event"] as? String, "activate_pill")
         XCTAssertEqual(first["sessionId"] as? String, "session-1")
         XCTAssertEqual(first["intent"] as? String, "chat")
+        XCTAssertEqual(dismissed["event"] as? String, "activate_pill")
+        XCTAssertEqual(dismissed["sessionId"] as? String, "failed-session")
+        XCTAssertEqual(dismissed["intent"] as? String, "dismiss")
         XCTAssertEqual(second["event"] as? String, "open_sessions")
         XCTAssertEqual(third["event"] as? String, "toggle_sessions")
         XCTAssertEqual(fourth["event"] as? String, "open_settings")

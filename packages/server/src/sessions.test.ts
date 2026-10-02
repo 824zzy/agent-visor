@@ -94,6 +94,45 @@ describe("SessionRepository", () => {
     expect(openURL).toHaveBeenCalledExactlyOnceWith(`codex://threads/${id}`);
   });
 
+  it("revalidates a Claude background target before each focus", async () => {
+    const id = "claude-session";
+    const record: DiscoveredProviderSession = {
+      ...readyLive,
+      id,
+      provider: "claude_code",
+      owner: "Ghostty",
+      controlTarget: {
+        kind: "claude_background",
+        target: {
+          jobId: "8e45ed2c", cwd: "/tmp/project", executable: "/usr/local/bin/claude",
+          application: "Ghostty",
+        },
+      },
+    };
+    let present = true;
+    let resolutions = 0;
+    const provider: ProviderAdapter = {
+      id: "claude_code",
+      discover: async () => present ? [structuredClone(record)] : [],
+      resolveForFocus: async (sessionId) => {
+        resolutions += 1;
+        return present && sessionId === id ? structuredClone(record) : undefined;
+      },
+    };
+    const helper = new FakeNativeHelper();
+    const controls = new NativeSessionControls(helper);
+    const repository = new SessionRepository([provider]);
+    repository.setControls(controls);
+    await repository.refresh();
+
+    expect(await repository.focusSession(id)).toBeUndefined();
+    expect(helper.claudeAttachRequests).toHaveLength(1);
+    present = false;
+    expect(await repository.focusSession(id)).toBe("Exact session focus is unavailable.");
+    expect(resolutions).toBe(2);
+    expect(helper.claudeAttachRequests).toHaveLength(1);
+  });
+
   it("keeps a stable revision while provider data is unchanged", async () => {
     const provider = new FakeProvider();
     const repository = new SessionRepository([provider]);

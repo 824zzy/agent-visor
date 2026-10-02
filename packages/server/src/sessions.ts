@@ -78,6 +78,8 @@ export type DiscoveredProviderSession = {
   canEnterChat: boolean;
   /** Provider-owned interaction class used by ambient attention surfaces. */
   sessionClass?: SessionClass;
+  /** Current user-facing presence, independent of lifecycle and resume capability. */
+  ambientEligible?: boolean;
   managedBy?: SessionSummary["managedBy"];
   authority?: number;
   chatPath?: string;
@@ -89,6 +91,14 @@ export type DiscoveredProviderSession = {
   codexLifecycle?: import("./providers/codex-lifecycle.js").CodexLifecycle;
   /** Timestamped main-thread evidence from a live Claude Desktop transcript. */
   claudeLifecycle?: { phase: "working" | "ready"; observedAt: string };
+  /** True only for a newly observed Claude background failure. */
+  failureAlert?: boolean;
+  /**
+   * Claude's bounded agent inventory is authoritative for background state
+   * while its snapshot is fresh. This is provider-internal evidence and is
+   * stripped when the session is normalized for the client.
+   */
+  claudeInventoryState?: { authoritative: boolean; observedAt: number; checkedAt: number };
   /** Provider-confirmed lifetime, independent of list placement. */
   conversationState?: SessionConversationState;
   /** Current provider turn state, independent of attention ordering. */
@@ -214,6 +224,7 @@ export interface SessionSnapshotSource {
   /** Push a settings-only update when a lazy Codex catalog finishes loading. */
   subscribeChatSettings?(listener: ChatSettingsListener): () => void;
   acknowledgeReady?(sessionId: string): void;
+  acknowledgeFailure?(sessionId: string): void;
   chatPage?(
     sessionId: string,
     before?: number,
@@ -238,6 +249,8 @@ export interface ProviderAdapter {
   discover(): Promise<DiscoveredProviderSession[]>;
   /** Resolve one opened conversation without relying on recent-list membership. */
   resolve?(sessionId: string): Promise<DiscoveredProviderSession | undefined>;
+  /** Resolve one user focus request with bounded fresh provider identity checks. */
+  resolveForFocus?(sessionId: string): Promise<DiscoveredProviderSession | undefined>;
   /** Load provider controls lazily for an opened chat, never during discovery. */
   chatSettings?(session: DiscoveredProviderSession): Promise<
     DiscoveredProviderSession["chatSettingsCatalog"]
@@ -245,6 +258,8 @@ export interface ProviderAdapter {
   noteHook?(event: HookSessionEvent): void;
   /** Sessions the last discovery proved are not conversations; their hooks are dropped. */
   hiddenSessionIds?(): ReadonlySet<string>;
+  /** Acknowledge a provider-owned failure while retaining its history row. */
+  acknowledgeFailure?(sessionId: string): void;
 }
 
 export type HookSessionEvent = {
@@ -420,10 +435,12 @@ export class SessionRepository {
     sessions: [],
   };
   private readonly lastByProvider = new Map<ProviderID, DiscoveredProviderSession[]>();
+  private refreshInFlight: Promise<SessionSnapshot> | undefined;
   private readonly latestHookAtBySession = new Map<string, string>();
   private readonly hookBySession = new Map<string, HookSessionEvent>();
   private readonly piRuntimeBySession = new Map<string, HookSessionEvent>();
   private readonly acknowledgedReadyIDs = new Set<string>();
+  private readonly acknowledgedFailureIDs = new Set<string>();
   private readonly stateRevisionBySession = new Map<string, number>();
   private readonly stateFingerprintBySession = new Map<string, string>();
   private readonly piRuntimeDiscoveryGeneration = new Map<string, number>();
@@ -1415,8 +1432,20 @@ export class SessionRepository {
   }
 
   async focusSession(sessionId: string): Promise<string | undefined> {
-    const session = this.controlBySession.get(sessionId);
-    if (!session?.controlTarget || !this.controls) return "Exact session focus is unavailable.";
+    let session = this.controlBySession.get(sessionId);
+    if (!session || !this.controls) return "Exact session focus is unavailable.";
+    // Claude background targets are short-lived process/CLI identities. A
+    // click must revalidate the exact conversation before native focus so a
+    // removed or replaced job cannot reuse a cached attach target.
+    if (session.provider === "claude_code"
+      && session.controlTarget?.kind === "claude_background") {
+      const resolved = await this.resolveExactSession(sessionId, false, true);
+      if (!resolved || resolved.resolutionUnavailable || !resolved.controlTarget) {
+        return "Exact session focus is unavailable.";
+      }
+      session = resolved;
+    }
+    if (!session.controlTarget) return "Exact session focus is unavailable.";
     if (isTerminalChatRoute(session) && this.terminalNextTurnBySession.has(sessionId)) {
       return unavailableMessage("turn_in_progress");
     }
@@ -1442,6 +1471,15 @@ export class SessionRepository {
     const session = this.snapshotValue.sessions.find(({ id }) => id === sessionId);
     if (session?.section !== "ready" || this.acknowledgedReadyIDs.has(sessionId)) return;
     this.acknowledgedReadyIDs.add(sessionId);
+    this.publish([...this.lastByProvider.values()].flat());
+  }
+
+  acknowledgeFailure(sessionId: string): void {
+    const session = this.snapshotValue.sessions.find(({ id }) => id === sessionId);
+    if (session?.failureAlert !== true) return;
+    this.providers.find((provider) => provider.id === "claude_code")
+      ?.acknowledgeFailure?.(sessionId);
+    this.acknowledgedFailureIDs.add(sessionId);
     this.publish([...this.lastByProvider.values()].flat());
   }
 
@@ -2319,6 +2357,7 @@ export class SessionRepository {
   private async resolveExactSession(
     sessionId: string,
     recoverTentativeRoute = false,
+    freshFocus = false,
   ): Promise<DiscoveredProviderSession | undefined> {
     const hook = this.hookBySession.get(sessionId);
     const fallback = this.openedSessionBySession.get(sessionId)
@@ -2331,18 +2370,28 @@ export class SessionRepository {
     // Once a cached/opened record establishes provider identity, a failed
     // exact lookup means that provider no longer confirmed this conversation.
     // Do not let another adapter with a colliding ID take over its route.
-    const resolverProviders = fallbackProvider?.resolve
+    const fallbackResolver = fallbackProvider
+      ? freshFocus ? fallbackProvider.resolveForFocus ?? fallbackProvider.resolve : fallbackProvider.resolve
+      : undefined;
+    const resolverProviders = fallbackResolver && fallbackProvider
       ? [fallbackProvider]
       : this.providers;
     for (const provider of resolverProviders) {
-      if (!provider.resolve) continue;
-      resolved = await provider.resolve(sessionId).catch(() => undefined);
+      const resolver = freshFocus
+        ? provider.resolveForFocus ?? provider.resolve
+        : provider.resolve;
+      if (!resolver) continue;
+      resolved = await resolver.call(provider, sessionId).catch(() => undefined);
       if (resolved) break;
     }
     if (!resolved) {
       if (!fallback) return undefined;
-      // Claude's live discovery also refreshes opened chats; opening one must
-      // not freeze its turn state. Keep other providers' retained route evidence.
+      // A provider-specific fresh resolver is an exact focus check. Its
+      // negative result must not fall back to the ambient Claude target.
+      if (freshFocus && fallbackProvider?.resolveForFocus) return undefined;
+      // Claude's ordinary opened-chat path uses the last ambient discovery;
+      // only an explicit background focus asks the provider for a fresh scan.
+      // Keep other providers' retained route evidence.
       // A Codex resolver failure is different: keep the transcript
       // record readable, but mark every action route unavailable until the
       // provider confirms the conversation again.
@@ -2451,7 +2500,18 @@ export class SessionRepository {
     }
   }
 
-  async refresh(): Promise<SessionSnapshot> {
+  refresh(): Promise<SessionSnapshot> {
+    if (this.refreshInFlight) return this.refreshInFlight;
+    const operation = this.refreshProviders();
+    this.refreshInFlight = operation;
+    const clear = () => {
+      if (this.refreshInFlight === operation) this.refreshInFlight = undefined;
+    };
+    void operation.then(clear, clear);
+    return operation;
+  }
+
+  private async refreshProviders(): Promise<SessionSnapshot> {
     const discovered = await Promise.all(this.providers.map(async (provider) => {
       try {
         const sessions = await provider.discover();
@@ -2483,10 +2543,20 @@ export class SessionRepository {
     // Retain the last real lifecycle/approval event instead of replacing it.
     if (event.provider === "claude_code" && !event.expectsResponse
       && !claudeTurnHookEvents.has(event.event)) return this.current();
+    let refreshClaudeFailure = false;
     const latestAt = this.latestHookAtBySession.get(event.sessionId);
     if (!latestAt || latestAt <= event.receivedAt) {
       this.latestHookAtBySession.set(event.sessionId, event.receivedAt);
+      refreshClaudeFailure = this.shouldRefreshClaudeFailure(event);
       const previous = this.hookBySession.get(event.sessionId);
+      // Keep an already accepted fresh start/approval bridge when a delayed
+      // Claude Stop is rejected by the authoritative inventory guard. The
+      // timestamp watermark still advances below, so older hooks cannot
+      // replace the bridge and a later fresh start can still take over.
+      const preserveClaudeBridge = shouldPreserveClaudeInventoryBridge(
+        event,
+        this.lastByProvider.get("claude_code")?.find(({ id }) => id === event.sessionId),
+      );
       if (!shouldIgnorePiHeartbeat(event, previous)) {
         this.providers.find((provider) => provider.id === event.provider)?.noteHook?.(event);
         if (event.provider === "pi") {
@@ -2516,15 +2586,30 @@ export class SessionRepository {
           if (recovered) this.hookBySession.set(event.sessionId, recovered);
         } else if (isPhaseNeutralNotification(event)) {
           if (!previous) this.hookBySession.set(event.sessionId, notificationPresentation(event));
-        } else {
+        } else if (!preserveClaudeBridge) {
           this.hookBySession.set(event.sessionId, structuredClone(event));
         }
       }
     }
     this.reconcileTerminalNextTurnHook(event);
     const snapshot = this.publish([...this.lastByProvider.values()].flat());
+    if (refreshClaudeFailure) {
+      void this.refresh().catch(() => undefined);
+    }
     if (event.provider === "pi") this.publishPiRestoration();
     return snapshot;
+  }
+
+  private shouldRefreshClaudeFailure(event: HookSessionEvent): boolean {
+    if (event.provider !== "claude_code") return false;
+    const receivedAt = Date.parse(event.receivedAt);
+    if (!Number.isFinite(receivedAt)) return false;
+    const session = this.lastByProvider.get("claude_code")
+      ?.find((candidate) => candidate.id === event.sessionId);
+    const inventory = session?.claudeInventoryState;
+    return session?.failureAlert !== undefined
+      && inventory?.authoritative === true
+      && receivedAt > inventory.observedAt;
   }
 
   private publishPiRestoration(): void {
@@ -2606,26 +2691,33 @@ export class SessionRepository {
   }
 
   private publish(discovered: DiscoveredProviderSession[]): SessionSnapshot {
-    this.reconcileTerminalNextTurns(discovered);
+    const freshFailureIDs = new Set(
+      discovered.filter((session) => session.failureAlert === true).map((session) => session.id),
+    );
+    for (const sessionId of this.acknowledgedFailureIDs) {
+      if (!freshFailureIDs.has(sessionId)) this.acknowledgedFailureIDs.delete(sessionId);
+    }
+    const effectiveDiscovered = discovered.map((session) => this.projectAcknowledgedFailure(session));
+    this.reconcileTerminalNextTurns(effectiveDiscovered);
     const authoritative = new Map<string, DiscoveredProviderSession>();
-    for (const record of discovered) {
+    for (const record of effectiveDiscovered) {
       const existing = authoritative.get(record.id);
       if (!existing || (record.authority ?? 1) > (existing.authority ?? 1)) {
         authoritative.set(record.id, record);
       }
     }
-    const ambientMerged = applyHooks(discovered, this.hookBySession);
+    const ambientMerged = applyHooks(effectiveDiscovered, this.hookBySession);
     const openedRecords = [...this.openedSessionBySession.entries()].map(([sessionId, session]) => {
       // Hook events can arrive between exact refreshes. Keep the opened
       // record's provider identity while applying the same current hook facts
       // that drive the ambient view.
       const hooked = applyHooks([session], this.hookBySession)[0] ?? session;
-      let copy = structuredClone(hooked);
+      const copy = structuredClone(this.projectAcknowledgedFailure(hooked));
       this.openedSessionBySession.set(sessionId, copy);
       return copy;
     });
     const openedIDs = new Set(openedRecords.map((session) => session.id));
-    const ambientIDs = new Set(discovered.map((session) => session.id));
+    const ambientIDs = new Set(effectiveDiscovered.map((session) => session.id));
     // Once a conversation is opened, its exact record is authoritative for
     // both Chat and its session summary. Ambient discovery may be stale or
     // bounded, and must not restore a writable route after exact lookup
@@ -2742,6 +2834,21 @@ export class SessionRepository {
     }
     return this.current();
   }
+
+  private projectAcknowledgedFailure(
+    session: DiscoveredProviderSession,
+  ): DiscoveredProviderSession {
+    if (session.failureAlert !== true || !this.acknowledgedFailureIDs.has(session.id)) {
+      return session;
+    }
+    return {
+      ...session,
+      section: "history",
+      subtitle: "Claude Code session failed",
+      turnState: "unknown",
+      failureAlert: false,
+    };
+  }
 }
 
 function canonicalBootSessionUUID(value: unknown): string | undefined {
@@ -2821,6 +2928,30 @@ function applyHooks(
     const phase = hookPhase(hook);
     const existing = sessions.find((session) => session.id === hook.sessionId);
     if (existing) {
+      // Hooks can arrive after inventory discovery and describe the launcher
+      // rather than the canonical Claude background job. Preserve the
+      // inventory state and updatedAt while its authority is live.
+      if (existing.claudeInventoryState) {
+        const receivedAt = Date.parse(hook.receivedAt);
+        // A hook observed after the inventory fetch began may describe a
+        // newer turn. Let it bridge until the next inventory refresh; older
+        // hooks must not replace the canonical snapshot.
+        if (!Number.isFinite(receivedAt)
+          || receivedAt <= existing.claudeInventoryState.observedAt
+          || (!existing.claudeInventoryState.authoritative
+            && receivedAt <= existing.claudeInventoryState.checkedAt)) continue;
+        // A fresh hook may be evidence that the failed job has started a new
+        // turn, but it cannot prove that transition on its own. Keep the
+        // authoritative failure terminal until the next inventory snapshot.
+        if (existing.claudeInventoryState.authoritative
+          && existing.failureAlert !== undefined) continue;
+        // A Stop/idle hook can be delivered after the inventory fetch while
+        // still belonging to the turn represented by the canonical row. Keep
+        // the authoritative state and activity timestamp until the next
+        // inventory refresh; receipt/activity time alone cannot settle an
+        // already observed background job.
+        if (existing.claudeInventoryState.authoritative && isClaudeSettledHook(hook)) continue;
+      }
       // ponytail: desktop Codex can omit or deliver stale turn hooks. Never let
       // those replace the lifecycle boundary read from its own transcript.
       if (existing.codexLifecycle) {
@@ -2845,6 +2976,26 @@ function applyHooks(
     sessions.push({ ...hookSession(hook), subtitle: phase.subtitle });
   }
   return sessions;
+}
+
+function isClaudeSettledHook(event: HookSessionEvent): boolean {
+  return event.provider === "claude_code"
+    && (event.event === "Stop"
+      || event.isIdle === true
+      || event.status.trim().toLowerCase() === "idle");
+}
+
+function shouldPreserveClaudeInventoryBridge(
+  event: HookSessionEvent,
+  canonical: DiscoveredProviderSession | undefined,
+): boolean {
+  if (event.provider !== "claude_code" || !isClaudeSettledHook(event)) return false;
+  const observedAt = canonical?.claudeInventoryState?.observedAt;
+  const receivedAt = Date.parse(event.receivedAt);
+  return canonical?.claudeInventoryState?.authoritative === true
+    && observedAt !== undefined
+    && Number.isFinite(receivedAt)
+    && receivedAt > observedAt;
 }
 
 function normalizedTTY(value: string): string {
@@ -3286,7 +3437,9 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
       canOpenOwner: session.canOpenOwner,
       canEnterChat: session.canEnterChat,
       ...(session.sessionClass ? { sessionClass: session.sessionClass } : {}),
+      ...(session.ambientEligible !== undefined ? { ambientEligible: session.ambientEligible } : {}),
       ...(session.managedBy ? { managedBy: session.managedBy } : {}),
+      ...(session.failureAlert !== undefined ? { failureAlert: session.failureAlert } : {}),
       ...(session.conversationState || session.turnState
         ? { sessionState: resolveSessionState(session) } : {}),
       ...(session.stateRevision !== undefined ? { stateRevision: session.stateRevision } : {}),

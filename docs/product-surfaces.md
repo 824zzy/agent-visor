@@ -214,8 +214,9 @@ Every surface uses the same phase meanings:
 - For a Claude Desktop session with unknown metadata status, Agent Visor uses
   the transcript as a completion fallback. A newer user/tool entry remains
   `Working`; a newer assistant entry that has stopped changing becomes
-  `Ready`; and any completed transcript quiet past the existing 30-minute
-  stale ceiling becomes `Recent`.
+  `Ready`; and the native menu gives a completed transcript quiet past the
+  existing 30-minute stale ceiling a `Recent` attention tier while preserving
+  its Ready phase in the source-backed Sessions state.
 - Codex desktop threads use the same rule. Their `task_started`,
   `task_complete`, and `turn_aborted` transcript markers are claims, not
   liveness: a marker only counts as `Working` or `Ready` while the transcript
@@ -233,14 +234,18 @@ Every surface uses the same phase meanings:
   orange pill alive indefinitely.
 - Agent Visor does not scrape Claude Desktop UI to recover phase.
 
+Claude background inventory records remain searchable and resumable. They enter physical pills and the default overflow only when current interactive metadata or a corroborated parked manager establishes a user-facing session. Worker processes and completed or blocked inventory entries alone do not establish that presence. Closing or switching the source UI updates eligibility without removing history.
+
 The menu-bar strip prioritizes:
 
 1. `Needs attention`
 2. `Working`
-3. All completed `Ready` sessions
+3. Fresh completed `Ready` sessions
 4. Source-backed `History` shortcuts
 
 Within each group, authoritative activity (`updatedAt`) sorts newest first and session ID is the stable tie-breaker. The daemon owns this order; the helper adopts updated priorities even when only activity changes. Acknowledgment does not change rank. Source, owner, terminal host, and project do not change priority. The Sessions browser retains its Needs you, Ready to continue, In progress, and History section order, with the same recency rule within each section.
+
+Claude Code rows that remain open and Ready but have no activity within the shared 30-minute transcript stale ceiling keep their Ready phase and true turn/route state, but receive a `History` attention tier on the menu-bar and native navigator. The tier moves an old idle or done job behind newer completed work and makes the overflow display it as Recent, while the 42-minute Ready age fade remains available. The full Sessions-browser row stays unchanged, and later provider activity removes the stale tier. Selecting a retained Claude background shortcut reattaches the exact job identity. Current interactive metadata identifying the same conversation preserves its exact terminal route and canonical job name; launch arguments alone never prove which conversation that terminal now displays.
 
 ## Ready Completion Attention
 

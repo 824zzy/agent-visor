@@ -99,9 +99,13 @@ export const sessionSummarySchema = z.object({
   cwd: z.string().min(1),
   section: sessionSectionSchema,
   sessionClass: sessionClassSchema.optional(),
+  /** Provider-confirmed ambient presence; false keeps resumable rows searchable only. */
+  ambientEligible: z.boolean().optional(),
   /** Recorded managing client; independent of the provider used for navigation. */
   managedBy: z.literal("Agent Room").optional(),
   attentionTier: sessionAttentionTierSchema.optional(),
+  /** True for a newly observed Claude failure; false keeps old failures searchable without an ambient pill. */
+  failureAlert: z.boolean().optional(),
   /** State used for actions; section remains a list/attention presentation. */
   sessionState: sessionStateSchema.optional(),
   /** Changes when provider state or action availability changes. */
@@ -884,6 +888,8 @@ export const nativeHelperPillSchema = z.object({
   inspector: nativeHelperSessionInspectorSchema.optional(),
   phase: sessionSectionSchema,
   attentionTier: sessionAttentionTierSchema.optional(),
+  /** Marks a needs-you pill that can be explicitly dismissed as a failure. */
+  failureAlert: z.boolean().optional(),
   // Omitted on older wire messages to preserve the helper's legacy overflow
   // behavior. New presentations set this explicitly so the helper does not
   // infer eligibility (or automation status) from catalog membership.
@@ -1116,7 +1122,7 @@ export const nativeHelperResponseSchema = z.union([
       type: z.literal("event"),
       event: z.literal("activate_pill"),
       sessionId: z.string().min(1).max(128),
-      intent: z.enum(["standard", "chat"]).optional(),
+      intent: z.enum(["standard", "chat", "dismiss"]).optional(),
     }).strict(),
     z.object({
       version: z.literal(PROTOCOL_VERSION),

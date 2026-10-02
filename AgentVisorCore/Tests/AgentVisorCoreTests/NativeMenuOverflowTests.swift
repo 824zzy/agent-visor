@@ -4,6 +4,18 @@ import XCTest
 @testable import AgentVisorCore
 
 final class NativeMenuOverflowTests: XCTestCase {
+    func testHistoryAttentionUsesRecentOverflowDisplayWithoutChangingReadyWirePhase() {
+        let stale = pill("stale", title: "Old Claude", project: "agent-visor")
+            .with(phase: .ready, attentionTier: .history)
+
+        XCTAssertEqual(stale.phase, .ready)
+        XCTAssertEqual(NativeMenuDisplayPhase.phase(for: stale), .history)
+        XCTAssertEqual(
+            NativeMenuDisplayPhase.phase(for: pill("fresh", title: "Fresh", project: "agent-visor")),
+            .working
+        )
+    }
+
     func testOldUnarchivedConversationRemainsInOverflowAndSearch() {
         let old = pill(
             "old", title: "donut-feature-parity", project: "Donut",
@@ -31,13 +43,17 @@ final class NativeMenuOverflowTests: XCTestCase {
             defaultOverflowEligible: false
         )
         let managed = pill("managed", title: "hi", project: "Codes", defaultOverflowEligible: false)
+        let retained = pill(
+            "retained", title: "cc-av", project: "Codes", defaultOverflowEligible: false
+        ).with(phase: .ready, attentionTier: .ready)
         let snapshot = NativeMenuOverflowSnapshot(
             menuPills: [visible],
-            navigatorPills: [visible, navigatorOnly, automation, managed],
+            navigatorPills: [visible, navigatorOnly, automation, managed, retained],
             visibleSessionIDs: ["visible"]
         )
 
         XCTAssertEqual(snapshot.overflowSessionIDs, ["chat"])
+        XCTAssertEqual(snapshot.selection(query: "cc-av").orderedSessionIDs, ["retained"])
         XCTAssertEqual(snapshot.selection(query: "").orderedSessionIDs, ["chat"])
         XCTAssertEqual(snapshot.selection(query: "hi").orderedSessionIDs.first, "managed")
     }
@@ -160,7 +176,9 @@ final class NativeMenuOverflowTests: XCTestCase {
         title: String,
         project: String,
         activityAt: String? = nil,
-        defaultOverflowEligible: Bool? = nil
+        defaultOverflowEligible: Bool? = nil,
+        attentionTier: NativeHelperSessionAttentionTier? = nil,
+        phase: NativeHelperPillPhase = .working
     ) -> NativeHelperPill {
         NativeHelperPill(
             id: id,
@@ -178,10 +196,34 @@ final class NativeMenuOverflowTests: XCTestCase {
                     context: nil
                 )
             },
-            phase: .working,
+            phase: phase,
+            attentionTier: attentionTier,
             defaultOverflowEligible: defaultOverflowEligible,
             priority: 0,
             accessibilityLabel: "\(title), in progress"
+        )
+    }
+}
+
+private extension NativeHelperPill {
+    func with(
+        phase: NativeHelperPillPhase,
+        attentionTier: NativeHelperSessionAttentionTier?
+    ) -> NativeHelperPill {
+        NativeHelperPill(
+            id: id,
+            title: title,
+            subtitle: subtitle,
+            source: source,
+            project: project,
+            owner: owner,
+            inspector: inspector,
+            phase: phase,
+            attentionTier: attentionTier,
+            failureAlert: failureAlert,
+            defaultOverflowEligible: defaultOverflowEligible,
+            priority: priority,
+            accessibilityLabel: accessibilityLabel
         )
     }
 }

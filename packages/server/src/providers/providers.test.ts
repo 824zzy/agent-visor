@@ -230,7 +230,7 @@ describe("live provider adapters", () => {
     }]);
   });
 
-  it("opens a Claude background pill in its exact CLI session", async () => {
+  it("keeps a retained Claude job searchable and opens it in its exact CLI session", async () => {
     const environment = new FixtureEnvironment();
     const sessionId = "69c752b0-5993-4a3b-a4da-2777293ac662";
     const jobId = "69c752b0";
@@ -255,7 +255,9 @@ describe("live provider adapters", () => {
     await repository.refresh();
     repository.applyHook({ sessionId, cwd, tty: "ttys001", provider: "claude_code", event: "Stop", status: "idle", receivedAt: now.toISOString() });
 
-    const pill = menuPresentation(repository.current(), [], now.valueOf()).pills.find(value => value.id === sessionId);
+    const presentation = menuPresentation(repository.current(), [], now.valueOf());
+    expect(presentation.pills.some((pill) => pill.id === sessionId)).toBe(false);
+    const pill = presentation.navigatorPills.find(value => value.id === sessionId);
     expect(pill).toMatchObject({ owner: "Ghostty", title: `Claude Code · ${jobId}` });
     const effects = vi.fn();
     await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId }, repository, effects);
@@ -270,7 +272,7 @@ describe("live provider adapters", () => {
     expect(opened).toHaveBeenCalledWith({ jobId, cwd, executable, application: "Ghostty" });
   });
 
-  it("returns a Claude background pill to its already attached window", async () => {
+  it("reopens the exact Claude background job instead of trusting an attached window", async () => {
     const environment = new FixtureEnvironment();
     const sessionId = "69c752b0-5993-4a3b-a4da-2777293ac662";
     const jobId = "69c752b0";
@@ -303,13 +305,13 @@ describe("live provider adapters", () => {
     );
 
     await activate();
-    expect(helper.terminalFocusRequests).toMatchObject([{ application: "Ghostty", pid: 62, tty: "ttys051" }]);
+    expect(helper.claudeAttachRequests).toEqual([{ cwd, executable, jobId }]);
+    expect(helper.terminalFocusRequests).toEqual([]);
     expect(opened).not.toHaveBeenCalled();
 
-    // A window closed after the last refresh must not strand the click.
-    helper.focusTerminal = async () => { throw new Error("The terminal is gone."); };
     await activate();
-    expect(helper.claudeAttachRequests).toEqual([{ cwd, executable, jobId }]);
+    expect(helper.claudeAttachRequests).toEqual([{ cwd, executable, jobId }, { cwd, executable, jobId }]);
+    expect(helper.terminalFocusRequests).toEqual([]);
     expect(opened).not.toHaveBeenCalled();
   });
 

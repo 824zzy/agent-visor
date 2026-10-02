@@ -192,6 +192,65 @@ describe("native session controls", () => {
     expect(helper.terminalFocusRequests.map(({ tty }) => tty)).toEqual(["ttys012", "ttys014"]);
   });
 
+  it("deduplicates concurrent focus requests for one Claude background job", async () => {
+    const helper = new FakeNativeHelper();
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-controls-test-"));
+    roots.push(root);
+    const controls = new NativeSessionControls(helper, root);
+    const claude = session({
+      id: "claude-session",
+      provider: "claude_code",
+      controlTarget: {
+        kind: "claude_background",
+        target: {
+          jobId: "8e45ed2c", cwd: "/tmp/project", executable: "/usr/local/bin/claude",
+          application: "Ghostty",
+        },
+      },
+    });
+
+    const first = controls.focus(claude);
+    const second = controls.focus(claude);
+    expect(second).toBe(first);
+    await first;
+    expect(helper.claudeAttachRequests).toHaveLength(1);
+    expect(helper.claudeAttachRequests[0]).toMatchObject({ jobId: "8e45ed2c" });
+  });
+
+  it("does not reuse an older Claude focus after an intervening job click", async () => {
+    const helper = new FakeNativeHelper();
+    let releaseFirst: (() => void) | undefined;
+    let opened = 0;
+    let signalStarted: (() => void) | undefined;
+    const firstStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+    const open = async () => {
+      opened += 1;
+      if (opened === 1) {
+        signalStarted?.();
+        await new Promise<void>((resolve) => { releaseFirst = resolve; });
+      }
+    };
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-controls-test-"));
+    roots.push(root);
+    const controls = new NativeSessionControls(helper, root, undefined, undefined, undefined, undefined, open);
+    const claude = (id: string, jobId: string) => session({
+      id, provider: "claude_code", controlTarget: {
+        kind: "claude_background", target: {
+          jobId, cwd: "/tmp/project", executable: "/usr/local/bin/claude", application: "Terminal",
+        },
+      },
+    });
+
+    const first = controls.focus(claude("a", "aaaaaaaa"));
+    await firstStarted;
+    const other = controls.focus(claude("b", "bbbbbbbb"));
+    const repeated = controls.focus(claude("a", "aaaaaaaa"));
+    releaseFirst?.();
+    await Promise.all([first, other, repeated]);
+
+    expect(opened).toBe(2);
+  });
+
   it("serializes terminal registration with writes so a queued send cannot replace the active delivery", async () => {
     const helper = new FakeNativeHelper();
     const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-controls-test-"));

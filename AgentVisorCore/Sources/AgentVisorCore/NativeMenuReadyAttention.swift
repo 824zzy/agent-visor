@@ -39,7 +39,10 @@ public struct NativeMenuReadyAttention {
     }
 
     public func hasActivePulse(pills: [NativeHelperPill], now: Date) -> Bool {
-        pills.contains { shouldPulse(id: $0.id, phase: $0.phase, now: now) }
+        pills.contains {
+            $0.attentionTier != .history
+                && shouldPulse(id: $0.id, phase: $0.phase, now: now)
+        }
     }
 
     public func isAcknowledged(_ pill: NativeHelperPill) -> Bool {
@@ -54,7 +57,13 @@ public struct NativeMenuReadyAttention {
         )
     }
 
-    public func opacity(id: String, phase: NativeHelperPillPhase, now: Date) -> Double {
+    public func opacity(
+        id: String,
+        phase: NativeHelperPillPhase,
+        attentionTier: NativeHelperSessionAttentionTier? = nil,
+        now: Date
+    ) -> Double {
+        guard attentionTier != .history else { return 1 }
         guard let phaseChangedAt = phaseChangedAtByID[id] else { return 1 }
         return ReadyAttentionPolicy.pulseOpacity(
             isReady: phase == .ready,

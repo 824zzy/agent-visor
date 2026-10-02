@@ -103,6 +103,10 @@ export class NativeSessionControls implements SessionControls {
   private readonly codexDeliveryBySession = new Map<string, string>();
   /** Last typed provider probe, retained across ambient rediscovery. */
   private readonly codexRouteProbeBySession = new Map<string, SessionRouteProbeResult>();
+  /** Repeated clicks on one Claude job share the same native focus action. */
+  private readonly claudeFocusByJob = new Map<string, Promise<void>>();
+  /** The latest requested target; alternating clicks must still supersede an older promise. */
+  private latestClaudeFocusKey: string | undefined;
   // A canonical transcript ID is global evidence, not a per-page hint. Keep
   // a bounded insertion-ordered history so replaying an earlier page cannot
   // bind the same provider row to a later delivery.
@@ -179,8 +183,18 @@ export class NativeSessionControls implements SessionControls {
   }
 
   focus(session: DiscoveredProviderSession): Promise<void> {
+    const claudeTarget = session.provider === "claude_code"
+      && session.controlTarget?.kind === "claude_background"
+      ? session.controlTarget.target : undefined;
+    const dedupeKey = claudeTarget
+      ? `${claudeTarget.cwd}\u0000${claudeTarget.jobId}` : undefined;
+    if (dedupeKey) {
+      const existing = this.claudeFocusByJob.get(dedupeKey);
+      if (existing && this.latestClaudeFocusKey === dedupeKey) return existing;
+    }
     const serial = ++this.focusSerial;
-    return this.queueAction(session.id, async () => {
+    this.latestClaudeFocusKey = dedupeKey;
+    const operation = this.queueAction(session.id, async () => {
       if (serial !== this.focusSerial) return;
       const control = session.controlTarget;
       if (!control) throw new Error("Exact session focus is unavailable.");
@@ -202,19 +216,29 @@ export class NativeSessionControls implements SessionControls {
       else if (control.kind === "cursor_workspace") await this.openCursor(control.cwd);
       else if (control.kind === "codex_thread") await this.helper.openCodexThread(control.target);
       else if (control.kind === "claude_background") {
-        const { attached, ...target } = control.target;
-        // Return to the window already attached to this job. It may have
-        // closed since the last refresh, so opening a new one is the fallback.
-        try {
-          if (!attached) throw new Error("No attached terminal.");
-          await this.helper.focusTerminal(attached);
-        } catch {
-          await this.attachClaudeBackground(target);
+        const { attached: _attached, ...target } = control.target;
+        if (!/^[0-9a-f]{8}$/i.test(target.jobId)
+          || !path.isAbsolute(target.cwd) || !path.isAbsolute(target.executable)) {
+          throw new Error("Exact Claude background session focus is unavailable.");
         }
+        // A matching `claude attach <jobId>` argv proves only how a terminal
+        // was launched. Claude can move that terminal into Agent View or a
+        // different conversation, so focusing it does not select this job.
+        // Reattach the exact background identity on every explicit selection.
+        await this.attachClaudeBackground(target);
       }
       else if (control.kind === "terminal") await this.helper.focusTerminal(control.target);
       else await this.helper.focus(control.target);
     });
+    if (dedupeKey) {
+      this.claudeFocusByJob.set(dedupeKey, operation);
+      void operation.then(() => undefined, () => undefined).then(() => {
+        if (this.claudeFocusByJob.get(dedupeKey) === operation) {
+          this.claudeFocusByJob.delete(dedupeKey);
+        }
+      });
+    }
+    return operation;
   }
 
   // Ghostty gets a new window inside the running app through the helper.

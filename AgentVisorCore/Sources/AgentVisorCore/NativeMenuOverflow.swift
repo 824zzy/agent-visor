@@ -120,7 +120,8 @@ public struct NativeMenuOverflowView: View {
                                 .history,
                             ], id: \.rawValue) { phase in
                                 let ids = displayedSessionIDs.filter {
-                                    snapshot.pill(id: $0)?.phase == phase
+                                    guard let pill = snapshot.pill(id: $0) else { return false }
+                                    return NativeMenuDisplayPhase.phase(for: pill) == phase
                                 }
                                 if !ids.isEmpty {
                                     Text(sectionTitle(for: phase))
@@ -203,7 +204,7 @@ public struct NativeMenuOverflowView: View {
         var counts: [SidebarStateSectionKind: Int] = [:]
         for id in snapshot.overflowSessionIDs {
             guard let pill = snapshot.pill(id: id) else { continue }
-            counts[section(for: pill.phase), default: 0] += 1
+            counts[section(for: NativeMenuDisplayPhase.phase(for: pill)), default: 0] += 1
         }
         return SessionNavigatorSummaryPolicy.headerText(
             for: SessionNavigatorSummaryPolicy.summary(sectionCounts: counts)
@@ -230,9 +231,10 @@ public struct NativeMenuOverflowView: View {
     }
 
     private func row(_ pill: NativeHelperPill) -> some View {
-        HStack(spacing: 9) {
+        let displayPhase = NativeMenuDisplayPhase.phase(for: pill)
+        return HStack(spacing: 9) {
             Circle()
-                .fill(color(for: pill.phase))
+                .fill(color(for: displayPhase))
                 .frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 2) {
                 Text(pill.title)
@@ -244,7 +246,7 @@ public struct NativeMenuOverflowView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            Text(status(for: pill.phase))
+            Text(status(for: displayPhase))
                 .font(.system(size: 9.5, weight: .medium))
                 .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
         }

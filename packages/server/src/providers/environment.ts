@@ -1,7 +1,14 @@
 import { createReadStream } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { machineWork, runProcess, summaryWork } from "../machine.js";
 import { readCodexSettingsCatalog, type CodexSettingsCatalog } from "../codex-turn.js";
+import {
+  ClaudeAgentInventory,
+  resolveClaudeExecutable,
+  type ClaudeAgentInventoryResult,
+} from "./claude-agent-inventory.js";
 
 export type ProcessRecord = {
   pid: number;
@@ -23,6 +30,8 @@ export interface ProviderEnvironment {
   readonly observedWindowMs: number;
   now(): Date;
   processes(): Promise<ProcessRecord[]>;
+  /** Bypass the short ambient process cache for an explicit focus recheck. */
+  processesFresh?(): Promise<ProcessRecord[]>;
   cwd(pid: number): Promise<string | undefined>;
   processStartedAt(pid: number): Promise<Date | undefined>;
   codexDesktopCommand?(pid: number): Promise<string | undefined>;
@@ -40,6 +49,12 @@ export interface ProviderEnvironment {
   sqlite(database: string, sql: string): Promise<unknown[]>;
   /** Optional provider-owned settings catalog used by interactive Codex chat. */
   codexSettingsCatalog?(cwd: string): Promise<CodexSettingsCatalog | undefined>;
+  /** Optional Claude inventory seam; fixture environments leave this unset. */
+  claudeAgentInventory?(): Promise<ClaudeAgentInventoryResult>;
+  /** Bounded fresh inventory used only to revalidate an explicit click. */
+  claudeAgentInventoryFresh?(): Promise<ClaudeAgentInventoryResult>;
+  /** Resolve the trusted Claude executable used by exact background attach. */
+  claudeExecutable?(): Promise<string | undefined>;
 }
 
 export class LiveProviderEnvironment implements ProviderEnvironment {
@@ -48,6 +63,8 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
   private processSnapshotExpiresAt = 0;
   private readonly cwdByPID = new Map<number, Promise<string | undefined>>();
   private readonly startedAtByPID = new Map<number, Promise<Date | undefined>>();
+  private readonly claudeInventory: ClaudeAgentInventory;
+  private claudeExecutablePath?: Promise<string | undefined>;
 
   constructor(
     readonly home: string,
@@ -55,6 +72,10 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
   ) {
     this.observedWindow = options.observedWindowMs ?? 42 * 60 * 60 * 1_000;
     this.clock = options.now ?? (() => new Date());
+    this.claudeInventory = new ClaudeAgentInventory({
+      home,
+      now: () => this.now(),
+    });
   }
 
   private readonly clock: () => Date;
@@ -106,6 +127,14 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
       });
     });
     return this.processSnapshot;
+  }
+
+  async processesFresh(): Promise<ProcessRecord[]> {
+    this.processSnapshot = undefined;
+    this.processSnapshotExpiresAt = 0;
+    this.cwdByPID.clear();
+    this.startedAtByPID.clear();
+    return this.processes();
   }
 
   async cwd(pid: number): Promise<string | undefined> {
@@ -263,6 +292,43 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
     // this environment seam as one uncached live read so two layers cannot
     // accidentally keep stale model/permission choices beyond that TTL.
     return readCodexSettingsCatalog(this.home, cwd).catch(() => undefined);
+  }
+
+  claudeAgentInventory(): Promise<ClaudeAgentInventoryResult> {
+    if (path.resolve(this.home) !== path.resolve(os.homedir())) {
+      const timestamp = this.now().valueOf();
+      return Promise.resolve({
+        kind: "unsupported",
+        root: path.join(this.home, ".claude"),
+        reason: "config_root",
+        startedAt: timestamp,
+        completedAt: timestamp,
+      });
+    }
+    return this.claudeInventory.read();
+  }
+
+  claudeAgentInventoryFresh(): Promise<ClaudeAgentInventoryResult> {
+    if (path.resolve(this.home) !== path.resolve(os.homedir())) {
+      const timestamp = this.now().valueOf();
+      return Promise.resolve({
+        kind: "unsupported",
+        root: path.join(this.home, ".claude"),
+        reason: "config_root",
+        startedAt: timestamp,
+        completedAt: timestamp,
+      });
+    }
+    return this.claudeInventory.refreshNow();
+  }
+
+  claudeExecutable(): Promise<string | undefined> {
+    if (path.resolve(this.home) !== path.resolve(os.homedir())) return Promise.resolve(undefined);
+    const pending = this.claudeExecutablePath ??= resolveClaudeExecutable(this.home);
+    return pending.then((value) => {
+      if (!value && this.claudeExecutablePath === pending) this.claudeExecutablePath = undefined;
+      return value;
+    });
   }
 }
 

@@ -103,6 +103,48 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
         XCTAssertFalse(attention.hasActivePulse(pills: [readyPill], now: later))
     }
 
+    func testHistoryAttentionSuppressesPulseWhileReadyPhaseKeepsItsAgeFade() {
+        let changedAt = Date(timeIntervalSinceReferenceDate: 1_000)
+        let stalePill = pill(.ready, attentionTier: .history, activityAt: changedAt)
+        var attention = NativeMenuReadyAttention()
+        attention.present(
+            previousPhases: ["session": .working],
+            pills: [stalePill],
+            now: changedAt
+        )
+
+        XCTAssertFalse(attention.hasActivePulse(pills: [stalePill], now: changedAt))
+        XCTAssertEqual(
+            attention.opacity(
+                id: "session", phase: .ready, attentionTier: .history, now: changedAt
+            ),
+            1,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            attention.statusStaleness(
+                pill: stalePill, now: changedAt.addingTimeInterval(21 * 60)
+            ),
+            0.5,
+            accuracy: 0.001
+        )
+    }
+
+    func testHistoryDisplayToReadyAttentionTransitionPulsesAgain() {
+        let changedAt = Date(timeIntervalSinceReferenceDate: 1_000)
+        let oldHistory = pill(.ready, attentionTier: .history)
+        let freshReady = pill(.ready, attentionTier: .ready)
+        var attention = NativeMenuReadyAttention()
+
+        attention.present(
+            previousPhases: ["session": NativeMenuDisplayPhase.phase(for: oldHistory)],
+            pills: [freshReady],
+            now: changedAt
+        )
+
+        XCTAssertTrue(attention.hasActivePulse(pills: [freshReady], now: changedAt))
+    }
+
     func testOpeningCompletionKeepsItsColorAgeAndNextCompletionIsUnseen() {
         let now = Date(timeIntervalSinceReferenceDate: 1_000)
         let readyPill = pill(.ready, activityAt: now)

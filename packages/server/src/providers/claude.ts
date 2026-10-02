@@ -1,7 +1,11 @@
 import path from "node:path";
-import type { NativeHelperTerminalTarget } from "@agent-visor/protocol";
+import { TRANSCRIPT_STALE_CEILING_MS, type NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import type { ProviderAdapter, DiscoveredProviderSession } from "../sessions.js";
 import type { FileStamp, ProcessRecord, ProviderEnvironment } from "./environment.js";
+import type {
+  ClaudeAgentInventoryRow,
+  ClaudeAgentInventoryResult,
+} from "./claude-agent-inventory.js";
 import { ClaudeDesktopSessions } from "./claude-desktop.js";
 import {
   applicationTargetForProcess, isRecord, iso, ownerForProcess, processInstanceToken,
@@ -19,6 +23,9 @@ const terminalStatuses = new Set([
 const readyStatuses = new Set([
   "idle", "ready", "waiting", "waiting_for_input", "awaiting_input",
 ]);
+const knownInventoryStates = new Set(["working", "blocked", "done", "failed", "stopped"]);
+const removedConversationRetentionMs = TRANSCRIPT_STALE_CEILING_MS;
+const maxRemovedConversationIds = 512;
 
 type TranscriptSummary = {
   customTitle: string;
@@ -28,24 +35,76 @@ type TranscriptSummary = {
 };
 const emptySummary: TranscriptSummary = { customTitle: "", firstUser: "", completed: false };
 
+type InventorySnapshot = {
+  rows: readonly ClaudeAgentInventoryRow[];
+  authoritative: boolean;
+  observedAt: number;
+};
+type InventoryRead = {
+  snapshot?: InventorySnapshot;
+  mode: "canonical" | "blocked" | "legacy";
+  /** A failed/unsupported read can retain a last-good snapshot during grace. */
+  outage: boolean;
+};
+
+type BackgroundMetadata = {
+  sessionID?: string;
+  process?: ProcessRecord;
+};
+
+type FailureLifecycle = {
+  state: string;
+  alert: boolean;
+  acknowledged: boolean;
+};
+
 export class ClaudeProvider implements ProviderAdapter {
   readonly id = "claude_code" as const;
   private readonly summaries = new Map<string, { size: number; modifiedAt: number; summary: TranscriptSummary }>();
   private readonly desktopSessions: ClaudeDesktopSessions;
-  private spareSessionIds: ReadonlySet<string> = new Set();
+  private hiddenSessionIdsForPublication: ReadonlySet<string> = new Set();
+  private readonly managerProofs = new Map<string, { jobId: string; processStartToken: string }>();
+  /** In-memory lifecycle evidence keeps startup failures quiet and watched failures actionable. */
+  private readonly failureLifecycleBySession = new Map<string, FailureLifecycle>();
+  private inventoryBackgroundIds: ReadonlySet<string> = new Set();
+  /** Tombstones suppress late hooks until a fresh row or interactive record proves reuse. */
+  private removedConversationIds: ReadonlyMap<string, number> = new Map();
 
   constructor(private readonly environment: ProviderEnvironment) {
     this.desktopSessions = new ClaudeDesktopSessions(environment);
   }
 
-  async discover(): Promise<DiscoveredProviderSession[]> {
+  async discover(forceInventory = false): Promise<DiscoveredProviderSession[]> {
     const directory = path.join(this.environment.home, ".claude", "sessions");
-    const processes = await this.environment.processes();
+    const processes = forceInventory && this.environment.processesFresh
+      ? await this.environment.processesFresh()
+      : await this.environment.processes();
     const byPID = new Map(processes.map((process) => [process.pid, process]));
+    const inventoryRead = await this.readInventory(forceInventory);
+    const inventory = inventoryRead.snapshot;
+    const inventoryMode = inventoryRead.mode === "canonical" || inventoryRead.mode === "blocked";
+    const inventoryRows = new Map(
+      (inventory?.rows ?? []).flatMap((row) =>
+        isUsableInventoryBackground(row)
+          ? [[row.id!.toLowerCase(), row] as const] : []),
+    );
+    const inventorySessionIds = new Set(
+      (inventory?.rows ?? []).flatMap((row) => {
+        const sessionID = fullSessionID(row.sessionId);
+        return sessionID ? [sessionID.toLowerCase()] : [];
+      }),
+    );
+    const backgroundMetadata = new Map<string, BackgroundMetadata>();
+    const hiddenInventoryJobs = new Set<string>();
+    const claudeExecutable = inventoryMode && this.environment.claudeExecutable
+      ? await this.environment.claudeExecutable()
+      : undefined;
     const results: DiscoveredProviderSession[] = [];
     const transcripts = new Set<string>();
     const desktopProfiles = new Map<string, ReturnType<ClaudeDesktopSessions["read"]>>();
     const spares = new Set<string>();
+    const interactiveSessionIds = new Set<string>();
+    const managerProofs = new Map<string, { jobId: string; processStartToken: string }>();
 
     for (const file of await this.environment.directory(directory)) {
       const match = /^(\d+)\.json$/.exec(file);
@@ -63,17 +122,65 @@ export class ClaudeProvider implements ProviderAdapter {
       const sessionID = string(metadata.sessionId);
       const cwd = string(metadata.cwd);
       const kind = string(metadata.kind);
+      const jobId = string(metadata.jobId).toLowerCase();
       const entrypoint = string(metadata.entrypoint).toLowerCase();
       const status = string(metadata.status).toLowerCase();
       // The Claude daemon pre-warms an idle worker for the next background
       // job. It has no conversation until claimed, when Claude drops the flag.
       if (metadata.spare === true) {
         if (sessionID) spares.add(sessionID);
+        if (jobId) hiddenInventoryJobs.add(jobId);
+        for (const row of inventoryRows.values()) {
+          if (row.sessionId?.toLowerCase() === sessionID.toLowerCase() && row.id) {
+            hiddenInventoryJobs.add(row.id.toLowerCase());
+          }
+        }
         continue;
+      }
+      // The inventory is the canonical source for background jobs. Session
+      // metadata can lag, omit a PID, or retain launcher details that no
+      // longer describe the worker, so only retain it as enrichment.
+      if (inventoryMode && kind === "bg") {
+        const row = inventoryRows.get(jobId);
+        if (row && !isInternalBackgroundMetadata(entrypoint, cwd)) {
+          backgroundMetadata.set(row.id!, {
+            ...(fullSessionID(sessionID) ? { sessionID: fullSessionID(sessionID) } : {}),
+            process,
+          });
+          continue;
+        }
+        // A stale last-good snapshot must not veto a newly observable legacy
+        // background route; a complete empty/fresh snapshot and a blocked
+        // nondefault root remain fail-closed.
+        if (inventoryRead.mode === "blocked" || inventory?.authoritative !== false) continue;
       }
       if (!sessionID || !cwd || (kind !== "interactive" && kind !== "bg")) continue;
       if (entrypoint.startsWith("sdk") || terminalStatuses.has(status)) continue;
       if (cwd.includes(".claude-mem") || cwd.includes("observer-sessions")) continue;
+      if (kind === "interactive" && (inventory || inventoryRead.outage)) {
+        const parkedJobId = string(metadata.parkedJobId).toLowerCase();
+        if (parkedJobId && /^[0-9a-f]{8}$/i.test(parkedJobId)) {
+          const processStartToken = processInstanceToken(
+            pid, await this.environment.processStartedAt(pid),
+          );
+          const row = inventoryRows.get(parkedJobId);
+          const previous = this.managerProofs.get(sessionID);
+          const managerListed = inventorySessionIds.has(sessionID.toLowerCase());
+          const rowSessionID = fullSessionID(row?.sessionId);
+          const managerSessionID = fullSessionID(sessionID);
+          const corroborated = inventory?.authoritative === true
+            && isKnownInventoryState(row?.state) && !managerListed
+            && rowSessionID !== undefined && row?.cwd === cwd
+            && rowSessionID.toLowerCase() !== managerSessionID?.toLowerCase();
+          const retained = (inventoryRead.outage || inventory?.authoritative === false)
+            && !managerListed && previous?.jobId === parkedJobId
+            && previous.processStartToken === processStartToken;
+          if (processStartToken && (corroborated || retained)) {
+            managerProofs.set(sessionID, { jobId: parkedJobId, processStartToken });
+            continue;
+          }
+        }
+      }
       const backgroundTarget = kind === "bg"
         ? claudeBackgroundTarget(process, byPID, sessionID, string(metadata.jobId), cwd, entrypoint, this.environment.home)
         : undefined;
@@ -154,6 +261,7 @@ export class ClaudeProvider implements ProviderAdapter {
         canOpenOwner: controlTarget !== undefined,
         canEnterChat: true,
         sessionClass: terminalTarget || backgroundTarget ? "terminal" : "interactive",
+        ...(kind === "bg" ? { ambientEligible: false } : {}),
         conversationState: "open",
         turnState,
         ...(claudeLifecycle ? { claudeLifecycle } : {}),
@@ -161,17 +269,256 @@ export class ClaudeProvider implements ProviderAdapter {
         ...(controlTarget ? { controlTarget } : {}),
         ...(terminalTarget ? { messageTransport: "terminal" as const } : {}),
       });
+      if (kind === "interactive") {
+        const interactiveID = fullSessionID(sessionID);
+        if (interactiveID) interactiveSessionIds.add(interactiveID.toLowerCase());
+      }
+    }
+
+    if (inventory) {
+      for (const row of inventoryRows.values()) {
+        if (hiddenInventoryJobs.has(row.id!.toLowerCase())) continue;
+        const metadata = backgroundMetadata.get(row.id!);
+        const transcriptSessionID = inventory.authoritative
+          ? fullSessionID(row.sessionId) ?? fullSessionID(metadata?.sessionID)
+          : fullSessionID(metadata?.sessionID) ?? fullSessionID(row.sessionId);
+        // A row with no trusted full UUID is retained in the inventory cache,
+        // but it cannot become a public conversation until metadata or a later
+        // inventory refresh supplies that identity.
+        if (!transcriptSessionID) continue;
+        const transcript = claudeTranscriptPath(
+          this.environment.home, transcriptSessionID, row.cwd,
+        );
+        transcripts.add(transcript);
+        const transcriptStamp = await this.environment.stamp(transcript);
+        const summary = await this.transcriptSummary(transcript, transcriptStamp);
+        const session = await this.backgroundSession(
+          row, metadata, summary, transcript, transcriptStamp, processes, claudeExecutable,
+          inventory.authoritative, inventory.observedAt, this.environment.now().valueOf(),
+          interactiveSessionIds.has(transcriptSessionID.toLowerCase())
+            || [...managerProofs.values()].some((proof) => proof.jobId === row.id),
+        );
+        if (session) {
+          const interactiveIndex = results.findIndex((candidate) =>
+            candidate.id.toLowerCase() === session.id.toLowerCase());
+          const interactive = results[interactiveIndex];
+          if (interactive) {
+            // One current UI identity and its retained job are one conversation.
+            // Inventory supplies its name/state; current metadata supplies the
+            // interactive route, rather than stale `claude attach` launch argv.
+            results[interactiveIndex] = {
+              ...session,
+              owner: interactive.owner,
+              canOpenOwner: interactive.canOpenOwner || session.canOpenOwner,
+              ...(interactive.controlTarget ? { controlTarget: interactive.controlTarget } : {}),
+              ...(interactive.messageTransport ? { messageTransport: interactive.messageTransport } : {}),
+            };
+          } else results.push(session);
+        }
+      }
     }
 
     for (const file of this.summaries.keys()) {
       if (!transcripts.has(file)) this.summaries.delete(file);
     }
-    this.spareSessionIds = spares;
+    this.managerProofs.clear();
+    for (const [sessionID, proof] of managerProofs) this.managerProofs.set(sessionID, proof);
+    const currentBackgroundIDs = inventory
+      ? new Set([...inventoryRows.values()]
+        .filter((row) => !hiddenInventoryJobs.has(row.id!.toLowerCase()))
+        .flatMap((row) => {
+          const metadata = backgroundMetadata.get(row.id!);
+          const sessionID = inventory.authoritative
+            ? fullSessionID(row.sessionId) ?? fullSessionID(metadata?.sessionID)
+            : fullSessionID(metadata?.sessionID) ?? fullSessionID(row.sessionId);
+          return sessionID ? [sessionID] : [];
+        }))
+      : this.inventoryBackgroundIds;
+    const removedConversationIds = new Map(this.removedConversationIds);
+    if (inventory?.authoritative) {
+      const removedAt = this.environment.now().valueOf();
+      for (const id of this.inventoryBackgroundIds) {
+        if (!currentBackgroundIDs.has(id) && !removedConversationIds.has(id)) {
+          removedConversationIds.set(id, removedAt);
+        }
+      }
+      for (const id of currentBackgroundIDs) {
+        removedConversationIds.delete(id);
+      }
+      for (const id of interactiveSessionIds) {
+        removedConversationIds.delete(id);
+      }
+      for (const [id, removedAt] of removedConversationIds) {
+        if (removedAt + removedConversationRetentionMs <= this.environment.now().valueOf()) {
+          removedConversationIds.delete(id);
+        }
+      }
+      for (const id of this.failureLifecycleBySession.keys()) {
+        if (!currentBackgroundIDs.has(id)) this.failureLifecycleBySession.delete(id);
+      }
+      while (removedConversationIds.size > maxRemovedConversationIds) {
+        removedConversationIds.delete(removedConversationIds.keys().next().value!);
+      }
+      this.inventoryBackgroundIds = currentBackgroundIDs;
+      this.removedConversationIds = removedConversationIds;
+    }
+    this.hiddenSessionIdsForPublication = new Set([
+      ...spares, ...managerProofs.keys(), ...this.removedConversationIds.keys(),
+    ]);
     return results;
   }
 
   hiddenSessionIds(): ReadonlySet<string> {
-    return this.spareSessionIds;
+    return this.hiddenSessionIdsForPublication;
+  }
+
+  acknowledgeFailure(sessionId: string): void {
+    const lifecycle = this.failureLifecycleBySession.get(sessionId.toLowerCase());
+    if (!lifecycle || lifecycle.state !== "failed" || !lifecycle.alert) return;
+    lifecycle.acknowledged = true;
+    lifecycle.alert = false;
+  }
+
+  async resolveForFocus(sessionId: string): Promise<DiscoveredProviderSession | undefined> {
+    return (await this.discover(true)).find((session) => session.id === sessionId);
+  }
+
+  private async readInventory(force = false): Promise<InventoryRead> {
+    if (!this.environment.claudeAgentInventory) return { mode: "legacy", outage: false };
+    let result: ClaudeAgentInventoryResult;
+    try {
+      result = force && this.environment.claudeAgentInventoryFresh
+        ? await this.environment.claudeAgentInventoryFresh()
+        : await this.environment.claudeAgentInventory();
+    }
+    catch { return { mode: "legacy", outage: true };
+    }
+    const snapshot = result.kind === "success" ? result : result.lastGood;
+    if (snapshot) return {
+      mode: "canonical", outage: result.kind !== "success",
+      snapshot: {
+        rows: snapshot.rows,
+        authoritative: snapshot.authoritative,
+        observedAt: snapshot.startedAt,
+      },
+    };
+    return {
+      outage: result.kind !== "unsupported" || result.reason !== "config_root",
+      mode: result.kind === "unsupported" && result.reason === "config_root"
+        ? "blocked" : "legacy",
+    };
+  }
+
+  private async backgroundSession(
+    row: ClaudeAgentInventoryRow,
+    metadata: BackgroundMetadata | undefined,
+    summary: TranscriptSummary,
+    transcript: string,
+    transcriptStamp: FileStamp | undefined,
+    processes: ProcessRecord[],
+    executable: string | undefined,
+    authoritative: boolean,
+    observedAt: number,
+    checkedAt: number,
+    ambientEligible: boolean,
+  ): Promise<DiscoveredProviderSession | undefined> {
+    // Do not publish a temporary public ID for a row whose UUID is absent.
+    // The next inventory refresh can safely promote it once identity is
+    // available without creating a second pill or breaking open-chat links.
+    const sessionID = authoritative
+      ? fullSessionID(row.sessionId) ?? fullSessionID(metadata?.sessionID)
+      : fullSessionID(metadata?.sessionID) ?? fullSessionID(row.sessionId);
+    if (!sessionID) return undefined;
+    const jobId = row.id!.toLowerCase();
+    const attached = await attachedTerminalTarget(jobId, row.cwd, processes, this.environment);
+    const application = attached?.application
+      ?? (metadata?.process
+        ? terminalApplication(ownerForProcess(metadata.process.pid, processes))
+        : undefined)
+      ?? "Terminal";
+    const target = authoritative && isKnownInventoryState(row.state)
+      && executable && path.isAbsolute(executable)
+      ? {
+        jobId, cwd: row.cwd, executable, application,
+        ...(attached ? { attached } : {}),
+      } : undefined;
+    const failurePresentation = this.failurePresentation(sessionID, row, authoritative);
+    const state = failurePresentation?.turnState
+      ?? inventoryTurnState(row, summary, authoritative, checkedAt);
+    const inventoryName = meaningfulInventoryName(row.name, jobId);
+    const title = inventoryName || summary.customTitle
+      || summary.firstUser || `Claude Code · ${jobId}`;
+    const lifecycle = summary.lifecycle;
+    const updatedAt = lifecycle?.observedAt
+      ?? iso(transcriptStamp?.modifiedAt ?? new Date(row.startedAt));
+    return {
+      id: sessionID,
+      provider: "claude_code",
+      title,
+      subtitle: state === "working" ? "Claude Code is working"
+        : state === "needs_you" ? row.waitingFor || "Claude Code needs attention"
+        : state === "ready" ? "Ready to continue"
+        : state === "history" ? "Claude Code session stopped" : "Check Claude for current status",
+      cwd: row.cwd,
+      owner: application,
+      section: state === "unknown" || state === "history" ? "history" : state,
+      updatedAt,
+      canOpenOwner: target !== undefined,
+      canEnterChat: true,
+      sessionClass: "terminal",
+      // A retained worker or attach argv is not evidence of an open UI. Only
+      // current interactive metadata or a corroborated parked manager counts.
+      ambientEligible,
+      conversationState: "open",
+      turnState: state === "history" ? "unknown" : state,
+      chatPath: transcript,
+      ...(target ? { controlTarget: { kind: "claude_background" as const, target } } : {}),
+      claudeInventoryState: { authoritative, observedAt, checkedAt },
+      ...(failurePresentation?.failureAlert !== undefined
+        ? { failureAlert: failurePresentation.failureAlert } : {}),
+    };
+  }
+
+  private failurePresentation(
+    sessionID: string,
+    row: ClaudeAgentInventoryRow,
+    authoritative: boolean,
+  ): { turnState: "needs_you" | "history"; failureAlert: boolean } | undefined {
+    const state = string(row.state).toLowerCase();
+    const key = sessionID.toLowerCase();
+    const previous = this.failureLifecycleBySession.get(key);
+    if (!authoritative) {
+      if (state !== "failed") return undefined;
+      if (previous?.state === "failed") {
+        return {
+          turnState: previous.alert && !previous.acknowledged ? "needs_you" : "history",
+          failureAlert: previous.alert && !previous.acknowledged,
+        };
+      }
+      // A stale failed row is historical evidence. It must not become a new
+      // alert while the provider is unavailable or its cache is outside grace.
+      return { turnState: "history", failureAlert: false };
+    }
+    if (state !== "failed") {
+      if (isKnownInventoryState(state)) {
+        this.failureLifecycleBySession.set(key, {
+          state, alert: false, acknowledged: false,
+        });
+      }
+      return undefined;
+    }
+
+    const newlyFailed = this.removedConversationIds.has(key)
+      || (previous !== undefined && previous.state !== "failed");
+    const acknowledged = previous?.state === "failed" && previous.acknowledged;
+    const alert = newlyFailed || (previous?.state === "failed" && previous.alert && !acknowledged);
+    this.failureLifecycleBySession.set(key, {
+      state, alert, acknowledged: !!acknowledged,
+    });
+    return {
+      turnState: alert ? "needs_you" : "history",
+      failureAlert: alert,
+    };
   }
 
   private async transcriptSummary(file: string, stamp: FileStamp | undefined): Promise<TranscriptSummary> {
@@ -303,6 +650,76 @@ function claudeUserText(value: Record<string, unknown>): string {
   if (!Array.isArray(content)) return "";
   return content.flatMap((block) =>
     isRecord(block) && typeof block.text === "string" ? [block.text] : []).join("\n").trim();
+}
+
+function inventoryTurnState(
+  row: ClaudeAgentInventoryRow,
+  summary: TranscriptSummary,
+  authoritative: boolean,
+  checkedAt: number,
+): "working" | "needs_you" | "ready" | "history" | "unknown" {
+  const lifecycle = freshLifecycle(summary.lifecycle, checkedAt);
+  if (!authoritative) {
+    return lifecycle?.phase === "working" ? "working"
+      : lifecycle ? "ready" : "unknown";
+  }
+  const state = string(row.state).toLowerCase();
+  if (state === "working") return "working";
+  if (state === "blocked") return "needs_you";
+  if (state === "done") return "ready";
+  if (state === "failed") return "needs_you";
+  if (state === "stopped") return "history";
+  if (lifecycle) return lifecycle.phase === "working" ? "working" : "ready";
+  return "unknown";
+}
+
+function freshLifecycle(
+  lifecycle: DiscoveredProviderSession["claudeLifecycle"] | undefined,
+  checkedAt: number,
+): DiscoveredProviderSession["claudeLifecycle"] | undefined {
+  if (!lifecycle) return undefined;
+  const observedAt = Date.parse(lifecycle.observedAt);
+  return Number.isFinite(observedAt)
+    && observedAt <= checkedAt
+    && checkedAt - observedAt <= 30_000 ? lifecycle : undefined;
+}
+
+function meaningfulInventoryName(value: string | undefined, jobId: string | undefined): string {
+  const name = string(value);
+  return name && name.toLowerCase() !== string(jobId).toLowerCase() ? name : "";
+}
+
+function isKnownInventoryState(value: string | undefined): boolean {
+  return value !== undefined && knownInventoryStates.has(value.toLowerCase());
+}
+
+function fullSessionID(value: string | undefined): string | undefined {
+  const sessionID = string(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionID)
+    ? sessionID.toLowerCase() : undefined;
+}
+
+function isUsableInventoryBackground(row: ClaudeAgentInventoryRow): boolean {
+  return row.kind === "background"
+    && !!row.id && /^[0-9a-f]{8}$/i.test(row.id)
+    && path.isAbsolute(row.cwd)
+    && !row.spare
+    && !isInternalBackgroundMetadata(
+      `${string(row.entrypoint)} ${string(row.source)} ${string(row.agent)}`.trim().toLowerCase(),
+      row.cwd,
+    );
+}
+
+function isInternalBackgroundMetadata(entrypoint: string, cwd: string): boolean {
+  const marker = entrypoint.toLowerCase();
+  const normalizedCwd = cwd.toLowerCase();
+  return marker.startsWith("sdk") || marker.startsWith("observer")
+    || marker.includes(".claude-mem") || marker.includes("observer-sessions")
+    || normalizedCwd.includes(".claude-mem") || normalizedCwd.includes("observer-sessions");
+}
+
+function terminalApplication(value: string): "Ghostty" | "iTerm2" | "Terminal" | undefined {
+  return value === "Ghostty" || value === "iTerm2" || value === "Terminal" ? value : undefined;
 }
 
 function string(value: unknown): string {
