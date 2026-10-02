@@ -1434,11 +1434,12 @@ export class SessionRepository {
   async focusSession(sessionId: string): Promise<string | undefined> {
     let session = this.controlBySession.get(sessionId);
     if (!session || !this.controls) return "Exact session focus is unavailable.";
-    // Claude background targets are short-lived process/CLI identities. A
-    // click must revalidate the exact conversation before native focus so a
-    // removed or replaced job cannot reuse a cached attach target.
+    // Claude terminals can enter Agent View or another conversation without
+    // changing their PID. Revalidate both interactive and background targets
+    // so a click cannot reuse a cached route to the wrong screen.
     if (session.provider === "claude_code"
-      && session.controlTarget?.kind === "claude_background") {
+      && (session.controlTarget?.kind === "claude_background"
+        || session.controlTarget?.kind === "terminal")) {
       const resolved = await this.resolveExactSession(sessionId, false, true);
       if (!resolved || resolved.resolutionUnavailable || !resolved.controlTarget) {
         return "Exact session focus is unavailable.";
@@ -3162,6 +3163,9 @@ function hookSession(hook: HookSessionEvent): DiscoveredProviderSession {
     canOpenOwner: false,
     canEnterChat: hookCanEnterChat(hook),
     sessionClass: hook.tty ? "terminal" : "interactive",
+    // A Claude hook can describe a parked host or detached background job.
+    // Current provider metadata, not the event's tty, proves pill presence.
+    ...(hook.provider === "claude_code" ? { ambientEligible: false } : {}),
     chatPath: hook.sessionFile,
   };
 }

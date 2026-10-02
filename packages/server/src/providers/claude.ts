@@ -63,7 +63,6 @@ export class ClaudeProvider implements ProviderAdapter {
   private readonly summaries = new Map<string, { size: number; modifiedAt: number; summary: TranscriptSummary }>();
   private readonly desktopSessions: ClaudeDesktopSessions;
   private hiddenSessionIdsForPublication: ReadonlySet<string> = new Set();
-  private readonly managerProofs = new Map<string, { jobId: string; processStartToken: string }>();
   /** In-memory lifecycle evidence keeps startup failures quiet and watched failures actionable. */
   private readonly failureLifecycleBySession = new Map<string, FailureLifecycle>();
   private inventoryBackgroundIds: ReadonlySet<string> = new Set();
@@ -88,12 +87,6 @@ export class ClaudeProvider implements ProviderAdapter {
         isUsableInventoryBackground(row)
           ? [[row.id!.toLowerCase(), row] as const] : []),
     );
-    const inventorySessionIds = new Set(
-      (inventory?.rows ?? []).flatMap((row) => {
-        const sessionID = fullSessionID(row.sessionId);
-        return sessionID ? [sessionID.toLowerCase()] : [];
-      }),
-    );
     const backgroundMetadata = new Map<string, BackgroundMetadata>();
     const hiddenInventoryJobs = new Set<string>();
     const claudeExecutable = inventoryMode && this.environment.claudeExecutable
@@ -104,7 +97,7 @@ export class ClaudeProvider implements ProviderAdapter {
     const desktopProfiles = new Map<string, ReturnType<ClaudeDesktopSessions["read"]>>();
     const spares = new Set<string>();
     const interactiveSessionIds = new Set<string>();
-    const managerProofs = new Map<string, { jobId: string; processStartToken: string }>();
+    const parkedSessionIds = new Set<string>();
 
     for (const file of await this.environment.directory(directory)) {
       const match = /^(\d+)\.json$/.exec(file);
@@ -157,29 +150,12 @@ export class ClaudeProvider implements ProviderAdapter {
       if (!sessionID || !cwd || (kind !== "interactive" && kind !== "bg")) continue;
       if (entrypoint.startsWith("sdk") || terminalStatuses.has(status)) continue;
       if (cwd.includes(".claude-mem") || cwd.includes("observer-sessions")) continue;
-      if (kind === "interactive" && (inventory || inventoryRead.outage)) {
-        const parkedJobId = string(metadata.parkedJobId).toLowerCase();
-        if (parkedJobId && /^[0-9a-f]{8}$/i.test(parkedJobId)) {
-          const processStartToken = processInstanceToken(
-            pid, await this.environment.processStartedAt(pid),
-          );
-          const row = inventoryRows.get(parkedJobId);
-          const previous = this.managerProofs.get(sessionID);
-          const managerListed = inventorySessionIds.has(sessionID.toLowerCase());
-          const rowSessionID = fullSessionID(row?.sessionId);
-          const managerSessionID = fullSessionID(sessionID);
-          const corroborated = inventory?.authoritative === true
-            && isKnownInventoryState(row?.state) && !managerListed
-            && rowSessionID !== undefined && row?.cwd === cwd
-            && rowSessionID.toLowerCase() !== managerSessionID?.toLowerCase();
-          const retained = (inventoryRead.outage || inventory?.authoritative === false)
-            && !managerListed && previous?.jobId === parkedJobId
-            && previous.processStartToken === processStartToken;
-          if (processStartToken && (corroborated || retained)) {
-            managerProofs.set(sessionID, { jobId: parkedJobId, processStartToken });
-            continue;
-          }
-        }
+      // Claude marks the host conversation parked while its agent overview is
+      // open, and clears this marker when returning to a conversation. This
+      // screen identity is independent of inventory state or availability.
+      if (kind === "interactive" && metadata.parkedJobId !== undefined) {
+        parkedSessionIds.add(sessionID);
+        continue;
       }
       const backgroundTarget = kind === "bg"
         ? claudeBackgroundTarget(process, byPID, sessionID, string(metadata.jobId), cwd, entrypoint, this.environment.home)
@@ -295,8 +271,7 @@ export class ClaudeProvider implements ProviderAdapter {
         const session = await this.backgroundSession(
           row, metadata, summary, transcript, transcriptStamp, processes, claudeExecutable,
           inventory.authoritative, inventory.observedAt, this.environment.now().valueOf(),
-          interactiveSessionIds.has(transcriptSessionID.toLowerCase())
-            || [...managerProofs.values()].some((proof) => proof.jobId === row.id),
+          interactiveSessionIds.has(transcriptSessionID.toLowerCase()),
         );
         if (session) {
           const interactiveIndex = results.findIndex((candidate) =>
@@ -321,8 +296,6 @@ export class ClaudeProvider implements ProviderAdapter {
     for (const file of this.summaries.keys()) {
       if (!transcripts.has(file)) this.summaries.delete(file);
     }
-    this.managerProofs.clear();
-    for (const [sessionID, proof] of managerProofs) this.managerProofs.set(sessionID, proof);
     const currentBackgroundIDs = inventory
       ? new Set([...inventoryRows.values()]
         .filter((row) => !hiddenInventoryJobs.has(row.id!.toLowerCase()))
@@ -363,7 +336,9 @@ export class ClaudeProvider implements ProviderAdapter {
       this.removedConversationIds = removedConversationIds;
     }
     this.hiddenSessionIdsForPublication = new Set([
-      ...spares, ...managerProofs.keys(), ...this.removedConversationIds.keys(),
+      ...spares,
+      ...[...parkedSessionIds].filter((id) => !interactiveSessionIds.has(id.toLowerCase())),
+      ...this.removedConversationIds.keys(),
     ]);
     return results;
   }
@@ -466,8 +441,8 @@ export class ClaudeProvider implements ProviderAdapter {
       canOpenOwner: target !== undefined,
       canEnterChat: true,
       sessionClass: "terminal",
-      // A retained worker or attach argv is not evidence of an open UI. Only
-      // current interactive metadata or a corroborated parked manager counts.
+      // A worker, attach argv, or parked overview is not an open conversation.
+      // Only current interactive conversation metadata establishes presence.
       ambientEligible,
       conversationState: "open",
       turnState: state === "history" ? "unknown" : state,

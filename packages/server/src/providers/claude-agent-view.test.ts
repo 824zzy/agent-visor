@@ -177,7 +177,7 @@ describe("Claude agent-view integration", () => {
       .toEqual([managerID]);
   });
 
-  it("shows only the job corroborated by a parked manager while retaining other jobs in search", async () => {
+  it("shows no pills for an agent overview while retaining its background jobs in search", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, home + "/.local/bin/claude");
     addMetadata(environment, 900, {
@@ -190,14 +190,12 @@ describe("Claude agent-view integration", () => {
     ]);
 
     const snapshot = await repository(environment).refresh();
-    const pills = menuPresentation(snapshot, [], nowMs).pills;
+    const presentation = menuPresentation(snapshot, [], nowMs);
 
     expect(snapshot.sessions.map((session) => session.id).sort()).toEqual([blockedID, ccID]);
-    expect(pills).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: blockedID, phase: "needs_you" }),
-    ]));
-    expect(pills).toHaveLength(1);
-    expect(pills.some((pill) => pill.id === managerID || pill.title === "codes-b8")).toBe(false);
+    expect(presentation.pills).toEqual([]);
+    expect(presentation.navigatorPills.map(({ id }) => id).sort()).toEqual([blockedID, ccID]);
+    expect(presentation.navigatorPills.every((pill) => !pill.defaultOverflowEligible)).toBe(true);
   });
 
   it("uses current interactive identity for a background pill and drops it when the UI closes or switches", async () => {
@@ -261,6 +259,172 @@ describe("Claude agent-view integration", () => {
       .toEqual([blockedID, ccID]);
   });
 
+  it("does not let an overview suppress a conversation open in another terminal", async () => {
+    const environment = new FixtureEnvironment();
+    for (const pid of [900, 901]) addProcess(environment, pid, executable);
+    addMetadata(environment, 900, {
+      sessionId: ccID, cwd, kind: "interactive", entrypoint: "cli",
+      status: "idle", parkedJobId: "8e45ed2c",
+    });
+    addMetadata(environment, 901, {
+      sessionId: ccID, cwd, kind: "interactive", entrypoint: "cli", status: "idle",
+    });
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "done", { name: "cc-misc" }),
+    ]);
+    const source = repository(environment);
+    await source.refresh();
+    const started = source.applyHook({
+      sessionId: ccID, cwd, provider: "claude_code", event: "UserPromptSubmit",
+      status: "processing", receivedAt: new Date(nowMs + 1_000).toISOString(),
+    });
+    expect(menuPresentation(started, [], nowMs + 1_000).pills).toMatchObject([
+      { id: ccID, title: "cc-misc", phase: "working" },
+    ]);
+    const helper = new FakeNativeHelper();
+    source.setControls(new NativeSessionControls(helper));
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: ccID },
+      source, () => undefined);
+    expect(helper.terminalFocusRequests).toMatchObject([{ pid: 901 }]);
+    expect(helper.claudeAttachRequests).toEqual([]);
+  });
+
+  it("removes an opened host conversation's pill when its terminal enters the overview", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, {
+      sessionId: managerID, cwd, kind: "interactive", entrypoint: "cli",
+      status: "idle", name: "codes-b8",
+    });
+    const source = repository(environment);
+    await source.refresh();
+    await source.chatOpened(managerID, "host-chat");
+    addMetadata(environment, 900, {
+      sessionId: managerID, cwd, kind: "interactive", entrypoint: "cli",
+      status: "idle", name: "codes-b8", parkedJobId: "64b38993",
+    });
+    environment.inventory = inventorySuccess([
+      backgroundRow("64b38993", blockedID, "working"),
+    ]);
+    const overview = await source.refresh();
+    expect(menuPresentation(overview, [], nowMs).pills).toEqual([]);
+    expect(menuPresentation(overview, [], nowMs).navigatorPills
+      .filter((pill) => pill.defaultOverflowEligible)).toEqual([]);
+    const effects: unknown[] = [];
+    const helper = new FakeNativeHelper();
+    source.setControls(new NativeSessionControls(helper));
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: managerID },
+      source, (effect) => effects.push(effect));
+    expect(helper.terminalFocusRequests).toEqual([]);
+    expect(effects).toMatchObject([{ type: "native_effect", action: "session_focus_failed" }]);
+  });
+
+  it("tracks overview to conversation to overview without duplicate pills or stale clicks", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable, "claude attach 8e45ed2c");
+    const overviewMetadata = {
+      sessionId: managerID, cwd, kind: "interactive", entrypoint: "cli",
+      status: "idle", name: "codes-b8", parkedJobId: "8e45ed2c",
+    };
+    addMetadata(environment, 900, overviewMetadata);
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "done", { name: "cc-misc" }),
+      backgroundRow("64b38993", blockedID, "blocked"),
+    ]);
+    const source = repository(environment);
+    const helper = new FakeNativeHelper();
+    source.setControls(new NativeSessionControls(helper));
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+
+    addMetadata(environment, 900, {
+      sessionId: ccID, cwd, kind: "interactive", entrypoint: "cli", status: "idle",
+    });
+    const entered = await source.refresh();
+    expect(entered.sessions.filter(({ id }) => id === ccID)).toHaveLength(1);
+    expect(menuPresentation(entered, [], nowMs).pills).toMatchObject([
+      { id: ccID, title: "cc-misc", phase: "ready" },
+    ]);
+    await source.chatOpened(ccID, "overview-transition-chat");
+    expect(await source.focusSession(ccID)).toBeUndefined();
+    expect(helper.terminalFocusRequests).toMatchObject([{ pid: 900 }]);
+
+    // A click can race the next ambient refresh. Fresh source navigation
+    // must attach the selected job, never focus the terminal's overview.
+    addMetadata(environment, 900, overviewMetadata);
+    expect(await source.focusSession(ccID)).toBeUndefined();
+    expect(helper.terminalFocusRequests).toHaveLength(1);
+    expect(helper.claudeAttachRequests).toMatchObject([{ jobId: "8e45ed2c" }]);
+    const returned = await source.refresh();
+    expect(menuPresentation(returned, [], nowMs).pills).toEqual([]);
+    expect(returned.sessions.filter(({ id }) => id === ccID)).toHaveLength(1);
+    expect(menuPresentation(returned, [], nowMs).navigatorPills
+      .every((pill) => !pill.defaultOverflowEligible)).toBe(true);
+    const delayed = source.applyHook({
+      sessionId: managerID, cwd, provider: "claude_code", event: "Stop",
+      status: "idle", tty: "ttys001", receivedAt: new Date(nowMs + 1_000).toISOString(),
+    });
+    expect(menuPresentation(delayed, [], nowMs + 1_000).pills).toEqual([]);
+  });
+
+  it.each([
+    ["empty", inventorySuccess([])],
+    ["unknown", inventorySuccess([backgroundRow("64b38993", blockedID, "future")])],
+    ["stale", inventoryFailure(inventorySuccess([backgroundRow("64b38993", blockedID, "done")], false))],
+    ["failed", { kind: "failure", root: home + "/.claude", reason: "timed_out", startedAt: nowMs, completedAt: nowMs }],
+    ["unsupported", { kind: "unsupported", root: home + "/.claude", reason: "command_unavailable", startedAt: nowMs, completedAt: nowMs }],
+    ["config root", { kind: "unsupported", root: home + "/.claude", reason: "config_root", startedAt: nowMs, completedAt: nowMs }],
+  ] satisfies [string, ClaudeAgentInventoryResult][])(
+    "does not turn an overview into a conversation when inventory is %s", async (_label, inventory) => {
+      const environment = new FixtureEnvironment();
+      addProcess(environment, 900, executable);
+      addMetadata(environment, 900, {
+        sessionId: managerID, cwd, kind: "interactive", entrypoint: "cli",
+        status: "idle", parkedJobId: "64b38993",
+      });
+      environment.inventory = inventory;
+      const source = repository(environment);
+      await source.refresh();
+      const delayed = source.applyHook({
+        sessionId: managerID, cwd, provider: "claude_code", event: "UserPromptSubmit",
+        status: "processing", tty: "ttys001", receivedAt: new Date(nowMs + 1_000).toISOString(),
+      });
+      expect(delayed.sessions.some(({ id }) => id === managerID)).toBe(false);
+      expect(menuPresentation(delayed, [], nowMs + 1_000).pills).toEqual([]);
+      expect(menuPresentation(delayed, [], nowMs + 1_000).navigatorPills
+        .every((pill) => !pill.defaultOverflowEligible)).toBe(true);
+    },
+  );
+
+  it("does not recreate an overview pill from a hook while its metadata is unreadable", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, {
+      sessionId: managerID, cwd, kind: "interactive", entrypoint: "cli",
+      status: "idle", parkedJobId: "64b38993",
+    });
+    const source = repository(environment);
+    await source.refresh();
+    environment.files.delete(path.join(home, ".claude/sessions/900.json"));
+    await source.refresh();
+    const delayed = source.applyHook({
+      sessionId: managerID, cwd, provider: "claude_code", event: "Stop",
+      status: "idle", tty: "ttys001", receivedAt: new Date(nowMs + 1_000).toISOString(),
+    });
+    expect(menuPresentation(delayed, [], nowMs + 1_000).pills).toEqual([]);
+    expect(menuPresentation(delayed, [], nowMs + 1_000).navigatorPills
+      .every((pill) => !pill.defaultOverflowEligible)).toBe(true);
+    // Positive current conversation metadata restores eligibility, even after
+    // a process restart. Suppression must not be sticky by PID or session ID.
+    environment.starts.set(900, new Date(nowMs + 2_000));
+    addMetadata(environment, 900, {
+      sessionId: managerID, cwd, kind: "interactive", entrypoint: "cli",
+      status: "idle", name: "new conversation",
+    });
+    expect(menuPresentation(await source.refresh(), [], nowMs + 2_000).pills).toMatchObject([
+      { id: managerID, title: "new conversation", phase: "ready" },
+    ]);
+  });
+
   it("does not treat a matching attach command without current session metadata as an open conversation", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, executable, "claude attach 8e45ed2c");
@@ -272,7 +436,7 @@ describe("Claude agent-view integration", () => {
     expect(menuPresentation(snapshot, [], nowMs).pills).toEqual([]);
   });
 
-  it("keeps an unknown inventory row visible without authorizing focus or hiding its manager", async () => {
+  it("keeps an unknown inventory row searchable without restoring an overview pill", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, home + "/.local/bin/claude");
     addMetadata(environment, 900, {
@@ -288,7 +452,8 @@ describe("Claude agent-view integration", () => {
 
     expect(background).toMatchObject({ id: blockedID, canOpenOwner: false });
     expect(background?.controlTarget).toBeUndefined();
-    expect(snapshot.sessions.some((session) => session.id === managerID)).toBe(true);
+    expect(snapshot.sessions.some((session) => session.id === managerID)).toBe(false);
+    expect(menuPresentation(snapshot, [], nowMs).pills).toEqual([]);
   });
 
   it("discovers a claimed spare without launch flags, keeps a no-PID job, and separates same-CWD jobs", async () => {
@@ -520,7 +685,7 @@ describe("Claude agent-view integration", () => {
     expect(source.current().sessions).toMatchObject([{ id: ccID, section: "working" }]);
   });
 
-  it("returns a parked manager when a valid empty inventory proves it is interactive again", async () => {
+  it("does not invent a conversation pill when an overview's inventory becomes empty", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, home + "/.local/bin/claude");
     addMetadata(environment, 900, {
@@ -536,10 +701,8 @@ describe("Claude agent-view integration", () => {
 
     environment.inventory = inventorySuccess([]);
     const returned = await source.refresh();
-    expect(returned.sessions.map((session) => session.id)).toEqual([managerID]);
-    expect(returned.sessions[0]).toMatchObject({
-      title: "codes-b8", section: "ready", canOpenOwner: true,
-    });
+    expect(returned.sessions).toEqual([]);
+    expect(menuPresentation(returned, [], nowMs).pills).toEqual([]);
   });
 
   it("retains removed conversation tombstones across refreshes and clears them on interactive reuse", async () => {

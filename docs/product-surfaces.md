@@ -234,7 +234,7 @@ Every surface uses the same phase meanings:
   orange pill alive indefinitely.
 - Agent Visor does not scrape Claude Desktop UI to recover phase.
 
-Claude background inventory records remain searchable and resumable. They enter physical pills and the default overflow only when current interactive metadata or a corroborated parked manager establishes a user-facing session. Worker processes and completed or blocked inventory entries alone do not establish that presence. Closing or switching the source UI updates eligibility without removing history.
+Claude background inventory records remain searchable and resumable. They enter physical pills and the default overflow only when current interactive metadata identifies a displayed conversation. An agent overview contributes no session pill or default overflow entry; its parked host does not establish presence for a background job. This rule does not depend on the inventory's lifecycle states or availability. Entering a conversation restores its presence; returning to the overview, closing, or switching the source UI removes that terminal's contribution without removing history. Another terminal displaying the conversation keeps its pill. Worker processes and completed or blocked inventory entries alone do not establish presence. Source actions revalidate the exact conversation before focusing a terminal or attaching a background job.
 
 The menu-bar strip prioritizes:
 
