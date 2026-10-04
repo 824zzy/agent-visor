@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { navigationStep } from "./navigation-diagnostics.js";
 import {
   chatImageBase64Bytes,
   type ChatImage,
@@ -195,9 +196,13 @@ export class NativeSessionControls implements SessionControls {
     const serial = ++this.focusSerial;
     this.latestClaudeFocusKey = dedupeKey;
     const operation = this.queueAction(session.id, async () => {
-      if (serial !== this.focusSerial) return;
+      if (serial !== this.focusSerial) { navigationStep("superseded"); return; }
       const control = session.controlTarget;
       if (!control) throw new Error("Exact session focus is unavailable.");
+      navigationStep("target", {
+        targetKind: control.kind,
+        ...(control.kind === "codex_thread" ? { pid: control.target.pid, home: control.target.home } : {}),
+      });
       if (session.provider === "codex" && session.messageTransport === "codex_app_server") {
         // Check ownership inside the same action queue as Send. An ambient
         // discovery record says nothing about a locally acquired writer.
@@ -216,10 +221,20 @@ export class NativeSessionControls implements SessionControls {
       else if (control.kind === "cursor_workspace") await this.openCursor(control.cwd);
       else if (control.kind === "codex_thread") await this.helper.openCodexThread(control.target);
       else if (control.kind === "claude_background") {
-        const { attached: _attached, ...target } = control.target;
+        const { attached: _attached, displayed, ...target } = control.target;
         if (!/^[0-9a-f]{8}$/i.test(target.jobId)
           || !path.isAbsolute(target.cwd) || !path.isAbsolute(target.executable)) {
           throw new Error("Exact Claude background session focus is unavailable.");
+        }
+        if (displayed && this.helper.focusGhosttyTerminal) {
+          try {
+            await this.helper.focusGhosttyTerminal(displayed);
+            return;
+          } catch {
+            // A close/switch between discovery and focus must never target an
+            // unrelated surface. Fall back to selecting the canonical job.
+          }
+          if (serial !== this.focusSerial) return;
         }
         // A matching `claude attach <jobId>` argv proves only how a terminal
         // was launched. Claude can move that terminal into Agent View or a

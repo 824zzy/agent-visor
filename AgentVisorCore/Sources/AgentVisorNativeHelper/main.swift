@@ -184,6 +184,12 @@ private func response(
         switch try NativeHelperRequest.decode(data) {
         case .screenTopology(let id):
             return .screenTopology(id: id, screens: screenTopology())
+        case .ghosttyTerminalViews(let id):
+            return .ghosttyTerminalViews(id: id, views: NativeGhosttyTerminalController().views())
+        case .focusGhosttyTerminal(let id, let target):
+            return NativeGhosttyTerminalController().focus(target)
+                ? .accepted(id: id)
+                : .error(id: id, code: .failed, message: "The displayed Claude conversation changed or could not be focused.")
         case .accessibilityStatus(let id):
             return .accessibilityStatus(id: id, trusted: AXIsProcessTrusted())
         case .notificationStatus(let id):
@@ -273,13 +279,8 @@ private func response(
             switch result {
             case .opened:
                 return .accepted(id: id)
-            case .focused:
-                return .error(
-                    id: id, code: .failed,
-                    message: "Codex opened, but did not select the thread. Select it in that Codex window."
-                )
-            case .unavailable:
-                return .error(id: id, code: .failed, message: "The owning Codex process is unavailable.")
+            case .failed(let reason, let systemCode):
+                return .error(id: id, code: .failed, message: reason.message, reason: reason.rawValue, systemCode: systemCode)
             }
         }
     } catch {

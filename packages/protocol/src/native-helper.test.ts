@@ -194,6 +194,19 @@ const requests = [
 ] as const;
 
 describe("native helper protocol", () => {
+  it("carries current Ghostty surface identity without accepting extra focus fields", () => {
+    const target = {
+      applicationPID: 7, processStartToken: "instance", terminalId: "surface-a",
+      title: "✳ ccx-cleanup", cwd: "/Users/me/Codes",
+    };
+    expect(nativeHelperRequestSchema.safeParse({ version: 1, id: "views", method: "ghostty_terminal_views" }).success).toBe(true);
+    const request = { version: 1, id: "focus", method: "focus_ghostty_terminal", params: { target } };
+    expect(nativeHelperRequestSchema.safeParse(request).success).toBe(true);
+    expect(nativeHelperRequestSchema.safeParse({ ...request, params: { target: { ...target, text: "send input" } } }).success).toBe(false);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1, id: "views", ok: true, result: { type: "ghostty_terminal_views", views: [target] },
+    }).success).toBe(true);
+  });
   it("accepts the terminal text boundary but rejects one more UTF-16 unit", () => {
     const base = {
       version: 1 as const,
@@ -470,4 +483,20 @@ describe("native helper protocol", () => {
       }] },
     }).success).toBe(true);
   });
+});
+
+// Native failures carry bounded machine reasons without exposing command/environment text.
+it("accepts structured focus reasons and rejects arbitrary diagnostic fields", () => {
+  const response = {
+    version: 1, id: "click", ok: false,
+    error: { code: "failed", message: "Codex could not select the thread.",
+      reason: "deep_link_rejected", systemCode: -1743 },
+  };
+  expect(nativeHelperResponseSchema.safeParse(response).success).toBe(true);
+  expect(nativeHelperResponseSchema.safeParse({ ...response,
+    error: { ...response.error, reason: "secret command" },
+  }).success).toBe(false);
+  expect(nativeHelperResponseSchema.safeParse({ ...response,
+    error: { ...response.error, environment: "secret" },
+  }).success).toBe(false);
 });

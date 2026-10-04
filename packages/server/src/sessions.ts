@@ -61,6 +61,7 @@ export type SessionControlTarget =
     application: "Ghostty" | "iTerm2" | "Terminal";
     /** A terminal already running `claude attach` for this job. */
     attached?: NativeHelperTerminalTarget;
+    displayed?: import("@agent-visor/protocol").NativeHelperGhosttyTerminalView;
   } }
   | { kind: "url"; url: string };
 

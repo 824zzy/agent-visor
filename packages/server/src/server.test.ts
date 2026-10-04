@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -11,6 +11,7 @@ import {
 import { fixtureSnapshot } from "./fixture.js";
 import { startServer, type RunningServer } from "./server.js";
 import { SessionRepository, type ProviderAdapter } from "./sessions.js";
+import { NavigationDiagnostics } from "./navigation-diagnostics.js";
 
 const token = "test-token-with-at-least-thirty-two-characters";
 let running: RunningServer | undefined;
@@ -21,6 +22,24 @@ afterEach(async () => {
 });
 
 describe("Agent Visor daemon", () => {
+  it("traces a Sessions-window focus request without logging its error text", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "visor-focus-"));
+    const navigationDiagnostics = new NavigationDiagnostics(root);
+    const source = { current: () => fixtureSnapshot, subscribe: () => () => {}, focusSession: async () => "private error" };
+    running = await startServer({ port: 0, source, token, navigationDiagnostics });
+    const socket = new WebSocket(running.url);
+    try {
+      await new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
+      const response = new Promise(resolve => socket.once("message", resolve));
+      socket.send(JSON.stringify({ type: "focus_session", id: "focus", sessionId: "private-id" }));
+      await response;
+      await navigationDiagnostics.flush();
+      const text = await readFile(path.join(root, "diagnostics/pill-navigation.jsonl"), "utf8");
+      const records = text.trim().split("\n").map(line => JSON.parse(line));
+      expect(records.map(record => [record.origin, record.stage])).toEqual([["sessions", "received"], ["sessions", "failed"]]);
+      expect(text).not.toContain("private");
+    } finally { socket.close(); await rm(root, { recursive: true, force: true }); }
+  });
   it("delivers health and one validated session snapshot", async () => {
     running = await startServer({ port: 0, snapshot: fixtureSnapshot, token });
     const socket = new WebSocket(running.url);

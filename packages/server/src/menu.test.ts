@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   nativeHelperRequestSchema,
   TRANSCRIPT_STALE_CEILING_MS,
   type SessionSnapshot,
 } from "@agent-visor/protocol";
 import { activateMenuPill, menuPresentation, nativeActionFor } from "./menu.js";
+import { NavigationDiagnostics } from "./navigation-diagnostics.js";
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -122,6 +126,51 @@ describe("menu presentation", () => {
       type: "native_effect", action: "session_focus_failed",
       message: "This turn is still running in Agent Visor.",
     }]);
+  });
+
+  it("persists a correlated failed click without session names or arbitrary errors", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "visor-click-"));
+    try {
+      const diagnostics = new NavigationDiagnostics(root);
+      await diagnostics.run("private-session", "standard", () => activateMenuPill({
+        version: 1, type: "event", event: "activate_pill", sessionId: "private-session",
+      }, { current: () => snapshot, focusSession: async () => "secret-token-in-error" }, () => {}));
+      await diagnostics.flush();
+      const file = path.join(root, "diagnostics/pill-navigation.jsonl");
+      const text = await readFile(file, "utf8");
+      const records = text.trim().split("\n").map(line => JSON.parse(line));
+      expect(records.map(record => record.stage)).toEqual(["received", "failed"]);
+      expect(new Set(records.map(record => record.clickId)).size).toBe(1);
+      expect(records[0].sessionHash).toMatch(/^[0-9a-f]{16}$/);
+      expect(text).not.toContain("private-session");
+      expect(text).not.toContain("secret-token");
+      expect((await stat(file)).mode & 0o777).toBe(0o600);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("caps click log retention and continues navigation when diagnostics cannot be written", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "visor-click-"));
+    try {
+      const directory = path.join(root, "diagnostics");
+      const file = path.join(directory, "pill-navigation.jsonl");
+      await mkdir(directory);
+      await writeFile(file, " ".repeat(262_143), { mode: 0o600 });
+      const diagnostics = new NavigationDiagnostics(root);
+      const focusSession = vi.fn(async () => undefined);
+      const click = () => activateMenuPill({
+        version: 1, type: "event", event: "activate_pill", sessionId: "history",
+      }, { current: () => snapshot, focusSession }, () => {});
+      await diagnostics.run("history", "standard", click);
+      await diagnostics.flush();
+      expect((await stat(file)).size).toBeLessThanOrEqual(262_144);
+      expect((await stat(file + ".previous")).size).toBe(262_143);
+      // A path that is a file cannot become a diagnostics directory.
+      await writeFile(path.join(root, "unwritable-root"), "fixture");
+      const unavailable = new NavigationDiagnostics(path.join(root, "unwritable-root"));
+      await unavailable.run("history", "standard", click);
+      await unavailable.flush();
+      expect(focusSession).toHaveBeenCalledTimes(2);
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it("keeps explicit Chat activation out of owner focus", async () => {

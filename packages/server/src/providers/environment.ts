@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { NativeHelperGhosttyTerminalView } from "@agent-visor/protocol";
 import { machineWork, runProcess, summaryWork } from "../machine.js";
 import { readCodexSettingsCatalog, type CodexSettingsCatalog } from "../codex-turn.js";
 import {
@@ -55,7 +56,11 @@ export interface ProviderEnvironment {
   claudeAgentInventoryFresh?(): Promise<ClaudeAgentInventoryResult>;
   /** Resolve the trusted Claude executable used by exact background attach. */
   claudeExecutable?(): Promise<string | undefined>;
+  /** Current Ghostty titles; runtime ownership alone cannot identify an attached job. */
+  ghosttyTerminalViews?(): Promise<GhosttyTerminalView[]>;
 }
+
+export type GhosttyTerminalView = NativeHelperGhosttyTerminalView;
 
 export class LiveProviderEnvironment implements ProviderEnvironment {
   private readonly observedWindow: number | (() => number);
@@ -65,13 +70,18 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
   private readonly startedAtByPID = new Map<number, Promise<Date | undefined>>();
   private readonly claudeInventory: ClaudeAgentInventory;
   private claudeExecutablePath?: Promise<string | undefined>;
+  readonly ghosttyTerminalViews?: () => Promise<GhosttyTerminalView[]>;
 
   constructor(
     readonly home: string,
-    options: { observedWindowMs?: number | (() => number); now?: () => Date } = {},
+    options: {
+      observedWindowMs?: number | (() => number); now?: () => Date;
+      ghosttyTerminalViews?: () => Promise<GhosttyTerminalView[]>;
+    } = {},
   ) {
     this.observedWindow = options.observedWindowMs ?? 42 * 60 * 60 * 1_000;
     this.clock = options.now ?? (() => new Date());
+    this.ghosttyTerminalViews = options.ghosttyTerminalViews;
     this.claudeInventory = new ClaudeAgentInventory({
       home,
       now: () => this.now(),

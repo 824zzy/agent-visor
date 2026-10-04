@@ -225,6 +225,30 @@ public struct NativeHelperTerminalTarget: Codable, Equatable {
     }
 }
 
+/// A presentation surface, independent of a Claude background worker's PTY.
+public struct NativeHelperGhosttyTerminalView: Codable, Equatable {
+    public let applicationPID: Int32
+    public let processStartToken: String
+    public let terminalId: String
+    public let title: String
+    public let cwd: String
+
+    public init(applicationPID: Int32, processStartToken: String, terminalId: String, title: String, cwd: String) {
+        self.applicationPID = applicationPID
+        self.processStartToken = processStartToken
+        self.terminalId = terminalId
+        self.title = title
+        self.cwd = cwd
+    }
+
+    public var isValid: Bool {
+        applicationPID > 0 && !processStartToken.isEmpty && processStartToken.utf16.count <= 256
+            && !terminalId.isEmpty && terminalId.utf16.count <= 128
+            && !title.isEmpty && title.utf16.count <= 512 && cwd.hasPrefix("/") && cwd.utf16.count <= 4_096
+            && ![terminalId, title, cwd, processStartToken].contains(where: { $0.contains("\0") })
+    }
+}
+
 public struct NativeHelperFocusTarget: Codable, Equatable {
     public let pid: Int32
     public let bundleIdentifier: String
@@ -399,13 +423,16 @@ public enum NativeHelperRequest: Equatable {
     case openCodexThread(id: String, target: NativeHelperCodexThreadTarget)
     case openClaudeAttach(id: String, target: NativeHelperClaudeAttachTarget)
     case focusTerminal(id: String, target: NativeHelperTerminalTarget)
+    case ghosttyTerminalViews(id: String)
+    case focusGhosttyTerminal(id: String, target: NativeHelperGhosttyTerminalView)
     case sendTerminal(id: String, target: NativeHelperTerminalTarget, text: String, submit: Bool)
     case cancelTerminal(id: String, target: NativeHelperTerminalTarget)
     case cyclePermissionMode(id: String, target: NativeHelperTerminalTarget)
 
     public var id: String {
         switch self {
-        case .screenTopology(let id), .accessibilityStatus(let id),
+        case .ghosttyTerminalViews(let id), .focusGhosttyTerminal(let id, _),
+             .screenTopology(let id), .accessibilityStatus(let id),
              .notificationStatus(let id), .requestNotifications(let id),
              .reconcileNotifications(let id, _, _),
              .reconcilePiRestoration(let id, _), .requestAccessibility(let id),
@@ -428,7 +455,7 @@ public enum NativeHelperRequest: Equatable {
         let requiredKeys: Set<String> = [
             "present_pills", "reconcile_notifications", "reconcile_pi_restoration",
                 "focus", "open_codex_thread", "open_claude_attach", "focus_terminal", "send_terminal",
-                "cancel_terminal", "cycle_permission_mode",
+                "cancel_terminal", "cycle_permission_mode", "focus_ghostty_terminal",
         ].contains(method)
             ? ["version", "id", "method", "params"]
             : ["version", "id", "method"]
@@ -444,6 +471,13 @@ public enum NativeHelperRequest: Equatable {
         }
 
         switch method {
+        case "ghostty_terminal_views":
+            return .ghosttyTerminalViews(id: wire.id)
+        case "focus_ghostty_terminal":
+            guard let target = wire.params?.ghosttyTerminalTarget, target.isValid else {
+                throw NativeHelperWireError.invalidRequest
+            }
+            return .focusGhosttyTerminal(id: wire.id, target: target)
         case "screen_topology":
             return .screenTopology(id: wire.id)
         case "accessibility_status":
@@ -651,15 +685,21 @@ public enum NativeHelperErrorCode: String, Codable {
 }
 
 public enum NativeHelperResponse {
+    case ghosttyTerminalViews(id: String, views: [NativeHelperGhosttyTerminalView])
     case screenTopology(id: String, screens: [NativeHelperScreen])
     case accessibilityStatus(id: String, trusted: Bool)
     case notificationStatus(id: String, status: NativeHelperNotificationPermission)
     case accepted(id: String)
-    case error(id: String, code: NativeHelperErrorCode, message: String)
+    case error(id: String, code: NativeHelperErrorCode, message: String, reason: String? = nil, systemCode: Int? = nil)
 
     public func encoded() throws -> Data {
         let encoder = JSONEncoder()
         switch self {
+        case .ghosttyTerminalViews(let id, let views):
+            return try encoder.encode(SuccessEnvelope(
+                version: nativeHelperProtocolVersion, id: id, ok: true,
+                result: .ghosttyTerminalViews(views)
+            ))
         case .screenTopology(let id, let screens):
             return try encoder.encode(SuccessEnvelope(
                 version: nativeHelperProtocolVersion,
@@ -688,12 +728,12 @@ public enum NativeHelperResponse {
                 ok: true,
                 result: .accepted
             ))
-        case .error(let id, let code, let message):
+        case .error(let id, let code, let message, let reason, let systemCode):
             return try encoder.encode(ErrorEnvelope(
                 version: nativeHelperProtocolVersion,
                 id: id,
                 ok: false,
-                error: .init(code: code, message: String(message.prefix(512)))
+                error: .init(code: code, message: String(message.prefix(512)), reason: reason, systemCode: systemCode)
             ))
         }
     }
@@ -837,6 +877,11 @@ public struct NativeHelperFrameDecoder {
 
 private func hasStrictNestedFields(method: String, object: [String: Any]) -> Bool {
     switch method {
+    case "focus_ghostty_terminal":
+        guard let params = object["params"] as? [String: Any],
+              Set(params.keys) == ["target"],
+              let target = params["target"] as? [String: Any] else { return false }
+        return Set(target.keys) == ["applicationPID", "processStartToken", "terminalId", "title", "cwd"]
     case "present_pills":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys).contains("pills"),
@@ -964,6 +1009,7 @@ private struct WireParameters: Decodable {
     let codexThreadTarget: NativeHelperCodexThreadTarget?
     let claudeAttachTarget: NativeHelperClaudeAttachTarget?
     let terminalTarget: NativeHelperTerminalTarget?
+    let ghosttyTerminalTarget: NativeHelperGhosttyTerminalView?
     let text: String?
     let submit: Bool?
     let keys: [String]
@@ -1031,6 +1077,9 @@ private struct WireParameters: Decodable {
         terminalTarget = try? container.decodeIfPresent(
             NativeHelperTerminalTarget.self,
             forKey: .init("target")
+        )
+        ghosttyTerminalTarget = try? container.decodeIfPresent(
+            NativeHelperGhosttyTerminalView.self, forKey: .init("target")
         )
         text = try container.decodeIfPresent(String.self, forKey: .init("text"))
         submit = try container.decodeIfPresent(Bool.self, forKey: .init("submit"))
@@ -1219,6 +1268,7 @@ private struct SuccessEnvelope: Encodable {
 }
 
 private enum ResultBody: Encodable {
+    case ghosttyTerminalViews([NativeHelperGhosttyTerminalView])
     case screenTopology([NativeHelperScreen])
     case accessibilityStatus(Bool)
     case notificationStatus(NativeHelperNotificationPermission)
@@ -1227,6 +1277,9 @@ private enum ResultBody: Encodable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: DynamicKey.self)
         switch self {
+        case .ghosttyTerminalViews(let views):
+            try container.encode("ghostty_terminal_views", forKey: .init("type"))
+            try container.encode(views, forKey: .init("views"))
         case .screenTopology(let screens):
             try container.encode("screen_topology", forKey: .init("type"))
             try container.encode(screens, forKey: .init("screens"))
@@ -1246,6 +1299,8 @@ private struct ErrorEnvelope: Encodable {
     struct Body: Encodable {
         let code: NativeHelperErrorCode
         let message: String
+        let reason: String?
+        let systemCode: Int?
     }
 
     let version: Int

@@ -950,6 +950,14 @@ export const nativeHelperNotificationPermissionSchema = z.enum([
   "not_determined", "denied", "authorized",
 ]);
 
+export const nativeHelperGhosttyTerminalViewSchema = z.object({
+  applicationPID: z.number().int().positive().max(2_147_483_647),
+  processStartToken: z.string().min(1).max(256).regex(/^[^\0]+$/),
+  terminalId: z.string().min(1).max(128).regex(/^[^\0]+$/),
+  title: z.string().min(1).max(512).regex(/^[^\0]+$/),
+  cwd: z.string().startsWith("/").max(4_096).regex(/^[^\0]+$/),
+}).strict();
+
 export const nativeHelperNotificationSchema = z.object({
   id: z.string().min(1).max(128),
   sessionId: z.string().min(1).max(512),
@@ -989,6 +997,12 @@ const nativeHelperTerminalTextSchema = z.string()
   });
 
 export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
+  z.object({ ...helperEnvelope, method: z.literal("ghostty_terminal_views") }).strict(),
+  z.object({
+    ...helperEnvelope,
+    method: z.literal("focus_ghostty_terminal"),
+    params: z.object({ target: nativeHelperGhosttyTerminalViewSchema }).strict(),
+  }).strict(),
   z.object({
     ...helperEnvelope,
     method: z.literal("screen_topology"),
@@ -1082,6 +1096,10 @@ export const nativeHelperScreenSchema = z.object({
 
 const nativeHelperResultSchema = z.discriminatedUnion("type", [
   z.object({
+    type: z.literal("ghostty_terminal_views"),
+    views: z.array(nativeHelperGhosttyTerminalViewSchema).max(64),
+  }).strict(),
+  z.object({
     type: z.literal("screen_topology"),
     screens: z.array(nativeHelperScreenSchema),
   }).strict(),
@@ -1098,6 +1116,12 @@ const nativeHelperResultSchema = z.discriminatedUnion("type", [
   }).strict(),
 ]);
 
+export const nativeHelperFocusFailureReasonSchema = z.enum([
+  "invalid_target", "process_missing", "process_terminated", "bundle_mismatch",
+  "profile_unavailable", "executable_mismatch", "profile_ambiguous", "profile_mismatch",
+  "deep_link_rejected", "activation_failed",
+]);
+
 const nativeHelperResponseEnvelopeSchema = z.discriminatedUnion("ok", [
   z.object({
     ...helperEnvelope,
@@ -1110,6 +1134,8 @@ const nativeHelperResponseEnvelopeSchema = z.discriminatedUnion("ok", [
     error: z.object({
       code: z.enum(["invalid_request", "unsupported", "failed"]),
       message: z.string().min(1).max(512),
+      reason: nativeHelperFocusFailureReasonSchema.optional(),
+      systemCode: z.number().int().min(-2_147_483_648).max(2_147_483_647).optional(),
     }).strict(),
   }).strict(),
 ]);
@@ -1187,6 +1213,7 @@ export type NativeHelperPiRestorationUpdate = z.infer<
   typeof nativeHelperPiRestorationUpdateSchema
 >;
 export type NativeHelperTerminalTarget = z.infer<typeof nativeHelperTerminalTargetSchema>;
+export type NativeHelperGhosttyTerminalView = z.infer<typeof nativeHelperGhosttyTerminalViewSchema>;
 export type NativeServicesState = z.infer<typeof nativeServicesStateSchema>;
 export type NativeHelperPill = z.infer<typeof nativeHelperPillSchema>;
 export type NativeHelperUsageGlance = z.infer<typeof nativeHelperUsageGlanceSchema>;

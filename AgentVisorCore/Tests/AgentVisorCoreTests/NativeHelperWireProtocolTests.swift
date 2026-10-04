@@ -2,6 +2,35 @@ import XCTest
 @testable import AgentVisorCore
 
 final class NativeHelperWireProtocolTests: XCTestCase {
+    func testFocusFailureCarriesOnlyAReasonAndSystemCodeAlongsideTheMessage() throws {
+        let data = try NativeHelperResponse.error(
+            id: "click", code: .failed, message: "Codex could not select the thread.",
+            reason: "deep_link_rejected", systemCode: -1743
+        ).encoded()
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let error = try XCTUnwrap(object["error"] as? [String: Any])
+        XCTAssertEqual(error["reason"] as? String, "deep_link_rejected")
+        XCTAssertEqual(error["systemCode"] as? Int, -1743)
+        XCTAssertEqual(error.count, 4)
+    }
+
+    func testGhosttyViewFocusAndReadShareTheWireIdentity() throws {
+        let target = NativeHelperGhosttyTerminalView(
+            applicationPID: 7, processStartToken: "instance", terminalId: "surface-a",
+            title: "✳ ccx-cleanup", cwd: "/Users/me/Codes"
+        )
+        XCTAssertEqual(try NativeHelperRequest.decode(Data(#"{"version":1,"id":"views","method":"ghostty_terminal_views"}"#.utf8)), .ghosttyTerminalViews(id: "views"))
+        let data = try JSONSerialization.data(withJSONObject: [
+            "version": 1, "id": "focus-view", "method": "focus_ghostty_terminal",
+            "params": ["target": try JSONSerialization.jsonObject(with: JSONEncoder().encode(target))],
+        ])
+        XCTAssertEqual(try NativeHelperRequest.decode(data), .focusGhosttyTerminal(id: "focus-view", target: target))
+        let result = try NativeHelperResponse.ghosttyTerminalViews(id: "views", views: [target]).encoded()
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: result) as? [String: Any])
+        let body = try XCTUnwrap(object["result"] as? [String: Any])
+        XCTAssertEqual(body["type"] as? String, "ghostty_terminal_views")
+        XCTAssertEqual((body["views"] as? [[String: Any]])?.first?["terminalId"] as? String, "surface-a")
+    }
     func testParsesWireTimestampsWithAndWithoutFractionalSeconds() {
         XCTAssertNotNil(NativeHelperTimestamp.parse("2026-08-24T12:00:00.000Z"))
         XCTAssertNotNil(NativeHelperTimestamp.parse("2026-08-24T12:00:00Z"))

@@ -13,6 +13,7 @@ import {
 } from "@agent-visor/protocol";
 import type { SessionSnapshotSource } from "./sessions.js";
 import { sendDaemonMessage } from "./outbound.js";
+import { navigationStep, type NavigationDiagnostics } from "./navigation-diagnostics.js";
 
 export interface NativeServicesSource {
   current(): NativeServicesState;
@@ -33,6 +34,7 @@ export async function startServer(options: {
   /** Tests may lower the production bound to exercise disconnect handling. */
   maxPayload?: number;
   nativeServices?: NativeServicesSource;
+  navigationDiagnostics?: NavigationDiagnostics;
 } & (
   | { snapshot: SessionSnapshot; source?: never }
   | { source: SessionSnapshotSource; snapshot?: never }
@@ -121,9 +123,17 @@ export async function startServer(options: {
           sendDaemonMessage(socket, options.nativeServices.current(), { requestType: parsed.data.type });
         }
       } else if (parsed.data.type === "focus_session") {
-        const error = source.focusSession
-          ? await source.focusSession(parsed.data.sessionId)
-          : "Exact session focus is unavailable.";
+        const sessionId = parsed.data.sessionId;
+        const focus = async () => {
+          const error = source.focusSession
+            ? await source.focusSession(sessionId)
+            : "Exact session focus is unavailable.";
+          navigationStep(error ? "failed" : "completed");
+          return error;
+        };
+        const error = options.navigationDiagnostics
+          ? await options.navigationDiagnostics.run(sessionId, "standard", focus, "sessions")
+          : await focus();
         sendDaemonMessage(socket, {
           type: "native_action_result",
           id: parsed.data.id,

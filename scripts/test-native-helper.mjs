@@ -146,6 +146,7 @@ try {
 }
 
 const { NativeHelperProcess } = await import("../packages/server/dist/native-helper.js");
+const { NavigationDiagnostics } = await import("../packages/server/dist/navigation-diagnostics.js");
 process.env.AGENT_VISOR_DATA_DIR = dataRoot;
 const adapter = await NativeHelperProcess.start(helperExecutable, () => undefined);
 try {
@@ -155,14 +156,27 @@ try {
   await adapter.notificationStatus();
   await adapter.reconcileNotifications([], false);
   let rejectedWrongOwner = false;
-  try {
-    await adapter.openCodexThread({
-      pid: process.pid, home: "/tmp", threadId: "019f3931-ec11-7f31-8400-1c8624aa9e4d",
-    });
-  } catch (error) {
-    rejectedWrongOwner = String(error).includes("owning Codex process is unavailable");
-  }
+  const navigation = new NavigationDiagnostics(dataRoot);
+  await navigation.run("adapter-non-Codex-owner", "standard", async () => {
+    // Discovery/menu refreshes can inherit a click context but are not navigation.
+    await adapter.screenTopology();
+    try {
+      await adapter.openCodexThread({
+        pid: process.pid, home: "/tmp", threadId: "019f3931-ec11-7f31-8400-1c8624aa9e4d",
+      });
+    } catch {
+      rejectedWrongOwner = true;
+    }
+  });
   if (!rejectedWrongOwner) throw new Error("Codex thread navigation accepted a non-Codex process");
+  await navigation.flush();
+  const trace = (await readFile(path.join(dataRoot, "diagnostics/pill-navigation.jsonl"), "utf8"))
+    .trim().split("\n").map(line => JSON.parse(line));
+  const reply = trace.find(record => record.stage === "helper_response");
+  const request = trace.find(record => record.stage === "helper_request");
+  if (trace.length !== 3) throw new Error("Click trace includes unrelated helper requests");
+  if (!["process_missing", "bundle_mismatch"].includes(reply?.reason) || reply.requestId !== request?.requestId
+    || reply.clickId !== request.clickId) throw new Error("Native focus failure trace is missing its request identity or reason");
   let rejectedMissingProject = false;
   try {
     await adapter.openClaudeAttach({

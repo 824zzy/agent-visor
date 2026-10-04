@@ -28,6 +28,7 @@ import { readLegacyDefaults, SettingsRepository } from "./settings.js";
 import { chatUsageGlanceFromNative, readCodexUsage } from "./usage.js";
 import { checkForUpdates } from "./updates.js";
 import { agentVisorVersion } from "./runtime-version.js";
+import { NavigationDiagnostics } from "./navigation-diagnostics.js";
 
 await runDaemon(async (lifetime) => {
   let hookSocket: RunningHookSocket | undefined;
@@ -51,6 +52,7 @@ await runDaemon(async (lifetime) => {
   let sessionControls: NativeSessionControls | undefined;
   let running: Awaited<ReturnType<typeof startServer>> | undefined;
   let refreshTimer: NodeJS.Timeout | undefined;
+  let flushNavigationDiagnostics = async () => {};
   lifetime.onStop(async () => {
     for (const timer of [refreshTimer, usageTimer, menuTimer, permissionTimer, updateTimer]) {
       clearInterval(timer);
@@ -65,6 +67,7 @@ await runDaemon(async (lifetime) => {
       alfredSocket?.close(), sessionControls?.close(), hookSocket?.close(),
       nativeHelper?.close(), running?.close(),
     ]);
+    await flushNavigationDiagnostics();
     const failure = results.find((result) => result.status === "rejected");
     if (failure?.status === "rejected") throw failure.reason;
   });
@@ -74,6 +77,8 @@ await runDaemon(async (lifetime) => {
   const currentVersion = agentVisorVersion();
   const dataRoot = process.env.AGENT_VISOR_DATA_DIR
     ?? path.join(os.homedir(), "Library/Application Support/Agent Visor");
+  const navigationDiagnostics = new NavigationDiagnostics(dataRoot);
+  flushNavigationDiagnostics = () => navigationDiagnostics.flush();
   const settingsDomain = process.env.AGENT_VISOR_SETTINGS_DOMAIN ?? "com.824zzy.AgentVisor.Dev";
   const integrationResources = process.env.AGENT_VISOR_INTEGRATIONS_DIR ?? path.resolve(
     path.dirname(fileURLToPath(import.meta.url)), "../../../AgentVisor/Resources",
@@ -94,6 +99,7 @@ await runDaemon(async (lifetime) => {
       () => settings.current().codexHomes,
       (home) => settings.addDiscoveredCodexHome(home),
       () => settings.current().ignoredCodexHomes,
+      () => nativeHelper?.ghosttyTerminalViews?.() ?? Promise.resolve([]),
     ),
     {
       piRuntimeStatePath: path.join(dataRoot, "pi-runtime-links.json"),
@@ -151,9 +157,11 @@ await runDaemon(async (lifetime) => {
           return;
         }
         if (event.event === "activate_pill") {
-          if (event.intent !== "dismiss") repository.acknowledgeReady(event.sessionId);
-          runBackground("session focus", () => activateMenuPill(
-            event, repository, (message) => sendToDesktop(message),
+          runBackground("session focus", () => navigationDiagnostics.run(
+            event.sessionId, event.intent ?? "standard", async () => {
+              if (event.intent !== "dismiss") repository.acknowledgeReady(event.sessionId);
+              await activateMenuPill(event, repository, (message) => sendToDesktop(message));
+            },
           ));
           return;
         }
@@ -267,6 +275,7 @@ await runDaemon(async (lifetime) => {
     source: repository,
     token,
     nativeServices,
+    navigationDiagnostics,
   });
   if (lifetime.stopping) return;
   sendToDesktop({ type: "ready", url: running.url });

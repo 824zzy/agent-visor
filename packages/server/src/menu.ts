@@ -6,6 +6,7 @@ import {
 } from "@agent-visor/protocol";
 import type { NativeHelperEvent } from "./native-helper.js";
 import type { SessionSnapshotSource } from "./sessions.js";
+import { navigationStep } from "./navigation-diagnostics.js";
 
 const attentionOrder = {
   needs_you: 0,
@@ -34,16 +35,19 @@ export async function activateMenuPill(
   if (event.intent === "dismiss") {
     const session = source.current().sessions.find((candidate) => candidate.id === event.sessionId);
     if (session?.failureAlert === true) source.acknowledgeFailure?.(session.id);
+    navigationStep("dismissed");
     return;
   }
   const action = nativeActionFor(event, source.current());
   if (action?.action === "open_chat") {
+    navigationStep("chat");
     dispatch(action);
     return;
   }
   const error = source.focusSession
     ? await source.focusSession(event.sessionId)
     : "Opening this session is unavailable.";
+  navigationStep(error ? "failed" : "completed");
   if (error) dispatch({
     type: "native_effect", action: "session_focus_failed", message: error.slice(0, 1_000),
   });

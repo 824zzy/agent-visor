@@ -1,7 +1,7 @@
 import path from "node:path";
 import { TRANSCRIPT_STALE_CEILING_MS, type NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import type { ProviderAdapter, DiscoveredProviderSession } from "../sessions.js";
-import type { FileStamp, ProcessRecord, ProviderEnvironment } from "./environment.js";
+import type { FileStamp, GhosttyTerminalView, ProcessRecord, ProviderEnvironment } from "./environment.js";
 import type {
   ClaudeAgentInventoryRow,
   ClaudeAgentInventoryResult,
@@ -98,6 +98,7 @@ export class ClaudeProvider implements ProviderAdapter {
     const spares = new Set<string>();
     const interactiveSessionIds = new Set<string>();
     const parkedSessionIds = new Set<string>();
+    const parkedGhosttyApplications = new Set<number>();
 
     for (const file of await this.environment.directory(directory)) {
       const match = /^(\d+)\.json$/.exec(file);
@@ -150,11 +151,22 @@ export class ClaudeProvider implements ProviderAdapter {
       if (!sessionID || !cwd || (kind !== "interactive" && kind !== "bg")) continue;
       if (entrypoint.startsWith("sdk") || terminalStatuses.has(status)) continue;
       if (cwd.includes(".claude-mem") || cwd.includes("observer-sessions")) continue;
-      // Claude marks the host conversation parked while its agent overview is
-      // open, and clears this marker when returning to a conversation. This
-      // screen identity is independent of inventory state or availability.
+      // A parked host can show either overview or an attached background job.
+      // Its own UUID/parkedJobId do not identify that displayed conversation.
       if (kind === "interactive" && metadata.parkedJobId !== undefined) {
         parkedSessionIds.add(sessionID);
+        if (process.tty && path.basename(process.command).toLowerCase().includes("claude")) {
+          let ancestor: ProcessRecord | undefined = process;
+          const visited = new Set<number>();
+          while (ancestor && !visited.has(ancestor.pid)) {
+            visited.add(ancestor.pid);
+            if (ancestor.command.endsWith("/Ghostty.app/Contents/MacOS/ghostty")) {
+              parkedGhosttyApplications.add(ancestor.pid);
+              break;
+            }
+            ancestor = byPID.get(ancestor.parentPID);
+          }
+        }
         continue;
       }
       const backgroundTarget = kind === "bg"
@@ -251,6 +263,23 @@ export class ClaudeProvider implements ProviderAdapter {
       }
     }
 
+    const displayedJobs = new Map<string, GhosttyTerminalView>();
+    if (inventory?.authoritative && parkedGhosttyApplications.size && this.environment.ghosttyTerminalViews) {
+      let views: GhosttyTerminalView[] = [];
+      try { views = await this.environment.ghosttyTerminalViews(); } catch { /* No stale view fallback. */ }
+      for (const view of views) {
+        if (!parkedGhosttyApplications.has(view.applicationPID)) continue;
+        // Claude emits these exact indicators for conversation titles. Fleet
+        // titles (including awaiting-input counts) never match a job title.
+        const name = /^[✳◐◑] /.test(view.title) ? view.title.slice(2) : "";
+        if (!name || name === "Claude Code" || /(?:^| · )claude agents$/.test(name)) continue;
+        const matches = [...inventoryRows.values()].filter((row) =>
+          !hiddenInventoryJobs.has(row.id!.toLowerCase())
+          && row.name === name && row.cwd === view.cwd);
+        if (matches.length === 1) displayedJobs.set(matches[0]!.id!, view);
+      }
+    }
+
     if (inventory) {
       for (const row of inventoryRows.values()) {
         if (hiddenInventoryJobs.has(row.id!.toLowerCase())) continue;
@@ -271,9 +300,15 @@ export class ClaudeProvider implements ProviderAdapter {
         const session = await this.backgroundSession(
           row, metadata, summary, transcript, transcriptStamp, processes, claudeExecutable,
           inventory.authoritative, inventory.observedAt, this.environment.now().valueOf(),
-          interactiveSessionIds.has(transcriptSessionID.toLowerCase()),
+          interactiveSessionIds.has(transcriptSessionID.toLowerCase()) || displayedJobs.has(row.id!),
         );
         if (session) {
+          const displayed = displayedJobs.get(row.id!);
+          if (displayed && session.controlTarget?.kind === "claude_background") {
+            session.controlTarget.target.displayed = displayed;
+            session.controlTarget.target.application = "Ghostty";
+            session.owner = "Ghostty";
+          }
           const interactiveIndex = results.findIndex((candidate) =>
             candidate.id.toLowerCase() === session.id.toLowerCase());
           const interactive = results[interactiveIndex];
@@ -442,7 +477,8 @@ export class ClaudeProvider implements ProviderAdapter {
       canEnterChat: true,
       sessionClass: "terminal",
       // A worker, attach argv, or parked overview is not an open conversation.
-      // Only current interactive conversation metadata establishes presence.
+      // Current interactive metadata or a unique current Ghostty conversation
+      // title establishes presence; ownership and parked IDs alone do not.
       ambientEligible,
       conversationState: "open",
       turnState: state === "history" ? "unknown" : state,

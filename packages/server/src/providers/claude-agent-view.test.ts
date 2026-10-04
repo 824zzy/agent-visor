@@ -34,6 +34,7 @@ class FixtureEnvironment implements ProviderEnvironment {
   inventory: ClaudeAgentInventoryResult = inventorySuccess([]);
   clock = now;
   executable: string | undefined = executable;
+  ghosttyViews: Array<{ applicationPID: number; processStartToken: string; terminalId: string; title: string; cwd: string }> = [];
 
   now(): Date { return this.clock; }
   async processes(): Promise<ProcessRecord[]> { return this.processRows; }
@@ -55,6 +56,7 @@ class FixtureEnvironment implements ProviderEnvironment {
   async sqlite(_database: string, _sql: string): Promise<unknown[]> { return []; }
   async claudeAgentInventory(): Promise<ClaudeAgentInventoryResult> { return this.inventory; }
   async claudeExecutable(): Promise<string | undefined> { return this.executable; }
+  async ghosttyTerminalViews() { return this.ghosttyViews; }
 }
 
 function inventorySuccess(
@@ -146,6 +148,106 @@ function repository(environment: FixtureEnvironment): SessionRepository {
 }
 
 describe("Claude agent-view integration", () => {
+  it("does not reattach an older selection after a newer click wins during failed surface focus", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, { sessionId: managerID, cwd, kind: "interactive", status: "idle", parkedJobId: "0a06da15" });
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "blocked", { name: "ccx-cleanup" }),
+      backgroundRow("64b38993", blockedID, "done", { name: "cc-misc" }),
+    ]);
+    environment.ghosttyViews = [{ applicationPID: 7, processStartToken: "instance", terminalId: "surface-a", title: "✳ ccx-cleanup", cwd }];
+    const helper = new FakeNativeHelper();
+    let failFirst!: () => void;
+    let started!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { started = resolve; });
+    helper.focusGhosttyTerminal = async (target) => {
+      if (target.title === "✳ ccx-cleanup") {
+        started();
+        await new Promise<void>((_resolve, reject) => { failFirst = () => reject(new Error("surface changed")); });
+      }
+    };
+    const source = repository(environment);
+    await source.refresh();
+    source.setControls(new NativeSessionControls(helper));
+    const first = source.focusSession(ccID);
+    await firstStarted;
+    environment.ghosttyViews[0]!.title = "✳ cc-misc";
+    expect(await source.focusSession(blockedID)).toBeUndefined();
+    failFirst();
+    expect(await first).toBeUndefined();
+    expect(helper.claudeAttachRequests).toEqual([]);
+  });
+
+  it("shows the attached conversation while its frontend retains a different parked identity", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, {
+      sessionId: managerID, cwd, kind: "interactive", status: "idle",
+      name: "codes-ef", parkedJobId: "0a06da15",
+    });
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "blocked", { name: "ccx-cleanup" }),
+      backgroundRow("64b38993", blockedID, "done", { name: "cc-misc" }),
+    ]);
+    environment.ghosttyViews = [{
+      applicationPID: 7, processStartToken: "ghostty-instance",
+      terminalId: "048c93af-0c77-4f8c-b6b0-313257df61ae",
+      title: "✳ ccx-cleanup", cwd,
+    }];
+    const source = repository(environment);
+    const snapshot = await source.refresh();
+    expect(menuPresentation(snapshot, [], nowMs).pills.map(({ id }) => id)).toEqual([ccID]);
+    expect(snapshot.sessions.find(({ id }) => id === blockedID)?.ambientEligible).toBe(false);
+    expect(snapshot.sessions.some(({ id }) => id === managerID)).toBe(false);
+    const helper = new FakeNativeHelper();
+    const reattachments: Array<{ jobId: string }> = [];
+    source.setControls(new NativeSessionControls(
+      helper, undefined, undefined, undefined, undefined, undefined,
+      async (target) => { reattachments.push(target); },
+    ));
+    expect(await source.focusSession(ccID)).toBeUndefined();
+    expect(helper.claudeAttachRequests).toHaveLength(0);
+    expect(helper.ghosttyTerminalFocusRequests).toEqual(environment.ghosttyViews);
+
+    // Neither the host UUID nor its parked job changes during this roundtrip.
+    environment.ghosttyViews[0]!.title = "1 awaiting input · claude agents";
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    environment.ghosttyViews[0]!.title = "◐ cc-misc";
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills.map(({ id }) => id)).toEqual([blockedID]);
+    // A stale click selects its canonical job; it cannot focus the other view.
+    expect(await source.focusSession(ccID)).toBeUndefined();
+    expect(helper.ghosttyTerminalFocusRequests).toHaveLength(1);
+    expect(reattachments).toMatchObject([{ cwd, executable, jobId: "8e45ed2c" }]);
+    environment.ghosttyViews = [];
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+  });
+
+  it("does not guess a displayed job from ambiguous names, another directory, or a failed view read", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, {
+      sessionId: managerID, cwd, kind: "interactive", status: "idle", parkedJobId: "0a06da15",
+    });
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "blocked", { name: "ccx-cleanup" }),
+      backgroundRow("64b38993", blockedID, "done", { name: "ccx-cleanup" }),
+    ]);
+    environment.ghosttyViews = [{
+      applicationPID: 7, processStartToken: "ghostty-instance", terminalId: "surface-a",
+      title: "✳ ccx-cleanup", cwd,
+    }];
+    const source = repository(environment);
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "blocked", { name: "ccx-cleanup" }),
+    ]);
+    environment.ghosttyViews[0]!.cwd = home + "/another-project";
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    environment.ghosttyTerminalViews = async () => { throw new Error("permission unavailable"); };
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+  });
+
   it("shows only the open interactive conversation when retained background jobs share its workspace", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, executable);

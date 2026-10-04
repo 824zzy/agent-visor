@@ -5,6 +5,7 @@ import net, { type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { saveNativeHelperDiagnostic } from "./native-helper-diagnostics.js";
+import { navigationRecorder } from "./navigation-diagnostics.js";
 import {
   NATIVE_HELPER_MAX_FRAME_BYTES,
   NATIVE_HELPER_MAX_TEXT_BYTES,
@@ -19,12 +20,15 @@ import {
   type NativeHelperPiRestorationUpdate,
   type NativeHelperPill,
   type NativeHelperTerminalTarget,
+  type NativeHelperGhosttyTerminalView,
   type NativeHelperResponse,
   type NativeHelperScreen,
   type NativeHelperUsageGlance,
 } from "@agent-visor/protocol";
 
 export interface NativeHelperAdapter {
+  ghosttyTerminalViews?(): Promise<NativeHelperGhosttyTerminalView[]>;
+  focusGhosttyTerminal?(target: NativeHelperGhosttyTerminalView): Promise<void>;
   /** False when the signed helper process is not available for a real action. */
   isAvailable?(): boolean;
   screenTopology(): Promise<NativeHelperScreen[]>;
@@ -109,6 +113,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export class FakeNativeHelper implements NativeHelperAdapter {
+  readonly ghosttyTerminalFocusRequests: NativeHelperGhosttyTerminalView[] = [];
+  ghosttyViews: NativeHelperGhosttyTerminalView[] = [];
+  async ghosttyTerminalViews() { return structuredClone(this.ghosttyViews); }
+  async focusGhosttyTerminal(target: NativeHelperGhosttyTerminalView) {
+    this.ghosttyTerminalFocusRequests.push(structuredClone(target));
+  }
   readonly focusRequests: NativeHelperFocusTarget[] = [];
   readonly codexThreadRequests: NativeHelperCodexThreadTarget[] = [];
   readonly claudeAttachRequests: NativeHelperClaudeAttachTarget[] = [];
@@ -414,6 +424,16 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     await this.accepted("open_claude_attach", { target });
   }
 
+  async ghosttyTerminalViews(): Promise<NativeHelperGhosttyTerminalView[]> {
+    const response = await this.request("ghostty_terminal_views");
+    if (response.result.type !== "ghostty_terminal_views") throw new Error("Unexpected helper response.");
+    return response.result.views;
+  }
+
+  async focusGhosttyTerminal(target: NativeHelperGhosttyTerminalView): Promise<void> {
+    await this.accepted("focus_ghostty_terminal", { target });
+  }
+
   async focusTerminal(target: NativeHelperTerminalTarget): Promise<void> {
     await this.accepted("focus_terminal", { target });
   }
@@ -467,8 +487,11 @@ export class NativeHelperProcess implements NativeHelperAdapter {
   }
 
   private request(method: string, params?: unknown) {
-    if (this.closed) return Promise.reject(new Error("The native helper is closed."));
-    if (this.failure) return Promise.reject(this.failure);
+    const trace = navigationRecorder(method);
+    if (this.closed || this.failure) {
+      trace("helper_response", { method, outcome: "connection_closed" });
+      return Promise.reject(this.failure ?? new Error("The native helper is closed."));
+    }
     let serialized: { id: string; frame: Buffer };
     try {
       serialized = serializeNativeHelperRequest(method, params);
@@ -476,19 +499,28 @@ export class NativeHelperProcess implements NativeHelperAdapter {
       return Promise.reject(error);
     }
     const { id, frame } = serialized;
+    trace("helper_request", { method, requestId: id });
 
     return new Promise<Extract<NativeHelperResponse, { ok: true }>>((resolve, reject) => {
       const deadline = setTimeout(() => {
         this.pending.delete(id);
+        trace("helper_response", { method, requestId: id, outcome: "timeout" });
         reject(new Error(`The native helper did not answer ${method}.`));
       }, 3_000);
       this.pending.set(id, {
         method,
         resolve: (response) => {
+          trace("helper_response", {
+            method, requestId: id, outcome: response.ok ? "accepted" : "failed",
+            ...(!response.ok ? { reason: response.error.reason, systemCode: response.error.systemCode } : {}),
+          });
           if (response.ok) resolve(response);
           else reject(new Error(response.error.message));
         },
-        reject,
+        reject: (error) => {
+          trace("helper_response", { method, requestId: id, outcome: "failed" });
+          reject(error);
+        },
         deadline,
       });
       this.socket.write(frame);
