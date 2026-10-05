@@ -2,14 +2,7 @@ import XCTest
 @testable import AgentVisorCore
 
 final class NativeHelperWireProtocolTests: XCTestCase {
-    func testForegroundIdentityReadHasANullResultWhenUnknownAndAcceptsDurableAttention() throws {
-        let read = Data(#"{"version":1,"id":"view","method":"foreground_session"}"#.utf8)
-        XCTAssertEqual(try NativeHelperRequest.decode(read), .foregroundSession(id: "view"))
-        let result = try NativeHelperResponse.foregroundSession(id: "view", view: nil).encoded()
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: result) as? [String: Any])
-        let body = try XCTUnwrap(object["result"] as? [String: Any])
-        XCTAssertEqual(body["type"] as? String, "foreground_session")
-        XCTAssertTrue(body["view"] is NSNull)
+    func testPillPresentationAcceptsDurableAttention() throws {
         XCTAssertNoThrow(try NativeHelperRequest.decode(Data(#"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"test","title":"Test","phase":"ready","attentionTier":"ready","completionUnseen":true,"priority":0,"accessibilityLabel":"Test, unopened"}]}}"#.utf8)))
     }
 

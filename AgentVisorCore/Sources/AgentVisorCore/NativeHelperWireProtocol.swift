@@ -252,20 +252,6 @@ public struct NativeHelperGhosttyTerminalView: Codable, Equatable {
     }
 }
 
-public struct NativeHelperForegroundSessionView: Codable, Equatable {
-    public let source: String
-    public let pid: Int32?
-    public let threadId: String?
-    public let terminal: NativeHelperGhosttyTerminalView?
-    public let observedAt: String
-
-    public init(source: String, pid: Int32? = nil, threadId: String? = nil,
-                terminal: NativeHelperGhosttyTerminalView? = nil, observedAt: String) {
-        self.source = source; self.pid = pid; self.threadId = threadId
-        self.terminal = terminal; self.observedAt = observedAt
-    }
-}
-
 public struct NativeHelperFocusTarget: Codable, Equatable {
     public let pid: Int32
     public let bundleIdentifier: String
@@ -441,7 +427,6 @@ public enum NativeHelperRequest: Equatable {
     case openClaudeAttach(id: String, target: NativeHelperClaudeAttachTarget)
     case focusTerminal(id: String, target: NativeHelperTerminalTarget)
     case ghosttyTerminalViews(id: String)
-    case foregroundSession(id: String)
     case focusGhosttyTerminal(id: String, target: NativeHelperGhosttyTerminalView)
     case sendTerminal(id: String, target: NativeHelperTerminalTarget, text: String, submit: Bool)
     case cancelTerminal(id: String, target: NativeHelperTerminalTarget)
@@ -449,7 +434,7 @@ public enum NativeHelperRequest: Equatable {
 
     public var id: String {
         switch self {
-        case .foregroundSession(let id), .ghosttyTerminalViews(let id), .focusGhosttyTerminal(let id, _),
+        case .ghosttyTerminalViews(let id), .focusGhosttyTerminal(let id, _),
              .screenTopology(let id), .accessibilityStatus(let id),
              .notificationStatus(let id), .requestNotifications(let id),
              .reconcileNotifications(let id, _, _),
@@ -489,8 +474,6 @@ public enum NativeHelperRequest: Equatable {
         }
 
         switch method {
-        case "foreground_session":
-            return .foregroundSession(id: wire.id)
         case "ghostty_terminal_views":
             return .ghosttyTerminalViews(id: wire.id)
         case "focus_ghostty_terminal":
@@ -705,7 +688,6 @@ public enum NativeHelperErrorCode: String, Codable {
 }
 
 public enum NativeHelperResponse {
-    case foregroundSession(id: String, view: NativeHelperForegroundSessionView?)
     case ghosttyTerminalViews(id: String, views: [NativeHelperGhosttyTerminalView])
     case screenTopology(id: String, screens: [NativeHelperScreen])
     case accessibilityStatus(id: String, trusted: Bool)
@@ -716,10 +698,6 @@ public enum NativeHelperResponse {
     public func encoded() throws -> Data {
         let encoder = JSONEncoder()
         switch self {
-        case .foregroundSession(let id, let view):
-            return try encoder.encode(SuccessEnvelope(
-                version: nativeHelperProtocolVersion, id: id, ok: true, result: .foregroundSession(view)
-            ))
         case .ghosttyTerminalViews(let id, let views):
             return try encoder.encode(SuccessEnvelope(
                 version: nativeHelperProtocolVersion, id: id, ok: true,
@@ -1293,7 +1271,6 @@ private struct SuccessEnvelope: Encodable {
 }
 
 private enum ResultBody: Encodable {
-    case foregroundSession(NativeHelperForegroundSessionView?)
     case ghosttyTerminalViews([NativeHelperGhosttyTerminalView])
     case screenTopology([NativeHelperScreen])
     case accessibilityStatus(Bool)
@@ -1303,10 +1280,6 @@ private enum ResultBody: Encodable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: DynamicKey.self)
         switch self {
-        case .foregroundSession(let view):
-            try container.encode("foreground_session", forKey: .init("type"))
-            if let view { try container.encode(view, forKey: .init("view")) }
-            else { try container.encodeNil(forKey: .init("view")) }
         case .ghosttyTerminalViews(let views):
             try container.encode("ghostty_terminal_views", forKey: .init("type"))
             try container.encode(views, forKey: .init("views"))

@@ -39,15 +39,6 @@ public final class NativeGhosttyTerminalController {
         }
         return execute(GhosttyTerminalViewScript.focus(target)) == "ok"
     }
-    public func focusedView() -> NativeHelperGhosttyTerminalView? {
-        guard let identity = resolveApplication(), let output = execute(GhosttyTerminalViewScript.focused),
-              let data = output.data(using: .utf8), data.count <= 8_192,
-              let row = try? JSONDecoder().decode(ViewRow.self, from: data),
-              resolveApplication() == identity else { return nil }
-        let view = NativeHelperGhosttyTerminalView(applicationPID: identity.pid, processStartToken: identity.token,
-                                                  terminalId: row.terminalId, title: row.title, cwd: row.cwd)
-        return view.isValid ? view : nil
-    }
     public static func liveApplication() -> ApplicationIdentity? {
         let apps = NSWorkspace.shared.runningApplications.filter {
             $0.bundleIdentifier == "com.mitchellh.ghostty" && !$0.isTerminated

@@ -960,13 +960,6 @@ export const nativeHelperGhosttyTerminalViewSchema = z.object({
   cwd: z.string().startsWith("/").max(4_096).regex(/^[^\0]+$/),
 }).strict();
 
-export const nativeHelperForegroundSessionViewSchema = z.discriminatedUnion("source", [
-  z.object({ source: z.literal("codex"), pid: z.number().int().positive(),
-    threadId: z.uuid(), observedAt: z.iso.datetime() }).strict(),
-  z.object({ source: z.literal("ghostty"), terminal: nativeHelperGhosttyTerminalViewSchema,
-    observedAt: z.iso.datetime() }).strict(),
-]);
-
 export const nativeHelperNotificationSchema = z.object({
   id: z.string().min(1).max(128),
   sessionId: z.string().min(1).max(512),
@@ -1007,7 +1000,6 @@ const nativeHelperTerminalTextSchema = z.string()
 
 export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
   z.object({ ...helperEnvelope, method: z.literal("ghostty_terminal_views") }).strict(),
-  z.object({ ...helperEnvelope, method: z.literal("foreground_session") }).strict(),
   z.object({
     ...helperEnvelope,
     method: z.literal("focus_ghostty_terminal"),
@@ -1105,7 +1097,6 @@ export const nativeHelperScreenSchema = z.object({
 }).strict();
 
 const nativeHelperResultSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("foreground_session"), view: nativeHelperForegroundSessionViewSchema.nullable() }).strict(),
   z.object({
     type: z.literal("ghostty_terminal_views"),
     views: z.array(nativeHelperGhosttyTerminalViewSchema).max(64),
@@ -1225,7 +1216,6 @@ export type NativeHelperPiRestorationUpdate = z.infer<
 >;
 export type NativeHelperTerminalTarget = z.infer<typeof nativeHelperTerminalTargetSchema>;
 export type NativeHelperGhosttyTerminalView = z.infer<typeof nativeHelperGhosttyTerminalViewSchema>;
-export type NativeHelperForegroundSessionView = z.infer<typeof nativeHelperForegroundSessionViewSchema>;
 export type NativeServicesState = z.infer<typeof nativeServicesStateSchema>;
 export type NativeHelperPill = z.infer<typeof nativeHelperPillSchema>;
 export type NativeHelperUsageGlance = z.infer<typeof nativeHelperUsageGlanceSchema>;

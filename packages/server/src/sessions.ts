@@ -177,7 +177,6 @@ export type ChatCanonicalUserEntry = Pick<Extract<ChatItem, { kind: "user" }>,
   "id" | "text" | "requestId" | "deliveryId" | "providerMessageId">;
 
 export interface SessionControls {
-  viewedSession?(sessions: DiscoveredProviderSession[]): Promise<{ sessionId: string; observedAt: string } | undefined>;
   /** False when the native helper cannot currently execute terminal actions. */
   isAvailable?(): boolean;
   focus(session: DiscoveredProviderSession): Promise<void>;
@@ -2557,20 +2556,6 @@ export class SessionRepository {
     this.expireStalePiReadyHooks();
     this.dropHiddenSessionHooks();
     this.publish(discovered.flat());
-    const candidates = [...this.controlBySession.values()].filter((source) =>
-      this.snapshotValue.sessions.some((session) => session.id === source.id && session.completionUnseen));
-    const completions = new Map(candidates.map((source) => [source.id, completionIdentity(source)]));
-    if (candidates.length && this.controls?.viewedSession) {
-      try {
-        const viewed = await this.controls.viewedSession([...this.controlBySession.values()]);
-        const source = viewed && this.controlBySession.get(viewed.sessionId);
-        const at = viewed ? Date.parse(viewed.observedAt) : NaN;
-        if (viewed && source && at <= this.now().valueOf() && at >= Date.parse(source.updatedAt)
-          && completions.get(viewed.sessionId) === this.readyCompletionIdentity(viewed.sessionId)) {
-          this.acknowledgeReady(viewed.sessionId);
-        }
-      } catch { /* Unknown foreground identity leaves the completion unopened. */ }
-    }
     this.publishPiRestoration();
     return this.current();
   }

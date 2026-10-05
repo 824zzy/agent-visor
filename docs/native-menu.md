@@ -68,7 +68,7 @@ An authoritative unopened completion keeps a gentle green status-dot pulse until
 
 Unopened completions stay green. Opening marks that completion seen and stops its pulse; the existing 42-minute fade then uses the original completion date, without resetting its age. A later completion receives a new identity and starts attention again. Hover, overflow browsing, elapsed time, metadata writes, and failed opens never mark it seen.
 
-Ambient foreground observation may also acknowledge a completion. Codex requires an exact local thread UUID from the focused document/web-area URL and its owning PID. Ghostty requires the focused terminal's current unique Claude conversation title/directory and, when available, exact surface/process identity. Sidebar links, background windows, Agent View, ambiguous matches, unavailable permissions, and stale reads never acknowledge. A delayed observation cannot acknowledge a completion newer than the observation or the one for which it began. Reads do not focus apps, attach sessions, write terminal input, or request permissions.
+Completion acknowledgment requires a successful explicit source activation through Agent Visor or a valid Chat open. Opening a window or conversation directly in another app leaves its completion unopened in Agent Visor. Automatic detection of direct opens is deferred until a reliable identity integration is available; catalog refresh never infers that a result was seen from foreground windows, titles, or document URLs.
 
 Each item matches the released 24-point dark capsule, six-point status dot, seven-point outer padding, and three-point dot-to-title spacing.
 

@@ -83,7 +83,7 @@ it("ignores malformed attention state instead of acknowledging a completion", as
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-it("clears only the exact foreground Codex completion, without an Agent Visor click", async () => {
+it("keeps a Codex completion unopened until explicitly activated", async () => {
   const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
   const row = { ...completed, id, controlTarget: { kind: "codex_thread" as const,
     target: { pid: 42, home: "/fixture/.codex", threadId: id } } };
@@ -98,49 +98,29 @@ it("clears only the exact foreground Codex completion, without an Agent Visor cl
   repository.setControls(new NativeSessionControls(helper));
   expect((await repository.refresh()).sessions[0]?.attentionTier).toBe("ready");
   pid = 42;
-  expect((await repository.refresh()).sessions[0]?.attentionTier).toBe("acknowledged_ready");
-  expect(helper.codexThreadRequests).toHaveLength(0);
+  expect((await repository.refresh()).sessions[0]?.completionUnseen).toBe(true);
+  expect(await repository.focusSession(id)).toBeUndefined();
+  expect(repository.current().sessions[0]?.attentionTier).toBe("acknowledged_ready");
 });
 
-it("recognizes only the displayed Claude conversation, not Agent View or a replacement surface", async () => {
+it("keeps a Claude completion unopened until explicitly activated", async () => {
   const terminal = { applicationPID: 7, processStartToken: "instance-one", terminalId: "surface-a",
     title: "✳ Cleanup", cwd: "/project" };
   const row: DiscoveredProviderSession = { ...completed, provider: "claude_code", owner: "Ghostty", title: "Cleanup",
     codexLifecycle: undefined, completionAt: completedAt,
     controlTarget: { kind: "claude_background", target: { jobId: "aa11bb22", executable: "/usr/bin/claude",
       cwd: "/project", application: "Ghostty", displayed: terminal } } };
-  const helper = new FakeNativeHelper();
-  const repository = new SessionRepository([{ id: "claude_code", discover: async () => [row] }], {
+  const helper = Object.assign(new FakeNativeHelper(), {
+    foregroundSessionView: async () => ({ source: "ghostty" as const, terminal,
+      observedAt: "2026-10-05T15:01:00.000Z" }),
+  });
+  const repository = new SessionRepository([{ id: "claude_code", discover: async () => [row],
+    resolveForFocus: async (id) => id === row.id ? row : undefined }], {
     now: () => new Date("2026-10-05T15:01:00.000Z"),
   });
   repository.setControls(new NativeSessionControls(helper));
-  for (const changed of [{ title: "1 awaiting input · claude agents" }, { terminalId: "surface-b" },
-    { processStartToken: "instance-two" }]) {
-    helper.foregroundView = { source: "ghostty", terminal: { ...terminal, ...changed }, observedAt: "2026-10-05T15:01:00.000Z" };
-    expect((await repository.refresh()).sessions[0]?.completionUnseen).toBe(true);
-  }
-  helper.foregroundView = { source: "ghostty", terminal, observedAt: "2026-10-05T15:01:00.000Z" };
-  expect((await repository.refresh()).sessions[0]?.attentionTier).toBe("acknowledged_ready");
-  expect(helper.terminalFocusRequests).toHaveLength(0);
-  expect(helper.claudeAttachRequests).toHaveLength(0);
-});
-
-it("does not let a delayed foreground read acknowledge a newer completion", async () => {
-  const viewed = Promise.withResolvers<{ sessionId: string; observedAt: string }>();
-  const reading = Promise.withResolvers<void>();
-  const row: DiscoveredProviderSession = { ...completed, provider: "pi", turnId: undefined,
-    codexLifecycle: undefined, completionAt: completedAt };
-  const repository = new SessionRepository([{ id: "pi", discover: async () => [row] }], {
-    now: () => new Date("2026-10-05T15:05:00.000Z"),
-  });
-  repository.setControls({ focus: async () => undefined, send: async () => undefined,
-    viewedSession: async () => { reading.resolve(); return viewed.promise; } });
-  const refresh = repository.refresh();
-  await reading.promise;
-  repository.applyHook({ sessionId: row.id, provider: "pi", cwd: row.cwd,
-    event: "UserPromptSubmit", status: "busy", receivedAt: "2026-10-05T15:02:00.000Z" });
-  repository.applyHook({ sessionId: row.id, provider: "pi", cwd: row.cwd,
-    event: "Stop", status: "waiting_for_input", receivedAt: "2026-10-05T15:03:00.000Z" });
-  viewed.resolve({ sessionId: row.id, observedAt: "2026-10-05T15:01:00.000Z" });
-  expect((await refresh).sessions[0]?.completionUnseen).toBe(true);
+  expect((await repository.refresh()).sessions[0]?.completionUnseen).toBe(true);
+  expect((await repository.refresh()).sessions[0]?.attentionTier).toBe("ready");
+  expect(await repository.focusSession(row.id)).toBeUndefined();
+  expect(repository.current().sessions[0]?.attentionTier).toBe("acknowledged_ready");
 });

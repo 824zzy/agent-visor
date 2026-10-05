@@ -182,8 +182,6 @@ private func response(
 ) -> NativeHelperResponse {
     do {
         switch try NativeHelperRequest.decode(data) {
-        case .foregroundSession(let id):
-            return .foregroundSession(id: id, view: NativeForegroundSessionController.view())
         case .screenTopology(let id):
             return .screenTopology(id: id, screens: screenTopology())
         case .ghosttyTerminalViews(let id):
