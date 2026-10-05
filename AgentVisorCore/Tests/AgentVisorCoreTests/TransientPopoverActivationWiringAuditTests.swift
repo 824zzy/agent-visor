@@ -28,10 +28,11 @@ final class TransientPopoverActivationWiringAuditTests: XCTestCase {
         )
         XCTAssertTrue(
             daemon.contains("event.event === \"refresh_usage\"")
-                && daemon.contains("usageRefreshing")
-                && daemon.contains("stale: true")
+                && daemon.contains("usageGlances.refresh(settings.current()")
+                && daemon.contains("usageGlances.current(preferences)")
+                && helper.contains("glance.stale == true")
                 && daemon.contains("presentNativeMenu()"),
-            "The daemon must serialize refreshes and republish retained values as stale."
+            "The daemon must wire provider usage refreshes to the menu and display retained stale observations."
         )
     }
 

@@ -3,7 +3,18 @@ import {
   NATIVE_HELPER_MAX_TEXT_BYTES,
   nativeHelperRequestSchema,
   nativeHelperResponseSchema,
+  nativeHelperUsageGlanceSchema,
 } from "./index.js";
+
+it("accepts compact CP usage details and rejects an unsafe usage link", () => {
+  const glance = { id: "copilot", heading: "GitHub Copilot", width: 64,
+    label: "CP 92%", detail: "GitHub Copilot credits", summary: "128,807 of 140,000 AI credits remaining",
+    usageURL: "https://github.com/settings/copilot", tone: "normal", priority: 110,
+    accessibilityLabel: "GitHub Copilot credits" };
+  expect(nativeHelperUsageGlanceSchema.parse(glance)).toEqual(glance);
+  expect(nativeHelperUsageGlanceSchema.safeParse({ ...glance, usageURL: "file:///etc/passwd" }).success)
+    .toBe(false);
+});
 
 const requests = [
   { version: 1, id: "screens", method: "screen_topology" },

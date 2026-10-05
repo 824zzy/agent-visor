@@ -198,6 +198,20 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(glance.stale, true)
     }
 
+    func testDecodesCopilotCreditsAndRejectsAnUnsafeUsageLink() throws {
+        let json = #"{"version":1,"id":"cp","method":"present_pills","params":{"pills":[],"usageGlances":[{"id":"copilot","heading":"GitHub Copilot","width":64,"label":"CP 92%","detail":"GitHub Copilot credits","summary":"128,807 of 140,000 AI credits remaining","usageURL":"https://github.com/settings/copilot","tone":"normal","priority":110,"accessibilityLabel":"GitHub Copilot credits"}]}}"#
+        let request = try NativeHelperRequest.decode(Data(json.utf8))
+        guard case .presentPills(_, _, _, let glances, _, _, _, _, _) = request else {
+            return XCTFail("Expected pills")
+        }
+        let glance = try XCTUnwrap(glances.first)
+        XCTAssertEqual(glance.id, "copilot")
+        XCTAssertEqual(glance.label, "CP 92%")
+        XCTAssertEqual(glance.summary, "128,807 of 140,000 AI credits remaining")
+        XCTAssertEqual(glance.usageURL, "https://github.com/settings/copilot")
+        assertInvalid(json.replacingOccurrences(of: "https://github.com/settings/copilot", with: "file:///etc/passwd"))
+    }
+
     func testDecodesBoundedSessionInspector() throws {
         let json = #"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"session-1","title":"Review migration","phase":"ready","priority":1,"accessibilityLabel":"Review migration, ready","inspector":{"status":"Ready","runtimeItems":["Pi · Ghostty","Claude Sonnet 4"],"detailRows":[{"label":"Reasoning","value":"High"}],"projectPath":"~/Codes/agent-visor","activityAt":"2026-08-22T21:02:18.000Z","context":{"usedLabel":"84k","windowLabel":"200k","percentage":42}}}],"hotkeyTrigger":"custom","customHotkeyCombo":"49:8"}}"#
 

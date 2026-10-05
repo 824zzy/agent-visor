@@ -87,6 +87,7 @@ describe("settings repository", () => {
     const repository = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
 
     const addedDefaults = {
+      copilotUsageGlanceEnabled: true,
       hotkeyTrigger: "shift",
       customHotkeyCombo: null,
       pillScreen: { mode: "automatic" },
@@ -94,6 +95,19 @@ describe("settings repository", () => {
     };
     expect(repository.current()).toMatchObject(addedDefaults);
     expect(JSON.parse(await readFile(file, "utf8")).settings).toMatchObject(addedDefaults);
+  });
+
+  it("persists the CP toggle without changing Codex usage", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-settings-"));
+    roots.push(root);
+    const repository = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
+    await repository.update({ copilotUsageGlanceEnabled: false });
+    const reopened = await SettingsRepository.open({ root, readLegacy: async () => ({}) });
+    expect(reopened.current()).toMatchObject({
+      copilotUsageGlanceEnabled: false, codexUsageGlanceEnabled: true,
+    });
+    await reopened.update({ contentScale: 1.2 });
+    expect(reopened.current().copilotUsageGlanceEnabled).toBe(false);
   });
 
   it("preserves a saved display UUID across startup", async () => {

@@ -77,7 +77,7 @@ describe("Codex Desktop instances", () => {
       const secondID = codexSessionID(codexInstanceID(canonicalCopilot, canonicalNative), threadID);
       expect(sessions.map((session) => session.id)).toEqual([threadID, secondID]);
       expect(sessions.map((session) => session.owner)).toEqual(["Codex", "Codex · Copilot"]);
-      expect(menuPresentation(await repository.current(), [], Date.now()).navigatorPills
+      expect(menuPresentation(await repository.current(), [], environment.now().getTime()).navigatorPills
         .find((pill) => pill.id === secondID)?.source).toBe("Codex · Copilot");
       expect(homes).toEqual([{ path: canonicalCopilot, label: "Codex · Copilot" }]);
       expect((await provider.resolve(threadID))?.chatPath).toBe(nativeRollout);

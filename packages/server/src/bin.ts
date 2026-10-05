@@ -2,7 +2,6 @@ import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { NativeHelperUsageGlance } from "@agent-visor/protocol";
 import { runDaemon } from "./daemon-lifetime.js";
 import { runBackground } from "./background-task.js";
 import { stopCodexTurns } from "./codex-turn.js";
@@ -26,6 +25,8 @@ import { SessionRepository } from "./sessions.js";
 import { NativeSessionControls } from "./session-controls.js";
 import { readLegacyDefaults, SettingsRepository } from "./settings.js";
 import { chatUsageGlanceFromNative, readCodexUsage } from "./usage.js";
+import { readCopilotUsage } from "./copilot-usage.js";
+import { UsageGlances } from "./usage-glances.js";
 import { checkForUpdates } from "./updates.js";
 import { agentVisorVersion } from "./runtime-version.js";
 import { NavigationDiagnostics } from "./navigation-diagnostics.js";
@@ -43,8 +44,7 @@ await runDaemon(async (lifetime) => {
   let menuTimer: NodeJS.Timeout | undefined;
   let permissionTimer: NodeJS.Timeout | undefined;
   let updateTimer: NodeJS.Timeout | undefined;
-  let usageGlances: NativeHelperUsageGlance[] = [];
-  let usageRefreshing = false;
+  const usageGlances = new UsageGlances({ codex: readCodexUsage, copilot: readCopilotUsage });
   let presentNativeMenu = () => {};
   let refreshUsage = async () => {};
   let refreshing = false;
@@ -174,7 +174,7 @@ await runDaemon(async (lifetime) => {
         const presentation = preferences.pillsEnabled
           ? menuPresentation(
             repository.current(),
-            preferences.codexUsageGlanceEnabled ? usageGlances : [],
+            usageGlances.current(preferences),
           )
           : { pills: [], navigatorPills: [], usageGlances: [] };
         void nativeHelper?.presentPills(
@@ -193,22 +193,22 @@ await runDaemon(async (lifetime) => {
       menuTimer = setInterval(presentNativeMenu, 60_000);
       menuTimer.unref();
       unsubscribeMenu = repository.subscribe(presentNativeMenu);
-      unsubscribeSettings = settings.subscribe(presentNativeMenu);
+      let previousPreferences = settings.current();
+      unsubscribeSettings = settings.subscribe((preferences) => {
+        presentNativeMenu();
+        if ((preferences.codexUsageGlanceEnabled && !previousPreferences.codexUsageGlanceEnabled)
+          || (preferences.copilotUsageGlanceEnabled && !previousPreferences.copilotUsageGlanceEnabled)) {
+          runBackground("usage refresh", refreshUsage);
+        }
+        previousPreferences = preferences;
+      });
       presentNativeMenu();
 
       refreshUsage = async () => {
-        if (!settings.current().codexUsageGlanceEnabled || usageRefreshing) return;
-        usageRefreshing = true;
-        const codex = await readCodexUsage().finally(() => { usageRefreshing = false; });
-        if (!codex) {
-          if (usageGlances.some((glance) => glance.stale !== true)) {
-            usageGlances = usageGlances.map((glance) => ({ ...glance, stale: true }));
-            presentNativeMenu();
-          }
-          return;
-        }
-        usageGlances = [codex];
-        presentNativeMenu();
+        if (lifetime.stopping) return;
+        await usageGlances.refresh(settings.current(), () => {
+          if (!lifetime.stopping) presentNativeMenu();
+        });
       };
       runBackground("usage refresh", refreshUsage);
       usageTimer = setInterval(() => runBackground("usage refresh", refreshUsage), 300_000);

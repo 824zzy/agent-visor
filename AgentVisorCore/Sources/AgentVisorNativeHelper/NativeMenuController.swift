@@ -8,7 +8,12 @@ import os
 private final class NativePillButton: NSButton {
     var normalBackgroundColor = NSColor.black.withAlphaComponent(0.35)
     var motionBackgroundColor: NSColor?
-    var restingBackgroundColor: NSColor { motionBackgroundColor ?? normalBackgroundColor }
+    var attentionBackgroundColor: NSColor?
+    var restingBackgroundColor: NSColor {
+        motionBackgroundColor ?? attentionBackgroundColor ?? normalBackgroundColor
+    }
+    private var pressed = false
+    private var flashing = false
     var onActivate: ((NSEvent.ModifierFlags) -> Void)?
     var onContextMenu: ((NSEvent) -> Void)?
     var onAccessibilityActivate: (() -> Void)?
@@ -47,9 +52,13 @@ private final class NativePillButton: NSButton {
 
     override func highlight(_ flag: Bool) {
         super.highlight(flag)
-        layer?.backgroundColor = (
-            flag ? NSColor.white.withAlphaComponent(0.25) : restingBackgroundColor
-        ).cgColor
+        pressed = flag
+        refreshBackground()
+    }
+
+    func refreshBackground() {
+        layer?.backgroundColor = (pressed || flashing
+            ? NSColor.white.withAlphaComponent(0.25) : restingBackgroundColor).cgColor
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -62,9 +71,11 @@ private final class NativePillButton: NSButton {
     }
 
     func flash() {
-        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.25).cgColor
+        flashing = true
+        refreshBackground()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-            self?.layer?.backgroundColor = self?.restingBackgroundColor.cgColor
+            self?.flashing = false
+            self?.refreshBackground()
         }
     }
 }
@@ -134,7 +145,7 @@ private final class NativePillPanel: NSPanel {
         pillButton.layer?.cornerRadius = placement.contentFrame.height / 2
         // Opaque crossing pills keep the labels underneath from showing through.
         pillButton.motionBackgroundColor = overlapping ? NSColor(white: 0.22, alpha: 1) : nil
-        pillButton.layer?.backgroundColor = pillButton.restingBackgroundColor.cgColor
+        pillButton.refreshBackground()
     }
 }
 
@@ -299,6 +310,11 @@ private struct NativeMenuUsageView: View {
                 }
             }
             let windows = glance.windows ?? []
+            if let summary = glance.summary {
+                Text(summary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+            }
             if windows.isEmpty {
                 Text(glance.detail)
                     .font(.system(size: 11))
@@ -314,6 +330,10 @@ private struct NativeMenuUsageView: View {
                 Text("\(credits) usage reset \(credits == 1 ? "credit" : "credits") available")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+            }
+            if let usageURL = glance.usageURL, let url = URL(string: usageURL) {
+                Link("View usage on GitHub", destination: url)
+                    .font(.system(size: 11))
             }
         }
     }
@@ -547,7 +567,7 @@ final class NativeMenuController: NSObject {
         let now = Date()
         updateReadyPulse(now: now)
         guard presentationIsVisible && readyAttention.hasActivePulse(
-            pills: Array(sessionPresentations.values),
+            pills: sessionPresentations.values.filter { sessionPanels[$0.id]?.isVisible == true },
             now: now,
             reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         ) else {
@@ -566,7 +586,7 @@ final class NativeMenuController: NSObject {
         let now = Date()
         updateReadyPulse(now: now)
         if !presentationIsVisible || !readyAttention.hasActivePulse(
-            pills: Array(sessionPresentations.values),
+            pills: sessionPresentations.values.filter { sessionPanels[$0.id]?.isVisible == true },
             now: now,
             reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         ) {
@@ -575,14 +595,31 @@ final class NativeMenuController: NSObject {
     }
 
     private func updateReadyPulse(now: Date) {
-        for (id, pill) in sessionPresentations
-        where pill.phase == .ready && shortcutSnapshot?.positions[id] == nil {
-            let color = sessionPanels[id]?.pillButton.contentTintColor
-                ?? statusColor(for: pill, now: now)
-            sessionPanels[id]?.pillButton.contentTintColor = color.withAlphaComponent(
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        for (id, pill) in sessionPresentations where pill.phase == .ready {
+            guard let panel = sessionPanels[id], panel.isVisible else { continue }
+            updateSessionAppearance(panel.pillButton, pill: pill, now: now, reduceMotion: reduceMotion)
+        }
+    }
+
+    private func updateSessionAppearance(
+        _ button: NativePillButton, pill: NativeHelperPill, now: Date, reduceMotion: Bool
+    ) {
+        let unopened = readyAttention.isUnopened(pill)
+        let green = color(for: .ready)
+        let blend = readyAttention.backgroundPulse(for: pill, now: now, reduceMotion: reduceMotion)
+        button.attentionBackgroundColor = blend > 0
+            ? button.normalBackgroundColor.blended(withFraction: blend, of: green) : nil
+        let recent = NativeMenuDisplayPhase.phase(for: pill) == .history
+        button.layer?.borderWidth = unopened || recent ? 1 : 0
+        button.layer?.borderColor = (unopened
+            ? green.withAlphaComponent(0.65) : NSColor.white.withAlphaComponent(0.07)).cgColor
+        button.refreshBackground()
+        if shortcutSnapshot?.positions[pill.id] == nil {
+            button.contentTintColor = statusColor(for: pill, now: now).withAlphaComponent(
                 readyAttention.opacity(
-                    id: id, phase: pill.phase, attentionTier: pill.attentionTier, now: now,
-                    reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                    id: pill.id, phase: pill.phase, attentionTier: pill.attentionTier, now: now,
+                    reduceMotion: reduceMotion
                 )
             )
         }
@@ -1199,6 +1236,13 @@ final class NativeMenuController: NSObject {
             Task { @MainActor in self?.layoutPresentation() }
         })
         let workspaceCenter = NSWorkspace.shared.notificationCenter
+        layoutObservers.append(workspaceCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.refreshReadyPulse() }
+        })
         for name in [
             NSWorkspace.activeSpaceDidChangeNotification,
             NSWorkspace.didActivateApplicationNotification,
@@ -1514,15 +1558,10 @@ final class NativeMenuController: NSObject {
                 ? { [weak self] _ in self?.showSessionContextMenu(for: pill.id) }
                 : nil
         )
-        if shortcutPosition == nil {
-            let now = Date()
-            panel.pillButton.contentTintColor = statusColor(for: pill, now: now).withAlphaComponent(
-                readyAttention.opacity(
-                    id: pill.id, phase: pill.phase, attentionTier: pill.attentionTier, now: now,
-                    reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-                )
-            )
-        }
+        updateSessionAppearance(
+            panel.pillButton, pill: pill, now: Date(),
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
     }
 
     private func renderUsage(_ panel: NativePillPanel, glance: NativeHelperUsageGlance) {
@@ -1595,8 +1634,9 @@ final class NativeMenuController: NSObject {
         panel.pillButton.setAccessibilityLabel(accessibilityLabel)
         panel.pillButton.setAccessibilityHelp(accessibilityHelp)
         panel.pillButton.onAccessibilityActivate = accessibilityAction
+        panel.pillButton.attentionBackgroundColor = nil
         panel.pillButton.normalBackgroundColor = .black.withAlphaComponent(backgroundAlpha)
-        panel.pillButton.layer?.backgroundColor = panel.pillButton.normalBackgroundColor.cgColor
+        panel.pillButton.refreshBackground()
         panel.pillButton.layer?.borderColor = NSColor.white.withAlphaComponent(borderAlpha).cgColor
         panel.pillButton.layer?.borderWidth = borderAlpha > 0 ? 1 : 0
         panel.pillButton.target = nil

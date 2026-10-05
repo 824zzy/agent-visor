@@ -62,6 +62,26 @@ public struct NativeMenuReadyAttention {
         pill.phase == .ready && acknowledgedReadyIDs.contains(pill.id)
     }
 
+    public func isUnopened(_ pill: NativeHelperPill) -> Bool {
+        pill.phase == .ready && pill.attentionTier == .ready
+            && unopenedIDs.contains(pill.id) && !isAcknowledged(pill)
+    }
+
+    /// Blend green into the background; the outline and status dot stay steady.
+    /// Reduce Motion leaves only the outline, without acknowledging the result.
+    public func backgroundPulse(
+        for pill: NativeHelperPill,
+        now: Date,
+        reduceMotion: Bool = false
+    ) -> Double {
+        guard !reduceMotion, isUnopened(pill),
+              let completedAt = phaseChangedAtByID[pill.id] else { return 0 }
+        return 0.30 * ReadyAttentionPolicy.pulseOpacity(
+            isReady: true, phaseChangedAt: completedAt, acknowledgedAt: nil,
+            now: now, pulseWindow: .infinity, pulsePeriod: 3, minimumOpacity: 0.4
+        )
+    }
+
     public func statusStaleness(pill: NativeHelperPill, now: Date) -> Double {
         if unopenedIDs.contains(pill.id) && !isAcknowledged(pill) { return 0 }
         return ReadyAttentionPolicy.statusStaleness(
@@ -80,15 +100,14 @@ public struct NativeMenuReadyAttention {
     ) -> Double {
         guard !reduceMotion else { return 1 }
         guard attentionTier != .history else { return 1 }
+        guard !unopenedIDs.contains(id) else { return 1 }
         guard let phaseChangedAt = phaseChangedAtByID[id] else { return 1 }
         return ReadyAttentionPolicy.pulseOpacity(
             isReady: phase == .ready,
             phaseChangedAt: phaseChangedAt,
             acknowledgedAt: acknowledgedReadyIDs.contains(id) ? phaseChangedAt : nil,
             now: now,
-            pulseWindow: unopenedIDs.contains(id) ? .infinity : ReadyAttentionPolicy.defaultPulseWindow,
-            pulsePeriod: unopenedIDs.contains(id) ? 3 : ReadyAttentionPolicy.defaultPulsePeriod,
-            minimumOpacity: unopenedIDs.contains(id) ? 0.65 : ReadyAttentionPolicy.defaultPulseMinimumOpacity
+            pulseWindow: ReadyAttentionPolicy.defaultPulseWindow
         )
     }
 

@@ -818,6 +818,7 @@ describe("Agent Visor daemon", () => {
         appearance: "dark" as const, contentScale: 1, pillsEnabled: true,
         pillScreen: { mode: "automatic" as const }, fullScreenPolicy: "onDemand" as const,
         codexUsageGlanceEnabled: true, claudeUsageGlanceEnabled: false,
+        copilotUsageGlanceEnabled: true,
         codexHomes: [], ignoredCodexHomes: [],
         notificationSound: "Pop" as const, hotkeyTrigger: "shift" as const,
         customHotkeyCombo: null, sessionShortcutModifierFamily: "optionCommand" as const,

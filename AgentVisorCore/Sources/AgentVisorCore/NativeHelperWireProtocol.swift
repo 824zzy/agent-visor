@@ -159,6 +159,8 @@ public struct NativeHelperUsageGlance: Codable, Equatable {
     public let width: Double?
     public let label: String
     public let detail: String
+    public let summary: String?
+    public let usageURL: String?
     public let tone: NativeHelperUsageTone
     public let priority: Int
     public let accessibilityLabel: String
@@ -173,6 +175,8 @@ public struct NativeHelperUsageGlance: Codable, Equatable {
         width: Double? = nil,
         label: String,
         detail: String,
+        summary: String? = nil,
+        usageURL: String? = nil,
         tone: NativeHelperUsageTone,
         priority: Int,
         accessibilityLabel: String,
@@ -186,6 +190,8 @@ public struct NativeHelperUsageGlance: Codable, Equatable {
         self.width = width
         self.label = label
         self.detail = detail
+        self.summary = summary
+        self.usageURL = usageURL
         self.tone = tone
         self.priority = priority
         self.accessibilityLabel = accessibilityLabel
@@ -1161,6 +1167,7 @@ private func hasStrictUsageFields(_ object: [String: Any]) -> Bool {
     ]
     let allowed = required.union([
         "heading", "width", "observedAt", "windows", "resetCreditsAvailable", "stale",
+        "summary", "usageURL",
     ])
     guard Set(object.keys).isSuperset(of: required),
           Set(object.keys).isSubset(of: allowed) else { return false }
@@ -1248,11 +1255,13 @@ private extension NativeHelperUsageWindow {
 
 private extension NativeHelperUsageGlance {
     var isValid: Bool {
-        ["codex", "claude"].contains(id)
+        ["codex", "claude", "copilot"].contains(id)
             && (heading.map { !$0.isEmpty && $0.count <= 64 } ?? true)
             && (width.map { $0.isFinite && (28...200).contains($0) } ?? true)
             && !label.isEmpty && label.count <= 128
             && !detail.isEmpty && detail.count <= 512
+            && (summary.map { !$0.isEmpty && $0.count <= 256 } ?? true)
+            && (usageURL.map { $0 == "https://github.com/settings/copilot" } ?? true)
             && !accessibilityLabel.isEmpty && accessibilityLabel.count <= 512
             && (observedAt.map {
                 $0.count <= 64 && NativeHelperTimestamp.parse($0) != nil

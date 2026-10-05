@@ -109,11 +109,11 @@ func frame(_ element: AXUIElement) -> CGRect? {
     return CGRect(origin: position, size: size)
 }
 
-func usageButton(pid: Int32) -> AXUIElement? {
+func usageButton(pid: Int32, label: String = "Codex usage") -> AXUIElement? {
     var remaining = 1_000
     return find(
         AXUIElementCreateApplication(pid),
-        containing: "Codex usage",
+        containing: label,
         remaining: &remaining
     )
 }
@@ -141,8 +141,8 @@ let usageWindows = helperWindows.filter {
 }
 
 switch command {
-case "click-usage", "double-click-usage":
-    guard let button = usageButton(pid: pid),
+case "click-usage", "double-click-usage", "click-copilot":
+    guard let button = usageButton(pid: pid, label: command == "click-copilot" ? "GitHub Copilot," : "Codex usage"),
           let panel = frame(button) else { exit(3) }
     let point = CGPoint(x: panel.midX, y: panel.midY)
     click(point)
@@ -192,8 +192,8 @@ case "count-popovers":
     print(helperWindows.filter { $0.width >= 250 && $0.height > 40 }.count)
 case "frontmost":
     print(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)
-case "press-usage":
-    guard let button = usageButton(pid: pid),
+case "press-usage", "press-copilot":
+    guard let button = usageButton(pid: pid, label: command == "press-copilot" ? "GitHub Copilot," : "Codex usage"),
           AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else { exit(4) }
 case "labels":
     var remaining = 1_000

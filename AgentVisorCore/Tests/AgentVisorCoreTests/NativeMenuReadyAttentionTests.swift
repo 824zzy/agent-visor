@@ -10,11 +10,13 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
         XCTAssertFalse(attention.hasActivePulse(pills: [unopened], now: now, reduceMotion: true))
         XCTAssertEqual(attention.opacity(id: "session", phase: .ready, attentionTier: .ready,
                                         now: now.addingTimeInterval(1.5), reduceMotion: true), 1)
+        XCTAssertTrue(attention.isUnopened(unopened))
+        XCTAssertEqual(attention.backgroundPulse(for: unopened, now: now, reduceMotion: true), 0)
         XCTAssertEqual(attention.statusStaleness(pill: unopened, now: now.addingTimeInterval(86_400)), 0)
         XCTAssertTrue(attention.hasActivePulse(pills: [unopened], now: now.addingTimeInterval(86_400)))
     }
 
-    func testUnopenedCompletionKeepsGentlePulseAndGreenColorUntilOpened() {
+    func testUnopenedCompletionKeepsBackgroundPulseAndSteadyGreenDotUntilOpened() {
         let completedAt = Date(timeIntervalSinceReferenceDate: 1_000)
         let unopened = pill(.ready, attentionTier: .ready, activityAt: completedAt, completionUnseen: true)
         let tomorrow = completedAt.addingTimeInterval(24 * 60 * 60)
@@ -25,11 +27,42 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
         XCTAssertEqual(attention.opacity(
             id: "session", phase: .ready, attentionTier: .ready,
             now: tomorrow.addingTimeInterval(1.5)
-        ), 0.65, accuracy: 0.001)
+        ), 1)
+        XCTAssertTrue(attention.isUnopened(unopened))
+        XCTAssertEqual(attention.backgroundPulse(for: unopened, now: tomorrow), 0.30, accuracy: 0.001)
+        XCTAssertEqual(attention.backgroundPulse(for: unopened, now: tomorrow.addingTimeInterval(1.5)),
+                       0.12, accuracy: 0.001)
+        XCTAssertEqual(attention.backgroundPulse(for: unopened, now: tomorrow.addingTimeInterval(3)),
+                       0.30, accuracy: 0.001)
         let opened = pill(.ready, attentionTier: .acknowledgedReady, activityAt: completedAt)
         attention.present(previousPhases: ["session": .ready], pills: [opened], now: tomorrow)
         XCTAssertFalse(attention.hasActivePulse(pills: [opened], now: tomorrow))
+        XCTAssertFalse(attention.isUnopened(opened))
+        XCTAssertEqual(attention.backgroundPulse(for: opened, now: tomorrow), 0)
         XCTAssertEqual(attention.statusStaleness(pill: opened, now: tomorrow), 1)
+    }
+
+    func testCompletionOutlineRequiresAnUnopenedResultAndClearsWhenWorkResumes() {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000)
+        var attention = NativeMenuReadyAttention()
+        let legacyReady = pill(.ready, attentionTier: .ready, activityAt: now)
+        attention.present(previousPhases: ["session": .working], pills: [legacyReady], now: now)
+        XCTAssertFalse(attention.isUnopened(legacyReady))
+        XCTAssertEqual(attention.backgroundPulse(for: legacyReady, now: now), 0)
+
+        let unopened = pill(.ready, attentionTier: .ready, activityAt: now, completionUnseen: true)
+        attention.present(previousPhases: ["session": .working], pills: [unopened], now: now)
+        XCTAssertTrue(attention.isUnopened(unopened))
+        attention.acknowledgeReady(id: "session")
+        XCTAssertFalse(attention.isUnopened(unopened))
+        XCTAssertEqual(attention.backgroundPulse(for: unopened, now: now), 0)
+
+        let working = pill(.working)
+        attention.present(previousPhases: ["session": .ready], pills: [working], now: now)
+        XCTAssertFalse(attention.isUnopened(working))
+        XCTAssertEqual(attention.backgroundPulse(for: working, now: now), 0)
+        attention.present(previousPhases: ["session": .working], pills: [unopened], now: now)
+        XCTAssertTrue(attention.isUnopened(unopened))
     }
 
     func testObservedReadyTransitionPulsesWithReleasedTiming() {

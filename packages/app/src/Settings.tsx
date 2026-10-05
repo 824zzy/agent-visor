@@ -263,6 +263,7 @@ export function Settings({
             styles={styles}
           />
           <ToggleRow label="Show Codex usage" value={settings.codexUsageGlanceEnabled} onPress={() => update({ codexUsageGlanceEnabled: !settings.codexUsageGlanceEnabled })} styles={styles} />
+          <ToggleRow label="Show Copilot usage (CP)" value={settings.copilotUsageGlanceEnabled} onPress={() => update({ copilotUsageGlanceEnabled: !settings.copilotUsageGlanceEnabled })} styles={styles} />
           <ValueRow label="Claude usage" value="Waiting for a supported credential route" styles={styles} />
           <ChoiceRow
             label="Session shortcuts"

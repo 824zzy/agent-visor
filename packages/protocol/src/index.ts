@@ -434,6 +434,7 @@ export const appSettingsSchema = z.object({
   pillScreen: pillScreenSchema,
   fullScreenPolicy: z.enum(["onDemand", "alwaysHide", "alwaysShow"]),
   codexUsageGlanceEnabled: z.boolean(),
+  copilotUsageGlanceEnabled: z.boolean(),
   codexHomes: z.array(z.object({
     path: z.string().regex(/^(?:\/|~\/)/).max(1_024),
     label: z.string().min(1).max(64),
@@ -901,11 +902,13 @@ export const nativeHelperPillSchema = z.object({
 }).strict();
 
 export const nativeHelperUsageGlanceSchema = z.object({
-  id: z.enum(["codex", "claude"]),
+  id: z.enum(["codex", "claude", "copilot"]),
   heading: z.string().min(1).max(64).optional(),
   width: z.number().finite().min(28).max(200).optional(),
   label: z.string().min(1).max(128),
   detail: z.string().min(1).max(512),
+  summary: z.string().min(1).max(256).optional(),
+  usageURL: z.literal("https://github.com/settings/copilot").optional(),
   tone: z.enum(["normal", "warning", "critical"]),
   priority: z.number().int(),
   accessibilityLabel: z.string().min(1).max(512),

@@ -80,6 +80,16 @@ const claudeGlance = {
   accessibilityLabel: "Claude usage, 18 dollars used of 600 dollars",
   observedAt: "2026-08-24T12:00:00.000Z",
 };
+const copilotGlance = {
+  id: "copilot", heading: "GitHub Copilot", width: 64, label: "CP 92%",
+  detail: "GitHub Copilot, 92 percent of your monthly AI-credit allowance remaining",
+  summary: "128,807.1 of 140,000 AI credits remaining\n11,192.9 used this cycle · Copilot Business",
+  usageURL: "https://github.com/settings/copilot", tone: "normal", priority: 110,
+  accessibilityLabel: "GitHub Copilot, 92 percent remaining",
+  observedAt: new Date().toISOString(),
+  windows: [{ title: "Monthly AI-credit allowance", remainingPercent: 92,
+    tone: "normal", resetsAt: "2026-11-01T00:00:00.000Z" }],
+};
 
 try {
   await waitForSocket();
@@ -113,11 +123,11 @@ try {
       pills: [],
       pillScreen: { mode: "automatic" },
       fullScreenPolicy: "alwaysShow",
-      usageGlances: [claudeGlance, codexGlance],
+      usageGlances: [claudeGlance, codexGlance, copilotGlance],
     },
   });
   await waitFor(() => messages.find((message) => message.id === "usage"));
-  await waitFor(() => Number(run("count-usage")) === 2);
+  await waitFor(() => Number(run("count-usage")) === 3);
   const usageWidths = run("usage-widths");
   const automaticDisplay = Number(run("usage-display-ids").split(",")[0]);
   const selectedScreen = screens.find((screen) => screen.displayId !== automaticDisplay)
@@ -135,7 +145,7 @@ try {
       },
       fullScreenPolicy,
       ...(shortcuts ? { shortcutModifierFamily: "optionCommand" } : {}),
-      usageGlances: [claudeGlance, codexGlance],
+      usageGlances: [claudeGlance, codexGlance, copilotGlance],
     },
   });
   presentSelected("selected-screen", "alwaysShow");
@@ -189,7 +199,10 @@ try {
   await waitFor(() => Number(run("count-popovers")) === 0);
   const overflowCloseCount = Number(run("count-popovers"));
 
-  run("move-top");
+  // Closing the overflow can order out the on-demand panels. Restore the
+  // visible policy before checking usage clicks; hover was checked above.
+  presentSelected("usage-clicks", "alwaysShow");
+  await waitFor(() => messages.find((message) => message.id === "usage-clicks"));
   await waitFor(() => run("usage-visible") === "true");
   const firstOpenCount = await toggleTo(1);
   const refreshEvent = await waitFor(() =>
@@ -203,6 +216,7 @@ try {
       usageGlances: [
         { ...claudeGlance, stale: true },
         { ...codexGlance, label: "5h 9% | 7d 100%", stale: true },
+        { ...copilotGlance, label: "CP 9%", stale: true },
       ],
     },
   });
@@ -221,6 +235,11 @@ try {
   run("press-usage");
   await sleep(300);
   const accessibilityCloseCount = Number(run("count-popovers"));
+  run("click-copilot");
+  await waitFor(() => Number(run("count-popovers")) === 1);
+  const copilotClickDetails = run("labels");
+  run("press-copilot");
+  await waitFor(() => Number(run("count-popovers")) === 0);
   await stopFullScreenHost(fullScreenHost);
   fullScreenHost = undefined;
   presentSelected("windowed-always-hide", "alwaysHide");
@@ -258,10 +277,13 @@ try {
     marksStale: accessibility.split("\n").some((label) =>
       label.startsWith("Refresh failed; updated ")),
     requestedRefresh: refreshEvent.event === "refresh_usage",
+    copilotClickWorked: copilotClickDetails.includes("GitHub Copilot")
+      && copilotClickDetails.includes("128,807.1 of 140,000 AI credits remaining")
+      && copilotClickDetails.includes("View usage on GitHub"),
     emittedSessionsEvent: messages.some((message) => message.event === "open_sessions"),
   };
   console.log(JSON.stringify(result, null, 2));
-  if (!result.accepted || !/^68,11[2-4]$/.test(result.usageWidths)
+  if (!result.accepted || !/^64,68,11[2-4]$/.test(result.usageWidths)
       || !result.widthsStable || !result.selectedDisplay
       || result.hiddenClickCount !== 0 || !result.directShortcutStayedHidden
       || result.overflowOpenCount !== 1 || result.overflowCloseCount !== 0
@@ -272,7 +294,8 @@ try {
       || !result.stayedNonactivating || !result.hasTitle || !result.hasSharedClaudeDetail
       || !result.hasFiveHour
       || !result.hasWeekly || !result.hasReset || !result.hasCredits
-      || !result.marksStale || !result.requestedRefresh || result.emittedSessionsEvent) {
+      || !result.marksStale || !result.requestedRefresh || !result.copilotClickWorked
+      || result.emittedSessionsEvent) {
     process.exitCode = 1;
   }
   socket.end();
@@ -331,7 +354,11 @@ async function toggleTo(expected) {
   return Number(run("count-popovers"));
 }
 async function waitForSocket() {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (helper.exitCode !== null || helper.signalCode !== null) {
+      throw new Error(`native helper exited before its socket: code=${helper.exitCode} signal=${helper.signalCode} ${stderr}`);
+    }
     try { await stat(socketPath); return; } catch { await sleep(20); }
   }
   throw new Error(`native helper did not create its socket: ${stderr}`);

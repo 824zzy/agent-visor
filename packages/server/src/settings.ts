@@ -19,6 +19,7 @@ const defaults: AppSettings = {
   pillScreen: { mode: "automatic" },
   fullScreenPolicy: "onDemand",
   codexUsageGlanceEnabled: true,
+  copilotUsageGlanceEnabled: true,
   codexHomes: [],
   ignoredCodexHomes: [],
   claudeUsageGlanceEnabled: true,
@@ -234,6 +235,7 @@ function migrate(legacy: Record<string, unknown>): AppSettings {
     fullScreenPolicy: migratedFullScreenPolicy(legacy.fullScreenPolicy),
     codexUsageGlanceEnabled: boolean(legacy.codexUsageGlanceEnabled)
       ?? defaults.codexUsageGlanceEnabled,
+    copilotUsageGlanceEnabled: defaults.copilotUsageGlanceEnabled,
     codexHomes: [],
     ignoredCodexHomes: [],
     claudeUsageGlanceEnabled: boolean(legacy.claudeUsageGlanceEnabled)

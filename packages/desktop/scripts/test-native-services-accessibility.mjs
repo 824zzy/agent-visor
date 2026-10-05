@@ -30,6 +30,7 @@ async function run() {
       pillScreen: { mode: "specific", displayId: 5, name: "DELL P3424WEB" },
       fullScreenPolicy: "onDemand",
       codexUsageGlanceEnabled: true, claudeUsageGlanceEnabled: false,
+      copilotUsageGlanceEnabled: true,
       codexHomes: [], ignoredCodexHomes: [],
       notificationSound: "Pop", hotkeyTrigger: "shift", customHotkeyCombo: null,
       sessionShortcutModifierFamily: "optionCommand", editorPreference: "auto",
@@ -127,6 +128,11 @@ async function run() {
 
     await clickButton(window, "Pills");
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Show session pills, On"]'))`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show Copilot usage (CP), On"]').click()`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Show Copilot usage (CP), Off"]'))`);
+    assert(actions.some((message) => message.type === "update_settings"
+      && message.patch.copilotUsageGlanceEnabled === false), "CP has an independent settings toggle");
+    assert(state.settings.codexUsageGlanceEnabled === true, "disabling CP preserves Codex usage");
     assert(
       await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Show session pills, On"]')?.getAttribute('aria-checked') === 'true'`),
       "enabled settings expose the correct accessibility value",

@@ -215,6 +215,7 @@ describe("session snapshot protocol", () => {
         pillScreen: { mode: "automatic" },
         fullScreenPolicy: "onDemand",
         codexUsageGlanceEnabled: true,
+        copilotUsageGlanceEnabled: true,
         codexHomes: [],
         ignoredCodexHomes: [],
         claudeUsageGlanceEnabled: false,

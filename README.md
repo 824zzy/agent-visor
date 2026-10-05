@@ -109,6 +109,13 @@ When Codex exposes a recognized limit, an optional menu-bar pill shows
 usage is currently unavailable because the Electron daemon has no
 provider-authoritative credential route.
 
+### Copilot usage glance
+
+The compact <code>CP NN%</code> pill shows monthly AI credits remaining from an
+authenticated local Copilot bridge. Click for the credit balance, reset, and
+GitHub usage link. It has a separate toggle in Settings → Pills. See
+[Copilot usage](docs/copilot-usage.md) for the data source and availability limits.
+
 ## Alfred session search
 
 With Alfred Powerpack, the optional [Agent Visor Sessions workflow](integrations/alfred/README.md)
