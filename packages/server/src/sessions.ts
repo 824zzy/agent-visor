@@ -440,7 +440,7 @@ export class SessionRepository {
   private readonly latestHookAtBySession = new Map<string, string>();
   private readonly hookBySession = new Map<string, HookSessionEvent>();
   private readonly piRuntimeBySession = new Map<string, HookSessionEvent>();
-  private readonly acknowledgedReadyIDs = new Set<string>();
+  private readonly acknowledgedReadyBySession = new Map<string, string>();
   private readonly acknowledgedFailureIDs = new Set<string>();
   private readonly stateRevisionBySession = new Map<string, number>();
   private readonly stateFingerprintBySession = new Map<string, string>();
@@ -1435,6 +1435,7 @@ export class SessionRepository {
   async focusSession(sessionId: string): Promise<string | undefined> {
     let session = this.controlBySession.get(sessionId);
     if (!session || !this.controls) return "Exact session focus is unavailable.";
+    const completion = this.readyCompletionIdentity(sessionId);
     // Claude terminals can enter Agent View or another conversation without
     // changing their PID. Revalidate both interactive and background targets
     // so a click cannot reuse a cached route to the wrong screen.
@@ -1458,9 +1459,13 @@ export class SessionRepository {
     if (!reservation) {
       return "Too many chat actions are queued for this session.";
     }
-    this.acknowledgeReady(sessionId);
     try {
       await this.controls.focus(structuredClone(session));
+      // Focus can fail or outlive the completion the user clicked. Only a
+      // successful opening of that same completion may demote its pill.
+      if (completion !== undefined && completion === this.readyCompletionIdentity(sessionId)) {
+        this.acknowledgeReady(sessionId);
+      }
       return undefined;
     } catch (error) {
       return error instanceof Error ? error.message : "Exact session focus failed.";
@@ -1470,10 +1475,16 @@ export class SessionRepository {
   }
 
   acknowledgeReady(sessionId: string): void {
-    const session = this.snapshotValue.sessions.find(({ id }) => id === sessionId);
-    if (session?.section !== "ready" || this.acknowledgedReadyIDs.has(sessionId)) return;
-    this.acknowledgedReadyIDs.add(sessionId);
+    const completion = this.readyCompletionIdentity(sessionId);
+    if (completion === undefined || this.acknowledgedReadyBySession.get(sessionId) === completion) return;
+    this.acknowledgedReadyBySession.set(sessionId, completion);
     this.publish([...this.lastByProvider.values()].flat());
+  }
+
+  private readyCompletionIdentity(sessionId: string): string | undefined {
+    const session = this.snapshotValue.sessions.find(({ id }) => id === sessionId);
+    if (session?.section !== "ready") return undefined;
+    return completionIdentity(this.controlBySession.get(sessionId) ?? session);
   }
 
   acknowledgeFailure(sessionId: string): void {
@@ -2810,16 +2821,18 @@ export class SessionRepository {
       this.snapshotValue.sessions.map(({ id, section }) => [id, section]),
     );
     const sessionIDs = new Set(sessions.map(({ id }) => id));
-    for (const sessionId of this.acknowledgedReadyIDs) {
-      if (!sessionIDs.has(sessionId)) this.acknowledgedReadyIDs.delete(sessionId);
+    for (const sessionId of this.acknowledgedReadyBySession.keys()) {
+      if (!sessionIDs.has(sessionId)) this.acknowledgedReadyBySession.delete(sessionId);
     }
     for (const session of sessions) {
-      if (session.section !== "ready" || previousSections.get(session.id) !== "ready") {
-        this.acknowledgedReadyIDs.delete(session.id);
+      const completion = completionIdentity(mergedByID.get(session.id) ?? session);
+      if (session.section !== "ready" || previousSections.get(session.id) !== "ready"
+        || this.acknowledgedReadyBySession.get(session.id) !== completion) {
+        this.acknowledgedReadyBySession.delete(session.id);
       }
       session.attentionTier = session.sessionClass === "automation"
         ? "history"
-        : session.section === "ready" && this.acknowledgedReadyIDs.has(session.id)
+        : session.section === "ready" && this.acknowledgedReadyBySession.has(session.id)
         ? "acknowledged_ready"
         : session.section;
     }
@@ -2851,6 +2864,11 @@ export class SessionRepository {
       failureAlert: false,
     };
   }
+}
+
+/** Prefer provider turn identity; transcript-only providers use activity evidence. */
+function completionIdentity(session: { turnId?: string; updatedAt: string }): string {
+  return session.turnId ? `turn:${session.turnId}` : `activity:${session.updatedAt}`;
 }
 
 function canonicalBootSessionUUID(value: unknown): string | undefined {

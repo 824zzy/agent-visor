@@ -30,7 +30,9 @@ Full-screen detection uses native `AXFullScreen` evidence on the selected displa
 
 ## Session items
 
-Needs you items come first, then In progress, fresh Ready completions, and source-backed recent History shortcuts. Claude Code rows that remain Ready without activity for the shared 30-minute transcript stale ceiling keep their Ready wire phase and true turn/route state, but receive a History attention tier on native surfaces. That tier moves them behind newer work and makes the overflow show them as Recent without truncating the Ready age fade. Their full Sessions-browser row remains unchanged. Each group sorts by authoritative activity (`updatedAt`) newest first, then stable session ID. Seen and unseen completions share one priority group; acknowledgment controls the pulse, not position. The daemon assigns priority and the helper adopts it without a second ordering policy.
+Needs you items come first, then unopened Ready completions, In progress, opened Ready completions, and source-backed recent History shortcuts. Each group sorts by authoritative activity (`updatedAt`) newest first, then stable session ID. Opening a completion moves it behind running work. The acknowledgment belongs to the latest provider turn, with authoritative activity as the fallback for providers without turn IDs. A later completion becomes unopened even if polling did not observe its Working phase. The daemon assigns priority and the helper adopts it without a second ordering policy.
+
+Claude Code rows that remain Ready without activity for the shared 30-minute transcript stale ceiling keep their Ready wire phase and true turn/route state, but receive a History attention tier on native surfaces. That tier moves them behind newer work and makes the overflow show them as Recent without truncating the Ready age fade. Their full Sessions-browser row remains unchanged.
 
 ### Pill-surface selection contract
 
@@ -46,7 +48,7 @@ Claude Code's retained background inventory is a resumable catalog, not evidence
 
 Ponytail: a change to the observed window, History eligibility, or overflow count must update the provider, menu-presentation, packer, and overflow-snapshot tests together. Do not restore a source-specific History exclusion at the presentation seam.
 
-A normal click immediately opens the selected task and marks its Ready completion seen. Acknowledgment alone does not reorder pills. Layout changes from activity, phase, or membership updates are deferred while the pointer remains over either pill strip, a press begun there remains held, session shortcut modifiers are held, or a native popover is open. Gaps between pills count as part of the strip; the notch does not.
+A normal click immediately requests the selected task. Successful focus marks that Ready completion seen; a failed focus or a focus that finishes after a newer completion does not. Opening Chat marks it seen after a valid page is sent for the current chat reference. The helper waits for the daemon's acknowledgment before stopping the pulse. Layout changes from acknowledgment, activity, phase, or membership updates are deferred while the pointer remains over either pill strip, a press begun there remains held, session shortcut modifiers are held, or a native popover is open. Gaps between pills count as part of the strip; the notch does not.
 
 Cursor IDE history pills open their owning workspace through Cursor's document handler; they do not select an exact Agent conversation. Their subtitle says “Opens workspace.” Discovery advertises this action only for an existing workspace, and clicking rechecks that directory. A missing workspace keeps its readable transcript in the navigator. Cursor CLI sessions with a terminal target still focus that exact terminal.
 
@@ -58,7 +60,7 @@ Motion is clipped to each safe menu-bar lane without compressing the button cont
 
 The rendered layout determines click targets, visible shortcut numbers, and overflow membership. Seen state, colors, and provider updates continue during the hold. Removed sessions disappear immediately. If screen or menu/tray geometry makes the held frames unsafe, safe placement takes precedence over the hold. Screen changes and hiding cancel pending motion.
 
-In progress stays ahead of completed work once the layout settles. Activity-only refreshes adopt the new recency order after the interaction hold, even when every session keeps the same phase.
+Unopened completions stay ahead of In progress once the layout settles. Opening a completion lets running work move ahead of it after the interaction hold. Activity-only refreshes adopt the new recency order after the interaction hold, even when every session keeps the same phase.
 
 An observed transition into Ready pulses its status dot for up to seven minutes. Initial snapshots do not invent completions, and acknowledgment stops the pulse.
 

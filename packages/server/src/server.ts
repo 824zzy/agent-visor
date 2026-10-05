@@ -3,6 +3,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import {
   PROTOCOL_VERSION,
   CHAT_MAX_WIRE_BYTES,
+  chatPageSchema,
   clientMessageSchema,
   sessionSnapshotSchema,
   type ClientMessage,
@@ -219,7 +220,8 @@ export async function startServer(options: {
           : undefined;
         if (source.chatPage) {
           try {
-            source.acknowledgeReady?.(parsed.data.sessionId);
+            const sessionId = parsed.data.sessionId;
+            const completion = source.current().sessions.find(({ id }) => id === sessionId);
             const page = await source.chatPage(
               parsed.data.sessionId,
               parsed.data.before,
@@ -233,7 +235,7 @@ export async function startServer(options: {
               && (!current
                 || current.sessionId !== parsed.data.sessionId
                 || current.referenceId !== requestReferenceId)) return;
-            sendDaemonMessage(socket, {
+            const sent = sendDaemonMessage(socket, {
               ...page,
               ...(parsed.data.id ? { requestId: parsed.data.id } : {}),
               mode: parsed.data.before === undefined ? "latest" : "earlier",
@@ -242,6 +244,12 @@ export async function startServer(options: {
               ...(parsed.data.id ? { requestId: parsed.data.id } : {}),
               sessionId: parsed.data.sessionId,
             });
+            const latest = source.current().sessions.find(({ id }) => id === sessionId);
+            if (sent && chatPageSchema.safeParse(page).success
+              && completion?.section === "ready" && latest?.section === "ready"
+              && completion.updatedAt === latest.updatedAt) {
+              source.acknowledgeReady?.(parsed.data.sessionId);
+            }
           } catch (error) {
             reportRequestFailure(error);
             // Preserve the renderer's existing page while reporting the

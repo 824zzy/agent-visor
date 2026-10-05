@@ -9,21 +9,21 @@ final class NativeMenuSessionOrderTests: XCTestCase {
         XCTAssertEqual(NativeMenuSessionOrder.orderedPills(after).map(\.id), ["agi-poc", "old"])
     }
 
-    func testAcknowledgmentStopsThePulseWithoutDemotingTheCompletedPill() {
+    func testAcknowledgmentAdoptsTheDaemonDemotionAndStopsThePulse() {
         let now = Date(timeIntervalSinceReferenceDate: 1_000)
         let pills = [pill("old-unseen", .ready, 1), pill("new", .ready, 0)]
         var attention = NativeMenuReadyAttention()
         attention.present(previousPhases: ["new": .working, "old-unseen": .ready], pills: pills, now: now)
         XCTAssertTrue(attention.hasActivePulse(pills: pills, now: now))
-        attention.acknowledgeReady(id: "new")
-        XCTAssertFalse(attention.hasActivePulse(pills: pills, now: now))
-        let acknowledged = [pills[0], pill("new", .ready, 0, acknowledged: true)]
-        XCTAssertEqual(NativeMenuSessionOrder.orderedPills(acknowledged).map(\.id), ["new", "old-unseen"])
+        let acknowledged = [pill("old-unseen", .ready, 0), pill("new", .ready, 1, acknowledged: true)]
+        attention.present(previousPhases: ["new": .ready, "old-unseen": .ready], pills: acknowledged, now: now)
+        XCTAssertFalse(attention.hasActivePulse(pills: acknowledged, now: now))
+        XCTAssertEqual(NativeMenuSessionOrder.orderedPills(acknowledged).map(\.id), ["old-unseen", "new"])
     }
 
     func testRecencyUpdatePreservesTheClickedTargetUntilTheSlideSettles() {
-        let before = [pill("old", .ready, 0), pill("agi-poc", .ready, 1, acknowledged: true)]
-        let after = [pill("old", .ready, 1), pill("agi-poc", .ready, 0, acknowledged: true)]
+        let before = [pill("old", .ready, 0), pill("agi-poc", .working, 1)]
+        let after = [pill("old", .ready, 1, acknowledged: true), pill("agi-poc", .working, 0)]
         let lane = CGRect(x: 0, y: 0, width: 200, height: 24)
         let pointer = CGPoint(x: 30, y: 12)
         var transition = NativeMenuLayoutTransition()
@@ -51,8 +51,8 @@ final class NativeMenuSessionOrderTests: XCTestCase {
     }
 
     func testPackingOverflowAndShortcutsShareThePresentedPriority() {
-        let pills = [pill("old-unseen", .ready, 3), pill("agi-poc", .ready, 2, acknowledged: true),
-                     pill("working", .working, 1), pill("needs", .needsYou, 0), pill("history", .history, 4)]
+        let pills = [pill("unseen", .ready, 1), pill("agi-poc", .ready, 3, acknowledged: true),
+                     pill("working", .working, 2), pill("needs", .needsYou, 0), pill("history", .history, 4)]
         let ordered = NativeMenuSessionOrder.orderedPills(pills)
         let packed = PillBarPacker.pack(
             candidates: ordered.map { .init(id: $0.id, pillWidth: 60) },
@@ -60,12 +60,12 @@ final class NativeMenuSessionOrderTests: XCTestCase {
             overflowPillWidthFor: { _ in 30 }
         )
         let visible = packed.leftVisibleIds + packed.rightVisibleIds
-        XCTAssertEqual(visible, ["needs", "working", "agi-poc"])
-        XCTAssertEqual(packed.hiddenIds, ["old-unseen", "history"])
+        XCTAssertEqual(visible, ["needs", "unseen", "working"])
+        XCTAssertEqual(packed.hiddenIds, ["agi-poc", "history"])
         let shortcut = NativeMenuShortcutSnapshot(visibleSessionIDs: visible)
-        XCTAssertEqual(shortcut.sessionID(at: 2), "agi-poc")
+        XCTAssertEqual(shortcut.sessionID(at: 2), "working")
         let overflow = NativeMenuOverflowSnapshot(pills: ordered, visibleSessionIDs: Set(visible))
-        XCTAssertEqual(overflow.selection(query: "").orderedSessionIDs, ["old-unseen", "history"])
+        XCTAssertEqual(overflow.selection(query: "").orderedSessionIDs, ["agi-poc", "history"])
         XCTAssertEqual(overflow.overflowSessionIDs.count, packed.hiddenCount)
     }
 

@@ -3058,6 +3058,57 @@ describe("SessionRepository", () => {
     expect((await repository.refresh()).sessions[0]?.attentionTier).toBe("ready");
   });
 
+  it("keeps a completion unopened when owner focus fails", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{ ...readyLive, controlTarget: { kind: "application", target: { pid: 42 } } }];
+    const repository = new SessionRepository([provider]);
+    repository.setControls({
+      focus: async () => { throw new Error("The session could not be focused."); },
+      send: async () => undefined,
+    });
+    await repository.refresh();
+
+    expect(await repository.focusSession("pi-1")).toBe("The session could not be focused.");
+    expect(repository.current().sessions[0]?.attentionTier).toBe("ready");
+  });
+
+  it.each([true, false])("recognizes a later completion without observing Working (turn identity: %s)", async (hasTurnID) => {
+    const provider = new FakeProvider();
+    provider.sessions = [{ ...readyLive, ...(hasTurnID ? { turnId: "first" } : {}) }];
+    const repository = new SessionRepository([provider]);
+    await repository.refresh();
+    repository.acknowledgeReady("pi-1");
+    expect(repository.current().sessions[0]?.attentionTier).toBe("acknowledged_ready");
+
+    // A title/route refresh is not another completion when its turn is known.
+    provider.sessions[0] = { ...provider.sessions[0]!, title: "Renamed", canOpenOwner: false };
+    expect((await repository.refresh()).sessions[0]?.attentionTier).toBe("acknowledged_ready");
+    provider.sessions[0] = {
+      ...provider.sessions[0]!,
+      ...(hasTurnID ? { turnId: "second" } : {}),
+      updatedAt: "2026-08-22T09:00:00.000Z",
+    };
+    expect((await repository.refresh()).sessions[0]?.attentionTier).toBe("ready");
+  });
+
+  it("does not acknowledge a newer completion when an older focus finishes", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{
+      ...readyLive, turnId: "first", controlTarget: { kind: "application", target: { pid: 42 } },
+    }];
+    const repository = new SessionRepository([provider]);
+    const focused = Promise.withResolvers<void>();
+    repository.setControls({ focus: () => focused.promise, send: async () => undefined });
+    await repository.refresh();
+    const opening = repository.focusSession("pi-1");
+    provider.sessions[0] = { ...provider.sessions[0]!, turnId: "second", updatedAt: "2026-08-22T09:00:00.000Z" };
+    await repository.refresh();
+    focused.resolve();
+
+    expect(await opening).toBeUndefined();
+    expect(repository.current().sessions[0]?.attentionTier).toBe("ready");
+  });
+
   it("lets an authoritative host replace a duplicate provider row", async () => {
     const pi = new FakeProvider();
     pi.sessions = [{

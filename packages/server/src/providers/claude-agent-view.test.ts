@@ -358,7 +358,7 @@ describe("Claude agent-view integration", () => {
     ]);
     const snapshot = await repository(environment).refresh();
     expect(menuPresentation(snapshot, [], nowMs).pills.map(({ id }) => id))
-      .toEqual([blockedID, ccID]);
+      .toEqual([ccID, blockedID]);
   });
 
   it("does not let an overview suppress a conversation open in another terminal", async () => {

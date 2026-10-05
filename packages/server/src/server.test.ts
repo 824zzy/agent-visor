@@ -642,9 +642,11 @@ describe("Agent Visor daemon", () => {
   });
 
   it("returns contextual daemon errors for malformed page and slash responses", async () => {
+    const acknowledgeReady = vi.fn();
     const source = {
       current: () => fixtureSnapshot,
       subscribe: () => () => undefined,
+      acknowledgeReady,
       chatPage: async () => ({}) as never,
       chatCommands: async () => ({}) as never,
     };
@@ -676,14 +678,17 @@ describe("Agent Visor daemon", () => {
       requestId: "commands-1",
       sessionId: "pi-ready",
     });
+    expect(acknowledgeReady).not.toHaveBeenCalled();
     socket.close();
   });
 
   it("stays available when a client request fails", async () => {
     const failed = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const acknowledgeReady = vi.fn();
     const source = {
       current: () => fixtureSnapshot,
       subscribe: () => () => undefined,
+      acknowledgeReady,
       chatPage: async () => { throw new Error("conversation file changed"); },
     };
     running = await startServer({ port: 0, source, token });
@@ -717,6 +722,7 @@ describe("Agent Visor daemon", () => {
     ))).toBe(true);
 
     expect(failed).toHaveBeenCalledWith("Agent Visor request failed: Error: conversation file changed");
+    expect(acknowledgeReady).not.toHaveBeenCalled();
     failed.mockRestore();
     socket.close();
   });

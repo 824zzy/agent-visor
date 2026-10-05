@@ -772,11 +772,6 @@ final class NativeMenuController: NSObject {
            now - lastActivation.at < 0.2 { return }
         lastActivation = (id, now)
         updateLayoutFrames()
-        if sessionPresentations[id]?.phase == .ready {
-            readyAttention.acknowledgeReady(id: id)
-            layoutPresentation()
-            refreshReadyPulse()
-        }
         sessionPanels[id]?.pillButton.flash()
         emit(.activatePill(sessionId: id, intent: intent))
     }

@@ -10,10 +10,9 @@ import { navigationStep } from "./navigation-diagnostics.js";
 
 const attentionOrder = {
   needs_you: 0,
-  working: 1,
-  ready: 2,
-  // Acknowledgment stops the pulse; it does not outrank recent completed work.
-  acknowledged_ready: 2,
+  ready: 1,
+  working: 2,
+  acknowledged_ready: 3,
   history: 4,
 } as const;
 

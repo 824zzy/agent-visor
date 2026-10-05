@@ -202,18 +202,6 @@ describe("menu presentation", () => {
           accessibilityLabel: "Approve release, needs you, Claude Code, agent-visor",
         },
         {
-          id: "work",
-          title: "Build menu",
-          subtitle: "Agent is working",
-          source: "Pi",
-          project: "agent-visor",
-          owner: "Ghostty",
-          phase: "working",
-          priority: 1,
-          defaultOverflowEligible: true,
-          accessibilityLabel: "Build menu, in progress, Pi, agent-visor",
-        },
-        {
           id: "ready",
           title: "Review result",
           subtitle: "Ready to continue",
@@ -221,9 +209,21 @@ describe("menu presentation", () => {
           project: "agent-visor",
           owner: "Cursor",
           phase: "ready",
-          priority: 2,
+          priority: 1,
           defaultOverflowEligible: true,
           accessibilityLabel: "Review result, ready to continue, Cursor, agent-visor",
+        },
+        {
+          id: "work",
+          title: "Build menu",
+          subtitle: "Agent is working",
+          source: "Pi",
+          project: "agent-visor",
+          owner: "Ghostty",
+          phase: "working",
+          priority: 2,
+          defaultOverflowEligible: true,
+          accessibilityLabel: "Build menu, in progress, Pi, agent-visor",
         },
         {
           id: "history",
@@ -292,8 +292,8 @@ describe("menu presentation", () => {
     const presentation = menuPresentation(sourceSnapshot, [], now);
 
     expect(presentation.pills.map(({ id, phase, attentionTier }) => ({ id, phase, attentionTier }))).toEqual([
-      { id: "old-working-claude", phase: "working", attentionTier: undefined },
       { id: "fresh-claude", phase: "ready", attentionTier: undefined },
+      { id: "old-working-claude", phase: "working", attentionTier: undefined },
       { id: "stale-claude", phase: "ready", attentionTier: "history" },
     ]);
     expect(sourceSnapshot).toEqual(before);
@@ -344,11 +344,12 @@ describe("menu presentation", () => {
     });
   });
 
-  it("keeps urgent work first and sorts completed pills by activity regardless of acknowledgment", () => {
+  it("puts unopened completions before running work and opened completions", () => {
     const presentation = menuPresentation({
       ...snapshot,
       sessions: [
         { ...snapshot.sessions[4]!, id: "old-unseen", attentionTier: "ready", updatedAt: "2026-09-06T04:12:00.000Z" },
+        { ...snapshot.sessions[4]!, id: "new-unseen", attentionTier: "ready", updatedAt: "2026-09-07T01:08:00.000Z" },
         { ...snapshot.sessions[4]!, id: "seen", attentionTier: "acknowledged_ready", updatedAt: "2026-09-07T02:08:00.000Z" },
         { ...snapshot.sessions[0]!, attentionTier: "working", updatedAt: "2026-09-07T02:04:00.000Z" },
         { ...snapshot.sessions[3]!, attentionTier: "needs_you" },
@@ -357,8 +358,8 @@ describe("menu presentation", () => {
     }, []);
 
     for (const pills of [presentation.pills, presentation.navigatorPills]) {
-      expect(pills.map(({ id }) => id)).toEqual(["approval", "work", "seen", "old-unseen", "history"]);
-      expect(pills.map(({ priority }) => priority)).toEqual([0, 1, 2, 3, 4]);
+      expect(pills.map(({ id }) => id)).toEqual(["approval", "new-unseen", "old-unseen", "work", "seen", "history"]);
+      expect(pills.map(({ priority }) => priority)).toEqual([0, 1, 2, 3, 4, 5]);
     }
   });
 
