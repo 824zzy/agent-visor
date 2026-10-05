@@ -48,6 +48,7 @@ import {
   unavailableMessage,
 } from "./session-state.js";
 import type { CodexRouteEvent } from "./codex-turn.js";
+import { CompletionAttention } from "./completion-attention.js";
 
 export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie";
 
@@ -92,6 +93,8 @@ export type DiscoveredProviderSession = {
   codexLifecycle?: import("./providers/codex-lifecycle.js").CodexLifecycle;
   /** Timestamped main-thread evidence from a live Claude Desktop transcript. */
   claudeLifecycle?: { phase: "working" | "ready"; observedAt: string };
+  /** Authoritative completed response date, independent of file/metadata writes. */
+  completionAt?: string;
   /** True only for a newly observed Claude background failure. */
   failureAlert?: boolean;
   /**
@@ -174,6 +177,7 @@ export type ChatCanonicalUserEntry = Pick<Extract<ChatItem, { kind: "user" }>,
   "id" | "text" | "requestId" | "deliveryId" | "providerMessageId">;
 
 export interface SessionControls {
+  viewedSession?(sessions: DiscoveredProviderSession[]): Promise<{ sessionId: string; observedAt: string } | undefined>;
   /** False when the native helper cannot currently execute terminal actions. */
   isAvailable?(): boolean;
   focus(session: DiscoveredProviderSession): Promise<void>;
@@ -314,6 +318,7 @@ const codexSettingsCatalogTtlMs = 60_000;
 const maxOpenedSessionRecords = 128;
 
 type SessionRepositoryOptions = {
+  completionAttentionPath?: string;
   piRuntimeStatePath?: string;
   bootSessionUUID?: string;
   now?: () => Date;
@@ -441,6 +446,7 @@ export class SessionRepository {
   private readonly hookBySession = new Map<string, HookSessionEvent>();
   private readonly piRuntimeBySession = new Map<string, HookSessionEvent>();
   private readonly acknowledgedReadyBySession = new Map<string, string>();
+  private readonly completionAttention: CompletionAttention;
   private readonly acknowledgedFailureIDs = new Set<string>();
   private readonly stateRevisionBySession = new Map<string, number>();
   private readonly stateFingerprintBySession = new Map<string, string>();
@@ -556,6 +562,7 @@ export class SessionRepository {
     options: SessionRepositoryOptions = {},
   ) {
     this.now = options.now ?? (() => new Date());
+    this.completionAttention = new CompletionAttention(options.completionAttentionPath, this.now);
     this.chatPageReader = options.chatPageReader ?? readChatPage;
     this.chatUsageGlance = options.chatUsageGlance;
     const bootSessionUUID = canonicalBootSessionUUID(options.bootSessionUUID);
@@ -1478,6 +1485,10 @@ export class SessionRepository {
     const completion = this.readyCompletionIdentity(sessionId);
     if (completion === undefined || this.acknowledgedReadyBySession.get(sessionId) === completion) return;
     this.acknowledgedReadyBySession.set(sessionId, completion);
+    const source = this.controlBySession.get(sessionId);
+    if (source) this.completionAttention.acknowledge(
+      `${source.provider}:${sessionId}`, completion, source.updatedAt,
+    );
     this.publish([...this.lastByProvider.values()].flat());
   }
 
@@ -2545,9 +2556,23 @@ export class SessionRepository {
     this.removeConcludedPiRuntimes();
     this.expireStalePiReadyHooks();
     this.dropHiddenSessionHooks();
-    const snapshot = this.publish(discovered.flat());
+    this.publish(discovered.flat());
+    const candidates = [...this.controlBySession.values()].filter((source) =>
+      this.snapshotValue.sessions.some((session) => session.id === source.id && session.completionUnseen));
+    const completions = new Map(candidates.map((source) => [source.id, completionIdentity(source)]));
+    if (candidates.length && this.controls?.viewedSession) {
+      try {
+        const viewed = await this.controls.viewedSession([...this.controlBySession.values()]);
+        const source = viewed && this.controlBySession.get(viewed.sessionId);
+        const at = viewed ? Date.parse(viewed.observedAt) : NaN;
+        if (viewed && source && at <= this.now().valueOf() && at >= Date.parse(source.updatedAt)
+          && completions.get(viewed.sessionId) === this.readyCompletionIdentity(viewed.sessionId)) {
+          this.acknowledgeReady(viewed.sessionId);
+        }
+      } catch { /* Unknown foreground identity leaves the completion unopened. */ }
+    }
     this.publishPiRestoration();
-    return snapshot;
+    return this.current();
   }
 
   applyHook(event: HookSessionEvent): SessionSnapshot {
@@ -2825,17 +2850,40 @@ export class SessionRepository {
       if (!sessionIDs.has(sessionId)) this.acknowledgedReadyBySession.delete(sessionId);
     }
     for (const session of sessions) {
-      const completion = completionIdentity(mergedByID.get(session.id) ?? session);
+      const source = mergedByID.get(session.id);
+      const completion = completionIdentity(source ?? session);
+      const key = `${source?.provider}:${session.id}`;
+      if (session.section === "working" || session.section === "needs_you") {
+        this.completionAttention.forget(key);
+      }
+      const age = this.now().valueOf() - Date.parse(session.updatedAt);
+      const completed = source?.codexLifecycle?.phase === "ready"
+        || source?.claudeLifecycle?.phase === "ready" || source?.completionAt !== undefined
+        || previousSections.get(session.id) === "working"
+        || this.hookBySession.get(session.id)?.event === "Stop";
+      if (session.section === "ready" && session.sessionClass !== "automation"
+        && completed
+        && Number.isFinite(age) && age >= 0 && age <= TRANSCRIPT_STALE_CEILING_MS) {
+        this.completionAttention.observe(key, completion, session.updatedAt);
+      }
+      const attention = this.completionAttention.get(key, completion);
+      if (attention && !attention.seen) session.completionUnseen = true;
+      if (attention && !attention.seen && session.section === "history"
+        && source?.turnState === "ready") {
+        session.section = "ready";
+        session.subtitle = "Ready to continue";
+      }
       if (session.section !== "ready" || previousSections.get(session.id) !== "ready"
         || this.acknowledgedReadyBySession.get(session.id) !== completion) {
         this.acknowledgedReadyBySession.delete(session.id);
       }
       session.attentionTier = session.sessionClass === "automation"
         ? "history"
-        : session.section === "ready" && this.acknowledgedReadyBySession.has(session.id)
+        : session.section === "ready" && (attention?.seen || this.acknowledgedReadyBySession.has(session.id))
         ? "acknowledged_ready"
         : session.section;
     }
+    this.completionAttention.save();
     const fingerprint = JSON.stringify(sessions);
     if (fingerprint !== this.fingerprint) {
       this.fingerprint = fingerprint;

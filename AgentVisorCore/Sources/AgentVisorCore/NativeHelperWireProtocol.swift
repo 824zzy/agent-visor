@@ -84,6 +84,7 @@ public struct NativeHelperPill: Codable, Equatable {
     public let inspector: NativeHelperSessionInspector?
     public let phase: NativeHelperPillPhase
     public let attentionTier: NativeHelperSessionAttentionTier?
+    public let completionUnseen: Bool?
     /// Whether this needs-you pill represents a newly observed failure.
     /// Only `true` enables the native dismiss action; omitted and `false`
     /// preserve the normal pill behavior.
@@ -104,6 +105,7 @@ public struct NativeHelperPill: Codable, Equatable {
         inspector: NativeHelperSessionInspector? = nil,
         phase: NativeHelperPillPhase,
         attentionTier: NativeHelperSessionAttentionTier? = nil,
+        completionUnseen: Bool? = nil,
         failureAlert: Bool? = nil,
         defaultOverflowEligible: Bool? = nil,
         priority: Int,
@@ -118,6 +120,7 @@ public struct NativeHelperPill: Codable, Equatable {
         self.inspector = inspector
         self.phase = phase
         self.attentionTier = attentionTier
+        self.completionUnseen = completionUnseen
         self.failureAlert = failureAlert
         self.defaultOverflowEligible = defaultOverflowEligible
         self.priority = priority
@@ -246,6 +249,20 @@ public struct NativeHelperGhosttyTerminalView: Codable, Equatable {
             && !terminalId.isEmpty && terminalId.utf16.count <= 128
             && !title.isEmpty && title.utf16.count <= 512 && cwd.hasPrefix("/") && cwd.utf16.count <= 4_096
             && ![terminalId, title, cwd, processStartToken].contains(where: { $0.contains("\0") })
+    }
+}
+
+public struct NativeHelperForegroundSessionView: Codable, Equatable {
+    public let source: String
+    public let pid: Int32?
+    public let threadId: String?
+    public let terminal: NativeHelperGhosttyTerminalView?
+    public let observedAt: String
+
+    public init(source: String, pid: Int32? = nil, threadId: String? = nil,
+                terminal: NativeHelperGhosttyTerminalView? = nil, observedAt: String) {
+        self.source = source; self.pid = pid; self.threadId = threadId
+        self.terminal = terminal; self.observedAt = observedAt
     }
 }
 
@@ -424,6 +441,7 @@ public enum NativeHelperRequest: Equatable {
     case openClaudeAttach(id: String, target: NativeHelperClaudeAttachTarget)
     case focusTerminal(id: String, target: NativeHelperTerminalTarget)
     case ghosttyTerminalViews(id: String)
+    case foregroundSession(id: String)
     case focusGhosttyTerminal(id: String, target: NativeHelperGhosttyTerminalView)
     case sendTerminal(id: String, target: NativeHelperTerminalTarget, text: String, submit: Bool)
     case cancelTerminal(id: String, target: NativeHelperTerminalTarget)
@@ -431,7 +449,7 @@ public enum NativeHelperRequest: Equatable {
 
     public var id: String {
         switch self {
-        case .ghosttyTerminalViews(let id), .focusGhosttyTerminal(let id, _),
+        case .foregroundSession(let id), .ghosttyTerminalViews(let id), .focusGhosttyTerminal(let id, _),
              .screenTopology(let id), .accessibilityStatus(let id),
              .notificationStatus(let id), .requestNotifications(let id),
              .reconcileNotifications(let id, _, _),
@@ -471,6 +489,8 @@ public enum NativeHelperRequest: Equatable {
         }
 
         switch method {
+        case "foreground_session":
+            return .foregroundSession(id: wire.id)
         case "ghostty_terminal_views":
             return .ghosttyTerminalViews(id: wire.id)
         case "focus_ghostty_terminal":
@@ -685,6 +705,7 @@ public enum NativeHelperErrorCode: String, Codable {
 }
 
 public enum NativeHelperResponse {
+    case foregroundSession(id: String, view: NativeHelperForegroundSessionView?)
     case ghosttyTerminalViews(id: String, views: [NativeHelperGhosttyTerminalView])
     case screenTopology(id: String, screens: [NativeHelperScreen])
     case accessibilityStatus(id: String, trusted: Bool)
@@ -695,6 +716,10 @@ public enum NativeHelperResponse {
     public func encoded() throws -> Data {
         let encoder = JSONEncoder()
         switch self {
+        case .foregroundSession(let id, let view):
+            return try encoder.encode(SuccessEnvelope(
+                version: nativeHelperProtocolVersion, id: id, ok: true, result: .foregroundSession(view)
+            ))
         case .ghosttyTerminalViews(let id, let views):
             return try encoder.encode(SuccessEnvelope(
                 version: nativeHelperProtocolVersion, id: id, ok: true,
@@ -897,7 +922,7 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         ]
         let detailedPillKeys = legacyPillKeys.union([
             "subtitle", "source", "project", "owner", "inspector", "attentionTier",
-            "failureAlert", "defaultOverflowEligible",
+            "failureAlert", "defaultOverflowEligible", "completionUnseen",
         ])
         return (pills + navigatorPills).allSatisfy {
             let keys = Set($0.keys)
@@ -1268,6 +1293,7 @@ private struct SuccessEnvelope: Encodable {
 }
 
 private enum ResultBody: Encodable {
+    case foregroundSession(NativeHelperForegroundSessionView?)
     case ghosttyTerminalViews([NativeHelperGhosttyTerminalView])
     case screenTopology([NativeHelperScreen])
     case accessibilityStatus(Bool)
@@ -1277,6 +1303,10 @@ private enum ResultBody: Encodable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: DynamicKey.self)
         switch self {
+        case .foregroundSession(let view):
+            try container.encode("foreground_session", forKey: .init("type"))
+            if let view { try container.encode(view, forKey: .init("view")) }
+            else { try container.encodeNil(forKey: .init("view")) }
         case .ghosttyTerminalViews(let views):
             try container.encode("ghostty_terminal_views", forKey: .init("type"))
             try container.encode(views, forKey: .init("views"))

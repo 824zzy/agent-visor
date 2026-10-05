@@ -247,14 +247,15 @@ export class CodexProvider implements ProviderAdapter {
     // died right after `task_started` never writes a completion marker, so the
     // marker alone would read as Working for months. The shared stale ceiling
     // (the same one Swift's TranscriptPhaseInferrer uses) decides whether the
-    // claim is still current; the transcript's own modification time is the
-    // clock because a long live turn keeps writing after its start marker.
+    // claim is still current. A completion uses its boundary timestamp; a long
+    // live turn uses actual turn progress after its start. File modification
+    // time is not activity: opening an old thread also writes settings records.
     // Catalog membership is a separate policy: a dormant thread stays listed
     // and openable as Recent.
     const phase = lifecycle
       ? transcriptPhase({
         marker: lifecycle.phase === "working" ? "started" : "completed",
-        transcriptModifiedAt: rolloutStamp?.modifiedAt,
+        transcriptModifiedAt: lifecycle.phase === "ready" ? lifecycle.observedAt : transcript?.activityAt,
         now: this.environment.now(),
       })
       : "recent";

@@ -32,6 +32,8 @@ Full-screen detection uses native `AXFullScreen` evidence on the selected displa
 
 Needs you items come first, then unopened Ready completions, In progress, opened Ready completions, and source-backed recent History shortcuts. Each group sorts by authoritative activity (`updatedAt`) newest first, then stable session ID. Opening a completion moves it behind running work. The acknowledgment belongs to the latest provider turn, with authoritative activity as the fallback for providers without turn IDs. A later completion becomes unopened even if polling did not observe its Working phase. The daemon assigns priority and the helper adopts it without a second ordering policy.
 
+Codex completion freshness uses the recorded completion time. Running freshness uses start and actual turn-progress records, including bounded headers of large answer/tool rows. File modification times, settings, client metadata, and context records do not refresh either claim. Opening an old conversation cannot turn History into unopened Ready or revive a dormant start marker. Transcript revisions still track file changes so Chat refreshes normally.
+
 Claude Code rows that remain Ready without activity for the shared 30-minute transcript stale ceiling keep their Ready wire phase and true turn/route state, but receive a History attention tier on native surfaces. That tier moves them behind newer work and makes the overflow show them as Recent without truncating the Ready age fade. Their full Sessions-browser row remains unchanged.
 
 ### Pill-surface selection contract
@@ -62,9 +64,11 @@ The rendered layout determines click targets, visible shortcut numbers, and over
 
 Unopened completions stay ahead of In progress once the layout settles. Opening a completion lets running work move ahead of it after the interaction hold. Activity-only refreshes adopt the new recency order after the interaction hold, even when every session keeps the same phase.
 
-An observed transition into Ready pulses its status dot for up to seven minutes. Initial snapshots do not invent completions, and acknowledgment stops the pulse.
+An authoritative unopened completion keeps a gentle green status-dot pulse until that exact completion is opened. Its three-second cycle varies opacity from 0.65 to 1. Reduce Motion keeps its green marker static, and hidden strips stop the animation timer. Completion attention is stored separately from lifecycle age and restored after app/helper restarts. Old catalog entries, empty idle conversations, and settings writes do not invent unopened completions. The seven-day menu cap and ambient eligibility still apply.
 
-Ready status color fades linearly from green to gray over 42 minutes from the authoritative activity date. The helper refreshes the color every 30 seconds. Opening a completion marks it seen and stops its pulse; it does not reset the color age. A later Working-to-Ready transition creates a new unseen completion. Pulse animation changes only opacity; elapsed time never marks a completion seen.
+Unopened completions stay green. Opening marks that completion seen and stops its pulse; the existing 42-minute fade then uses the original completion date, without resetting its age. A later completion receives a new identity and starts attention again. Hover, overflow browsing, elapsed time, metadata writes, and failed opens never mark it seen.
+
+Ambient foreground observation may also acknowledge a completion. Codex requires an exact local thread UUID from the focused document/web-area URL and its owning PID. Ghostty requires the focused terminal's current unique Claude conversation title/directory and, when available, exact surface/process identity. Sidebar links, background windows, Agent View, ambiguous matches, unavailable permissions, and stale reads never acknowledge. A delayed observation cannot acknowledge a completion newer than the observation or the one for which it began. Reads do not focus apps, attach sessions, write terminal input, or request permissions.
 
 Each item matches the released 24-point dark capsule, six-point status dot, seven-point outer padding, and three-point dot-to-title spacing.
 

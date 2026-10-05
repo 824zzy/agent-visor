@@ -21,12 +21,14 @@ import {
   type NativeHelperPill,
   type NativeHelperTerminalTarget,
   type NativeHelperGhosttyTerminalView,
+  type NativeHelperForegroundSessionView,
   type NativeHelperResponse,
   type NativeHelperScreen,
   type NativeHelperUsageGlance,
 } from "@agent-visor/protocol";
 
 export interface NativeHelperAdapter {
+  foregroundSessionView?(): Promise<NativeHelperForegroundSessionView | undefined>;
   ghosttyTerminalViews?(): Promise<NativeHelperGhosttyTerminalView[]>;
   focusGhosttyTerminal?(target: NativeHelperGhosttyTerminalView): Promise<void>;
   /** False when the signed helper process is not available for a real action. */
@@ -113,6 +115,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export class FakeNativeHelper implements NativeHelperAdapter {
+  foregroundView?: NativeHelperForegroundSessionView;
+  async foregroundSessionView() { return structuredClone(this.foregroundView); }
   readonly ghosttyTerminalFocusRequests: NativeHelperGhosttyTerminalView[] = [];
   ghosttyViews: NativeHelperGhosttyTerminalView[] = [];
   async ghosttyTerminalViews() { return structuredClone(this.ghosttyViews); }
@@ -428,6 +432,12 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     const response = await this.request("ghostty_terminal_views");
     if (response.result.type !== "ghostty_terminal_views") throw new Error("Unexpected helper response.");
     return response.result.views;
+  }
+
+  async foregroundSessionView(): Promise<NativeHelperForegroundSessionView | undefined> {
+    const response = await this.request("foreground_session");
+    if (response.result.type !== "foreground_session") throw new Error("Unexpected helper response.");
+    return response.result.view ?? undefined;
   }
 
   async focusGhosttyTerminal(target: NativeHelperGhosttyTerminalView): Promise<void> {

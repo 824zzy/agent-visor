@@ -123,7 +123,7 @@ function menuSession(
   session: SessionSnapshot["sessions"][number],
   now: number,
 ): SessionSnapshot["sessions"][number] {
-  if (session.source !== "Claude Code" || session.section !== "ready"
+  if (session.completionUnseen || session.source !== "Claude Code" || session.section !== "ready"
     || (session.attentionTier !== undefined
       && session.attentionTier !== "ready"
       && session.attentionTier !== "acknowledged_ready")) return session;
@@ -159,6 +159,7 @@ function presentationPill(
     project: session.project,
     ...(session.canOpenOwner ? { owner: session.owner } : {}),
     ...(session.attentionTier ? { attentionTier: session.attentionTier } : {}),
+    ...(session.completionUnseen ? { completionUnseen: true } : {}),
     ...(session.failureAlert !== undefined ? { failureAlert: session.failureAlert } : {}),
     inspector: {
       status: inspectorStatus(session.section, session.subtitle),

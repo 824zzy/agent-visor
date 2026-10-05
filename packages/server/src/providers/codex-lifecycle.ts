@@ -19,6 +19,8 @@ type Checkpoint = {
 
 type CodexTranscriptState = {
   lifecycle?: CodexLifecycle;
+  /** Turn progress only; settings, navigation, and unknown records cannot refresh it. */
+  activityAt?: string;
   originator?: string;
 };
 
@@ -52,6 +54,7 @@ export class CodexTranscriptReader {
       return checkpoint.state;
     }
     let lifecycle = checkpoint?.state.lifecycle;
+    let activityAt = checkpoint?.state.activityAt;
     let originator = checkpoint?.state.originator;
     const offset = await environment.scanLinePrefixes(file, lifecyclePrefixBytes, (line) => {
       try {
@@ -63,10 +66,11 @@ export class CodexTranscriptReader {
             && value.payload.originator.length <= 256 ? value.payload.originator : undefined;
           return;
         }
-        if (!isRecord(value) || value.type !== "event_msg" || !isRecord(value.payload)
+        if (!isRecord(value) || !isRecord(value.payload)
           || typeof value.timestamp !== "string" || !Number.isFinite(Date.parse(value.timestamp))) return;
         const type = value.payload.type;
-        if (type === "task_started" || type === "task_complete" || type === "turn_aborted") {
+        if (value.type === "event_msg"
+          && (type === "task_started" || type === "task_complete" || type === "turn_aborted")) {
           const turnId = typeof value.payload.turn_id === "string"
             && value.payload.turn_id.length > 0 && value.payload.turn_id.length <= 256
             ? value.payload.turn_id : undefined;
@@ -82,13 +86,19 @@ export class CodexTranscriptReader {
             observedAt,
             ...(currentTurnId ? { turnId: currentTurnId } : {}),
           };
+          activityAt = observedAt;
+        } else if (lifecycle?.phase === "working" && isTurnProgress(value.type, value.payload)) {
+          const observedAt = new Date(value.timestamp).toISOString();
+          if (observedAt < lifecycle.observedAt || (activityAt && observedAt <= activityAt)) return;
+          if ("turn_id" in value.payload && value.payload.turn_id !== lifecycle.turnId) return;
+          activityAt = observedAt;
         }
       } catch { /* Large content rows and incomplete JSON are not lifecycle evidence. */ }
     }, checkpoint?.offset ?? 0);
     // ponytail: retain only bounded metadata, never prompts or tool output.
     // The offset stops at a newline. Partial writes/read failures are retried,
     // while unchanged transcripts and already-consumed bytes are not rescanned.
-    const state = { lifecycle, originator };
+    const state = { lifecycle, activityAt, originator };
     this.checkpoints.delete(sessionId);
     this.checkpoints.set(sessionId, { file, size: stamp.size, modifiedAt, offset, state });
     while (this.checkpoints.size > this.checkpointLimit) {
@@ -96,6 +106,17 @@ export class CodexTranscriptReader {
     }
     return state;
   }
+}
+
+function isTurnProgress(type: unknown, payload: Record<string, unknown>): boolean {
+  if (type === "event_msg") {
+    return ["agent_message", "agent_reasoning", "item_started", "item_completed", "token_count"]
+      .includes(String(payload.type));
+  }
+  if (type !== "response_item") return false;
+  if (payload.type === "message") return payload.role === "assistant";
+  return ["reasoning", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "web_search_call"]
+    .includes(String(payload.type));
 }
 
 function lifecycleRecord(line: string): unknown {
@@ -110,6 +131,17 @@ function lifecycleRecord(line: string): unknown {
         const header: unknown = JSON.parse(line.slice(0, instructions.index) + "}}");
         if (isRecord(header) && header.type === "session_meta") return header;
       } catch { /* Unknown metadata layouts remain unclassified. */ }
+    }
+    // Progress headers can precede megabytes of answer or tool output. Parse
+    // only the complete JSON envelope before its content field, so activity
+    // does not depend on answer size or marker-like text inside that content.
+    const content = /,\s*"(?:message|item|content|arguments|output|summary)"\s*:/.exec(line);
+    if (content) {
+      try {
+        const header: unknown = JSON.parse(line.slice(0, content.index) + "}}");
+        if (isRecord(header) && isRecord(header.payload)
+          && isTurnProgress(header.type, header.payload)) return header;
+      } catch { /* Nested or unknown layouts are not progress evidence. */ }
     }
     // Codex puts identity before last_agent_message, which can be megabytes.
     // Match only the emitted root envelope, never marker-like text in content.

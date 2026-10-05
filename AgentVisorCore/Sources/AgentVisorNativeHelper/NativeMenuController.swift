@@ -546,9 +546,10 @@ final class NativeMenuController: NSObject {
     private func refreshReadyPulse() {
         let now = Date()
         updateReadyPulse(now: now)
-        guard readyAttention.hasActivePulse(
+        guard presentationIsVisible && readyAttention.hasActivePulse(
             pills: Array(sessionPresentations.values),
-            now: now
+            now: now,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         ) else {
             stopReadyPulse()
             return
@@ -564,9 +565,10 @@ final class NativeMenuController: NSObject {
     private func tickReadyPulse() {
         let now = Date()
         updateReadyPulse(now: now)
-        if !readyAttention.hasActivePulse(
+        if !presentationIsVisible || !readyAttention.hasActivePulse(
             pills: Array(sessionPresentations.values),
-            now: now
+            now: now,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         ) {
             stopReadyPulse()
         }
@@ -579,7 +581,8 @@ final class NativeMenuController: NSObject {
                 ?? statusColor(for: pill, now: now)
             sessionPanels[id]?.pillButton.contentTintColor = color.withAlphaComponent(
                 readyAttention.opacity(
-                    id: id, phase: pill.phase, attentionTier: pill.attentionTier, now: now
+                    id: id, phase: pill.phase, attentionTier: pill.attentionTier, now: now,
+                    reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
                 )
             )
         }
@@ -614,7 +617,8 @@ final class NativeMenuController: NSObject {
         where pill.phase == .ready && shortcutSnapshot?.positions[id] == nil {
             sessionPanels[id]?.pillButton.contentTintColor = statusColor(for: pill, now: now)
                 .withAlphaComponent(readyAttention.opacity(
-                    id: id, phase: pill.phase, attentionTier: pill.attentionTier, now: now
+                    id: id, phase: pill.phase, attentionTier: pill.attentionTier, now: now,
+                    reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
                 ))
         }
     }
@@ -1133,6 +1137,7 @@ final class NativeMenuController: NSObject {
                 panels.forEach { $0.animator().alphaValue = visible ? 1 : 0 }
             }
         }
+        refreshReadyPulse()
     }
 
     private func refreshFullScreenState(on screen: NSScreen, force: Bool = false) {
@@ -1513,7 +1518,8 @@ final class NativeMenuController: NSObject {
             let now = Date()
             panel.pillButton.contentTintColor = statusColor(for: pill, now: now).withAlphaComponent(
                 readyAttention.opacity(
-                    id: pill.id, phase: pill.phase, attentionTier: pill.attentionTier, now: now
+                    id: pill.id, phase: pill.phase, attentionTier: pill.attentionTier, now: now,
+                    reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
                 )
             )
         }

@@ -4,6 +4,18 @@ import XCTest
 import JavaScriptCore
 
 final class NativeGhosttyTerminalControllerTests: XCTestCase {
+    func testReadsOnlyTheFocusedSurfaceAndRejectsAReplacedApplication() {
+        var identity = NativeGhosttyTerminalController.ApplicationIdentity(pid: 7, token: "instance-one")
+        var replaced = false
+        let controller = NativeGhosttyTerminalController(resolveApplication: { identity }, execute: { _ in
+            if replaced { identity = .init(pid: 7, token: "instance-two") }
+            return #"{"terminalId":"surface-a","title":"✳ Cleanup","cwd":"/project"}"#
+        })
+        XCTAssertEqual(controller.focusedView()?.terminalId, "surface-a")
+        replaced = true
+        XCTAssertNil(controller.focusedView())
+    }
+
     func testScriptingSelectsOnlyTheStableSurfaceAndRejectsAChangedTitle() throws {
         let context = try XCTUnwrap(JSContext())
         context.evaluateScript(#"""

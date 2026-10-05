@@ -3,6 +3,15 @@ import Foundation
 /// Ghostty's supported scripting API exposes surface identity/title/cwd.
 /// These scripts never read terminal contents, write PTYs, or send keys.
 public enum GhosttyTerminalViewScript {
+    public static let focused = """
+    (function () {
+        var app = Application('com.mitchellh.ghostty');
+        if (!app.running() || !app.windows().length) return '';
+        var t = app.windows()[0].selectedTab().focusedTerminal();
+        return JSON.stringify({terminalId: t.id(), title: t.name(), cwd: t.workingDirectory()});
+    })()
+    """
+
     public static let list = """
     (function () {
         var app = Application('com.mitchellh.ghostty');

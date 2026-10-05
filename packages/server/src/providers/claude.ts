@@ -224,6 +224,8 @@ export class ClaudeProvider implements ProviderAdapter {
           : "unknown" as const;
       const claudeLifecycle = desktopTranscript && summary.lifecycle?.phase === turnState
         ? summary.lifecycle : undefined;
+      const completionAt = turnState === "ready" && summary.lifecycle?.phase === "ready"
+        ? summary.lifecycle.observedAt : undefined;
       const section = turnState === "unknown" ? "history" as const : turnState;
       const attached = backgroundTarget
         ? await attachedTerminalTarget(backgroundTarget.jobId, backgroundTarget.cwd, processes, this.environment)
@@ -244,7 +246,7 @@ export class ClaudeProvider implements ProviderAdapter {
         cwd,
         owner,
         section,
-        updatedAt: claudeLifecycle?.observedAt
+        updatedAt: completionAt ?? claudeLifecycle?.observedAt
           ?? iso(transcriptStamp?.modifiedAt ?? metadataStamp?.modifiedAt ?? this.environment.now()),
         canOpenOwner: controlTarget !== undefined,
         canEnterChat: true,
@@ -253,6 +255,7 @@ export class ClaudeProvider implements ProviderAdapter {
         conversationState: "open",
         turnState,
         ...(claudeLifecycle ? { claudeLifecycle } : {}),
+        ...(completionAt ? { completionAt } : {}),
         chatPath: transcript,
         ...(controlTarget ? { controlTarget } : {}),
         ...(terminalTarget ? { messageTransport: "terminal" as const } : {}),
@@ -473,6 +476,7 @@ export class ClaudeProvider implements ProviderAdapter {
       owner: application,
       section: state === "unknown" || state === "history" ? "history" : state,
       updatedAt,
+      ...(state === "ready" && lifecycle?.phase === "ready" ? { completionAt: lifecycle.observedAt } : {}),
       canOpenOwner: target !== undefined,
       canEnterChat: true,
       sessionClass: "terminal",

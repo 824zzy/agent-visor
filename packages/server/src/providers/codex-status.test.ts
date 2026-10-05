@@ -52,11 +52,11 @@ class StatusEnvironment extends LiveProviderEnvironment {
       offset = end + 1;
     }
   }
-  append(type: string, turnId: string) {
+  append(type: string, turnId?: string) {
     this.clock += 1_000;
     this.modifiedAt = this.clock;
     this.content += JSON.stringify({ type: "event_msg", timestamp: this.now().toISOString(),
-      payload: { type, turn_id: turnId } }) + "\n";
+      payload: { type, ...(turnId ? { turn_id: turnId } : {}) } }) + "\n";
   }
 }
 
@@ -283,7 +283,7 @@ describe("Codex desktop lifecycle status", () => {
     expect((await repository.refresh()).sessions[0]?.section).toBe("working");
   });
 
-  it("moves a dormant completed task to Recent after the stale ceiling but keeps Open Chat", async () => {
+  it("keeps an observed unopened completion Ready beyond the stale ceiling with Open Chat", async () => {
     const { environment, repository, hook } = setup();
     environment.append("task_started", "turn-1");
     environment.append("task_complete", "turn-1");
@@ -295,13 +295,14 @@ describe("Codex desktop lifecycle status", () => {
 
     expect(snapshot.sessions).toMatchObject([{
       id: sessionId,
-      section: "history",
+      section: "ready",
+      completionUnseen: true,
       sessionState: { conversation: "open", turn: "ready" },
       canEnterChat: true,
     }]);
     expect(menuPresentation(snapshot, [], environment.clock).pills).toMatchObject([{
       id: sessionId,
-      phase: "history",
+      phase: "ready",
     }]);
   });
 
@@ -312,6 +313,35 @@ describe("Codex desktop lifecycle status", () => {
     environment.clock += 29 * 60_000;
 
     expect((await repository.refresh()).sessions[0]).toMatchObject({ section: "ready", sessionState: { turn: "ready" } });
+  });
+
+  it("keeps an old completion Recent when opening it writes settings but no new turn", async () => {
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn-1");
+    environment.append("task_complete", "turn-1");
+    const completedAt = environment.now().toISOString();
+    environment.clock += 2 * 24 * 60 * 60_000;
+    expect((await repository.refresh()).sessions[0]?.section).toBe("history");
+
+    environment.append("thread_settings_applied");
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions[0]).toMatchObject({
+      section: "history", updatedAt: completedAt,
+      sessionState: { conversation: "open", turn: "ready" },
+      canOpenOwner: true, canEnterChat: true,
+    });
+    expect(menuPresentation(snapshot, [], environment.clock).pills).toMatchObject([{
+      id: sessionId, phase: "history", attentionTier: "history",
+    }]);
+    const restarted = new SessionRepository([new CodexProvider(environment)]);
+    expect((await restarted.refresh()).sessions[0]?.section).toBe("history");
+
+    environment.append("task_started", "new-turn");
+    expect((await repository.refresh()).sessions[0]?.section).toBe("working");
+    environment.append("task_complete", "new-turn");
+    expect(menuPresentation(await repository.refresh(), [], environment.clock).pills).toMatchObject([{
+      id: sessionId, phase: "ready", attentionTier: "ready", inspector: { activityAt: environment.now().toISOString() },
+    }]);
   });
 
   it("does not keep a dead turn Working once its transcript has been quiet past the stale ceiling", async () => {
@@ -328,6 +358,48 @@ describe("Codex desktop lifecycle status", () => {
     expect(session?.sessionState?.turn).not.toBe("working");
   });
 
+  it.each([
+    ["settings", { type: "event_msg", payload: { type: "thread_settings_applied" } }],
+    ["client metadata", { type: "session_meta", payload: { id: sessionId, originator: "Codex Desktop" } }],
+    ["context", { type: "turn_context", payload: { cwd } }],
+    ["instructions", { type: "response_item", payload: { type: "message", role: "developer", content: "Instructions" } }],
+    ["unknown event", { type: "event_msg", payload: { type: "future_metadata" } }],
+    ["another turn's progress", { type: "event_msg", payload: { type: "token_count", turn_id: "other-turn" } }],
+  ])("does not revive a dormant start marker from %s", async (_label, record) => {
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn-1");
+    await repository.refresh();
+    environment.clock += 2 * 24 * 60 * 60_000;
+    expect((await repository.refresh()).sessions[0]?.section).toBe("history");
+
+    environment.modifiedAt = environment.clock;
+    environment.content += JSON.stringify({ timestamp: environment.now().toISOString(), ...record }) + "\n";
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions[0]?.section).toBe("history");
+    expect(snapshot.sessions[0]?.sessionState?.turn).not.toBe("working");
+    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("history");
+  });
+
+  it("keeps an opened completion seen across settings writes and observes a later completion", async () => {
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn-1");
+    environment.append("task_complete", "turn-1");
+    await repository.refresh();
+    repository.acknowledgeReady(sessionId);
+    const completionAt = environment.now().toISOString();
+    environment.clock += 10 * 60_000;
+    environment.append("thread_settings_applied");
+    expect(menuPresentation(await repository.refresh(), [], environment.clock).pills).toMatchObject([{
+      id: sessionId, phase: "ready", attentionTier: "acknowledged_ready", inspector: { activityAt: completionAt },
+    }]);
+
+    environment.append("task_started", "turn-2");
+    environment.append("task_complete", "turn-2");
+    expect(menuPresentation(await repository.refresh(), [], environment.clock).pills).toMatchObject([{
+      id: sessionId, phase: "ready", attentionTier: "ready", inspector: { activityAt: environment.now().toISOString() },
+    }]);
+  });
+
   it("keeps a live turn Working while its transcript keeps changing", async () => {
     const { environment, repository } = setup();
     environment.append("task_started", "turn-1");
@@ -340,6 +412,22 @@ describe("Codex desktop lifecycle status", () => {
     }
 
     expect((await repository.refresh()).sessions[0]).toMatchObject({ section: "working", sessionState: { turn: "working" } });
+  });
+
+  it.each([
+    { type: "event_msg", payload: { type: "agent_message", message: "Streaming answer. ".repeat(2_000) } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: "call-1", output: "Tool output. ".repeat(2_000) } },
+  ])("keeps a long turn Working through oversized $type progress records", async (progress) => {
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn-1");
+    await repository.refresh();
+    environment.clock += 45 * 60_000;
+    environment.modifiedAt = environment.clock;
+    environment.content += JSON.stringify({ timestamp: environment.now().toISOString(), ...progress }) + "\n";
+
+    expect((await repository.refresh()).sessions[0]).toMatchObject({
+      section: "working", sessionState: { turn: "working" },
+    });
   });
 
   it("does not revive a completed turn from a duplicate start marker", async () => {

@@ -2,6 +2,36 @@ import XCTest
 @testable import AgentVisorCore
 
 final class NativeMenuReadyAttentionTests: XCTestCase {
+    func testReduceMotionKeepsUnopenedAttentionGreenWithoutAnimatingOrAcknowledging() {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000)
+        let unopened = pill(.ready, attentionTier: .ready, activityAt: now, completionUnseen: true)
+        var attention = NativeMenuReadyAttention()
+        attention.present(previousPhases: [:], pills: [unopened], now: now)
+        XCTAssertFalse(attention.hasActivePulse(pills: [unopened], now: now, reduceMotion: true))
+        XCTAssertEqual(attention.opacity(id: "session", phase: .ready, attentionTier: .ready,
+                                        now: now.addingTimeInterval(1.5), reduceMotion: true), 1)
+        XCTAssertEqual(attention.statusStaleness(pill: unopened, now: now.addingTimeInterval(86_400)), 0)
+        XCTAssertTrue(attention.hasActivePulse(pills: [unopened], now: now.addingTimeInterval(86_400)))
+    }
+
+    func testUnopenedCompletionKeepsGentlePulseAndGreenColorUntilOpened() {
+        let completedAt = Date(timeIntervalSinceReferenceDate: 1_000)
+        let unopened = pill(.ready, attentionTier: .ready, activityAt: completedAt, completionUnseen: true)
+        let tomorrow = completedAt.addingTimeInterval(24 * 60 * 60)
+        var attention = NativeMenuReadyAttention()
+        attention.present(previousPhases: [:], pills: [unopened], now: tomorrow)
+        XCTAssertTrue(attention.hasActivePulse(pills: [unopened], now: tomorrow))
+        XCTAssertEqual(attention.statusStaleness(pill: unopened, now: tomorrow), 0)
+        XCTAssertEqual(attention.opacity(
+            id: "session", phase: .ready, attentionTier: .ready,
+            now: tomorrow.addingTimeInterval(1.5)
+        ), 0.65, accuracy: 0.001)
+        let opened = pill(.ready, attentionTier: .acknowledgedReady, activityAt: completedAt)
+        attention.present(previousPhases: ["session": .ready], pills: [opened], now: tomorrow)
+        XCTAssertFalse(attention.hasActivePulse(pills: [opened], now: tomorrow))
+        XCTAssertEqual(attention.statusStaleness(pill: opened, now: tomorrow), 1)
+    }
+
     func testObservedReadyTransitionPulsesWithReleasedTiming() {
         let changedAt = Date(timeIntervalSinceReferenceDate: 1_000)
         var attention = NativeMenuReadyAttention()
@@ -188,7 +218,8 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
     private func pill(
         _ phase: NativeHelperPillPhase,
         attentionTier: NativeHelperSessionAttentionTier? = nil,
-        activityAt: Date? = nil
+        activityAt: Date? = nil,
+        completionUnseen: Bool? = nil
     ) -> NativeHelperPill {
         NativeHelperPill(
             id: "session",
@@ -205,6 +236,7 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
             },
             phase: phase,
             attentionTier: attentionTier,
+            completionUnseen: completionUnseen,
             priority: 0,
             accessibilityLabel: "Session"
         )

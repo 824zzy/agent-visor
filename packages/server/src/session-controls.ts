@@ -78,6 +78,30 @@ export const MAX_TERMINAL_DELIVERY_RECORDS = 64;
 const terminalEvidenceTTL = 5 * 60_000;
 
 export class NativeSessionControls implements SessionControls {
+  async viewedSession(sessions: DiscoveredProviderSession[]): Promise<{ sessionId: string; observedAt: string } | undefined> {
+    const view = await this.helper.foregroundSessionView?.();
+    if (!view) return undefined;
+    const matches = sessions.filter((session) => {
+      const control = session.controlTarget;
+      if (view.source === "codex") {
+        return session.provider === "codex" && control?.kind === "codex_thread"
+          && control.target.pid === view.pid && control.target.threadId.toLowerCase() === view.threadId.toLowerCase();
+      }
+      if (session.provider !== "claude_code" || session.owner !== "Ghostty") return false;
+      const name = /^[✳◐◑] /.test(view.terminal.title) ? view.terminal.title.slice(2) : undefined;
+      if (!name || name === "Claude Code" || /(?:^| · )claude agents$/.test(name)
+        || name !== session.title || view.terminal.cwd !== session.cwd) return false;
+      const displayed = control?.kind === "claude_background" ? control.target.displayed : undefined;
+      // A current displayed surface has stronger identity than a title. Never
+      // replace mismatching surface/process evidence with a name match.
+      if (displayed) return displayed.applicationPID === view.terminal.applicationPID
+        && displayed.processStartToken === view.terminal.processStartToken
+        && displayed.terminalId === view.terminal.terminalId;
+      return control?.kind === "terminal" && control.target.application === "Ghostty";
+    });
+    return matches.length === 1 ? { sessionId: matches[0]!.id, observedAt: view.observedAt } : undefined;
+  }
+
   private focusSerial = 0;
   // Provider actions are serialized per session. A queued terminal send must
   // register its delivery immediately before its helper write; otherwise a
