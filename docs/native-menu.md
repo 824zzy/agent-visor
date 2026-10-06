@@ -12,7 +12,9 @@ Each panel contains one native button. Transparent menu-bar space has no Agent V
 
 Button actions and the Accessibility fallback use the live panel frames. No separate click-geometry cache can outlive its rendered capsule.
 
-The helper measures the active application menus, system tray, display, and physical notch. A left lane requires a complete, stable menu reading. Failed child reads, mixed-display frames, gaps, or an unresolved owner close that lane; there is no guessed app-menu width. A complete menu measured on another display transfers with 24 points of clearance, while a crowded source reading is rejected. The shared `PillBarPacker` selects the visible priority prefix and overflow.
+The helper measures the application menu on the pill display, system tray, display, and physical notch. It reads the local menu owner's PID from Accessibility hits in the Apple and application menu areas, even when focus is on another display or separate Spaces are disabled. Both hits must identify the same app menu; global focus and window order cannot establish local ownership. The owner is checked again after reading its menu geometry.
+
+A left lane requires a complete, stable menu reading. Failed child reads, mixed-display frames, gaps, or an unresolved owner close that lane; there is no guessed app-menu width. A complete menu measured on another display transfers with 24 points of clearance, while a crowded source reading is rejected. The shared `PillBarPacker` selects the visible priority prefix and overflow.
 
 Display and application changes trigger immediate layout. A bounded half-second refresh covers menu-title and system-tray changes without rebuilding visible pills.
 

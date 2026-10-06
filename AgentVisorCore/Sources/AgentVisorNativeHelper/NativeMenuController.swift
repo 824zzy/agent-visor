@@ -1783,47 +1783,8 @@ final class NativeMenuController: NSObject {
     }
 
     private func menuOwnerPID(on screen: NSScreen) -> pid_t? {
-        let frontmost = NSWorkspace.shared.frontmostApplication
-        let screens = NSScreen.screens
-        guard NSScreen.screensHaveSeparateSpaces, screens.count > 1 else {
-            return frontmost?.processIdentifier
-        }
-        let frontmostPID = frontmost?.activationPolicy == .regular
-            ? frontmost?.processIdentifier : nil
-        guard let windows = CGWindowListCopyWindowInfo(
-                  [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-              ) as? [[String: Any]] else { return nil }
-
-        let target = cgScreenRect(for: screen)
-        func isOnTarget(_ window: [String: Any]) -> Bool {
-            guard let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-                  let frame = CGRect(dictionaryRepresentation: bounds) else { return false }
-            return target.contains(CGPoint(x: frame.midX, y: frame.midY))
-        }
-        let frontmostHasWindow = windows.contains { window in
-            (window[kCGWindowLayer as String] as? Int) == 0
-                && (window[kCGWindowOwnerPID as String] as? pid_t) == frontmostPID
-                && isOnTarget(window)
-        }
-        let topmostPID = windows.first { window in
-            guard let pid = window[kCGWindowOwnerPID as String] as? pid_t else { return false }
-            let app = NSRunningApplication(processIdentifier: pid)
-            return MenuBarOwnerCandidatePolicy.canOwnTargetMenu(
-                windowLayer: window[kCGWindowLayer as String] as? Int ?? -1,
-                isOwnProcess: pid == getpid(),
-                isOnTargetScreen: isOnTarget(window),
-                isRegularApplication: app?.activationPolicy == .regular,
-                hasBundleIdentifier: !(app?.bundleIdentifier?.isEmpty ?? true)
-            )
-        }.flatMap { $0[kCGWindowOwnerPID as String] as? pid_t }
-        let owner = MenuBarOwnerResolver.resolve(
-            frontmostPid: frontmostPID,
-            frontmostHasWindowOnTargetScreen: frontmostHasWindow,
-            topmostOnTargetPid: topmostPID,
-            separateSpaces: true,
-            isSingleScreen: false
-        )
-        return owner.isConfident ? owner.ownerPid : nil
+        // Each display can retain a different app menu, including with shared Spaces.
+        NativeMenuOwnerProbe.ownerPID(on: cgScreenRect(for: screen))
     }
 
     private func statusTrayLeftEdge(on screen: NSScreen) -> CGFloat? {
