@@ -71,7 +71,18 @@ export class AgentConnectionsRepository {
     }];
   }
 
-  async refresh(): Promise<void> {
+  refresh(): Promise<void> {
+    const refresh = this.pendingChange.then(() => this.refreshIntegrations());
+    this.pendingChange = refresh.catch(() => undefined);
+    return refresh;
+  }
+
+  private async refreshIntegrations(): Promise<void> {
+    if (this.claudeState.installed) {
+      const hooks = path.join(this.options.home, ".claude/hooks");
+      await mkdir(hooks, { recursive: true });
+      await copyAtomic(path.join(this.options.resources, "agent-visor-state.py"), path.join(hooks, "agent-visor-state.py"));
+    }
     const root = path.join(this.options.home, ".pi/agent");
     const pi = this.current().find(({ id }) => id === "pi");
     if (!pi?.available) return;

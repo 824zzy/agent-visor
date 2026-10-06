@@ -19,6 +19,13 @@ const question: Extract<ChatPendingAction, { type: "question" }> = {
 };
 
 describe("Chat action policy", () => {
+  it("accepts a custom answer only when this question allows Other", () => {
+    const other = { ...question, questions: [{ ...question.questions[0]!, allowsOther: true }] };
+    expect(validateQuestionAnswers(other, { one: "My own strategy" })).toEqual([]);
+    expect(validateQuestionAnswers(other, { one: "  " })).toEqual(["Answer “Pick one”."]);
+    expect(validateQuestionAnswers(question, { one: "My own strategy", many: ["X"], text: "done" }))
+      .toEqual(["Choose an available answer for “Pick one”."]);
+  });
   it("uses the exact provider approval identity and context title", () => {
     expect(pendingChatActionIdentity(question)).toBe("approval-1");
     expect(chatActionTitle(question, "Codex")).toBe("Codex asks a question");

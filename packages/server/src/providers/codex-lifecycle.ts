@@ -22,6 +22,8 @@ type CodexTranscriptState = {
   /** Turn progress only; settings, navigation, and unknown records cannot refresh it. */
   activityAt?: string;
   originator?: string;
+  pendingQuestionIds?: string[];
+  questionAt?: string;
 };
 
 /** Read turn boundaries and client identity together, without retaining content. */
@@ -56,6 +58,8 @@ export class CodexTranscriptReader {
     let lifecycle = checkpoint?.state.lifecycle;
     let activityAt = checkpoint?.state.activityAt;
     let originator = checkpoint?.state.originator;
+    const pendingQuestionIds = new Set(checkpoint?.state.pendingQuestionIds);
+    let questionAt = checkpoint?.state.questionAt;
     const offset = await environment.scanLinePrefixes(file, lifecyclePrefixBytes, (line) => {
       try {
         const value = lifecycleRecord(line);
@@ -86,19 +90,32 @@ export class CodexTranscriptReader {
             observedAt,
             ...(currentTurnId ? { turnId: currentTurnId } : {}),
           };
+          pendingQuestionIds.clear();
+          questionAt = undefined;
           activityAt = observedAt;
         } else if (lifecycle?.phase === "working" && isTurnProgress(value.type, value.payload)) {
           const observedAt = new Date(value.timestamp).toISOString();
-          if (observedAt < lifecycle.observedAt || (activityAt && observedAt <= activityAt)) return;
+          if (observedAt < lifecycle.observedAt || (activityAt && observedAt < activityAt)) return;
           if ("turn_id" in value.payload && value.payload.turn_id !== lifecycle.turnId) return;
           activityAt = observedAt;
+          const callId = typeof value.payload.call_id === "string" ? value.payload.call_id : undefined;
+          if (callId && callId.length <= 512) {
+            if ((value.type === "response_item" && type === "function_call"
+              && ["request_user_input", "functions.request_user_input"].includes(String(value.payload.name)))
+              || (value.type === "event_msg" && type === "request_user_input")) {
+              if (pendingQuestionIds.size < 32) pendingQuestionIds.add(callId);
+              questionAt = observedAt;
+            } else if (value.type === "response_item" && type === "function_call_output") {
+              pendingQuestionIds.delete(callId);
+            }
+          }
         }
       } catch { /* Large content rows and incomplete JSON are not lifecycle evidence. */ }
     }, checkpoint?.offset ?? 0);
     // ponytail: retain only bounded metadata, never prompts or tool output.
     // The offset stops at a newline. Partial writes/read failures are retried,
     // while unchanged transcripts and already-consumed bytes are not rescanned.
-    const state = { lifecycle, activityAt, originator };
+    const state = { lifecycle, activityAt, originator, pendingQuestionIds: [...pendingQuestionIds], questionAt };
     this.checkpoints.delete(sessionId);
     this.checkpoints.set(sessionId, { file, size: stamp.size, modifiedAt, offset, state });
     while (this.checkpoints.size > this.checkpointLimit) {
@@ -110,7 +127,7 @@ export class CodexTranscriptReader {
 
 function isTurnProgress(type: unknown, payload: Record<string, unknown>): boolean {
   if (type === "event_msg") {
-    return ["agent_message", "agent_reasoning", "item_started", "item_completed", "token_count"]
+    return ["agent_message", "agent_reasoning", "item_started", "item_completed", "token_count", "request_user_input"]
       .includes(String(payload.type));
   }
   if (type !== "response_item") return false;

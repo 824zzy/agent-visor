@@ -1,5 +1,6 @@
 import {
   sessionSnapshotSchema,
+  validateQuestionAnswers,
   type ChatPage,
   type ChatCommands,
   type ClientMessage,
@@ -286,7 +287,7 @@ export type HookSessionEvent = {
 };
 
 export type HookResponse = {
-  decision: "allow" | "deny";
+  decision: "allow" | "deny" | "ask";
   reason?: string;
   updated_input?: Record<string, unknown>;
   updated_permissions?: unknown[];
@@ -494,6 +495,7 @@ export class SessionRepository {
   private readonly chatSettingsListeners = new Set<ChatSettingsListener>();
   private readonly controlBySession = new Map<string, DiscoveredProviderSession>();
   private readonly externalActions = new Map<string, Map<string, ExternalApprovalRecord>>();
+  private readonly hookRequests = new Map<string, HookSessionEvent>();
   private controls: SessionControls | undefined;
   private readonly now: () => Date;
   private readonly chatPageReader: NonNullable<SessionRepositoryOptions["chatPageReader"]>;
@@ -635,6 +637,14 @@ export class SessionRepository {
       ?? this.controlBySession.get(event.threadId);
     if (!current || current.provider !== "codex") return;
     if (current.turnId && current.turnId !== event.turnId) return;
+    if (event.type === "turn_completed") {
+      for (const [id, action] of this.externalActions.get(event.threadId) ?? []) {
+        if (action.pending.type === "question" && action.pending.turnId === event.turnId) {
+          if (action.expiryTimer) clearTimeout(action.expiryTimer);
+          this.externalActions.get(event.threadId)?.delete(id);
+        }
+      }
+    }
     const updated: DiscoveredProviderSession = event.type === "turn_started"
       ? {
         ...current,
@@ -952,14 +962,19 @@ export class SessionRepository {
   /** Return every still-actionable approval/question for one exact session. */
   pendingActions(sessionId: string): ChatPendingAction[] {
     const external = [...(this.externalActions.get(sessionId)?.values() ?? [])]
-      .filter((record) => record.state === "pending" || record.state === "responding")
+      .filter((record) => record.state === "pending" || record.state === "responding"
+        || (record.state === "uncertain" && record.pending.type === "question"))
       .sort((left, right) => left.receivedAt.localeCompare(right.receivedAt))
       .map((record) => ({
         ...structuredClone(record.pending),
+        ...(record.pending.type === "question" && record.state === "uncertain" ? { responseAvailable: false } : {}),
         ...(record.state === "responding" ? { responding: true } : {}),
       }));
-    const hook = pendingChatAction(this.hookBySession.get(sessionId));
-    if (hook) external.push(structuredClone(hook));
+    for (const [key, request] of this.hookRequests) {
+      if (request.sessionId !== sessionId) continue;
+      const action = pendingChatAction(request);
+      if (action) external.push({ ...action, ...(action.type === "question" && !this.hookResponders.has(key) ? { responseAvailable: false } : {}) });
+    }
     return external;
   }
 
@@ -971,7 +986,8 @@ export class SessionRepository {
   ): () => void {
     this.pruneExternalActions(sessionId);
     const currentGeneration = this.chatGenerationBySession.get(sessionId) ?? 1;
-    if (generation !== undefined && generation !== currentGeneration) {
+    if (generation !== undefined && generation !== currentGeneration
+      && (pending.type !== "question" || generation > currentGeneration)) {
       // Codex can finish registering an approval after a page refresh. Do
       // not attach that provider callback to the newer renderer generation.
       return () => undefined;
@@ -1004,13 +1020,22 @@ export class SessionRepository {
       responseToken: 0,
       expiresAt: Date.now() + EXTERNAL_APPROVAL_TTL_MS,
     };
-    record.expiryTimer = setTimeout(() => this.expireExternalAction(sessionId, approvalId), EXTERNAL_APPROVAL_TTL_MS);
-    record.expiryTimer.unref?.();
+    if (pending.type !== "question") {
+      record.expiryTimer = setTimeout(() => this.expireExternalAction(sessionId, approvalId), EXTERNAL_APPROVAL_TTL_MS);
+      record.expiryTimer.unref?.();
+    }
     records.set(approvalId, record);
     this.publish([...this.lastByProvider.values()].flat());
     return () => {
       const current = this.externalActions.get(sessionId)?.get(approvalId);
       if (current?.respond === respond && current.state === "pending") {
+        if (current.pending.type === "question") {
+          current.state = "uncertain";
+          current.result = "This question must be answered in its owning app.";
+          current.expiresAt = Infinity;
+          this.publish([...this.lastByProvider.values()].flat());
+          return;
+        }
         if (current.expiryTimer) clearTimeout(current.expiryTimer);
         const currentRecords = this.externalActions.get(sessionId);
         currentRecords?.delete(approvalId);
@@ -1065,10 +1090,11 @@ export class SessionRepository {
     if (records?.size === 0) this.externalActions.delete(sessionId);
   }
 
-  private invalidateExternalActions(sessionId: string, reason: string): void {
+  private invalidateExternalActions(sessionId: string, reason: string, viewChanged = false): void {
     const records = this.externalActions.get(sessionId);
     if (!records) return;
     for (const record of records.values()) {
+      if (viewChanged && record.pending.type === "question") continue;
       if (record.state === "completed" || record.state === "uncertain") continue;
       record.state = "uncertain";
       record.result = reason;
@@ -1093,7 +1119,9 @@ export class SessionRepository {
     if (!record || record.pending.toolUseId !== message.toolUseId) {
       return Promise.resolve("This approval is no longer waiting for a response.");
     }
-    if (message.generation !== undefined && message.generation !== record.generation) {
+    const responseGeneration = record.pending.type === "question"
+      ? this.chatGenerationBySession.get(sessionId) ?? record.generation : record.generation;
+    if (message.generation !== undefined && message.generation !== responseGeneration) {
       return Promise.resolve("This approval belongs to an older session generation.");
     }
     const responseFingerprint = responseIdentity(message);
@@ -1143,6 +1171,10 @@ export class SessionRepository {
     record.inFlight = undefined;
     record.result = result;
     record.state = result === undefined ? "completed" : "uncertain";
+    if (record.pending.type === "question" && result !== undefined) {
+      record.expiresAt = Infinity;
+      return result;
+    }
     record.expiresAt = Date.now() + EXTERNAL_APPROVAL_TTL_MS;
     if (record.expiryTimer) clearTimeout(record.expiryTimer);
     record.expiryTimer = setTimeout(
@@ -1163,16 +1195,27 @@ export class SessionRepository {
     toolUseId: string,
     respond: (response: HookResponse) => void,
   ): () => void {
-    this.hookResponders.set(toolUseId, { sessionId, respond });
+    const key = JSON.stringify([sessionId, toolUseId]);
+    if (!this.hookRequests.has(key) || this.hookResponders.has(key)) {
+      respond({ decision: "ask" });
+      return () => undefined;
+    }
+    this.hookResponders.set(key, { sessionId, respond });
+    this.publish([...this.lastByProvider.values()].flat());
     return () => {
-      const current = this.hookResponders.get(toolUseId);
+      const current = this.hookResponders.get(key);
       if (current?.respond !== respond) return;
-      this.hookResponders.delete(toolUseId);
+      this.hookResponders.delete(key);
+      if (this.hookRequests.get(key)?.tool === "AskUserQuestion") {
+        this.publish([...this.lastByProvider.values()].flat());
+        return;
+      }
+      this.hookRequests.delete(key);
       const hook = this.hookBySession.get(sessionId);
       if (hook?.expectsResponse && hook.toolUseId === toolUseId) {
         this.hookBySession.delete(sessionId);
-        this.publish([...this.lastByProvider.values()].flat());
       }
+      this.publish([...this.lastByProvider.values()].flat());
     };
   }
 
@@ -1339,7 +1382,7 @@ export class SessionRepository {
         page.pendingAction = pendingActions[0] ?? null;
         page.pendingActions = pendingActions;
         page.capabilities.canApprove = pendingActions.some((action) => action.type === "approval");
-        page.capabilities.canAnswer = pendingActions.some((action) => action.type === "question");
+        page.capabilities.canAnswer = pendingActions.some((action) => action.type === "question" && action.responseAvailable !== false);
       }
       if (chatRecord.sessionClass === "automation") {
         // Automation may expose pending provider state for inspection, but it
@@ -1745,6 +1788,13 @@ export class SessionRepository {
       return automationChatReadOnlyReason;
     }
     const approvalKey = message.approvalId ?? message.toolUseId;
+    const question = this.pendingActions(message.sessionId).find((action) => action.type === "question"
+      && action.toolUseId === message.toolUseId && (action.approvalId ?? action.toolUseId) === approvalKey);
+    if (question?.type === "question" && message.decision !== "deny") {
+      if (message.decision !== "answer") return "Answer this question or cancel it.";
+      const errors = validateQuestionAnswers(question, message.answers ?? {});
+      if (errors.length) return errors.join(" ");
+    }
     const externalRecords = this.externalActions.get(message.sessionId);
     if (externalRecords?.has(approvalKey)
       || [...(externalRecords?.values() ?? [])].some((record) => (
@@ -1754,15 +1804,17 @@ export class SessionRepository {
       this.publish([...this.lastByProvider.values()].flat());
       return result;
     }
-    const pending = this.hookResponders.get(message.toolUseId);
-    const hook = this.hookBySession.get(message.sessionId);
+    const hookKey = JSON.stringify([message.sessionId, message.toolUseId]);
+    const pending = this.hookResponders.get(hookKey);
+    const hook = this.hookRequests.get(hookKey);
     if (!pending || pending.sessionId !== message.sessionId || !hook) {
       return "This action is no longer waiting for a response.";
     }
     const response = hookResponse(message, hook);
     pending.respond(response);
-    this.hookResponders.delete(message.toolUseId);
-    this.hookBySession.delete(message.sessionId);
+    this.hookResponders.delete(hookKey);
+    this.hookRequests.delete(hookKey);
+    if (this.hookBySession.get(message.sessionId)?.toolUseId === message.toolUseId) this.hookBySession.delete(message.sessionId);
     this.publish([...this.lastByProvider.values()].flat());
     return undefined;
   }
@@ -2135,10 +2187,7 @@ export class SessionRepository {
         : "This chat open belongs to a future session generation.";
     }
     this.chatGenerationBySession.set(sessionId, generation);
-    this.invalidateExternalActions(
-      sessionId,
-      "This approval belongs to an older session generation.",
-    );
+    this.invalidateExternalActions(sessionId, "This approval belongs to an older session generation.", true);
     return undefined;
   }
 
@@ -2269,7 +2318,18 @@ export class SessionRepository {
       && sessionActionFingerprint(currentSession) === reservation.sessionFingerprint;
   }
 
+  private clearHookRequests(sessionId: string): void {
+    for (const [key, request] of this.hookRequests) {
+      if (request.sessionId !== sessionId) continue;
+      this.hookRequests.delete(key);
+      const responder = this.hookResponders.get(key);
+      this.hookResponders.delete(key);
+      responder?.respond({ decision: "ask" });
+    }
+  }
+
   private forgetChatState(sessionId: string): void {
+    this.clearHookRequests(sessionId);
     if ((this.chatOpenReferencesBySession.get(sessionId) ?? 0) <= 0) {
       this.chatOpenReferencesBySession.delete(sessionId);
       this.chatLeasesBySession.delete(sessionId);
@@ -2570,6 +2630,22 @@ export class SessionRepository {
     const latestAt = this.latestHookAtBySession.get(event.sessionId);
     if (!latestAt || latestAt <= event.receivedAt) {
       this.latestHookAtBySession.set(event.sessionId, event.receivedAt);
+      if (event.provider === "claude_code") {
+        for (const [key, request] of this.hookRequests) {
+          if (request.sessionId !== event.sessionId) continue;
+          if (["Stop", "StopFailure", "SessionEnd", "SessionStart", "UserPromptSubmit"].includes(event.event)
+            || (["PostToolUse", "PostToolUseFailure"].includes(event.event) && request.toolUseId === event.toolUseId)) {
+            this.hookRequests.delete(key);
+            const responder = this.hookResponders.get(key);
+            this.hookResponders.delete(key);
+            responder?.respond({ decision: "ask" });
+          }
+        }
+        if (event.expectsResponse && event.toolUseId && this.hookRequests.size < MAX_EXTERNAL_APPROVAL_RECORDS) {
+          const key = JSON.stringify([event.sessionId, event.toolUseId]);
+          if (!this.hookRequests.has(key)) this.hookRequests.set(key, structuredClone(event));
+        }
+      }
       refreshClaudeFailure = this.shouldRefreshClaudeFailure(event);
       const previous = this.hookBySession.get(event.sessionId);
       // Keep an already accepted fresh start/approval bridge when a delayed
@@ -2709,7 +2785,10 @@ export class SessionRepository {
   // hide it again once discovery proves it is not a conversation.
   private dropHiddenSessionHooks(): void {
     for (const [sessionId, hook] of this.hookBySession) {
-      if (this.isHiddenSession(hook.provider, sessionId)) this.hookBySession.delete(sessionId);
+      if (this.isHiddenSession(hook.provider, sessionId)) {
+        this.clearHookRequests(sessionId);
+        this.hookBySession.delete(sessionId);
+      }
     }
   }
 
@@ -2750,13 +2829,22 @@ export class SessionRepository {
       ...openedRecords,
     ];
     for (const record of merged) {
-      if (this.pendingActions(record.id).some((action) => action.type === "approval" || action.type === "question")) {
+      if (record.codexLifecycle?.phase === "ready") {
+        for (const [id, action] of this.externalActions.get(record.id) ?? []) {
+          if (action.pending.type === "question" && action.pending.turnId === record.codexLifecycle.turnId) {
+            if (action.expiryTimer) clearTimeout(action.expiryTimer);
+            this.externalActions.get(record.id)?.delete(id);
+          }
+        }
+      }
+      if (this.pendingActions(record.id).some((action) => action.type === "approval" || action.blocking !== false)) {
         record.section = "needs_you";
         record.turnState = "needs_you";
-        record.subtitle = "Approval required";
+        record.subtitle = this.pendingActions(record.id).some((action) => action.type === "question") ? "Answer required" : "Approval required";
         const latestApproval = [...(this.externalActions.get(record.id)?.values() ?? [])]
           .find((action) => action.state === "pending");
-        record.updatedAt = latestApproval?.receivedAt ?? new Date().toISOString();
+        const hookRequest = [...this.hookRequests.values()].find((request) => request.sessionId === record.id);
+        record.updatedAt = latestApproval?.receivedAt ?? hookRequest?.receivedAt ?? record.updatedAt;
       }
     }
     // Views and actions now consume the same hook-merged record. Provider

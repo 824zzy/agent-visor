@@ -3,13 +3,17 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
 import { startHookSocket, type RunningHookSocket } from "./hook-socket.js";
 import { SessionRepository } from "./sessions.js";
 
 let root: string | undefined;
 let running: RunningHookSocket | undefined;
+const hooks = new Set<ChildProcess>();
 
 afterEach(async () => {
+  for (const hook of hooks) hook.kill();
+  hooks.clear();
   await running?.close();
   if (root) await rm(root, { recursive: true, force: true });
   root = undefined;
@@ -17,6 +21,34 @@ afterEach(async () => {
 });
 
 describe("hook socket", () => {
+  it("answers the real Claude PreToolUse question in bypass mode after sibling activity", async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-hooks-"));
+    const socketPath = path.join(root, "hooks.sock");
+    const repository = new SessionRepository([]);
+    running = await startHookSocket({ socketPath, repository });
+    const output = pythonHook(socketPath, {
+      session_id: "claude-question", cwd: root, hook_event_name: "PreToolUse",
+      permission_mode: "bypassPermissions", tool_name: "AskUserQuestion", tool_use_id: "question-1",
+      tool_input: { questions: [{ question: "Which strategy?", options: [{ label: "Minimal" }] }] },
+    });
+    await expect.poll(() => repository.pendingAction("claude-question")?.type).toBe("question");
+    await send(socketPath, {
+      session_id: "claude-question", cwd: root, event: "PostToolUse", status: "processing",
+      agent: "claude", tty: "/dev/ttys999", tool: "Read", tool_use_id: "sibling",
+    });
+    expect(repository.current().sessions[0]?.section).toBe("needs_you");
+    expect(await repository.chatAction({ type: "respond_chat", id: "skip", sessionId: "claude-question",
+      toolUseId: "question-1", decision: "allow" })).toMatch(/answer/i);
+    expect(await repository.chatAction({
+      type: "respond_chat", id: "answer", sessionId: "claude-question",
+      toolUseId: "question-1", decision: "answer", answers: { "Which strategy?": "Minimal" },
+    })).toBeUndefined();
+    expect(JSON.parse(await output)).toMatchObject({ hookSpecificOutput: {
+      hookEventName: "PreToolUse", permissionDecision: "allow",
+      updatedInput: { questions: [{ question: "Which strategy?" }], answers: { "Which strategy?": "Minimal" } },
+    } });
+    expect(repository.pendingAction("claude-question")).toBeUndefined();
+  });
   it("validates a provider event and updates session state", async () => {
     root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-hooks-"));
     const socketPath = path.join(root, "hooks.sock");
@@ -38,6 +70,46 @@ describe("hook socket", () => {
       section: "needs_you",
     });
     expect((await stat(socketPath)).mode & 0o777).toBe(0o600);
+  });
+
+  it("delivers a Claude answer larger than one socket read", async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-hooks-"));
+    const socketPath = path.join(root, "hooks.sock");
+    const repository = new SessionRepository([]);
+    running = await startHookSocket({ socketPath, repository });
+    const output = pythonHook(socketPath, { session_id: "large-answer", cwd: root, hook_event_name: "PreToolUse",
+      tool_name: "AskUserQuestion", tool_use_id: "large", tool_input: { questions: [{ question: "Explain", options: [] }] } });
+    await expect.poll(() => repository.pendingAction("large-answer")?.type).toBe("question");
+    const answer = "a".repeat(9000);
+    expect(await repository.chatAction({ type: "respond_chat", id: "large", sessionId: "large-answer",
+      toolUseId: "large", decision: "answer", answers: { Explain: answer } })).toBeUndefined();
+    expect(JSON.parse(await output).hookSpecificOutput.updatedInput.answers.Explain).toBe(answer);
+  });
+
+  it("correlates the real PermissionRequest without an ID only to an exact unique PreToolUse", async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-hooks-"));
+    const socketPath = path.join(root, "hooks.sock");
+    const repository = new SessionRepository([]);
+    running = await startHookSocket({ socketPath, repository });
+    await pythonHook(socketPath, { session_id: "permission", cwd: root, hook_event_name: "PreToolUse",
+      tool_name: "Bash", tool_use_id: "exact", tool_input: { command: "true" } });
+    const output = pythonHook(socketPath, { session_id: "permission", cwd: root, hook_event_name: "PermissionRequest",
+      tool_name: "Bash", tool_input: { command: "true" } });
+    await expect.poll(() => repository.pendingAction("permission")?.toolUseId).toBe("exact");
+    expect(await repository.chatAction({ type: "respond_chat", id: "allow", sessionId: "permission",
+      toolUseId: "exact", decision: "allow" })).toBeUndefined();
+    expect(JSON.parse(await output)).toMatchObject({ hookSpecificOutput: { decision: { behavior: "allow" } } });
+    // A consumed match, another session, or ambiguous identical calls must
+    // fall back to Claude; none may borrow the old response authority.
+    expect(await pythonHook(socketPath, { session_id: "permission", cwd: root, hook_event_name: "PermissionRequest",
+      tool_name: "Bash", tool_input: { command: "true" } })).toBe("");
+    for (const tool_use_id of ["first", "second"]) await pythonHook(socketPath, {
+      session_id: "ambiguous", cwd: root, hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id,
+      tool_input: { command: "true" },
+    });
+    expect(await pythonHook(socketPath, { session_id: "ambiguous", cwd: root, hook_event_name: "PermissionRequest",
+      tool_name: "Bash", tool_input: { command: "true" } })).toBe("");
+    expect(repository.pendingAction("ambiguous")).toBeUndefined();
   });
 
   it("keeps Claude permission sockets open for Chat responses", async () => {
@@ -136,6 +208,27 @@ describe("hook socket", () => {
     expect(repository.current().sessions).toEqual([]);
   });
 });
+
+function pythonHook(socketPath: string, input: unknown): Promise<string> {
+  const child = spawn("python3", ["-c", `
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("hook", sys.argv[1])
+hook = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(hook)
+hook.SOCKET_PATH = sys.argv[2]
+hook.DECISION_TIMEOUT = 3
+hook.get_tty = lambda: "/dev/ttys999"
+hook.main()
+`, path.resolve("../../AgentVisor/Resources/agent-visor-state.py"), socketPath]);
+  hooks.add(child);
+  child.stdin!.end(JSON.stringify(input));
+  let output = "";
+  child.stdout!.on("data", (value) => { output += value; });
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => { hooks.delete(child); code === 0 ? resolve(output) : reject(new Error(`Hook exited ${code}`)); });
+  });
+}
 
 async function send(socketPath: string, value: unknown): Promise<void> {
   await sendRaw(socketPath, Buffer.from(JSON.stringify(value)));

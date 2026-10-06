@@ -9,32 +9,7 @@ export function chatActionTitle(action: ChatPendingAction, source: string): stri
   return `${source} asks a question`;
 }
 
-/** Validate the complete answer map before it crosses the daemon seam. */
-export function validateQuestionAnswers(
-  action: Extract<ChatPendingAction, { type: "question" }>,
-  answers: ChatResponseAnswers,
-): string[] {
-  const errors: string[] = [];
-  for (const question of action.questions) {
-    const answer = answers[question.id];
-    if (question.choices.length) {
-      const selected = Array.isArray(answer) ? answer : typeof answer === "string" ? [answer] : [];
-      if (!selected.length) {
-        errors.push(`Answer “${question.question}”.`);
-        continue;
-      }
-      if (!question.multiple && selected.length !== 1) {
-        errors.push(`Choose one answer for “${question.question}”.`);
-      }
-      if (selected.some((value) => !question.choices.includes(value))) {
-        errors.push(`Choose an available answer for “${question.question}”.`);
-      }
-    } else if (typeof answer !== "string" || !answer.trim()) {
-      errors.push(`Answer “${question.question}”.`);
-    }
-  }
-  return errors;
-}
+export { validateQuestionAnswers } from "@agent-visor/protocol";
 
 export function normalizeQuestionAnswers(
   action: Extract<ChatPendingAction, { type: "question" }>,

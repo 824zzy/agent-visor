@@ -1500,9 +1500,21 @@ export function codexPendingAction(method: string, value: unknown): ChatPendingA
         const label = typeof option === "string" ? option : string(item?.label);
         return label ? [label] : [];
       }) : [];
-      return [{ id, question: prompt, choices, multiple: question?.multiSelect === true }];
+      const choiceDescriptions = Object.fromEntries((Array.isArray(question?.options) ? question.options : []).flatMap((value) => {
+        const option = record(value);
+        return string(option?.label) && string(option?.description) ? [[string(option?.label), string(option?.description)]] : [];
+      }));
+      return [{ id, question: prompt, choices, multiple: question?.multiSelect === true,
+        ...(question?.isOther === true ? { allowsOther: true } : {}),
+        ...(question?.isSecret === true ? { secret: true } : {}),
+        ...(string(question?.header) ? { header: string(question?.header) } : {}),
+        ...(Object.keys(choiceDescriptions).length ? { choiceDescriptions } : {}),
+      }];
     }) : [];
-    return questions.length ? { type: "question", toolUseId, questions } : undefined;
+    return questions.length ? { type: "question", toolUseId, questions,
+      ...(params.isBlocking === false ? { blocking: false } : {}),
+      ...(string(params.turnId) ? { turnId: string(params.turnId) } : {}),
+    } : undefined;
   }
   if (!approvalMethods.has(method)) return undefined;
   return {
@@ -1524,12 +1536,16 @@ export function codexResponseFor(
     if (response.decision !== "answer") {
       return { id, error: { code: -32000, message: "Cancelled by user." } };
     }
+    const pending = codexPendingAction(method, paramsValue);
     return {
       id,
       result: {
-        answers: Object.fromEntries(Object.entries(response.answers ?? {}).map(([key, answer]) => [
-          key, { answers: Array.isArray(answer) ? answer : [answer] },
-        ])),
+        answers: Object.fromEntries(Object.entries(response.answers ?? {}).map(([key, answer]) => {
+          const question = pending?.type === "question" ? pending.questions.find((item) => item.id === key) : undefined;
+          const answers = (Array.isArray(answer) ? answer : [answer]).map((text) =>
+            question && !question.choices.includes(text) && !text.startsWith("user_note:") ? `user_note: ${text}` : text);
+          return [key, { answers }];
+        })),
       },
     };
   }

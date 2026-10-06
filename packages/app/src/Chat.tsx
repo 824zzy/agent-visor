@@ -720,10 +720,11 @@ export function Chat({
         );
         const pendingActions = chat.page?.pendingActions
           ?? (chat.page?.pendingAction ? [chat.page.pendingAction] : []);
+        const hasBlockingAction = pendingActions.some((action) => action.type === "approval" || action.blocking !== false);
         const canSendInLifecycle = lifecycle.canEditDraft
           && lifecycle.turn === "ready"
           && lifecycle.route === "available"
-          && pendingActions.length === 0;
+          && !hasBlockingAction;
         return (
           <>
           {pendingActions.length > 0 ? (
@@ -746,7 +747,7 @@ export function Chat({
               </View>
             </View>
           ) : null}
-          {pendingActions.length === 0 && chat.page ? (
+          {!hasBlockingAction && chat.page ? (
           <>
           {lifecycle.notice ? (
             <ReadOnlyNotice
@@ -1483,7 +1484,7 @@ function QuestionAction({
 }) {
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [errors, setErrors] = useState<string[]>([]);
-  const enabled = canRespond && !responding;
+  const enabled = canRespond && action.responseAvailable !== false && !responding;
   const submit = () => {
     if (!enabled) return;
     const normalized = normalizeQuestionAnswers(action, answers);
@@ -1520,10 +1521,10 @@ function QuestionAction({
       <Text style={styles.actionTitle}>{chatActionTitle(action, source)}</Text>
       {action.questions.map((question) => (
         <View accessibilityLabel={`Question: ${question.question}`} key={question.id} style={styles.question}>
-          <Text style={styles.actionTitle}>{question.question}</Text>
+          <Text style={styles.actionTitle}>{question.header ? `${question.header}: ` : ""}{question.question}</Text>
           {question.choices.length ? question.choices.map((choice) => {
             const selected = question.multiple
-              ? (answers[question.id] as string[] | undefined)?.includes(choice)
+              ? Array.isArray(answers[question.id]) && (answers[question.id] as string[]).includes(choice)
               : answers[question.id] === choice;
             return (
               <Pressable
@@ -1545,17 +1546,37 @@ function QuestionAction({
                 style={[styles.choice, selected && styles.choiceSelected]}
               >
                 <Text style={styles.body}>{selected ? "●" : "○"} {choice}</Text>
+                {question.choiceDescriptions?.[choice] ? <Text style={styles.body}>{question.choiceDescriptions[choice]}</Text> : null}
               </Pressable>
             );
           }) : (
             <TextInput
               accessibilityLabel={`Answer ${question.question}`}
               editable={enabled}
+              secureTextEntry={question.secret}
               onChangeText={(text) => setAnswers((current) => ({ ...current, [question.id]: text }))}
               style={styles.answerInput}
               value={answers[question.id] as string | undefined}
             />
           )}
+          {question.choices.length > 0 && question.allowsOther ? (
+            <TextInput
+              accessibilityLabel={`Other answer ${question.question}`}
+              placeholder="Other — enter your answer"
+              editable={enabled}
+              secureTextEntry={question.secret}
+              onChangeText={(text) => {
+                setErrors([]);
+                setAnswers((current) => ({ ...current, [question.id]: question.multiple
+                  ? [...(Array.isArray(current[question.id]) ? (current[question.id] as string[]).filter((value) => question.choices.includes(value)) : []), ...(text ? [text] : [])]
+                  : text }));
+              }}
+              style={styles.answerInput}
+              value={Array.isArray(answers[question.id])
+                ? (answers[question.id] as string[]).find((value) => !question.choices.includes(value)) ?? ""
+                : typeof answers[question.id] === "string" && !question.choices.includes(answers[question.id] as string) ? answers[question.id] as string : ""}
+            />
+          ) : null}
         </View>
       ))}
       {errors.length ? (
@@ -1568,7 +1589,7 @@ function QuestionAction({
         <ActionButton label="Submit answers" disabled={!enabled} onPress={submit} styles={styles} />
         {cancellation?.visible && onCancel ? <CancellationButton cancellation={cancellation} onCancel={onCancel} primary={!enabled} styles={styles} /> : null}
       </View>
-      {responding ? <Text accessibilityLiveRegion="polite" style={styles.cancelStatus}>Responding…</Text> : !canRespond ? <Text accessibilityRole="alert" style={styles.actionUnavailable}>This question is not available from this Chat surface.</Text> : null}
+      {responding ? <Text accessibilityLiveRegion="polite" style={styles.cancelStatus}>Responding…</Text> : !enabled ? <Text accessibilityRole="alert" style={styles.actionUnavailable}>Answer this question in {source}.</Text> : null}
     </View>
   );
 }

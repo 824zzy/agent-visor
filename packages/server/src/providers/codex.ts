@@ -252,7 +252,7 @@ export class CodexProvider implements ProviderAdapter {
     // time is not activity: opening an old thread also writes settings records.
     // Catalog membership is a separate policy: a dormant thread stays listed
     // and openable as Recent.
-    const phase = lifecycle
+    const phase = transcript?.pendingQuestionIds?.length && lifecycle?.phase === "working" ? "needs_you" : lifecycle
       ? transcriptPhase({
         marker: lifecycle.phase === "working" ? "started" : "completed",
         transcriptModifiedAt: lifecycle.phase === "ready" ? lifecycle.observedAt : transcript?.activityAt,
@@ -279,15 +279,15 @@ export class CodexProvider implements ProviderAdapter {
       provider: "codex",
       title: title || undefined,
       subtitle: section !== "history"
-        ? (section === "working" ? "Agent is working" : "Ready to continue")
+        ? (section === "needs_you" ? "Answer required in Codex" : section === "working" ? "Agent is working" : "Ready to continue")
         : (terminalTarget ? "Codex CLI session" : `${instance.label} app session`),
       cwd: thread.cwd,
       owner,
       section,
-      updatedAt: codexLifecycle?.observedAt ?? iso(thread.updatedAt * 1_000),
+      updatedAt: section === "needs_you" ? transcript?.questionAt ?? lifecycle!.observedAt : codexLifecycle?.observedAt ?? iso(thread.updatedAt * 1_000),
       ...(codexLifecycle ? { codexLifecycle } : {}),
       conversationState: thread.archived ? "archived" : "open",
-      ...(codexLifecycle ? { turnState: codexLifecycle.phase === "working" ? "working" as const : "ready" as const } : {}),
+      ...(codexLifecycle ? { turnState: section === "needs_you" ? "needs_you" as const : codexLifecycle.phase === "working" ? "working" as const : "ready" as const } : {}),
       ...(codexLifecycle?.turnId ? { turnId: codexLifecycle.turnId } : {}),
       ...(rolloutStamp
         ? { transcriptRevision: `${rolloutStamp.modifiedAt.valueOf()}:${rolloutStamp.size}` }

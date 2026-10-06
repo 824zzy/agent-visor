@@ -600,11 +600,18 @@ export const chatPendingActionSchema = z.discriminatedUnion("type", [
     toolUseId: z.string().min(1).max(512),
     approvalId: z.string().min(1).max(512).optional(),
     responding: z.boolean().optional(),
+    responseAvailable: z.boolean().optional(),
+    blocking: z.boolean().optional(),
+    turnId: z.string().min(1).max(512).optional(),
     questions: z.array(z.object({
       id: z.string().min(1).max(16_384),
       question: z.string().min(1).max(16_384),
       choices: z.array(z.string().min(1).max(4_096)).max(100),
       multiple: z.boolean(),
+      header: z.string().max(512).optional(),
+      choiceDescriptions: z.record(z.string(), z.string().max(16_384)).optional(),
+      allowsOther: z.boolean().optional(),
+      secret: z.boolean().optional(),
     }).strict()).min(1).max(100),
   }).strict(),
 ]);
@@ -615,6 +622,33 @@ const chatAnswerValueSchema = z.union([
 ]);
 
 export type ChatResponseAnswers = Record<string, string | string[]>;
+
+/** Validate the complete answer map before it crosses the daemon seam. */
+export function validateQuestionAnswers(
+  action: Extract<ChatPendingAction, { type: "question" }>,
+  answers: ChatResponseAnswers,
+): string[] {
+  const errors: string[] = [];
+  for (const question of action.questions) {
+    const answer = answers[question.id];
+    if (question.choices.length) {
+      const selected = Array.isArray(answer) ? answer : typeof answer === "string" ? [answer] : [];
+      if (!selected.length || selected.some((value) => !value.trim())) {
+        errors.push(`Answer “${question.question}”.`);
+        continue;
+      }
+      if (!question.multiple && selected.length !== 1) {
+        errors.push(`Choose one answer for “${question.question}”.`);
+      }
+      if (!question.allowsOther && selected.some((value) => !question.choices.includes(value))) {
+        errors.push(`Choose an available answer for “${question.question}”.`);
+      }
+    } else if (typeof answer !== "string" || !answer.trim()) {
+      errors.push(`Answer “${question.question}”.`);
+    }
+  }
+  return errors;
+}
 
 export function chatResponseAnswerSizes(answers: ChatResponseAnswers): {
   chars: number;

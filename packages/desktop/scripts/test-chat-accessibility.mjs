@@ -646,6 +646,9 @@ async function run() {
             question: "Which strategy?",
             choices: ["Minimal", "Complete"],
             multiple: false,
+            allowsOther: true,
+            secret: true,
+            choiceDescriptions: { Minimal: "Small scope" },
           }, {
             id: "Targets",
             question: "Which targets?",
@@ -2195,6 +2198,17 @@ async function run() {
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Open Chat for Migration Chat"]'))`);
     await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Open Chat for Migration Chat"]')?.click()`);
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Question question-1"]'))`);
+    assert(await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Other answer Which strategy?"]')?.type === 'password'`),
+      "secret custom answers use a masked field");
+    await setInput(window, "Other answer Which strategy?", "My own strategy");
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Select API"]')?.click()`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Submit answers"]')?.click()`);
+    await waitUntil(() => actions.some((action) => action.type === "respond_chat" && action.answers?.Strategy === "My own strategy"));
+    mode = "question";
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Back to Sessions"]')?.click()`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Open Chat for Migration Chat"]'))`);
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Open Chat for Migration Chat"]')?.click()`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Question question-1"]'))`);
     const questionEscape = await window.webContents.executeJavaScript(`(() => {
       const question = document.querySelector('[aria-label="Question question-1"]');
       if (!question) return { defaultPrevented: false, back: false };
@@ -2556,8 +2570,8 @@ function assertFixtureRows(metrics, surface) {
 async function setInput(window, label, value) {
   await window.webContents.executeJavaScript(`(() => {
     const input = document.querySelector('[aria-label="${label}"]');
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
-      ?? Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    const setter = Object.getOwnPropertyDescriptor(input.tagName === 'TEXTAREA'
+      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value').set;
     setter.call(input, ${JSON.stringify(value)});
     input.dispatchEvent(new Event('input', { bubbles: true }));
   })()`);

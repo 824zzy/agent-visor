@@ -70,7 +70,18 @@ def send_event(state):
         # "user is reviewing" waits (slow, up to 24h).
         if state.get("status") == "waiting_for_approval":
             sock.settimeout(DECISION_TIMEOUT)
-            response = sock.recv(4096)
+            chunks = []
+            size = 0
+            while True:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > 8 * 1024 * 1024:
+                    sock.close()
+                    return None
+                chunks.append(chunk)
+            response = b"".join(chunks)
             sock.close()
             if response:
                 return json.loads(response.decode())
@@ -117,16 +128,30 @@ def main():
         state["status"] = "running_tool"
         state["tool"] = data.get("tool_name")
         state["tool_input"] = tool_input
-        # Send tool_use_id to Swift for caching
+        # Send the exact call ID for question responses and permission correlation.
         tool_use_id_from_event = data.get("tool_use_id")
         if tool_use_id_from_event:
             state["tool_use_id"] = tool_use_id_from_event
+        # Questions remain interactive in every permission mode. The exact
+        # PreToolUse connection owns the answer; fall back to Claude's UI if
+        # the daemon is absent, disconnected, or cannot answer.
+        if state["tool"] == "AskUserQuestion" and tool_input.get("questions") and not tool_input.get("answers"):
+            state["status"] = "waiting_for_approval"
+            response = send_event(state)
+            if response and response.get("decision") in ("allow", "deny"):
+                output = {"hookEventName": "PreToolUse", "permissionDecision": response["decision"]}
+                if response.get("updated_input") is not None:
+                    output["updatedInput"] = response["updated_input"]
+                if response.get("reason"):
+                    output["permissionDecisionReason"] = response["reason"]
+                print(json.dumps({"hookSpecificOutput": output}))
+            sys.exit(0)
 
     elif event in ("PostToolUse", "PostToolUseFailure"):
         state["status"] = "processing"
         state["tool"] = data.get("tool_name")
         state["tool_input"] = tool_input
-        # Send tool_use_id so Swift can cancel the specific pending permission
+        # Cancel only the matching pending request.
         tool_use_id_from_event = data.get("tool_use_id")
         if tool_use_id_from_event:
             state["tool_use_id"] = tool_use_id_from_event
@@ -144,7 +169,7 @@ def main():
         # they route through the same Approve/Deny UI as Ghostty/iTerm2
         # sessions.
         permission_mode = data.get("permission_mode", "")
-        operator_opted_out = permission_mode == "bypassPermissions"
+        operator_opted_out = permission_mode == "bypassPermissions" and data.get("tool_name") != "AskUserQuestion"
         if operator_opted_out:
             state["status"] = "running_tool"
             state["tool"] = data.get("tool_name")
@@ -174,7 +199,7 @@ def main():
         # Read rules even for Bash invocations).
         if "permission_suggestions" in data:
             state["permission_suggestions"] = data.get("permission_suggestions")
-        # tool_use_id lookup handled by Swift-side cache from PreToolUse
+        # PermissionRequest omits the call ID; the daemon correlates PreToolUse.
 
         # Send to app and wait for decision
         response = send_event(state)

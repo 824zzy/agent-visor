@@ -2,6 +2,7 @@ import { hookEventSchema, type HookEvent } from "@agent-visor/protocol";
 import { chmod, lstat, mkdir, unlink } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { ProviderID, SessionRepository } from "./sessions.js";
 
 export type RunningHookSocket = {
@@ -18,6 +19,7 @@ export async function startHookSocket(options: {
   await removeOwnedSocket(options.socketPath);
 
   const clients = new Set<net.Socket>();
+  const preTools = new Map<string, { event: HookEvent; at: number }>();
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     clients.add(socket);
     const chunks: Buffer[] = [];
@@ -59,11 +61,30 @@ export async function startHookSocket(options: {
         socket.end();
         return;
       }
-      applyEvent(options.repository, parsed.data);
-      const provider = providerID(parsed.data.agent);
-      const expectsResponse = parsed.data.event === "PermissionRequest"
-        && parsed.data.status === "waiting_for_approval"
-        && provider === "claude_code";
+      // PermissionRequest has no tool_use_id. Consume a unique exact match;
+      // ambiguous calls stay in Claude's UI instead of guessing an owner.
+      const event = parsed.data;
+      for (const [key, entry] of preTools) {
+        if (Date.now() - entry.at > 5 * 60_000
+          || (entry.event.session_id === event.session_id && (["SessionEnd", "SessionStart", "UserPromptSubmit", "Stop", "StopFailure"].includes(event.event)
+            || (["PostToolUse", "PostToolUseFailure"].includes(event.event) && entry.event.tool_use_id === event.tool_use_id)))) preTools.delete(key);
+      }
+      if (providerID(event.agent) === "claude_code") {
+        if (event.event === "PreToolUse" && event.tool_use_id) {
+          if (preTools.size >= 512) preTools.delete(preTools.keys().next().value!);
+          preTools.set(JSON.stringify([event.session_id, event.tool_use_id]), { event, at: Date.now() });
+        } else if (event.event === "PermissionRequest" && !event.tool_use_id) {
+          const matches = [...preTools.entries()].filter(([, entry]) => entry.event.session_id === event.session_id
+            && entry.event.cwd === event.cwd && entry.event.tool === event.tool
+            && isDeepStrictEqual(entry.event.tool_input, event.tool_input));
+          if (matches.length === 1) {
+            event.tool_use_id = matches[0]![1].event.tool_use_id;
+            preTools.delete(matches[0]![0]);
+          }
+        }
+      }
+      applyEvent(options.repository, event);
+      const expectsResponse = expectsHookResponse(parsed.data);
       if (expectsResponse && parsed.data.tool_use_id) {
         clearTimeout(deadline);
         unregisterResponder = options.repository.registerHookResponder(
@@ -71,7 +92,6 @@ export async function startHookSocket(options: {
           parsed.data.tool_use_id,
           (response) => socket.end(JSON.stringify(response)),
         );
-        setTimeout(() => socket.destroy(), 30 * 60_000).unref();
       } else {
         socket.end();
       }
@@ -114,10 +134,13 @@ function applyEvent(repository: SessionRepository, event: HookEvent): void {
     ...(event.tool_use_id ? { toolUseId: event.tool_use_id } : {}),
     ...(event.permission_suggestions
       ? { permissionSuggestions: event.permission_suggestions } : {}),
-    expectsResponse: event.event === "PermissionRequest"
-      && event.status === "waiting_for_approval"
-      && provider === "claude_code",
+    expectsResponse: expectsHookResponse(event),
   });
+}
+
+function expectsHookResponse(event: HookEvent): boolean {
+  return providerID(event.agent) === "claude_code" && event.status === "waiting_for_approval"
+    && (event.event === "PermissionRequest" || (event.event === "PreToolUse" && event.tool === "AskUserQuestion"));
 }
 
 function providerID(value: HookEvent["agent"]): Exclude<ProviderID, "zed"> {

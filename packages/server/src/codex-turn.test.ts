@@ -209,6 +209,23 @@ describe("Codex turn delivery", () => {
     expect(codexPendingAction("unknown/request", {})).toBeUndefined();
   });
 
+  it("preserves question features and sends a custom answer to the exact RPC request", () => {
+    const params = { itemId: "question", turnId: "turn", isBlocking: false, questions: [{
+      id: "strategy", header: "Strategy", question: "Which strategy?", isOther: true, isSecret: true,
+      options: [{ label: "Minimal", description: "Small scope" }],
+    }] };
+    expect(codexPendingAction("item/tool/requestUserInput", params)).toMatchObject({
+      type: "question", blocking: false, turnId: "turn", questions: [{
+        id: "strategy", header: "Strategy", allowsOther: true, secret: true,
+        choiceDescriptions: { Minimal: "Small scope" },
+      }],
+    });
+    expect(codexResponseFor(19, "item/tool/requestUserInput", params, {
+      type: "respond_chat", id: "custom", sessionId: "thread", toolUseId: "codex-question",
+      decision: "answer", answers: { strategy: "My own strategy" },
+    })).toEqual({ id: 19, result: { answers: { strategy: { answers: ["user_note: My own strategy"] } } } });
+  });
+
   it("deduplicates concurrent first acquires and does not report ready before resume", async () => {
     const { log } = await fakeCodex("resume-delayed");
     const opening = acquireCodexRoute("thread-open", true);

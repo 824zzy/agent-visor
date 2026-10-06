@@ -27,6 +27,18 @@ async function fixture() {
 }
 
 describe("agent connections", () => {
+  it("refreshes an already-connected Claude hook without changing settings or connecting a disabled profile", async () => {
+    const { home, resources, repository } = await fixture();
+    await repository.refresh();
+    await expect(access(path.join(home, ".claude/hooks/agent-visor-state.py"))).rejects.toThrow();
+    await repository.setEnabled("claude", true);
+    const before = await readFile(path.join(home, ".claude/settings.json"), "utf8");
+    await writeFile(path.join(resources, "agent-visor-state.py"), "# repaired Claude hook\n");
+    await repository.refresh();
+    expect(await readFile(path.join(home, ".claude/hooks/agent-visor-state.py"), "utf8")).toBe("# repaired Claude hook\n");
+    expect(await readFile(path.join(home, ".claude/settings.json"), "utf8")).toBe(before);
+  });
+
   it("applies overlapping connection changes in request order", async () => {
     const { home, repository } = await fixture();
 

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   MAX_CHAT_ACTIONS_PER_SESSION,
   EXTERNAL_APPROVAL_RESPONSE_TIMEOUT_MS,
+  EXTERNAL_APPROVAL_TTL_MS,
   MAX_EXTERNAL_APPROVAL_RECORDS,
   SessionRepository,
   type DiscoveredProviderSession,
@@ -1108,6 +1109,27 @@ describe("SessionRepository", () => {
     expect((await repository.refresh()).sessions).toEqual([]);
   });
 
+  it("releases a pending Claude question when discovery hides its nonconversation session", async () => {
+    const hidden = new Set<string>();
+    const repository = new SessionRepository([{
+      id: "claude_code", discover: async () => [], hiddenSessionIds: () => hidden,
+    }]);
+    repository.applyHook({
+      sessionId: "claude-hidden", cwd: live.cwd, provider: "claude_code",
+      event: "PreToolUse", status: "waiting_for_approval", expectsResponse: true,
+      receivedAt: "2026-08-22T08:01:00.000Z", tool: "AskUserQuestion", toolUseId: "question-hidden",
+      toolInput: { questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] },
+    });
+    let decision = "";
+    repository.registerHookResponder("claude-hidden", "question-hidden", (response) => { decision = response.decision; });
+    expect(repository.pendingAction("claude-hidden")?.type).toBe("question");
+    hidden.add("claude-hidden");
+    await repository.refresh();
+    expect(repository.current().sessions).toEqual([]);
+    expect(repository.pendingAction("claude-hidden")).toBeUndefined();
+    expect(decision).toBe("ask");
+  });
+
   it("routes external Codex approvals through the shared Chat action", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{ ...live, provider: "codex", chatPath: "/tmp/codex.jsonl" }];
@@ -1297,6 +1319,35 @@ describe("SessionRepository", () => {
     expect(actions[0]).toMatchObject({ approvalId: "approval-0" });
   });
 
+  it("keeps a question answerable beyond five minutes and across a new chat view", async () => {
+    const transcript = temporaryTranscript("2026-08-22T08:00:00.000Z");
+    vi.useFakeTimers();
+    try {
+      const provider = new FakeProvider();
+      provider.sessions = [{ ...live, chatPath: transcript.path }];
+      const repository = new SessionRepository([provider]);
+      await repository.refresh();
+      await repository.chatPage("pi-1", undefined, 100, 1);
+      let calls = 0;
+      const remove = repository.registerExternalAction("pi-1", {
+        type: "question", toolUseId: "question", approvalId: "exact-question",
+        questions: [{ id: "strategy", question: "Which strategy?", choices: ["Minimal"], multiple: false }],
+      }, async () => { calls++; }, 1);
+      await vi.advanceTimersByTimeAsync(EXTERNAL_APPROVAL_TTL_MS + 1);
+      expect(repository.current().sessions[0]?.section).toBe("needs_you");
+      expect((await repository.chatPage("pi-1", undefined, 100, 2)).capabilities.canAnswer).toBe(true);
+      expect(await repository.chatAction({ type: "respond_chat", id: "stale", sessionId: "pi-1", generation: 1,
+        toolUseId: "question", approvalId: "exact-question", decision: "answer", answers: { strategy: "Minimal" },
+      })).toMatch(/generation|view/);
+      expect(await repository.chatAction({ type: "respond_chat", id: "answer", sessionId: "pi-1", generation: 2,
+        toolUseId: "question", approvalId: "exact-question", decision: "answer", answers: { strategy: "Minimal" },
+      })).toBeUndefined();
+      expect(calls).toBe(1);
+      expect(repository.pendingActions("pi-1")).toEqual([]);
+      remove();
+    } finally { vi.useRealTimers(); transcript.remove(); }
+  });
+
   it("rejects a response from a stale approval generation", async () => {
     const repository = new SessionRepository([]);
     let calls = 0;
@@ -1310,6 +1361,49 @@ describe("SessionRepository", () => {
       toolUseId: "tool-a", approvalId: "approval-a", generation: 2, decision: "allow",
     })).resolves.toMatch(/stale|generation|no longer/i);
     expect(calls).toBe(0);
+  });
+
+  it("retains a disconnected question without response authority and isolates identical tool IDs across sessions", async () => {
+    const repository = new SessionRepository([]);
+    const answers: string[] = [];
+    const event = (sessionId: string): HookSessionEvent => ({
+      sessionId, cwd: "/tmp", provider: "claude_code", event: "PreToolUse", status: "waiting_for_approval",
+      receivedAt: "2026-10-05T23:00:00Z", tty: "/dev/ttys999", expectsResponse: true,
+      tool: "AskUserQuestion", toolUseId: "same", toolInput: { questions: [{ question: "Pick", options: [] }] },
+    });
+    for (const id of ["a", "b"]) {
+      repository.applyHook(event(id));
+      repository.registerHookResponder(id, "same", () => { answers.push(id); });
+    }
+    expect(await repository.chatAction({ type: "respond_chat", id: "answer-a", sessionId: "a",
+      toolUseId: "same", decision: "answer", answers: { Pick: "yes" } })).toBeUndefined();
+    expect(answers).toEqual(["a"]);
+    expect(repository.pendingAction("b")?.type).toBe("question");
+    const remove = repository.registerExternalAction("codex-question", {
+      type: "question", toolUseId: "codex-same", turnId: "turn", questions: [{ id: "pick", question: "Pick", choices: [], multiple: false }],
+    }, async () => undefined);
+    remove();
+    expect(repository.pendingAction("codex-question")).toMatchObject({ type: "question", responseAvailable: false });
+  });
+
+  it("clears a disconnected Codex question only on its matching native turn completion", async () => {
+    const record = { ...live, id: "codex-question", provider: "codex" as const, turnId: "turn" };
+    const repository = new SessionRepository([{ id: "codex", discover: async () => [record] }]);
+    await repository.refresh();
+    let emit!: (event: CodexRouteEvent) => void;
+    repository.setControls({ focus: async () => undefined, send: async () => undefined,
+      subscribeCodexRouteEvents: (listener) => { emit = listener; return () => undefined; } });
+    const remove = repository.registerExternalAction(record.id, {
+      type: "question", toolUseId: "question", turnId: "turn",
+      questions: [{ id: "pick", question: "Pick", choices: [], multiple: false }],
+    }, async () => undefined);
+    remove();
+    const completion = (turnId: string): CodexRouteEvent => ({ type: "turn_completed", threadId: record.id,
+      turnId, deliveryId: "delivery", outcome: "completed" });
+    emit(completion("other-turn"));
+    expect(repository.pendingAction(record.id)?.type).toBe("question");
+    emit(completion("turn"));
+    expect(repository.pendingAction(record.id)).toBeUndefined();
   });
 
   it("reattaches exact Pi focus after a same-boot repository restart", async () => {

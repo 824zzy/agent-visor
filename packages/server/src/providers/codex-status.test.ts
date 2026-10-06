@@ -74,6 +74,37 @@ function setup() {
 }
 
 describe("Codex desktop lifecycle status", () => {
+  it("keeps a native question Needs you until its exact output or turn boundary", async () => {
+    const { environment, repository, hook } = setup();
+    environment.append("task_started", "turn-1");
+    const response = (payload: Record<string, unknown>) => {
+      environment.clock += 1000;
+      environment.modifiedAt = environment.clock;
+      environment.content += JSON.stringify({ type: "response_item", timestamp: environment.now().toISOString(), payload }) + "\n";
+    };
+    response({ type: "function_call", name: "request_user_input", call_id: "question-1", arguments: "{}" });
+    response({ type: "function_call_output", call_id: "unrelated", output: "done" });
+    expect((await repository.refresh()).sessions[0]).toMatchObject({ section: "needs_you", sessionState: { turn: "needs_you" } });
+    expect(hook("PostToolUse", "processing").sessions[0]?.section).toBe("needs_you");
+    environment.clock += 2 * 60 * 60_000;
+    expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+    response({ type: "function_call_output", call_id: "question-1", output: "answer" });
+    expect((await repository.refresh()).sessions[0]?.section).toBe("working");
+    response({ type: "function_call", name: "request_user_input", call_id: "question-2", arguments: "{}" });
+    environment.append("task_complete", "turn-1");
+    expect((await repository.refresh()).sessions[0]?.section).toBe("ready");
+  });
+
+  it("detects a question even when adjacent records have the same timestamp", async () => {
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn");
+    environment.content += JSON.stringify({ type: "response_item", timestamp: environment.now().toISOString(),
+      payload: { type: "function_call", name: "request_user_input", call_id: "question", arguments: "{}" } }) + "\n";
+    expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+    environment.content += JSON.stringify({ type: "response_item", timestamp: environment.now().toISOString(),
+      payload: { type: "function_call_output", call_id: "question", output: "answer" } }) + "\n";
+    expect((await repository.refresh()).sessions[0]?.section).toBe("working");
+  });
   const metadata = (originator: string, id = sessionId) => JSON.stringify({
     timestamp: "2026-08-30T21:45:25.000Z", type: "session_meta",
     payload: { id, originator, source: "vscode", base_instructions: { text: "x".repeat(20_000) } },
