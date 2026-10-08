@@ -399,34 +399,9 @@ public final class NativeTerminalController {
         arguments: [String],
         timeout: TimeInterval = 1
     ) -> String? {
-        let process = Process()
-        let pipe = Pipe()
-        // The socket-serving thread stays alive between probes; do not leave
-        // pipe descriptors waiting for its autorelease pool to drain.
-        defer {
-            try? pipe.fileHandleForReading.close()
-            try? pipe.fileHandleForWriting.close()
-        }
-        let termination = DispatchSemaphore(value: 0)
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        process.terminationHandler = { _ in termination.signal() }
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-        if termination.wait(timeout: .now() + timeout) == .timedOut {
-            process.terminate()
-            if termination.wait(timeout: .now() + 0.25) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                _ = termination.wait(timeout: .now() + 0.25)
-            }
-            return nil
-        }
-        guard process.terminationStatus == 0 else { return nil }
-        return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+        guard let result = NativeCommandRunner.run(
+            executable, arguments: arguments, timeout: timeout
+        ), result.status == 0 else { return nil }
+        return String(data: result.output, encoding: .utf8)
     }
 }

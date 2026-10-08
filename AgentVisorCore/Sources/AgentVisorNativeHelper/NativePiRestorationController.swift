@@ -303,36 +303,11 @@ final class NativePiRestorationController {
     private nonisolated static func runAppleScriptProcess(
         _ source: String,
         captureOutput: Bool
-    ) -> (status: Int32, output: Data)? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", source]
-        let output = captureOutput ? Pipe() : nil
-        defer {
-            try? output?.fileHandleForReading.close()
-            try? output?.fileHandleForWriting.close()
-        }
-        process.standardOutput = output ?? FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        let finished = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in finished.signal() }
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-
-        let wait = finished.wait(timeout: .now() + SubprocessDeadlinePolicy.appCommand)
-        guard wait == .success else {
-            process.terminate()
-            if finished.wait(timeout: .now() + 1) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                _ = finished.wait(timeout: .now() + 1)
-            }
-            return nil
-        }
-        let data = output?.fileHandleForReading.readDataToEndOfFile() ?? Data()
-        return (process.terminationStatus, data)
+    ) -> NativeCommandRunner.Result? {
+        NativeCommandRunner.run(
+            "/usr/bin/osascript", arguments: ["-e", source], captureOutput: captureOutput,
+            timeout: SubprocessDeadlinePolicy.appCommand, terminationGrace: 1
+        )
     }
 
     private nonisolated static func resolvePiExecutable() -> String? {
