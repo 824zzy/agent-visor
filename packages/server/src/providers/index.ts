@@ -1,7 +1,7 @@
 import os from "node:os";
 import type { ProviderAdapter } from "../sessions.js";
 import { AuggieProvider } from "./auggie.js";
-import { ClaudeProvider } from "./claude.js";
+import { ClaudeProvider, type ClaudePresenceReport } from "./claude.js";
 import { CodexProvider } from "./codex.js";
 import { CursorProvider } from "./cursor.js";
 import { LiveProviderEnvironment, type GhosttyTerminalView } from "./environment.js";
@@ -16,10 +16,11 @@ export function liveProviders(
   saveDiscoveredCodexHome?: (home: CodexHome) => Promise<void>,
   ignoredCodexHomes: () => string[] = () => [],
   ghosttyTerminalViews?: () => Promise<GhosttyTerminalView[]>,
+  reportClaudePresence?: (report: ClaudePresenceReport) => void,
 ): ProviderAdapter[] {
   const environment = new LiveProviderEnvironment(home, { observedWindowMs, ghosttyTerminalViews });
   return [
-    new ClaudeProvider(environment),
+    new ClaudeProvider(environment, reportClaudePresence),
     new CodexProvider(environment, codexHomes, saveDiscoveredCodexHome, ignoredCodexHomes),
     new PiProvider(environment),
     new CursorProvider(environment),

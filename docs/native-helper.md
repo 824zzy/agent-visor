@@ -35,6 +35,7 @@ Every request contains protocol `version: 1`, a non-empty `id`, and one method:
 - Each usage glance may include two bounded limit windows, fixed capsule width, per-window tone, reset times, reset-credit count, sync time, and stale state.
 - `focus_terminal` selects one allowlisted terminal through its exact TTY.
 - `open_claude_attach` runs `claude attach <jobId>` in a new window of the running Ghostty. It needs an absolute working directory and executable, and an eight-character hexadecimal job ID. It never starts a second Ghostty, because that copy would take over Ghostty's AppleScript and break `focus_terminal`.
+- `ghostty_terminal_views` returns current stable terminal identities, titles, and working directories. An unreadable, invalid, or changed application snapshot returns a failed response rather than a successful empty list. No running Ghostty or a valid empty terminal list returns an empty list.
 - `send_terminal` sends bounded text to that exact terminal and optionally submits it.
 - `focus` requires an exact process identifier and bundle identifier. A window identifier is optional.
 
@@ -87,6 +88,8 @@ The daemon starts that application through Launch Services and retries once afte
 `FakeNativeHelper` implements the daemon adapter without starting native code. It records pill, usage, notification, Pi restoration, and focus calls.
 
 `NativeHelperProcess` owns the signed helper lifecycle, framed requests, event delivery, deadlines, and temporary socket cleanup.
+
+Native subprocess probes close both pipe ends on success, launch failure, and timeout. Periodic terminal discovery must not retain descriptors between requests; otherwise it can exhaust the helper and block navigation for every provider.
 
 Run the socket integration check with:
 

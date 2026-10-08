@@ -20,16 +20,23 @@ public final class NativeGhosttyTerminalController {
         self.resolveApplication = resolveApplication
         self.execute = execute
     }
-    public func views() -> [NativeHelperGhosttyTerminalView] {
-        guard let identity = resolveApplication(), let output = execute(GhosttyTerminalViewScript.list),
+    public enum ViewReadError: Error { case unreadable, invalidResponse, applicationChanged }
+    public func views() throws -> [NativeHelperGhosttyTerminalView] {
+        guard let identity = resolveApplication() else { return [] }
+        guard let output = execute(GhosttyTerminalViewScript.list) else { throw ViewReadError.unreadable }
+        guard
               let data = output.data(using: .utf8), data.count <= 512 * 1_024,
-              let rows = try? JSONDecoder().decode([ViewRow].self, from: data), rows.count <= 64,
-              resolveApplication() == identity else { return [] }
+              let rows = try? JSONDecoder().decode([ViewRow].self, from: data), rows.count <= 64 else {
+            throw ViewReadError.invalidResponse
+        }
+        guard resolveApplication() == identity else { throw ViewReadError.applicationChanged }
         let views = rows.map { NativeHelperGhosttyTerminalView(
             applicationPID: identity.pid, processStartToken: identity.token,
             terminalId: $0.terminalId, title: $0.title, cwd: $0.cwd
         ) }
-        guard views.allSatisfy(\.isValid), Set(views.map(\.terminalId)).count == views.count else { return [] }
+        guard views.allSatisfy(\.isValid), Set(views.map(\.terminalId)).count == views.count else {
+            throw ViewReadError.invalidResponse
+        }
         return views
     }
     public func focus(_ target: NativeHelperGhosttyTerminalView) -> Bool {

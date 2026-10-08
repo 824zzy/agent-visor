@@ -100,8 +100,12 @@ enum NativeCodexThreadController {
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
         process.arguments = ["eww", "-p", String(pid), "-o", "command="]
         let output = Pipe()
+        defer {
+            try? output.fileHandleForReading.close()
+            try? output.fileHandleForWriting.close()
+        }
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return .failure(.profileUnavailable) }
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()

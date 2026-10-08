@@ -248,6 +248,43 @@ describe("Claude agent-view integration", () => {
     expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
   });
 
+  it("reports a failed presence read and recovers exactly one working pill when conversation titles return", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, {
+      sessionId: managerID, cwd, kind: "interactive", status: "idle", parkedJobId: "64b38993",
+    });
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "working", { name: "ccx-plg-manifest", status: "busy" }),
+      backgroundRow("64b38993", blockedID, "done", { name: "cc-misc" }),
+    ]);
+    const reports: unknown[] = [];
+    const source = new SessionRepository([new ClaudeProvider(environment, report => reports.push(report))], { now: () => now });
+    environment.ghosttyTerminalViews = async () => { throw new Error("secret-bearing native error"); };
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    expect(reports.at(-1)).toEqual({
+      status: "read_failed", parkedApplications: 1, terminalViews: 0,
+      conversationTitles: 0, overviewTitles: 0, unrecognizedTitles: 0, matchedConversations: 0,
+    });
+
+    // Disabled terminal titles retain the shell title; never guess a job from it.
+    environment.ghosttyTerminalViews = async () => environment.ghosttyViews;
+    environment.ghosttyViews = [{ applicationPID: 7, processStartToken: "instance", terminalId: "surface-a", title: "Codes", cwd }];
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    expect(reports.at(-1)).toMatchObject({ status: "read_succeeded", unrecognizedTitles: 1, matchedConversations: 0 });
+
+    environment.ghosttyViews[0]!.title = "◐ ccx-plg-manifest";
+    const snapshot = await source.refresh();
+    expect(menuPresentation(snapshot, [], nowMs).pills.map(({ id, phase }) => ({ id, phase }))).toEqual([{ id: ccID, phase: "working" }]);
+    expect(snapshot.sessions.find(({ id }) => id === blockedID)?.ambientEligible).toBe(false);
+    expect(reports.at(-1)).toMatchObject({ status: "read_succeeded", conversationTitles: 1, matchedConversations: 1 });
+
+    environment.ghosttyViews[0]!.title = "1 awaiting input · claude agents";
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    expect(reports.at(-1)).toMatchObject({ status: "read_succeeded", overviewTitles: 1, unrecognizedTitles: 0, matchedConversations: 0 });
+    expect(JSON.stringify(reports)).not.toMatch(/secret-bearing|Codes|ccx-plg-manifest|cc-misc|surface-a/);
+  });
+
   it("shows only the open interactive conversation when retained background jobs share its workspace", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, executable);

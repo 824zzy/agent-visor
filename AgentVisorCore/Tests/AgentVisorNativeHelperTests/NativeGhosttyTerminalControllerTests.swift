@@ -2,8 +2,34 @@ import AgentVisorCore
 @testable import AgentVisorNativeHelper
 import XCTest
 import JavaScriptCore
+import Darwin
 
 final class NativeGhosttyTerminalControllerTests: XCTestCase {
+    func testRepeatedViewIdentityChecksReleaseProcessPipes() throws {
+        // Use our own process and fixture views: no Ghostty automation or UI input.
+        let pid = getpid()
+        let controller = NativeGhosttyTerminalController(resolveApplication: {
+            NativeTerminalController.processStartToken(pid: pid).map {
+                .init(pid: pid, token: $0)
+            }
+        }, execute: { _ in "[]" })
+        XCTAssertEqual(try controller.views(), [])
+        let before = openDescriptorCount()
+        for _ in 0..<64 {
+            XCTAssertNotNil(NativeTerminalController.processStartToken(pid: pid))
+            XCTAssertEqual(try controller.views(), [])
+        }
+        XCTAssertLessThanOrEqual(openDescriptorCount(), before + 4,
+                                 "Periodic view discovery must not exhaust the helper's descriptors")
+    }
+
+    private func openDescriptorCount() -> Int {
+        var limit = rlimit()
+        XCTAssertEqual(getrlimit(RLIMIT_NOFILE, &limit), 0)
+        return (0..<Int32(min(limit.rlim_cur, 8_192))).reduce(0) { count, fd in
+            count + (fcntl(fd, F_GETFD) >= 0 ? 1 : 0)
+        }
+    }
     func testScriptingSelectsOnlyTheStableSurfaceAndRejectsAChangedTitle() throws {
         let context = try XCTUnwrap(JSContext())
         context.evaluateScript(#"""
@@ -54,18 +80,28 @@ final class NativeGhosttyTerminalControllerTests: XCTestCase {
         XCTAssertFalse(controller.focus(target))
         XCTAssertEqual(attempts, 2)
     }
-    func testReadsCurrentTitlesAndRejectsAnApplicationReplacementDuringRead() {
+    func testReadsCurrentTitlesAndRejectsAnApplicationReplacementDuringRead() throws {
         var identity = NativeGhosttyTerminalController.ApplicationIdentity(pid: 7, token: "instance-one")
         var replace = false
         let controller = NativeGhosttyTerminalController(resolveApplication: { identity }, execute: { _ in
             if replace { identity = .init(pid: 7, token: "instance-two") }
             return #"[{"terminalId":"surface-a","title":"✳ ccx-cleanup","cwd":"/Users/me/Codes"}]"#
         })
-        XCTAssertEqual(controller.views(), [.init(
+        XCTAssertEqual(try controller.views(), [.init(
             applicationPID: 7, processStartToken: "instance-one", terminalId: "surface-a",
             title: "✳ ccx-cleanup", cwd: "/Users/me/Codes"
         )])
         replace = true
-        XCTAssertEqual(controller.views(), [])
+        XCTAssertThrowsError(try controller.views())
+    }
+    func testFailedViewReadIsNotReportedAsAnEmptyTerminalList() throws {
+        let identity = NativeGhosttyTerminalController.ApplicationIdentity(pid: 7, token: "instance")
+        var output: String? = nil
+        let controller = NativeGhosttyTerminalController(resolveApplication: { identity }, execute: { _ in output })
+        XCTAssertThrowsError(try controller.views())
+        output = "not JSON"
+        XCTAssertThrowsError(try controller.views())
+        output = "[]"
+        XCTAssertEqual(try controller.views(), [])
     }
 }

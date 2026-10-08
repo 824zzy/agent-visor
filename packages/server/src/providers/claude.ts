@@ -58,6 +58,17 @@ type FailureLifecycle = {
   acknowledged: boolean;
 };
 
+/** Counts only: never include terminal titles, paths, IDs, or native error text. */
+export type ClaudePresenceReport = {
+  status: "not_required" | "inventory_unavailable" | "reader_unavailable" | "read_failed" | "read_succeeded";
+  parkedApplications: number;
+  terminalViews: number;
+  conversationTitles: number;
+  overviewTitles: number;
+  unrecognizedTitles: number;
+  matchedConversations: number;
+};
+
 export class ClaudeProvider implements ProviderAdapter {
   readonly id = "claude_code" as const;
   private readonly summaries = new Map<string, { size: number; modifiedAt: number; summary: TranscriptSummary }>();
@@ -69,7 +80,10 @@ export class ClaudeProvider implements ProviderAdapter {
   /** Tombstones suppress late hooks until a fresh row or interactive record proves reuse. */
   private removedConversationIds: ReadonlyMap<string, number> = new Map();
 
-  constructor(private readonly environment: ProviderEnvironment) {
+  constructor(
+    private readonly environment: ProviderEnvironment,
+    private readonly reportPresence?: (report: ClaudePresenceReport) => void,
+  ) {
     this.desktopSessions = new ClaudeDesktopSessions(environment);
   }
 
@@ -267,21 +281,39 @@ export class ClaudeProvider implements ProviderAdapter {
     }
 
     const displayedJobs = new Map<string, GhosttyTerminalView>();
+    const presence: ClaudePresenceReport = {
+      status: !parkedGhosttyApplications.size ? "not_required"
+        : !inventory?.authoritative ? "inventory_unavailable" : "reader_unavailable",
+      parkedApplications: parkedGhosttyApplications.size, terminalViews: 0,
+      conversationTitles: 0, overviewTitles: 0, unrecognizedTitles: 0, matchedConversations: 0,
+    };
     if (inventory?.authoritative && parkedGhosttyApplications.size && this.environment.ghosttyTerminalViews) {
       let views: GhosttyTerminalView[] = [];
-      try { views = await this.environment.ghosttyTerminalViews(); } catch { /* No stale view fallback. */ }
+      try {
+        views = await this.environment.ghosttyTerminalViews();
+        presence.status = "read_succeeded";
+      } catch { presence.status = "read_failed"; /* No stale view fallback. */ }
       for (const view of views) {
         if (!parkedGhosttyApplications.has(view.applicationPID)) continue;
+        presence.terminalViews++;
         // Claude emits these exact indicators for conversation titles. Fleet
         // titles (including awaiting-input counts) never match a job title.
         const name = /^[✳◐◑] /.test(view.title) ? view.title.slice(2) : "";
-        if (!name || name === "Claude Code" || /(?:^| · )claude agents$/.test(name)) continue;
+        if (/(?:^| · )claude agents$/.test(name || view.title)) {
+          presence.overviewTitles++;
+          continue;
+        }
+        if (!name || name === "Claude Code") { presence.unrecognizedTitles++; continue; }
+        presence.conversationTitles++;
         const matches = [...inventoryRows.values()].filter((row) =>
           !hiddenInventoryJobs.has(row.id!.toLowerCase())
           && row.name === name && row.cwd === view.cwd);
         if (matches.length === 1) displayedJobs.set(matches[0]!.id!, view);
       }
     }
+    presence.matchedConversations = displayedJobs.size;
+    // Observability must never change session discovery or cause a retry.
+    try { this.reportPresence?.(presence); } catch { /* Diagnostic sink unavailable. */ }
 
     if (inventory) {
       for (const row of inventoryRows.values()) {

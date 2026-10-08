@@ -308,6 +308,10 @@ final class NativePiRestorationController {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = ["-e", source]
         let output = captureOutput ? Pipe() : nil
+        defer {
+            try? output?.fileHandleForReading.close()
+            try? output?.fileHandleForWriting.close()
+        }
         process.standardOutput = output ?? FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         let finished = DispatchSemaphore(value: 0)
@@ -325,7 +329,6 @@ final class NativePiRestorationController {
                 kill(process.processIdentifier, SIGKILL)
                 _ = finished.wait(timeout: .now() + 1)
             }
-            try? output?.fileHandleForReading.close()
             return nil
         }
         let data = output?.fileHandleForReading.readDataToEndOfFile() ?? Data()

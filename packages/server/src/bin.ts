@@ -30,6 +30,7 @@ import { UsageGlances } from "./usage-glances.js";
 import { checkForUpdates } from "./updates.js";
 import { agentVisorVersion } from "./runtime-version.js";
 import { NavigationDiagnostics } from "./navigation-diagnostics.js";
+import { ClaudePresenceDiagnostics } from "./claude-presence-diagnostics.js";
 
 await runDaemon(async (lifetime) => {
   let hookSocket: RunningHookSocket | undefined;
@@ -78,7 +79,11 @@ await runDaemon(async (lifetime) => {
   const dataRoot = process.env.AGENT_VISOR_DATA_DIR
     ?? path.join(os.homedir(), "Library/Application Support/Agent Visor");
   const navigationDiagnostics = new NavigationDiagnostics(dataRoot);
-  flushNavigationDiagnostics = () => navigationDiagnostics.flush();
+  const claudePresenceDiagnostics = new ClaudePresenceDiagnostics(dataRoot);
+  flushNavigationDiagnostics = async () => {
+    await navigationDiagnostics.flush();
+    await claudePresenceDiagnostics.flush();
+  };
   const settingsDomain = process.env.AGENT_VISOR_SETTINGS_DOMAIN ?? "com.824zzy.AgentVisor.Dev";
   const integrationResources = process.env.AGENT_VISOR_INTEGRATIONS_DIR ?? path.resolve(
     path.dirname(fileURLToPath(import.meta.url)), "../../../AgentVisor/Resources",
@@ -99,7 +104,11 @@ await runDaemon(async (lifetime) => {
       () => settings.current().codexHomes,
       (home) => settings.addDiscoveredCodexHome(home),
       () => settings.current().ignoredCodexHomes,
-      () => nativeHelper?.ghosttyTerminalViews?.() ?? Promise.resolve([]),
+      async () => {
+        if (!nativeHelper?.ghosttyTerminalViews) throw new Error("Native terminal view reader is unavailable.");
+        return nativeHelper.ghosttyTerminalViews();
+      },
+      report => claudePresenceDiagnostics.record(report),
     ),
     {
       piRuntimeStatePath: path.join(dataRoot, "pi-runtime-links.json"),

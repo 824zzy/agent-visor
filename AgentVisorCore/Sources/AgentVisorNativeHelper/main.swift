@@ -185,7 +185,11 @@ private func response(
         case .screenTopology(let id):
             return .screenTopology(id: id, screens: screenTopology())
         case .ghosttyTerminalViews(let id):
-            return .ghosttyTerminalViews(id: id, views: NativeGhosttyTerminalController().views())
+            do {
+                return .ghosttyTerminalViews(id: id, views: try NativeGhosttyTerminalController().views())
+            } catch {
+                return .error(id: id, code: .failed, message: "Current Ghostty terminal views could not be read.")
+            }
         case .focusGhosttyTerminal(let id, let target):
             return NativeGhosttyTerminalController().focus(target)
                 ? .accepted(id: id)

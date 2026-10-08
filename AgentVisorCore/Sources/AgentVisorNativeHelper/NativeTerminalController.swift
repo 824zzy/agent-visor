@@ -401,6 +401,12 @@ public final class NativeTerminalController {
     ) -> String? {
         let process = Process()
         let pipe = Pipe()
+        // The socket-serving thread stays alive between probes; do not leave
+        // pipe descriptors waiting for its autorelease pool to drain.
+        defer {
+            try? pipe.fileHandleForReading.close()
+            try? pipe.fileHandleForWriting.close()
+        }
         let termination = DispatchSemaphore(value: 0)
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
