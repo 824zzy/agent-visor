@@ -23,6 +23,18 @@ import { runIfSingleInstance } from "./single-instance.js";
 const daemonUrl = "ws://127.0.0.1:49152?token=secret";
 
 describe("desktop launch contract", () => {
+  it("accepts an exact Paseo agent route and rejects other Paseo URI forms", () => {
+    const url = "paseo://h/srv_local/agent/28a801ab-3b50-46ca-829c-783c202b79c4";
+    expect(nativeActionFromDaemonMessage({ type: "native_action", action: "open_session_url", url }))
+      .toEqual({ action: "open_session_url", url });
+    expect(ownerApplication("Paseo")).toBe("Paseo");
+    for (const invalid of [
+      "paseo://other/srv_local/agent/agent", "paseo://h/srv_local/agent/agent?command=run",
+      "paseo://h/srv_local/agent/agent#fragment", "paseo://user@h/srv_local/agent/agent",
+      "paseo://h/srv_local/agent/%2Fother", "paseo://h/srv_local/agent/agent/extra",
+    ]) expect(nativeActionFromDaemonMessage({ type: "native_action", action: "open_session_url", url: invalid }))
+      .toBeUndefined();
+  });
   it("uses bundled agent integrations when a release folder contains them", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-resources-"));
     try {

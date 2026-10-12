@@ -2,6 +2,32 @@
 
 The signed Swift helper presents Agent Visor’s macOS menu items.
 
+## Paseo-managed Claude conversations
+
+Paseo discovery reads the authenticated local daemon published under `~/.paseo`.
+It includes the built-in Claude provider and profiles whose `extends` value is
+`claude`, including `claude-copilot`. The read path sends only `hello` and paged
+`fetch_agents_request` messages. It does not create, resume, send to, or stop agents.
+The handshake advertises Paseo's `all_providers` capability so custom profiles are
+included, and explicit event subscriptions so directory reads do not follow timelines.
+Ambient reads have a three-second cache and a two-second request deadline. Clicks
+bypass the cache and verify that the agent still belongs to the same server.
+An unavailable or invalid snapshot removes its ambient rows until a successful read.
+
+Paseo supplies titles, running state, pending permission/question counts, and
+explicit completion attention. Idle alone does not create unopened-completion
+attention. Paseo clearing `requiresAttention` acknowledges its completion even
+when activity timestamps do not change. The usual attention ordering and seven-day
+menu cap still apply. Archived, internal, and child agents do not occupy pills.
+
+Paseo IDs include both server and agent identity. A verified native Claude UUID
+in the same working directory replaces the native ambient alias, including late
+hooks; matching titles or directories alone never merges sessions. Other native
+Ghostty conversations and overview suppression retain their existing rules.
+The source action opens `paseo://h/<server-id>/agent/<agent-id>` through Paseo's
+registered link handler. Paseo-managed Chat sending is not exposed in Agent Visor.
+Remote Paseo hosts and other provider families are outside this adapter's scope.
+
 ## Ownership
 
 The TypeScript daemon selects active and recent sessions, assigns priority, reads provider usage, and sends a typed presentation.

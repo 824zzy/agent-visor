@@ -107,6 +107,9 @@ export function nativeActionFromDaemonMessage(value: unknown): NativeAction | un
       : undefined;
   }
   if (message.action === "open_session_url" && typeof message.url === "string") {
+    if (/^paseo:\/\/h\/[a-zA-Z0-9_-]{1,128}\/agent\/[a-zA-Z0-9_-]{1,128}$/.test(message.url)) {
+      return { action: "open_session_url", url: message.url };
+    }
     if (/^claude:\/\/claude\.ai\/epitaxy\/local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(message.url)
       && !/[\r\n]/.test(message.url)) {
       return { action: "open_session_url", url: message.url };
@@ -176,6 +179,7 @@ export function ownerApplication(owner: string): string | undefined {
     Ghostty: "Ghostty",
     iTerm2: "iTerm",
     Pi: "Pi",
+    Paseo: "Paseo",
     Terminal: "Terminal",
     Zed: "Zed",
   }[owner];

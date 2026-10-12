@@ -13,6 +13,7 @@ import { activateMenuPill, menuPresentation } from "../menu.js";
 import { FakeNativeHelper } from "../native-helper.js";
 import { NativeSessionControls } from "../session-controls.js";
 import { SessionRepository } from "../sessions.js";
+import { PaseoProvider } from "./paseo.js";
 
 const home = "/Users/me";
 const cwd = home + "/Codes/agent-visor";
@@ -151,6 +152,32 @@ function repository(environment: FixtureEnvironment): SessionRepository {
 }
 
 describe("Claude agent-view integration", () => {
+  it("publishes one Paseo-owned conversation while an alias remains in the native overview inventory", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable, "claude");
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "blocked", { name: "Old native title" }),
+    ]);
+    environment.ghosttyViews = [{ applicationPID: 7, processStartToken: ghosttyInstance,
+      terminalId: "overview", title: "✳ 1 awaiting input · claude agents", cwd }];
+    const paseo = new PaseoProvider({ read: async () => ({
+      serverId: "srv_local", providers: {}, agents: [{
+        id: "paseo_agent", provider: "claude", title: "Paseo conversation", cwd,
+        status: "running", updatedAt: now.toISOString(), runtimeInfo: { sessionId: ccID },
+      }],
+    }) });
+    const source = new SessionRepository([new ClaudeProvider(environment), paseo], { now: () => now });
+    expect((await source.refresh()).sessions).toMatchObject([
+      { title: "Paseo conversation", owner: "Paseo", section: "working" },
+    ]);
+    expect(menuPresentation(source.current(), [], nowMs).pills).toMatchObject([
+      { title: "Paseo conversation", owner: "Paseo" },
+    ]);
+    // A late native permission hook must not resurrect the duplicate or its overview pill.
+    source.applyHook({ sessionId: ccID, provider: "claude_code", cwd,
+      event: "PermissionRequest", status: "waiting_for_approval", receivedAt: now.toISOString() });
+    expect(source.current().sessions).toHaveLength(1);
+  });
   it("keeps a title-suppressed stale name hidden and drops revoked title trust", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, executable, "claude attach 8e45ed2c");

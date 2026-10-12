@@ -51,7 +51,7 @@ import {
 import type { CodexRouteEvent } from "./codex-turn.js";
 import { CompletionAttention } from "./completion-attention.js";
 
-export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie";
+export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie" | "paseo";
 
 export type SessionControlTarget =
   | { kind: "application"; target: NativeHelperFocusTarget }
@@ -86,6 +86,8 @@ export type DiscoveredProviderSession = {
   claudePresence?: SessionSummary["claudePresence"];
   managedBy?: SessionSummary["managedBy"];
   authority?: number;
+  /** Verified underlying identity of a conversation owned by another UI. Never match by title. */
+  nativeSessionAlias?: { provider: "claude_code"; id: string };
   chatPath?: string;
   controlTarget?: SessionControlTarget;
   messageTransport?: "terminal" | "codex_app_server";
@@ -97,6 +99,8 @@ export type DiscoveredProviderSession = {
   claudeLifecycle?: { phase: "working" | "ready"; observedAt: string };
   /** Authoritative completed response date, independent of file/metadata writes. */
   completionAt?: string;
+  /** The managing client reports that this completion has already been viewed. */
+  completionAcknowledged?: boolean;
   /** True only for a newly observed Claude background failure. */
   failureAlert?: boolean;
   /**
@@ -425,6 +429,7 @@ export const EXTERNAL_APPROVAL_RESPONSE_TIMEOUT_MS = 30_000;
 const automationChatReadOnlyReason = "Automation sessions are read only.";
 
 const providerNames: Record<ProviderID, string> = {
+  paseo: "Paseo",
   claude_code: "Claude Code",
   codex: "Codex",
   pi: "Pi",
@@ -1489,9 +1494,9 @@ export class SessionRepository {
     // Claude terminals can enter Agent View or another conversation without
     // changing their PID. Revalidate both interactive and background targets
     // so a click cannot reuse a cached route to the wrong screen.
-    if (session.provider === "claude_code"
+    if (session.provider === "paseo" || (session.provider === "claude_code"
       && (session.controlTarget?.kind === "claude_background"
-        || session.controlTarget?.kind === "terminal")) {
+        || session.controlTarget?.kind === "terminal"))) {
       const resolved = await this.resolveExactSession(sessionId, false, true);
       if (!resolved || resolved.resolutionUnavailable || !resolved.controlTarget) {
         return "Exact session focus is unavailable.";
@@ -2800,7 +2805,13 @@ export class SessionRepository {
     for (const sessionId of this.acknowledgedFailureIDs) {
       if (!freshFailureIDs.has(sessionId)) this.acknowledgedFailureIDs.delete(sessionId);
     }
-    const effectiveDiscovered = discovered.map((session) => this.projectAcknowledgedFailure(session));
+    const paseoOwners = discovered.filter(session => session.provider === "paseo" && session.nativeSessionAlias);
+    const ownedByPaseo = (session: DiscoveredProviderSession) => paseoOwners.some(owner =>
+      owner.nativeSessionAlias?.provider === session.provider
+      && owner.nativeSessionAlias.id.toLowerCase() === session.id.toLowerCase()
+      && owner.cwd === session.cwd);
+    const effectiveDiscovered = discovered.filter(session => !ownedByPaseo(session))
+      .map((session) => this.projectAcknowledgedFailure(session));
     this.reconcileTerminalNextTurns(effectiveDiscovered);
     const authoritative = new Map<string, DiscoveredProviderSession>();
     for (const record of effectiveDiscovered) {
@@ -2809,7 +2820,8 @@ export class SessionRepository {
         authoritative.set(record.id, record);
       }
     }
-    const ambientMerged = applyHooks(effectiveDiscovered, this.hookBySession);
+    const ambientMerged = applyHooks(effectiveDiscovered, this.hookBySession)
+      .filter(session => !ownedByPaseo(session));
     const openedRecords = [...this.openedSessionBySession.entries()].map(([sessionId, session]) => {
       // Hook events can arrive between exact refreshes. Keep the opened
       // record's provider identity while applying the same current hook facts
@@ -2939,6 +2951,9 @@ export class SessionRepository {
         && completed
         && Number.isFinite(age) && age >= 0 && age <= TRANSCRIPT_STALE_CEILING_MS) {
         this.completionAttention.observe(key, completion, session.updatedAt);
+      }
+      if (source?.completionAcknowledged === true) {
+        this.completionAttention.acknowledge(key, completion, session.updatedAt);
       }
       const attention = this.completionAttention.get(key, completion);
       if (attention && !attention.seen) session.completionUnseen = true;
