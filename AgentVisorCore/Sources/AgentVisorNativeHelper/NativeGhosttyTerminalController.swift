@@ -13,12 +13,29 @@ public final class NativeGhosttyTerminalController {
     }
     private let resolveApplication: () -> ApplicationIdentity?
     private let execute: (String) -> String?
+    private let openAttach: (NativeHelperClaudeAttachTarget) -> String?
+    private var titleEnabledTerminals: [String: ApplicationIdentity] = [:]
     public init(
         resolveApplication: @escaping () -> ApplicationIdentity? = NativeGhosttyTerminalController.liveApplication,
-        execute: @escaping (String) -> String? = NativeGhosttyTerminalController.liveScript
+        execute: @escaping (String) -> String? = NativeGhosttyTerminalController.liveScript,
+        openAttach: @escaping (NativeHelperClaudeAttachTarget) -> String? = {
+            NativeTerminalController().openClaudeAttachSurface($0)
+        }
     ) {
         self.resolveApplication = resolveApplication
         self.execute = execute
+        self.openAttach = openAttach
+    }
+    /// Trust is scoped to the created surface and this Ghostty process instance.
+    public func openClaudeAttach(_ target: NativeHelperClaudeAttachTarget) -> Bool {
+        let previousIdentity = resolveApplication()
+        guard target.isValid,
+              let terminalId = openAttach(target), !terminalId.isEmpty,
+              terminalId.utf16.count <= 128, !terminalId.contains("\0"),
+              let identity = resolveApplication(),
+              previousIdentity == nil || previousIdentity == identity else { return false }
+        titleEnabledTerminals[terminalId] = identity
+        return true
     }
     public enum ViewReadError: Error { case unreadable, invalidResponse, applicationChanged }
     public func views() throws -> [NativeHelperGhosttyTerminalView] {
@@ -30,9 +47,12 @@ public final class NativeGhosttyTerminalController {
             throw ViewReadError.invalidResponse
         }
         guard resolveApplication() == identity else { throw ViewReadError.applicationChanged }
+        let currentIDs = Set(rows.map(\.terminalId))
+        titleEnabledTerminals = titleEnabledTerminals.filter { currentIDs.contains($0.key) && $0.value == identity }
         let views = rows.map { NativeHelperGhosttyTerminalView(
             applicationPID: identity.pid, processStartToken: identity.token,
-            terminalId: $0.terminalId, title: $0.title, cwd: $0.cwd
+            terminalId: $0.terminalId, title: $0.title, cwd: $0.cwd,
+            titleUpdatesEnabled: titleEnabledTerminals[$0.terminalId] == identity ? true : nil
         ) }
         guard views.allSatisfy(\.isValid), Set(views.map(\.terminalId)).count == views.count else {
             throw ViewReadError.invalidResponse
@@ -42,6 +62,10 @@ public final class NativeGhosttyTerminalController {
     public func focus(_ target: NativeHelperGhosttyTerminalView) -> Bool {
         guard target.isValid,
               resolveApplication() == ApplicationIdentity(pid: target.applicationPID, token: target.processStartToken) else {
+            return false
+        }
+        if target.titleUpdatesEnabled == true,
+           titleEnabledTerminals[target.terminalId] != ApplicationIdentity(pid: target.applicationPID, token: target.processStartToken) {
             return false
         }
         return execute(GhosttyTerminalViewScript.focus(target)) == "ok"

@@ -83,6 +83,7 @@ export type DiscoveredProviderSession = {
   sessionClass?: SessionClass;
   /** Current user-facing presence, independent of lifecycle and resume capability. */
   ambientEligible?: boolean;
+  claudePresence?: SessionSummary["claudePresence"];
   managedBy?: SessionSummary["managedBy"];
   authority?: number;
   chatPath?: string;
@@ -3582,6 +3583,7 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
       canEnterChat: session.canEnterChat,
       ...(session.sessionClass ? { sessionClass: session.sessionClass } : {}),
       ...(session.ambientEligible !== undefined ? { ambientEligible: session.ambientEligible } : {}),
+      ...(session.claudePresence ? { claudePresence: session.claudePresence } : {}),
       ...(session.managedBy ? { managedBy: session.managedBy } : {}),
       ...(session.failureAlert !== undefined ? { failureAlert: session.failureAlert } : {}),
       ...(session.conversationState || session.turnState

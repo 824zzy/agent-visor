@@ -1,12 +1,14 @@
 import path from "node:path";
 import { TRANSCRIPT_STALE_CEILING_MS, type NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import type { ProviderAdapter, DiscoveredProviderSession } from "../sessions.js";
-import type { FileStamp, GhosttyTerminalView, ProcessRecord, ProviderEnvironment } from "./environment.js";
+import type { FileStamp, ProcessRecord, ProviderEnvironment } from "./environment.js";
 import type {
   ClaudeAgentInventoryRow,
   ClaudeAgentInventoryResult,
 } from "./claude-agent-inventory.js";
 import { ClaudeDesktopSessions } from "./claude-desktop.js";
+import { resolveClaudePresence, type ClaudePresenceReport } from "./claude-presence.js";
+export type { ClaudePresenceReport } from "./claude-presence.js";
 import {
   applicationTargetForProcess, isRecord, iso, ownerForProcess, processInstanceToken,
   terminalTargetForProcess,
@@ -58,17 +60,6 @@ type FailureLifecycle = {
   acknowledged: boolean;
 };
 
-/** Counts only: never include terminal titles, paths, IDs, or native error text. */
-export type ClaudePresenceReport = {
-  status: "not_required" | "inventory_unavailable" | "reader_unavailable" | "read_failed" | "read_succeeded";
-  parkedApplications: number;
-  terminalViews: number;
-  conversationTitles: number;
-  overviewTitles: number;
-  unrecognizedTitles: number;
-  matchedConversations: number;
-};
-
 export class ClaudeProvider implements ProviderAdapter {
   readonly id = "claude_code" as const;
   private readonly summaries = new Map<string, { size: number; modifiedAt: number; summary: TranscriptSummary }>();
@@ -112,7 +103,26 @@ export class ClaudeProvider implements ProviderAdapter {
     const spares = new Set<string>();
     const interactiveSessionIds = new Set<string>();
     const parkedSessionIds = new Set<string>();
-    const parkedGhosttyApplications = new Set<number>();
+    const parkedGhosttyApplications = new Map<number, string | undefined>();
+
+    // An attach client need not publish session metadata. Discover the
+    // terminal frontend independently; only a current view can expose a job.
+    for (const process of processes) {
+      if (!process.tty || !isClaudeCommand(process.command, this.environment.home)) continue;
+      let ancestor: ProcessRecord | undefined = process;
+      const visited = new Set<number>();
+      while (ancestor && !visited.has(ancestor.pid)) {
+        visited.add(ancestor.pid);
+        if (ancestor.command.endsWith("/Ghostty.app/Contents/MacOS/ghostty")) {
+          if (!parkedGhosttyApplications.has(ancestor.pid)) {
+            parkedGhosttyApplications.set(ancestor.pid, ancestor.processStartToken
+              ?? processInstanceToken(ancestor.pid, await this.environment.processStartedAt(ancestor.pid)));
+          }
+          break;
+        }
+        ancestor = byPID.get(ancestor.parentPID);
+      }
+    }
 
     for (const file of await this.environment.directory(directory)) {
       const match = /^(\d+)\.json$/.exec(file);
@@ -169,25 +179,13 @@ export class ClaudeProvider implements ProviderAdapter {
       // Its own UUID/parkedJobId do not identify that displayed conversation.
       if (kind === "interactive" && metadata.parkedJobId !== undefined) {
         parkedSessionIds.add(sessionID);
-        if (process.tty && path.basename(process.command).toLowerCase().includes("claude")) {
-          let ancestor: ProcessRecord | undefined = process;
-          const visited = new Set<number>();
-          while (ancestor && !visited.has(ancestor.pid)) {
-            visited.add(ancestor.pid);
-            if (ancestor.command.endsWith("/Ghostty.app/Contents/MacOS/ghostty")) {
-              parkedGhosttyApplications.add(ancestor.pid);
-              break;
-            }
-            ancestor = byPID.get(ancestor.parentPID);
-          }
-        }
         continue;
       }
       const backgroundTarget = kind === "bg"
         ? claudeBackgroundTarget(process, byPID, sessionID, string(metadata.jobId), cwd, entrypoint, this.environment.home)
         : undefined;
       if (kind === "bg" ? !backgroundTarget
-        : !path.basename(process.command).toLowerCase().includes("claude")) continue;
+        : !isClaudeCommand(process.command, this.environment.home)) continue;
 
       const transcript = claudeTranscriptPath(this.environment.home, sessionID, cwd);
       transcripts.add(transcript);
@@ -280,38 +278,12 @@ export class ClaudeProvider implements ProviderAdapter {
       }
     }
 
-    const displayedJobs = new Map<string, GhosttyTerminalView>();
-    const presence: ClaudePresenceReport = {
-      status: !parkedGhosttyApplications.size ? "not_required"
-        : !inventory?.authoritative ? "inventory_unavailable" : "reader_unavailable",
-      parkedApplications: parkedGhosttyApplications.size, terminalViews: 0,
-      conversationTitles: 0, overviewTitles: 0, unrecognizedTitles: 0, matchedConversations: 0,
-    };
-    if (inventory?.authoritative && parkedGhosttyApplications.size && this.environment.ghosttyTerminalViews) {
-      let views: GhosttyTerminalView[] = [];
-      try {
-        views = await this.environment.ghosttyTerminalViews();
-        presence.status = "read_succeeded";
-      } catch { presence.status = "read_failed"; /* No stale view fallback. */ }
-      for (const view of views) {
-        if (!parkedGhosttyApplications.has(view.applicationPID)) continue;
-        presence.terminalViews++;
-        // Claude emits these exact indicators for conversation titles. Fleet
-        // titles (including awaiting-input counts) never match a job title.
-        const name = /^[✳◐◑] /.test(view.title) ? view.title.slice(2) : "";
-        if (/(?:^| · )claude agents$/.test(name || view.title)) {
-          presence.overviewTitles++;
-          continue;
-        }
-        if (!name || name === "Claude Code") { presence.unrecognizedTitles++; continue; }
-        presence.conversationTitles++;
-        const matches = [...inventoryRows.values()].filter((row) =>
-          !hiddenInventoryJobs.has(row.id!.toLowerCase())
-          && row.name === name && row.cwd === view.cwd);
-        if (matches.length === 1) displayedJobs.set(matches[0]!.id!, view);
-      }
-    }
-    presence.matchedConversations = displayedJobs.size;
+    const { jobs: presenceByJob, report: presence } = await resolveClaudePresence(
+      [...inventoryRows.values()].filter((row) => !hiddenInventoryJobs.has(row.id!.toLowerCase())),
+      inventory?.authoritative === true, parkedGhosttyApplications,
+      this.environment.ghosttyTerminalViews
+        ? () => this.environment.ghosttyTerminalViews!() : undefined,
+    );
     // Observability must never change session discovery or cause a retry.
     try { this.reportPresence?.(presence); } catch { /* Diagnostic sink unavailable. */ }
 
@@ -335,10 +307,13 @@ export class ClaudeProvider implements ProviderAdapter {
         const session = await this.backgroundSession(
           row, metadata, summary, transcript, transcriptStamp, processes, claudeExecutable,
           inventory.authoritative, inventory.observedAt, this.environment.now().valueOf(),
-          interactiveSessionIds.has(transcriptSessionID.toLowerCase()) || displayedJobs.has(row.id!),
+          interactiveSessionIds.has(transcriptSessionID.toLowerCase()) || presenceByJob.get(row.id!)?.reason === "conversation",
         );
         if (session) {
-          const displayed = displayedJobs.get(row.id!);
+          const evidence = presenceByJob.get(row.id!);
+          session.claudePresence = interactiveSessionIds.has(transcriptSessionID.toLowerCase())
+            ? "interactive" : evidence?.reason;
+          const displayed = evidence?.displayed;
           if (displayed && session.controlTarget?.kind === "claude_background") {
             session.controlTarget.target.displayed = displayed;
             session.controlTarget.target.application = "Ghostty";
@@ -604,6 +579,17 @@ async function attachedTerminalTarget(
   return undefined;
 }
 
+function isNativeClaudeBinary(command: string, home: string): boolean {
+  return path.dirname(command) === path.join(home, ".local/share/claude/versions")
+    && /^\d+\.\d+\.\d+$/.test(path.basename(command));
+}
+
+function isClaudeCommand(command: string, home: string): boolean {
+  // macOS comm can report the resolved native binary, whose name is a version.
+  return path.basename(command).toLowerCase().includes("claude")
+    || isNativeClaudeBinary(command, home);
+}
+
 function claudeBackgroundTarget(
   process: ProcessRecord,
   byPID: Map<number, ProcessRecord>,
@@ -631,8 +617,7 @@ function claudeBackgroundTarget(
     }
     parent = byPID.get(parent.parentPID);
   }
-  if (!executable && process.command.startsWith(path.join(home, ".local/share/claude/versions") + path.sep)
-    && /^\d+\.\d+\.\d+$/.test(path.basename(process.command))) executable = process.command;
+  if (!executable && isNativeClaudeBinary(process.command, home)) executable = process.command;
   return executable ? { jobId, cwd, executable, application } : undefined;
 }
 

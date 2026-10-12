@@ -60,11 +60,15 @@ public final class NativeTerminalController {
 
     /// Open `claude attach` in a new window of the running Ghostty.
     public func openClaudeAttach(_ target: NativeHelperClaudeAttachTarget) -> Bool {
+        openClaudeAttachSurface(target) != nil
+    }
+
+    public func openClaudeAttachSurface(_ target: NativeHelperClaudeAttachTarget) -> String? {
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: target.cwd, isDirectory: &isDirectory),
+        guard target.isValid, FileManager.default.fileExists(atPath: target.cwd, isDirectory: &isDirectory),
               isDirectory.boolValue,
-              FileManager.default.isExecutableFile(atPath: target.executable) else { return false }
-        return run(ClaudeGhosttyAttachScript.make(target: target)) == "ok"
+              FileManager.default.isExecutableFile(atPath: target.executable) else { return nil }
+        return run(ClaudeGhosttyAttachScript.make(target: target))
     }
 
     public func send(_ text: String, to target: NativeHelperTerminalTarget, submit: Bool) -> Bool {

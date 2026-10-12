@@ -142,6 +142,7 @@ private func handle(
     guard getpeereid(client, &peerUID, &peerGID) == 0, peerUID == getuid() else { return }
 
     var decoder = NativeHelperFrameDecoder()
+    let ghostty = NativeGhosttyTerminalController()
     var bytes = [UInt8](repeating: 0, count: 16_384)
 
     while true {
@@ -158,7 +159,8 @@ private func handle(
                     for: payload,
                     menu: menu,
                     notifications: notifications,
-                    piRestoration: piRestoration
+                    piRestoration: piRestoration,
+                    ghostty: ghostty
                 )
                 try writer.write(try NativeHelperFrameCodec.frame(response.encoded()), to: client)
             }
@@ -178,7 +180,8 @@ private func response(
     for data: Data,
     menu: NativeMenuController,
     notifications: NativeNotificationController,
-    piRestoration: NativePiRestorationController
+    piRestoration: NativePiRestorationController,
+    ghostty: NativeGhosttyTerminalController
 ) -> NativeHelperResponse {
     do {
         switch try NativeHelperRequest.decode(data) {
@@ -186,12 +189,12 @@ private func response(
             return .screenTopology(id: id, screens: screenTopology())
         case .ghosttyTerminalViews(let id):
             do {
-                return .ghosttyTerminalViews(id: id, views: try NativeGhosttyTerminalController().views())
+                return .ghosttyTerminalViews(id: id, views: try ghostty.views())
             } catch {
                 return .error(id: id, code: .failed, message: "Current Ghostty terminal views could not be read.")
             }
         case .focusGhosttyTerminal(let id, let target):
-            return NativeGhosttyTerminalController().focus(target)
+            return ghostty.focus(target)
                 ? .accepted(id: id)
                 : .error(id: id, code: .failed, message: "The displayed Claude conversation changed or could not be focused.")
         case .accessibilityStatus(let id):
@@ -246,7 +249,7 @@ private func response(
                 ? .accepted(id: id)
                 : .error(id: id, code: .failed, message: "The requested terminal could not be focused.")
         case .openClaudeAttach(let id, let target):
-            return NativeTerminalController().openClaudeAttach(target)
+            return ghostty.openClaudeAttach(target)
                 ? .accepted(id: id)
                 : .error(id: id, code: .failed, message: "Ghostty could not open the Claude background session.")
         case .sendTerminal(let id, let target, let text, let submit):

@@ -5,6 +5,80 @@ import JavaScriptCore
 import Darwin
 
 final class NativeGhosttyTerminalControllerTests: XCTestCase {
+    func testTrackedAttachmentCanLaunchGhosttyWhenItWasNotRunning() throws {
+        var identity: NativeGhosttyTerminalController.ApplicationIdentity?
+        let controller = NativeGhosttyTerminalController(
+            resolveApplication: { identity },
+            execute: { _ in #"[{"terminalId":"launched","title":"ccx-plg-manifest","cwd":"/Users/me/Codes"}]"# },
+            openAttach: { _ in identity = .init(pid: 7, token: "new-instance"); return "launched" }
+        )
+        XCTAssertTrue(controller.openClaudeAttach(.init(
+            cwd: "/Users/me/Codes", executable: "/Users/me/.local/bin/claude", jobId: "8e45ed2c"
+        )))
+        XCTAssertEqual(try controller.views().first?.titleUpdatesEnabled, true)
+    }
+
+    func testOnlyCreatedTerminalsReceiveTitleTrustAndReplacementClearsIt() throws {
+        var identity = NativeGhosttyTerminalController.ApplicationIdentity(pid: 7, token: "instance")
+        var rows = #"[{"terminalId":"owned","title":"ccx-plg-manifest","cwd":"/Users/me/Codes"},{"terminalId":"other","title":"ccx-plg-manifest","cwd":"/Users/me/Codes"}]"#
+        let controller = NativeGhosttyTerminalController(
+            resolveApplication: { identity },
+            execute: { $0 == GhosttyTerminalViewScript.list ? rows : "ok" },
+            openAttach: { _ in "owned" }
+        )
+        XCTAssertTrue(controller.openClaudeAttach(.init(
+            cwd: "/Users/me/Codes", executable: "/Users/me/.local/bin/claude", jobId: "8e45ed2c"
+        )))
+        let views = try controller.views()
+        XCTAssertEqual(views[0].titleUpdatesEnabled, true)
+        XCTAssertNil(views[1].titleUpdatesEnabled)
+        XCTAssertTrue(controller.focus(views[0]))
+        rows = "[]"
+        XCTAssertEqual(try controller.views(), [])
+        XCTAssertFalse(controller.focus(views[0]))
+        identity = .init(pid: 7, token: "replacement")
+        rows = #"[{"terminalId":"owned","title":"ccx-plg-manifest","cwd":"/Users/me/Codes"}]"#
+        XCTAssertNil(try controller.views()[0].titleUpdatesEnabled)
+        XCTAssertFalse(controller.focus(views[0]))
+    }
+
+    func testFocusRejectsClaimedTitleTrustForAnUnownedTerminal() {
+        let controller = NativeGhosttyTerminalController(
+            resolveApplication: { .init(pid: 7, token: "instance") }, execute: { _ in "ok" }
+        )
+        let target = NativeHelperGhosttyTerminalView(
+            applicationPID: 7, processStartToken: "instance", terminalId: "unowned",
+            title: "ccx-plg-manifest", cwd: "/Users/me/Codes", titleUpdatesEnabled: true
+        )
+        XCTAssertFalse(controller.focus(target))
+    }
+
+    func testPlainTitleFocusKeepsExactSurfaceAndRejectsOverview() throws {
+        let context = try XCTUnwrap(JSContext())
+        context.evaluateScript(#"""
+        var title = 'ccx-plg-manifest', focused = [];
+        function Application() { return {
+            running: function(){return true},
+            terminals: function(){return [{
+                id: function(){return 'owned-surface'}, name: function(){return title},
+                workingDirectory: function(){return '/Users/me/Codes'}
+            }]},
+            focus: function(t){focused.push(t.id())}, activate: function(){}
+        }; }
+        """#)
+        let target = NativeHelperGhosttyTerminalView(
+            applicationPID: 7, processStartToken: "instance", terminalId: "owned-surface",
+            title: "ccx-plg-manifest", cwd: "/Users/me/Codes", titleUpdatesEnabled: true
+        )
+        XCTAssertEqual(context.evaluateScript(GhosttyTerminalViewScript.focus(target))?.toString(), "ok")
+        context.evaluateScript("title = '◐ ccx-plg-manifest'")
+        XCTAssertEqual(context.evaluateScript(GhosttyTerminalViewScript.focus(target))?.toString(), "ok")
+        context.evaluateScript("title = '1 awaiting input · claude agents'")
+        XCTAssertEqual(context.evaluateScript(GhosttyTerminalViewScript.focus(target))?.toString(), "changed")
+        XCTAssertEqual(context.evaluateScript("focused.length")?.toInt32(), 2)
+        XCTAssertNil(context.exception)
+    }
+
     func testRepeatedViewIdentityChecksReleaseProcessPipes() throws {
         // Use our own process and fixture views: no Ghostty automation or UI input.
         let pid = getpid()

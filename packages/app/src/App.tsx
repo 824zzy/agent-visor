@@ -418,7 +418,7 @@ function SessionRow({
   return (
     <View nativeID={rowId(session.id)} style={rowStyles.row}>
       <Pressable
-        accessibilityLabel={`${session.title}, ${presentation.title}, ${sourceLabel}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}`}
+        accessibilityLabel={`${session.title}, ${presentation.title}, ${sourceLabel}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}${presentation.pillNotice ? `, ${presentation.pillNotice}` : ""}`}
         accessibilityRole="button"
         accessibilityState={{ selected: cursor }}
         disabled={!primary}
@@ -445,6 +445,7 @@ function SessionRow({
             {!compact ? <Chip label={session.project} styles={rowStyles} /> : null}
           </View>
           <Text numberOfLines={1} style={rowStyles.subtitle}>{presentation.subtitle || session.cwd}</Text>
+          {presentation.pillNotice ? <Text style={rowStyles.pillNotice}>{presentation.pillNotice}</Text> : null}
         </View>
         <Text style={rowStyles.age}>{relativeSessionAge(session.updatedAt, now)}</Text>
         <View style={rowStyles.hotkeySlot}>
@@ -583,6 +584,7 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
     titleLine: { alignItems: "center", flexDirection: "row", gap: 7, minWidth: 0 },
     title: { color: palette.foreground, flexShrink: 1, fontSize: font(14), fontWeight: "600" },
     subtitle: { color: palette.muted, fontSize: font(12) },
+    pillNotice: { color: palette.muted, fontSize: font(11) },
     chip: { backgroundColor: palette.card, borderRadius: 9, color: palette.muted, flexShrink: 0, fontSize: font(10), fontWeight: "600", overflow: "hidden", paddingHorizontal: 6, paddingVertical: 2 },
     age: { color: palette.tertiary, fontSize: font(11), fontWeight: "500", minWidth: 28, textAlign: "right" },
     hotkeySlot: { alignItems: "center", justifyContent: "center", minHeight: 24, width: 35 },

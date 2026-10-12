@@ -11,6 +11,12 @@ export type ClaudeBackgroundTarget = {
   application: "Ghostty" | "iTerm2" | "Terminal";
 };
 
+/** Shell command used by the Terminal launch boundary. */
+export function claudeAttachCommand(target: ClaudeBackgroundTarget): string {
+  // Enables the client's own titles; an existing worker keeps its launch state.
+  return `/usr/bin/env -u CLAUDE_CODE_DISABLE_TERMINAL_TITLE ${shellQuote(target.executable)} attach ${shellQuote(target.jobId)}`;
+}
+
 /**
  * Open the exact Claude background job in a new Terminal.app window, leaving
  * its daemon running. Ghostty windows are opened by the native helper instead.
@@ -33,7 +39,7 @@ export async function openClaudeBackgroundSession(target: ClaudeBackgroundTarget
       'rm -f "$0"',
       'rmdir "$(dirname "$0")" 2>/dev/null || true',
       `cd ${shellQuote(target.cwd)} || exit 1`,
-      `exec ${shellQuote(target.executable)} attach ${shellQuote(target.jobId)}`,
+      `exec ${claudeAttachCommand(target)}`,
       "",
     ].join("\n"), { mode: 0o700, flag: "wx" });
     const opened = await runProcess("/usr/bin/open", ["-a", "Terminal.app", script], {

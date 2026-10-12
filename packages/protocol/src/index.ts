@@ -101,6 +101,11 @@ export const sessionSummarySchema = z.object({
   sessionClass: sessionClassSchema.optional(),
   /** Provider-confirmed ambient presence; false keeps resumable rows searchable only. */
   ambientEligible: z.boolean().optional(),
+  /** Claude terminal presence, independent of worker activity and resumability. */
+  claudePresence: z.enum([
+    "interactive", "conversation", "overview", "not_displayed", "unrecognized_title",
+    "ambiguous_title", "inventory_unavailable", "reader_unavailable", "read_failed", "process_changed",
+  ]).optional(),
   /** Recorded managing client; independent of the provider used for navigation. */
   managedBy: z.literal("Agent Room").optional(),
   attentionTier: sessionAttentionTierSchema.optional(),
@@ -995,6 +1000,8 @@ export const nativeHelperGhosttyTerminalViewSchema = z.object({
   terminalId: z.string().min(1).max(128).regex(/^[^\0]+$/),
   title: z.string().min(1).max(512).regex(/^[^\0]+$/),
   cwd: z.string().startsWith("/").max(4_096).regex(/^[^\0]+$/),
+  /** Only helper-created attach clients with explicit title-enabled settings. */
+  titleUpdatesEnabled: z.literal(true).optional(),
 }).strict();
 
 export const nativeHelperNotificationSchema = z.object({

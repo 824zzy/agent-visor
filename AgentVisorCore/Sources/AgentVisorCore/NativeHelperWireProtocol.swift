@@ -241,17 +241,20 @@ public struct NativeHelperGhosttyTerminalView: Codable, Equatable {
     public let terminalId: String
     public let title: String
     public let cwd: String
+    public let titleUpdatesEnabled: Bool?
 
-    public init(applicationPID: Int32, processStartToken: String, terminalId: String, title: String, cwd: String) {
+    public init(applicationPID: Int32, processStartToken: String, terminalId: String, title: String, cwd: String,
+                titleUpdatesEnabled: Bool? = nil) {
         self.applicationPID = applicationPID
         self.processStartToken = processStartToken
         self.terminalId = terminalId
         self.title = title
         self.cwd = cwd
+        self.titleUpdatesEnabled = titleUpdatesEnabled
     }
 
     public var isValid: Bool {
-        applicationPID > 0 && !processStartToken.isEmpty && processStartToken.utf16.count <= 256
+        titleUpdatesEnabled != false && applicationPID > 0 && !processStartToken.isEmpty && processStartToken.utf16.count <= 256
             && !terminalId.isEmpty && terminalId.utf16.count <= 128
             && !title.isEmpty && title.utf16.count <= 512 && cwd.hasPrefix("/") && cwd.utf16.count <= 4_096
             && ![terminalId, title, cwd, processStartToken].contains(where: { $0.contains("\0") })

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { ProcessRecord, ProviderEnvironment, FileStamp } from "./environment.js";
+import type { ProcessRecord, ProviderEnvironment, FileStamp, GhosttyTerminalView } from "./environment.js";
 import {
   type ClaudeAgentInventoryFailure,
   type ClaudeAgentInventoryResult,
@@ -8,6 +8,7 @@ import {
   type ClaudeAgentInventorySuccess,
 } from "./claude-agent-inventory.js";
 import { ClaudeProvider } from "./claude.js";
+import { processInstanceToken } from "./shared.js";
 import { activateMenuPill, menuPresentation } from "../menu.js";
 import { FakeNativeHelper } from "../native-helper.js";
 import { NativeSessionControls } from "../session-controls.js";
@@ -17,6 +18,7 @@ const home = "/Users/me";
 const cwd = home + "/Codes/agent-visor";
 const now = new Date("2026-08-22T08:00:00.000Z");
 const nowMs = now.valueOf();
+const ghosttyInstance = processInstanceToken(7, now)!;
 const executable = home + "/.local/bin/claude";
 const managerID = "fa6ddf2e-efba-45cc-90c2-579e461c3ffa";
 const ccID = "8e45ed2c-cd3b-4140-a8da-4614085a3536";
@@ -34,7 +36,7 @@ class FixtureEnvironment implements ProviderEnvironment {
   inventory: ClaudeAgentInventoryResult = inventorySuccess([]);
   clock = now;
   executable: string | undefined = executable;
-  ghosttyViews: Array<{ applicationPID: number; processStartToken: string; terminalId: string; title: string; cwd: string }> = [];
+  ghosttyViews: GhosttyTerminalView[] = [];
 
   now(): Date { return this.clock; }
   async processes(): Promise<ProcessRecord[]> { return this.processRows; }
@@ -56,7 +58,7 @@ class FixtureEnvironment implements ProviderEnvironment {
   async sqlite(_database: string, _sql: string): Promise<unknown[]> { return []; }
   async claudeAgentInventory(): Promise<ClaudeAgentInventoryResult> { return this.inventory; }
   async claudeExecutable(): Promise<string | undefined> { return this.executable; }
-  async ghosttyTerminalViews() { return this.ghosttyViews; }
+  ghosttyTerminalViews: ProviderEnvironment["ghosttyTerminalViews"] = async () => this.ghosttyViews;
 }
 
 function inventorySuccess(
@@ -119,6 +121,7 @@ function addProcess(
   });
   environment.starts.set(pid, now);
   if (!environment.processRows.some((process) => process.pid === 7)) {
+    environment.starts.set(7, now);
     environment.processRows.push({
       pid: 7,
       parentPID: 1,
@@ -148,6 +151,173 @@ function repository(environment: FixtureEnvironment): SessionRepository {
 }
 
 describe("Claude agent-view integration", () => {
+  it("keeps a title-suppressed stale name hidden and drops revoked title trust", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable, "claude attach 8e45ed2c");
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "blocked", { name: "ccx-plg-manifest" }),
+    ]);
+    const view: GhosttyTerminalView = {
+      applicationPID: 7, processStartToken: ghosttyInstance, terminalId: "suppressed",
+      title: "ccx-plg-manifest", cwd,
+    };
+    environment.ghosttyViews = [view];
+    const source = repository(environment);
+    // Captured suppressed frontend leaves this title unchanged on detaching.
+    for (let stage = 0; stage < 2; stage++) {
+      const snapshot = await source.refresh();
+      expect(menuPresentation(snapshot, [], nowMs).pills).toEqual([]);
+      expect(snapshot.sessions.map(({ id }) => id)).toEqual([ccID]);
+    }
+    view.titleUpdatesEnabled = true;
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills.map(({ id }) => id)).toEqual([ccID]);
+    delete view.titleUpdatesEnabled;
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+  });
+
+  it("never guesses between duplicate plain-title jobs in a title-enabled terminal", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "working", { name: "same name" }),
+      backgroundRow("64b38993", blockedID, "done", { name: "same name" }),
+    ]);
+    environment.ghosttyViews = [{
+      applicationPID: 7, processStartToken: ghosttyInstance, terminalId: "owned",
+      title: "same name", cwd, titleUpdatesEnabled: true,
+    }];
+    expect(menuPresentation(await repository(environment).refresh(), [], nowMs).pills).toEqual([]);
+  });
+
+  it("restores one plain-title conversation from a title-enabled client and clears it in overview", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable, "claude attach 8e45ed2c");
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "blocked", { name: "ccx-plg-manifest" }),
+      backgroundRow("64b38993", blockedID, "done", { name: "other job" }),
+    ]);
+    environment.ghosttyViews = [{
+      applicationPID: 7, processStartToken: ghosttyInstance, terminalId: "title-enabled",
+      title: "1 awaiting input · claude agents", cwd, titleUpdatesEnabled: true,
+    }];
+    const source = repository(environment);
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    // Captured CLI 2.1.296 return title has no activity prefix.
+    environment.ghosttyViews[0]!.title = "ccx-plg-manifest";
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills.map(({ id }) => id)).toEqual([ccID]);
+    const helper = new FakeNativeHelper();
+    source.setControls(new NativeSessionControls(helper));
+    expect(await source.focusSession(ccID)).toBeUndefined();
+    expect(helper.ghosttyTerminalFocusRequests).toMatchObject([
+      { terminalId: "title-enabled", title: "ccx-plg-manifest", titleUpdatesEnabled: true },
+    ]);
+    expect(helper.claudeAttachRequests).toEqual([]);
+    environment.ghosttyViews[0]!.title = "1 awaiting input · claude agents";
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+  });
+
+  it("shows a standalone attached conversation without an interactive metadata record", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable, "claude attach 8e45ed2c");
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "working", { name: "ccx-plg-manifest", status: "busy" }),
+      backgroundRow("64b38993", blockedID, "working", { name: "other job", status: "busy" }),
+    ]);
+    environment.ghosttyViews = [{
+      applicationPID: 7, processStartToken: ghosttyInstance, terminalId: "standalone",
+      title: "◐ ccx-plg-manifest", cwd,
+    }];
+    const source = repository(environment);
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills.map(({ id }) => id)).toEqual([ccID]);
+    environment.ghosttyViews[0]!.title = "2 awaiting input · claude agents";
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+  });
+
+  it.each([executable, home + "/.local/share/claude/versions/2.1.296"])(
+    "keeps one canonical pill across multiple terminals and clears its evidence when inventory authority expires (%s)", async (command) => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, command);
+    addMetadata(environment, 900, {
+      sessionId: managerID, cwd, kind: "interactive", status: "idle", parkedJobId: "8e45ed2c",
+    });
+    const inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "working", { name: "ccx-plg-manifest", status: "busy" }),
+    ]);
+    environment.inventory = inventory;
+    environment.ghosttyViews = ["Codes", "claude agents", "◐ ccx-plg-manifest", "✳ ccx-plg-manifest"]
+      .map((title, index) => ({ applicationPID: 7, processStartToken: ghosttyInstance, terminalId: `surface-${index}`, title, cwd }));
+    const source = repository(environment);
+    for (const views of [environment.ghosttyViews, [...environment.ghosttyViews].reverse()]) {
+      environment.ghosttyViews = views;
+      const snapshot = await source.refresh();
+      expect(snapshot.sessions).toHaveLength(1);
+      expect(snapshot.sessions[0]?.claudePresence).toBe("conversation");
+      expect(menuPresentation(snapshot, [], nowMs).pills.map(({ id }) => id)).toEqual([ccID]);
+    }
+    environment.inventory = inventoryFailure(inventorySuccess(inventory.rows, false));
+    const stale = await source.refresh();
+    expect(menuPresentation(stale, [], nowMs).pills).toEqual([]);
+    expect(stale.sessions[0]?.claudePresence).toBe("inventory_unavailable");
+    environment.inventory = inventory;
+    environment.ghosttyTerminalViews = undefined;
+    const unavailable = await source.refresh();
+    expect(menuPresentation(unavailable, [], nowMs).pills).toEqual([]);
+    expect(unavailable.sessions[0]?.claudePresence).toBe("reader_unavailable");
+  });
+
+  it("rejects a terminal observation from a reused Ghostty process before exposing a pill or focus route", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    environment.processRows.find(({ pid }) => pid === 7)!.processStartToken = "replacement-instance";
+    addMetadata(environment, 900, {
+      sessionId: managerID, cwd, kind: "interactive", status: "idle", parkedJobId: "8e45ed2c",
+    });
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "working", { name: "ccx-plg-manifest", status: "busy" }),
+    ]);
+    environment.ghosttyViews = [{
+      applicationPID: 7, processStartToken: "old-instance", terminalId: "surface-a", title: "◐ ccx-plg-manifest", cwd,
+    }];
+    const source = repository(environment);
+    const snapshot = await source.refresh();
+    expect(menuPresentation(snapshot, [], nowMs).pills).toEqual([]);
+    expect(snapshot.sessions[0]).toMatchObject({ claudePresence: "process_changed", section: "working" });
+    const helper = new FakeNativeHelper();
+    const reattachments: Array<{ jobId: string }> = [];
+    source.setControls(new NativeSessionControls(
+      helper, undefined, undefined, undefined, undefined, undefined,
+      async (target) => { reattachments.push(target); },
+    ));
+    expect(await source.focusSession(ccID)).toBeUndefined();
+    expect(helper.ghosttyTerminalFocusRequests).toEqual([]);
+    expect(reattachments).toMatchObject([{ jobId: "8e45ed2c" }]);
+  });
+
+  it("explains an unidentified terminal without changing the canonical working session", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable, "claude attach 8e45ed2c");
+    addMetadata(environment, 900, {
+      sessionId: managerID, cwd, kind: "interactive", status: "idle", parkedJobId: "8e45ed2c",
+    });
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "working", { name: "ccx-plg-manifest", status: "busy" }),
+    ]);
+    environment.ghosttyViews = [{
+      applicationPID: 7, processStartToken: ghosttyInstance, terminalId: "surface-a", title: "Codes", cwd,
+    }];
+
+    const snapshot = await repository(environment).refresh();
+    expect(snapshot.sessions).toHaveLength(1);
+    expect(snapshot.sessions[0]).toMatchObject({
+      id: ccID, title: "ccx-plg-manifest", section: "working",
+      sessionState: { turn: "working" }, ambientEligible: false,
+      claudePresence: "unrecognized_title", canOpenOwner: true,
+    });
+    const menu = menuPresentation(snapshot, [], nowMs);
+    expect(menu.pills).toEqual([]);
+    expect(menu.navigatorPills.map(({ id }) => id)).toEqual([ccID]);
+  });
+
   it("does not reattach an older selection after a newer click wins during failed surface focus", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, executable);
@@ -156,7 +326,7 @@ describe("Claude agent-view integration", () => {
       backgroundRow("8e45ed2c", ccID, "blocked", { name: "ccx-cleanup" }),
       backgroundRow("64b38993", blockedID, "done", { name: "cc-misc" }),
     ]);
-    environment.ghosttyViews = [{ applicationPID: 7, processStartToken: "instance", terminalId: "surface-a", title: "✳ ccx-cleanup", cwd }];
+    environment.ghosttyViews = [{ applicationPID: 7, processStartToken: ghosttyInstance, terminalId: "surface-a", title: "✳ ccx-cleanup", cwd }];
     const helper = new FakeNativeHelper();
     let failFirst!: () => void;
     let started!: () => void;
@@ -191,13 +361,14 @@ describe("Claude agent-view integration", () => {
       backgroundRow("64b38993", blockedID, "done", { name: "cc-misc" }),
     ]);
     environment.ghosttyViews = [{
-      applicationPID: 7, processStartToken: "ghostty-instance",
+      applicationPID: 7, processStartToken: ghosttyInstance,
       terminalId: "048c93af-0c77-4f8c-b6b0-313257df61ae",
       title: "✳ ccx-cleanup", cwd,
     }];
     const source = repository(environment);
     const snapshot = await source.refresh();
     expect(menuPresentation(snapshot, [], nowMs).pills.map(({ id }) => id)).toEqual([ccID]);
+    expect(snapshot.sessions.find(({ id }) => id === ccID)?.claudePresence).toBe("conversation");
     expect(snapshot.sessions.find(({ id }) => id === blockedID)?.ambientEligible).toBe(false);
     expect(snapshot.sessions.some(({ id }) => id === managerID)).toBe(false);
     const helper = new FakeNativeHelper();
@@ -212,9 +383,13 @@ describe("Claude agent-view integration", () => {
 
     // Neither the host UUID nor its parked job changes during this roundtrip.
     environment.ghosttyViews[0]!.title = "1 awaiting input · claude agents";
-    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    const overview = await source.refresh();
+    expect(menuPresentation(overview, [], nowMs).pills).toEqual([]);
+    expect(overview.sessions.map(({ claudePresence }) => claudePresence)).toEqual(["overview", "overview"]);
     environment.ghosttyViews[0]!.title = "◐ cc-misc";
-    expect(menuPresentation(await source.refresh(), [], nowMs).pills.map(({ id }) => id)).toEqual([blockedID]);
+    const switched = await source.refresh();
+    expect(menuPresentation(switched, [], nowMs).pills.map(({ id }) => id)).toEqual([blockedID]);
+    expect(switched.sessions.find(({ id }) => id === ccID)?.claudePresence).toBe("not_displayed");
     // A stale click selects its canonical job; it cannot focus the other view.
     expect(await source.focusSession(ccID)).toBeUndefined();
     expect(helper.ghosttyTerminalFocusRequests).toHaveLength(1);
@@ -234,18 +409,24 @@ describe("Claude agent-view integration", () => {
       backgroundRow("64b38993", blockedID, "done", { name: "ccx-cleanup" }),
     ]);
     environment.ghosttyViews = [{
-      applicationPID: 7, processStartToken: "ghostty-instance", terminalId: "surface-a",
+      applicationPID: 7, processStartToken: ghosttyInstance, terminalId: "surface-a",
       title: "✳ ccx-cleanup", cwd,
     }];
     const source = repository(environment);
-    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    const ambiguous = await source.refresh();
+    expect(menuPresentation(ambiguous, [], nowMs).pills).toEqual([]);
+    expect(ambiguous.sessions.map(({ claudePresence }) => claudePresence)).toEqual(["ambiguous_title", "ambiguous_title"]);
     environment.inventory = inventorySuccess([
       backgroundRow("8e45ed2c", ccID, "blocked", { name: "ccx-cleanup" }),
     ]);
     environment.ghosttyViews[0]!.cwd = home + "/another-project";
-    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    const unrelated = await source.refresh();
+    expect(menuPresentation(unrelated, [], nowMs).pills).toEqual([]);
+    expect(unrelated.sessions[0]?.claudePresence).toBe("not_displayed");
     environment.ghosttyTerminalViews = async () => { throw new Error("permission unavailable"); };
-    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    const failed = await source.refresh();
+    expect(menuPresentation(failed, [], nowMs).pills).toEqual([]);
+    expect(failed.sessions[0]?.claudePresence).toBe("read_failed");
   });
 
   it("reports a failed presence read and recovers exactly one working pill when conversation titles return", async () => {
@@ -261,7 +442,11 @@ describe("Claude agent-view integration", () => {
     const reports: unknown[] = [];
     const source = new SessionRepository([new ClaudeProvider(environment, report => reports.push(report))], { now: () => now });
     environment.ghosttyTerminalViews = async () => { throw new Error("secret-bearing native error"); };
-    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    const failed = await source.refresh();
+    expect(menuPresentation(failed, [], nowMs).pills).toEqual([]);
+    expect(failed.sessions.find(({ id }) => id === ccID)).toMatchObject({
+      claudePresence: "read_failed", sessionState: { turn: "working" },
+    });
     expect(reports.at(-1)).toEqual({
       status: "read_failed", parkedApplications: 1, terminalViews: 0,
       conversationTitles: 0, overviewTitles: 0, unrecognizedTitles: 0, matchedConversations: 0,
@@ -269,13 +454,14 @@ describe("Claude agent-view integration", () => {
 
     // Disabled terminal titles retain the shell title; never guess a job from it.
     environment.ghosttyTerminalViews = async () => environment.ghosttyViews;
-    environment.ghosttyViews = [{ applicationPID: 7, processStartToken: "instance", terminalId: "surface-a", title: "Codes", cwd }];
+    environment.ghosttyViews = [{ applicationPID: 7, processStartToken: ghosttyInstance, terminalId: "surface-a", title: "Codes", cwd }];
     expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
     expect(reports.at(-1)).toMatchObject({ status: "read_succeeded", unrecognizedTitles: 1, matchedConversations: 0 });
 
     environment.ghosttyViews[0]!.title = "◐ ccx-plg-manifest";
     const snapshot = await source.refresh();
     expect(menuPresentation(snapshot, [], nowMs).pills.map(({ id, phase }) => ({ id, phase }))).toEqual([{ id: ccID, phase: "working" }]);
+    expect(snapshot.sessions.find(({ id }) => id === ccID)?.claudePresence).toBe("conversation");
     expect(snapshot.sessions.find(({ id }) => id === blockedID)?.ambientEligible).toBe(false);
     expect(reports.at(-1)).toMatchObject({ status: "read_succeeded", conversationTitles: 1, matchedConversations: 1 });
 
@@ -283,6 +469,40 @@ describe("Claude agent-view integration", () => {
     expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
     expect(reports.at(-1)).toMatchObject({ status: "read_succeeded", overviewTitles: 1, unrecognizedTitles: 0, matchedConversations: 0 });
     expect(JSON.stringify(reports)).not.toMatch(/secret-bearing|Codes|ccx-plg-manifest|cc-misc|surface-a/);
+  });
+
+  it("shows a native versioned Claude conversation once and retains its exact terminal click route", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, home + "/.local/share/claude/versions/2.1.296");
+    addMetadata(environment, 900, {
+      sessionId: managerID, cwd, kind: "interactive", entrypoint: "cli",
+      status: "idle", name: "AV smoke test",
+    });
+    const source = repository(environment);
+    const snapshot = await source.refresh();
+    expect(menuPresentation(snapshot, [], nowMs).pills).toMatchObject([
+      { id: managerID, title: "AV smoke test", phase: "ready" },
+    ]);
+    expect(snapshot.sessions).toHaveLength(1);
+    const helper = new FakeNativeHelper();
+    source.setControls(new NativeSessionControls(helper));
+    const effects: unknown[] = [];
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: managerID },
+      source, (effect) => effects.push(effect));
+    expect(effects).toEqual([]);
+    expect(helper.terminalFocusRequests).toMatchObject([{ pid: 900, tty: "ttys001" }]);
+    expect(helper.claudeAttachRequests).toEqual([]);
+  });
+
+  it("does not mistake an unrelated version-numbered executable for Claude", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, home + "/Codes/2.1.296");
+    addMetadata(environment, 900, {
+      sessionId: managerID, cwd, kind: "interactive", entrypoint: "cli", status: "idle",
+    });
+    const snapshot = await repository(environment).refresh();
+    expect(snapshot.sessions).toEqual([]);
+    expect(menuPresentation(snapshot, [], nowMs).pills).toEqual([]);
   });
 
   it("shows only the open interactive conversation when retained background jobs share its workspace", async () => {
@@ -316,9 +536,10 @@ describe("Claude agent-view integration", () => {
       .toEqual([managerID]);
   });
 
-  it("shows no pills for an agent overview while retaining its background jobs in search", async () => {
+  it.each([executable, home + "/.local/share/claude/versions/2.1.296"])(
+    "shows no pills for an agent overview while retaining its background jobs in search (%s)", async (command) => {
     const environment = new FixtureEnvironment();
-    addProcess(environment, 900, home + "/.local/bin/claude");
+    addProcess(environment, 900, command);
     addMetadata(environment, 900, {
       sessionId: managerID, cwd, kind: "interactive", entrypoint: "cli",
       status: "idle", name: "codes-b8", parkedJobId: "64b38993",
@@ -355,6 +576,7 @@ describe("Claude agent-view integration", () => {
       { id: ccID, title: "cc-misc", phase: "ready" },
     ]);
     expect(attached.sessions.find(({ id }) => id === ccID)?.ambientEligible).toBe(true);
+    expect(attached.sessions.find(({ id }) => id === ccID)?.claudePresence).toBe("interactive");
 
     const helper = new FakeNativeHelper();
     source.setControls(new NativeSessionControls(helper));

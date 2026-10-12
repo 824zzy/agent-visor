@@ -35,6 +35,42 @@ const session = (
 });
 
 describe("groupSessions", () => {
+  it("shows a searchable pill explanation separately from a Claude job's working status", () => {
+    const working = {
+      ...session("ccx-plg-manifest", "working", "2026-08-22T09:59:00.000Z"),
+      source: "Claude Code", subtitle: "Claude Code is working", ambientEligible: false,
+      claudePresence: "unrecognized_title" as const,
+    };
+    expect(sessionPresentation(working)).toEqual({
+      section: "working", title: "In progress", subtitle: "Claude Code is working",
+      pillNotice: "Pill hidden: terminal title cannot identify the displayed conversation.",
+    });
+    expect(selectSessions([working], "terminal title").orderedSessions).toEqual([working]);
+    expect(sessionAction(working)).toBe("owner");
+    for (const claudePresence of ["interactive", "conversation", "overview", "not_displayed"] as const) {
+      expect(sessionPresentation({ ...working, claudePresence })).not.toHaveProperty("pillNotice");
+    }
+  });
+
+  it("explains ambiguity and observation failures without changing a pending approval or its action", () => {
+    const approval = { ...session("approval", "needs_you", "2026-08-22T09:59:00.000Z"),
+      source: "Claude Code", subtitle: "Claude Code needs your input", ambientEligible: false };
+    const cases = [
+      ["ambiguous_title", "Pill hidden: duplicate Claude names in this folder. Rename one session."],
+      ["read_failed", "Pill hidden: terminal could not be checked. Agent Visor will retry."],
+      ["reader_unavailable", "Pill hidden: terminal detection is unavailable."],
+      ["inventory_unavailable", "Pill hidden: Claude sessions could not be checked. Agent Visor will retry."],
+      ["process_changed", "Pill hidden: terminal changed. Agent Visor will check again."],
+    ] as const;
+    for (const [claudePresence, pillNotice] of cases) {
+      const row = { ...approval, claudePresence };
+      expect(sessionPresentation(row)).toEqual({
+        section: "needs_you", title: "Needs you", subtitle: "Claude Code needs your input", pillNotice,
+      });
+      expect(sessionAction(row)).toBe("owner");
+    }
+  });
+
   it("reclassifies the same snapshot as time passes without changing its completion acknowledgment", () => {
     const row = {
       ...session("seen", "ready", "2026-08-15T10:00:00.000Z"),

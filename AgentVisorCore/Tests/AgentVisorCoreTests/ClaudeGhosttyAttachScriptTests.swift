@@ -14,9 +14,10 @@ final class ClaudeGhosttyAttachScriptTests: XCTestCase {
             activate
             set attachCfg to new surface configuration
             set initial working directory of attachCfg to "/tmp/it's \\"here\\""
-            set command of attachCfg to "'/Users/me/.local/bin/claude' attach '62c740e7'"
-            new window with configuration attachCfg
-            return "ok"
+            set command of attachCfg to "/usr/bin/env CLAUDE_CODE_DISABLE_TERMINAL_TITLE=0 '/Users/me/.local/bin/claude' --settings '{\\"env\\":{\\"CLAUDE_CODE_DISABLE_TERMINAL_TITLE\\":\\"0\\"}}' attach '62c740e7'"
+            set wait after command of attachCfg to false
+            set attachWindow to new window with configuration attachCfg
+            return id of focused terminal of selected tab of attachWindow
         end tell
         """)
     }

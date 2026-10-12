@@ -21,6 +21,15 @@ export type SessionSelection = {
   orderedSessions: SessionSummary[];
 };
 
+const pillNotices: Partial<Record<NonNullable<SessionSummary["claudePresence"]>, string>> = {
+  unrecognized_title: "Pill hidden: terminal title cannot identify the displayed conversation.",
+  ambiguous_title: "Pill hidden: duplicate Claude names in this folder. Rename one session.",
+  read_failed: "Pill hidden: terminal could not be checked. Agent Visor will retry.",
+  reader_unavailable: "Pill hidden: terminal detection is unavailable.",
+  inventory_unavailable: "Pill hidden: Claude sessions could not be checked. Agent Visor will retry.",
+  process_changed: "Pill hidden: terminal changed. Agent Visor will check again.",
+};
+
 /** Browser presentation never changes the provider state or action capabilities. */
 export function sessionPresentation(session: SessionSummary, now = new Date()) {
   const tier = session.attentionTier ?? session.section;
@@ -34,7 +43,9 @@ export function sessionPresentation(session: SessionSummary, now = new Date()) {
   const subtitle = section === "history" && completed
     ? `${session.managedBy ? `Managed by ${session.managedBy} · ` : ""}Completed`
     : session.subtitle;
-  return { section, title: sections.find(({ id }) => id === section)!.title, subtitle };
+  const pillNotice = session.claudePresence ? pillNotices[session.claudePresence] : undefined;
+  return { section, title: sections.find(({ id }) => id === section)!.title, subtitle,
+    ...(pillNotice ? { pillNotice } : {}) };
 }
 
 export function groupSessions(sessions: SessionSummary[], now = new Date()): SessionGroup[] {
@@ -126,7 +137,8 @@ export function relativeSessionAge(updatedAt: string, now = new Date()): string 
 
 function searchRank(session: SessionSummary, needle: string, now: Date): number {
   if (session.title.toLocaleLowerCase().includes(needle)) return 0;
-  return [session.subtitle, sessionPresentation(session, now).subtitle, session.source, session.project, session.owner, session.cwd]
+  const presentation = sessionPresentation(session, now);
+  return [session.subtitle, presentation.subtitle, presentation.pillNotice ?? "", session.source, session.project, session.owner, session.cwd]
     .some((value) => value.toLocaleLowerCase().includes(needle)) ? 1 : 2;
 }
 

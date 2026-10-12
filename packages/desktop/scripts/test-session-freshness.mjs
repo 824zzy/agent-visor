@@ -23,6 +23,8 @@ const sessions = [
   makeSession("Expiring completion", "ready", 7 * day - 60_000),
   makeSession("Expired completion", "ready", 9 * day),
   makeSession("Pending approval", "needs_you", 30 * day),
+  { ...makeSession("Claude title unavailable", "working", 0), source: "Claude Code",
+    owner: "Ghostty", ambientEligible: false, claudePresence: "unrecognized_title" },
   ...Array.from({ length: 30 }, (_, index) => makeSession(`Working ${index}`, "working", index * day)),
   ...Array.from({ length: 12 }, (_, index) => makeSession(`Older completion ${index}`, "ready", (15 + index) * day)),
 ];
@@ -73,6 +75,21 @@ try {
       delay === 60000 ? 50 : delay, ...args);
   ` });
   await window.loadFile(path.join(root, "packages/app/dist/index.html"));
+  const claudeRow = `document.getElementById('session-row-Claude%20title%20unavailable')`;
+  await waitFor(`${claudeRow}?.textContent.includes('Pill hidden: terminal title cannot identify the displayed conversation.')`);
+  assert(await evaluate(`${claudeRow}.textContent.includes('Agent is working')`),
+    "the title warning does not replace the worker's status");
+  assert(await evaluate(`document.querySelector('[aria-label^="Claude title unavailable, In progress,"]').getAttribute('aria-label').includes('terminal title cannot identify the displayed conversation.')`),
+    "the visibility explanation survives the wire schema and is accessible");
+  for (const [claudePresence, notice] of [["read_failed", "terminal could not be checked"], ["overview", null], ["conversation", null]]) {
+    snapshot.revision += 1;
+    snapshot.sessions = snapshot.sessions.map(row => row.id === "Claude title unavailable"
+      ? { ...row, claudePresence, ambientEligible: claudePresence === "conversation" } : row);
+    for (const subscriber of subscribers) subscriber(snapshot);
+    await waitFor(notice
+      ? `${claudeRow}?.textContent.includes(${JSON.stringify(notice)})`
+      : `${claudeRow} && !${claudeRow}.textContent.includes('Pill hidden:')`);
+  }
   await waitFor(`document.querySelector('[aria-label^="Expired completion, History,"]')`);
   assert(await evaluate(`document.getElementById('session-row-Expired%20completion').textContent.includes('Completed')`),
     "an expired completion has History accessibility and Completed row text");
