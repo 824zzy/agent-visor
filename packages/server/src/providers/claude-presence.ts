@@ -23,7 +23,7 @@ export async function resolveClaudePresence(
   rows: readonly ClaudeAgentInventoryRow[],
   authoritative: boolean,
   applications: ReadonlyMap<number, string | undefined>,
-  readViews?: () => Promise<GhosttyTerminalView[]>,
+  readViews?: (conversationTitles: readonly string[]) => Promise<GhosttyTerminalView[]>,
 ): Promise<{ jobs: Map<string, Evidence>; report: ClaudePresenceReport }> {
   const report: ClaudePresenceReport = {
     status: !applications.size ? "not_required"
@@ -33,7 +33,10 @@ export async function resolveClaudePresence(
   };
   let views: GhosttyTerminalView[] = [];
   if (authoritative && applications.size && readViews) {
-    try { views = await readViews(); report.status = "read_succeeded"; }
+    try {
+      views = await readViews([...new Set(rows.flatMap(row => row.name ? [row.name] : []))]);
+      report.status = "read_succeeded";
+    }
     catch { report.status = "read_failed"; }
   }
   const jobs = new Map<string, Evidence>(rows.map((row) => [row.id!, {
@@ -54,8 +57,8 @@ export async function resolveClaudePresence(
     report.terminalViews++;
     // The activity indicator is presentation only; name + directory identify a job.
     const name = /^[✳◐◑] /.test(view.title) ? view.title.slice(2)
-      : view.titleUpdatesEnabled === true ? view.title : "";
-    if (/(?:^| · )claude agents$/.test(name || view.title)) {
+      : view.titleUpdatesEnabled === true || view.viewMode === "conversation" ? view.title : "";
+    if (view.viewMode === "overview" || /(?:^| · )claude agents$/.test(name || view.title)) {
       report.overviewTitles++;
       overviewDirectories.add(view.cwd);
       continue;

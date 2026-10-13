@@ -235,6 +235,8 @@ public struct NativeHelperTerminalTarget: Codable, Equatable {
 }
 
 /// A presentation surface, independent of a Claude background worker's PTY.
+public enum NativeHelperGhosttyViewMode: String, Codable { case conversation, overview }
+
 public struct NativeHelperGhosttyTerminalView: Codable, Equatable {
     public let applicationPID: Int32
     public let processStartToken: String
@@ -242,15 +244,17 @@ public struct NativeHelperGhosttyTerminalView: Codable, Equatable {
     public let title: String
     public let cwd: String
     public let titleUpdatesEnabled: Bool?
+    public let viewMode: NativeHelperGhosttyViewMode?
 
     public init(applicationPID: Int32, processStartToken: String, terminalId: String, title: String, cwd: String,
-                titleUpdatesEnabled: Bool? = nil) {
+                titleUpdatesEnabled: Bool? = nil, viewMode: NativeHelperGhosttyViewMode? = nil) {
         self.applicationPID = applicationPID
         self.processStartToken = processStartToken
         self.terminalId = terminalId
         self.title = title
         self.cwd = cwd
         self.titleUpdatesEnabled = titleUpdatesEnabled
+        self.viewMode = viewMode
     }
 
     public var isValid: Bool {
@@ -435,7 +439,7 @@ public enum NativeHelperRequest: Equatable {
     case openCodexThread(id: String, target: NativeHelperCodexThreadTarget)
     case openClaudeAttach(id: String, target: NativeHelperClaudeAttachTarget)
     case focusTerminal(id: String, target: NativeHelperTerminalTarget)
-    case ghosttyTerminalViews(id: String)
+    case ghosttyTerminalViews(id: String, conversationTitles: [String] = [])
     case focusGhosttyTerminal(id: String, target: NativeHelperGhosttyTerminalView)
     case sendTerminal(id: String, target: NativeHelperTerminalTarget, text: String, submit: Bool)
     case cancelTerminal(id: String, target: NativeHelperTerminalTarget)
@@ -443,7 +447,7 @@ public enum NativeHelperRequest: Equatable {
 
     public var id: String {
         switch self {
-        case .ghosttyTerminalViews(let id), .focusGhosttyTerminal(let id, _),
+        case .ghosttyTerminalViews(let id, _), .focusGhosttyTerminal(let id, _),
              .screenTopology(let id), .accessibilityStatus(let id),
              .notificationStatus(let id), .requestNotifications(let id),
              .reconcileNotifications(let id, _, _),
@@ -468,7 +472,7 @@ public enum NativeHelperRequest: Equatable {
             "present_pills", "reconcile_notifications", "reconcile_pi_restoration",
                 "focus", "open_codex_thread", "open_claude_attach", "focus_terminal", "send_terminal",
                 "cancel_terminal", "cycle_permission_mode", "focus_ghostty_terminal",
-        ].contains(method)
+        ].contains(method) || (method == "ghostty_terminal_views" && object["params"] != nil)
             ? ["version", "id", "method", "params"]
             : ["version", "id", "method"]
         guard Set(object.keys) == requiredKeys,
@@ -484,7 +488,13 @@ public enum NativeHelperRequest: Equatable {
 
         switch method {
         case "ghostty_terminal_views":
-            return .ghosttyTerminalViews(id: wire.id)
+            if let params = wire.params {
+                guard Set(params.keys) == ["conversationTitles"], let titles = params.conversationTitles,
+                      titles.count <= 64, titles.allSatisfy({ !$0.isEmpty && $0.utf16.count <= 512 && !$0.contains("\0") }) else {
+                    throw NativeHelperWireError.invalidRequest
+                }
+            }
+            return .ghosttyTerminalViews(id: wire.id, conversationTitles: wire.params?.conversationTitles ?? [])
         case "focus_ghostty_terminal":
             guard let target = wire.params?.ghosttyTerminalTarget, target.isValid else {
                 throw NativeHelperWireError.invalidRequest
@@ -889,11 +899,18 @@ public struct NativeHelperFrameDecoder {
 
 private func hasStrictNestedFields(method: String, object: [String: Any]) -> Bool {
     switch method {
+    case "ghostty_terminal_views":
+        guard let value = object["params"] else { return true }
+        guard let params = value as? [String: Any], Set(params.keys) == ["conversationTitles"],
+              params["conversationTitles"] is [String] else { return false }
+        return true
     case "focus_ghostty_terminal":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys) == ["target"],
               let target = params["target"] as? [String: Any] else { return false }
-        return Set(target.keys) == ["applicationPID", "processStartToken", "terminalId", "title", "cwd"]
+        let required: Set<String> = ["applicationPID", "processStartToken", "terminalId", "title", "cwd"]
+        return required.isSubset(of: Set(target.keys))
+            && Set(target.keys).isSubset(of: required.union(["titleUpdatesEnabled", "viewMode"]))
     case "present_pills":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys).contains("pills"),
@@ -1022,6 +1039,7 @@ private struct WireParameters: Decodable {
     let claudeAttachTarget: NativeHelperClaudeAttachTarget?
     let terminalTarget: NativeHelperTerminalTarget?
     let ghosttyTerminalTarget: NativeHelperGhosttyTerminalView?
+    let conversationTitles: [String]?
     let text: String?
     let submit: Bool?
     let keys: [String]
@@ -1093,6 +1111,7 @@ private struct WireParameters: Decodable {
         ghosttyTerminalTarget = try? container.decodeIfPresent(
             NativeHelperGhosttyTerminalView.self, forKey: .init("target")
         )
+        conversationTitles = try container.decodeIfPresent([String].self, forKey: .init("conversationTitles"))
         text = try container.decodeIfPresent(String.self, forKey: .init("text"))
         submit = try container.decodeIfPresent(Bool.self, forKey: .init("submit"))
     }

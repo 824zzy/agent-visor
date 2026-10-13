@@ -1002,6 +1002,7 @@ export const nativeHelperGhosttyTerminalViewSchema = z.object({
   cwd: z.string().startsWith("/").max(4_096).regex(/^[^\0]+$/),
   /** Only helper-created attach clients with explicit title-enabled settings. */
   titleUpdatesEnabled: z.literal(true).optional(),
+  viewMode: z.enum(["conversation", "overview"]).optional(),
 }).strict();
 
 export const nativeHelperNotificationSchema = z.object({
@@ -1043,7 +1044,9 @@ const nativeHelperTerminalTextSchema = z.string()
   });
 
 export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
-  z.object({ ...helperEnvelope, method: z.literal("ghostty_terminal_views") }).strict(),
+  z.object({ ...helperEnvelope, method: z.literal("ghostty_terminal_views"),
+    params: z.object({ conversationTitles: z.array(z.string().min(1).max(512)).max(64) }).strict().optional(),
+  }).strict(),
   z.object({
     ...helperEnvelope,
     method: z.literal("focus_ghostty_terminal"),

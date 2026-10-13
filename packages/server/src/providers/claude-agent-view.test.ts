@@ -178,6 +178,39 @@ describe("Claude agent-view integration", () => {
       event: "PermissionRequest", status: "waiting_for_approval", receivedAt: now.toISOString() });
     expect(source.current().sessions).toHaveLength(1);
   });
+  it("restores a plain-title conversation and exact click across restart while hiding its stale title in overview", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "working", { name: "ccx-thinking-block-sneha", status: "busy" }),
+    ]);
+    const view: GhosttyTerminalView = {
+      applicationPID: 7, processStartToken: ghosttyInstance, terminalId: "manual",
+      title: "ccx-thinking-block-sneha", cwd, viewMode: "conversation",
+    };
+    environment.ghosttyViews = [view];
+    for (let restart = 0; restart < 2; restart++) {
+      const source = repository(environment);
+      const helper = new FakeNativeHelper();
+      source.setControls(new NativeSessionControls(helper));
+      const snapshot = await source.refresh();
+      expect(menuPresentation(snapshot, [], nowMs).pills.map(p => p.id)).toEqual([ccID]);
+      expect(await source.focusSession(ccID)).toBeUndefined();
+      expect(helper.ghosttyTerminalFocusRequests).toMatchObject([{ terminalId: "manual", viewMode: "conversation" }]);
+      expect(helper.claudeAttachRequests).toEqual([]);
+      // Title suppression leaves the name unchanged. Fresh view evidence wins
+      // even if the surface has previously been marked title-enabled.
+      view.viewMode = "overview";
+      view.titleUpdatesEnabled = true;
+      expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+      source.applyHook({ sessionId: ccID, provider: "claude_code", cwd,
+        event: "PermissionRequest", status: "waiting_for_approval", receivedAt: now.toISOString() });
+      expect(menuPresentation(source.current(), [], nowMs).pills).toEqual([]);
+      view.viewMode = "conversation";
+      delete view.titleUpdatesEnabled;
+    }
+  });
+
   it("keeps a title-suppressed stale name hidden and drops revoked title trust", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, executable, "claude attach 8e45ed2c");

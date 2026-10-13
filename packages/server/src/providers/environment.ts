@@ -57,7 +57,7 @@ export interface ProviderEnvironment {
   /** Resolve the trusted Claude executable used by exact background attach. */
   claudeExecutable?(): Promise<string | undefined>;
   /** Current Ghostty titles; runtime ownership alone cannot identify an attached job. */
-  ghosttyTerminalViews?(): Promise<GhosttyTerminalView[]>;
+  ghosttyTerminalViews?(conversationTitles?: readonly string[]): Promise<GhosttyTerminalView[]>;
 }
 
 export type GhosttyTerminalView = NativeHelperGhosttyTerminalView;
@@ -70,13 +70,13 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
   private readonly startedAtByPID = new Map<number, Promise<Date | undefined>>();
   private readonly claudeInventory: ClaudeAgentInventory;
   private claudeExecutablePath?: Promise<string | undefined>;
-  readonly ghosttyTerminalViews?: () => Promise<GhosttyTerminalView[]>;
+  readonly ghosttyTerminalViews?: (conversationTitles?: readonly string[]) => Promise<GhosttyTerminalView[]>;
 
   constructor(
     readonly home: string,
     options: {
       observedWindowMs?: number | (() => number); now?: () => Date;
-      ghosttyTerminalViews?: () => Promise<GhosttyTerminalView[]>;
+      ghosttyTerminalViews?: (conversationTitles?: readonly string[]) => Promise<GhosttyTerminalView[]>;
     } = {},
   ) {
     this.observedWindow = options.observedWindowMs ?? 42 * 60 * 60 * 1_000;

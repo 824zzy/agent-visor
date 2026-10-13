@@ -30,7 +30,7 @@ public enum GhosttyTerminalViewScript {
             function conversation(title) {
                 if (typeof title !== 'string') return null;
                 var name = /^[✳◐◑] /.test(title) ? title.slice(2)
-                    : expected.titleUpdatesEnabled === true ? title : null;
+                    : expected.titleUpdatesEnabled === true || expected.viewMode === 'conversation' ? title : null;
                 return name && name !== 'Claude Code' && !/(?:^| · )claude agents$/.test(name) ? name : null;
             }
             var name = conversation(expected.title);

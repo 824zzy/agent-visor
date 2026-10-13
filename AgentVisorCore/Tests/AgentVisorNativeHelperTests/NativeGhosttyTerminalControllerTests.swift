@@ -5,6 +5,193 @@ import JavaScriptCore
 import Darwin
 
 final class NativeGhosttyTerminalControllerTests: XCTestCase {
+    func testApplicationReplacementDuringFooterReadCannotPublishConversationEvidence() {
+        var identity = NativeGhosttyTerminalController.ApplicationIdentity(pid: 7, token: "original")
+        let controller = NativeGhosttyTerminalController(readViewText: { _, _ in
+            identity = .init(pid: 7, token: "replacement")
+            return "ccx-thinking-block-sneha —\naccept edits on · ← for agents"
+        }, resolveApplication: { identity }, execute: { _ in
+            #"[{"terminalId":"manual","title":"ccx-thinking-block-sneha","cwd":"/Users/me/Codes"}]"#
+        })
+        XCTAssertThrowsError(try controller.views())
+    }
+
+    func testFooterInspectionIsScopedToClaudeConversationTitles() throws {
+        var inspected: [String] = []
+        let controller = NativeGhosttyTerminalController(readViewText: { _, title in
+            inspected.append(title)
+            return nil
+        }, resolveApplication: { .init(pid: 7, token: "same-instance") }, execute: { _ in
+            #"[{"terminalId":"claude","title":"ccx-thinking-block-sneha","cwd":"/Users/me/Codes"},{"terminalId":"shell","title":"private-shell","cwd":"/Users/me/Other"}]"#
+        })
+        _ = try controller.views(conversationTitles: ["ccx-thinking-block-sneha"])
+        XCTAssertEqual(inspected, ["ccx-thinking-block-sneha"])
+        inspected = []
+        _ = try controller.views(conversationTitles: [])
+        XCTAssertEqual(inspected, [])
+    }
+
+    func testPersistedEvidenceIsRevokedForChangedProcessDirectoryAndClosedSurface() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("terminal-evidence.json")
+        var identity = NativeGhosttyTerminalController.ApplicationIdentity(pid: 7, token: "original")
+        var cwd = "/Users/me/Codes"
+        var closed = false
+        func controller() -> NativeGhosttyTerminalController {
+            NativeGhosttyTerminalController(storageURL: file, resolveApplication: { identity }, execute: { _ in
+                closed ? "[]" : "[{\"terminalId\":\"saved\",\"title\":\"ccx-thinking-block-sneha\",\"cwd\":\"\(cwd)\"}]"
+            }, openAttach: { _ in "saved" })
+        }
+        XCTAssertTrue(controller().openClaudeAttach(.init(
+            cwd: cwd, executable: "/Users/me/.local/bin/claude", jobId: "9dd37798"
+        )))
+        let saved = try Data(contentsOf: file)
+        XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        identity = .init(pid: 7, token: "replacement")
+        XCTAssertNil(try controller().views()[0].titleUpdatesEnabled)
+        identity = .init(pid: 7, token: "original")
+        try saved.write(to: file)
+        cwd = "/Users/me/Other"
+        XCTAssertNil(try controller().views()[0].titleUpdatesEnabled)
+        cwd = "/Users/me/Codes"
+        try saved.write(to: file)
+        closed = true
+        XCTAssertEqual(try controller().views(), [])
+        closed = false
+        XCTAssertNil(try controller().views()[0].titleUpdatesEnabled)
+    }
+
+    func testUnknownQuotedAndDuplicateSurfaceContentCannotConfirmAConversation() throws {
+        var rows = #"[{"terminalId":"a","title":"ccx-thinking-block-sneha","cwd":"/Users/me/Codes"}]"#
+        var footer: String? = "An example: ccx-thinking-block-sneha —\naccept edits on · ← for agents\n❯ user prompt"
+        let controller = NativeGhosttyTerminalController(readViewText: { _, _ in footer },
+            resolveApplication: { .init(pid: 7, token: "same-instance") }, execute: { _ in rows })
+        XCTAssertNil(try controller.views()[0].viewMode)
+        footer = nil
+        XCTAssertNil(try controller.views()[0].viewMode)
+        footer = "ccx-thinking-block-sneha —\naccept edits on · ← for agents"
+        rows = #"[{"terminalId":"a","title":"ccx-thinking-block-sneha","cwd":"/Users/me/Codes"},{"terminalId":"b","title":"ccx-thinking-block-sneha","cwd":"/Users/me/Codes"}]"#
+        XCTAssertTrue(try controller.views().allSatisfy { $0.viewMode == nil })
+    }
+
+    func testFooterDoesNotUseAnEarlierMentionAsTheCurrentConversation() throws {
+        let controller = NativeGhosttyTerminalController(readViewText: { _, _ in
+            "ccx-thinking-block-sneha —\nMentioned above in the transcript\nanother-conversation —\nOpus 5.5 | Codes\naccept edits on · ← for agents"
+        }, resolveApplication: { .init(pid: 7, token: "same-instance") },
+            execute: { _ in #"[{"terminalId":"manual","title":"ccx-thinking-block-sneha","cwd":"/Users/me/Codes"}]"# })
+        XCTAssertNil(try controller.views()[0].viewMode)
+    }
+
+    func testInvalidViewResponseDoesNotEraseVerifiedTerminalEvidence() throws {
+        var rows = #"[{"terminalId":"saved","title":"ccx-thinking-block-sneha","cwd":"/Users/me/Codes"}]"#
+        let valid = rows
+        let controller = NativeGhosttyTerminalController(resolveApplication: { .init(pid: 7, token: "same-instance") },
+            execute: { _ in rows }, openAttach: { _ in "saved" })
+        XCTAssertTrue(controller.openClaudeAttach(.init(
+            cwd: "/Users/me/Codes", executable: "/Users/me/.local/bin/claude", jobId: "9dd37798"
+        )))
+        rows = #"[{"terminalId":"saved","title":"ccx-thinking-block-sneha","cwd":"invalid"}]"#
+        XCTAssertThrowsError(try controller.views())
+        rows = valid
+        XCTAssertEqual(try controller.views()[0].titleUpdatesEnabled, true)
+    }
+
+    func testRecoveredFocusRejectsAConversationChangeDuringActivation() throws {
+        var name = "ccx-thinking-block-sneha"
+        let controller = NativeGhosttyTerminalController(readViewText: { _, _ in
+            name + " —\naccept edits on · ← for agents"
+        }, resolveApplication: { .init(pid: 7, token: "same-instance") }, execute: { source in
+            if source == GhosttyTerminalViewScript.list {
+                return "[{\"terminalId\":\"manual\",\"title\":\"\(name)\",\"cwd\":\"/Users/me/Codes\"}]"
+            }
+            name = "another-conversation"
+            return "ok"
+        })
+        let view = try XCTUnwrap(controller.views().first)
+        XCTAssertFalse(controller.focus(view))
+    }
+
+    func testTrackedPlainTitleIsNotFocusedWhenFreshEvidenceShowsOverview() throws {
+        var footer: String?
+        var focuses = 0
+        let rows = #"[{"terminalId":"saved","title":"ccx-thinking-block-sneha","cwd":"/Users/me/Codes"}]"#
+        let controller = NativeGhosttyTerminalController(readViewText: { _, _ in footer },
+            resolveApplication: { .init(pid: 7, token: "same-instance") },
+            execute: { source in
+                if source == GhosttyTerminalViewScript.list { return rows }
+                focuses += 1
+                return "ok"
+            }, openAttach: { _ in "saved" })
+        XCTAssertTrue(controller.openClaudeAttach(.init(
+            cwd: "/Users/me/Codes", executable: "/Users/me/.local/bin/claude", jobId: "9dd37798"
+        )))
+        let target = try XCTUnwrap(controller.views().first)
+        footer = "accept edits · enter to return · space to reply · ctrl+x to delete · ? for shortcuts"
+        XCTAssertFalse(controller.focus(target))
+        XCTAssertEqual(focuses, 0)
+    }
+
+    func testRecoveredPlainTitleClickUsesExactSurfaceAndRejectsOverviewBeforeFocusing() throws {
+        let context = try XCTUnwrap(JSContext())
+        context.evaluateScript(#"""
+        var focused = [];
+        function Application(){return {
+            running: function(){return true}, terminals: function(){return [{
+                id: function(){return 'manual'}, name: function(){return 'ccx-thinking-block-sneha'},
+                workingDirectory: function(){return '/Users/me/Codes'}
+            }]}, focus: function(t){focused.push(t.id())}, activate: function(){}
+        };}
+        """#)
+        var footer = "ccx-thinking-block-sneha —\naccept edits on · ← for agents"
+        let controller = NativeGhosttyTerminalController(readViewText: { _, _ in footer },
+            resolveApplication: { .init(pid: 7, token: "same-instance") },
+            execute: { context.evaluateScript($0)?.toString() })
+        let view = try XCTUnwrap(controller.views().first)
+        XCTAssertTrue(controller.focus(view))
+        XCTAssertEqual(context.evaluateScript("JSON.stringify(focused)")?.toString(), #"["manual"]"#)
+        footer = "accept edits · enter to return · space to reply · ctrl+x to delete · ? for shortcuts"
+        XCTAssertFalse(controller.focus(view))
+        XCTAssertEqual(context.evaluateScript("focused.length")?.toInt32(), 1)
+        XCTAssertNil(context.exception)
+    }
+
+    func testPlainTitleConversationIsRecoveredFromCurrentFooterWithoutAttachmentTrust() throws {
+        var footer = "ccx-thinking-block-sneha —\nOpus 5.5 | Codes\naccept edits on · ← for agents"
+        let identity = NativeGhosttyTerminalController.ApplicationIdentity(pid: 7, token: "same-instance")
+        func controller() -> NativeGhosttyTerminalController {
+            NativeGhosttyTerminalController(readViewText: { _, _ in footer }, resolveApplication: { identity },
+                execute: { _ in #"[{"terminalId":"manual","title":"ccx-thinking-block-sneha","cwd":"/Users/me/Codes"}]"# })
+        }
+        XCTAssertEqual(try controller().views()[0].viewMode, .conversation)
+        // A suppressed title stays unchanged when the UI enters overview.
+        footer = "Needs input\nCompleted\n❯ describe a task for a new session\naccept edits · enter to return · space to reply · ctrl+x to delete · ? for shortcuts"
+        XCTAssertEqual(try controller().views()[0].viewMode, .overview)
+        footer = "ccx-thinking-block-sneha —\naccept edits on · ← for agents"
+        XCTAssertEqual(try controller().views()[0].viewMode, .conversation)
+    }
+
+    func testCreatedTerminalEvidenceSurvivesHelperRestart() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("terminal-evidence.json")
+        let identity = NativeGhosttyTerminalController.ApplicationIdentity(pid: 7, token: "same-instance")
+        let rows = #"[{"terminalId":"saved","title":"ccx-thinking-block-sneha","cwd":"/Users/me/Codes"}]"#
+        func controller() -> NativeGhosttyTerminalController {
+            NativeGhosttyTerminalController(storageURL: file, resolveApplication: { identity },
+                execute: { $0 == GhosttyTerminalViewScript.list ? rows : "ok" }, openAttach: { _ in "saved" })
+        }
+        let first = controller()
+        XCTAssertTrue(first.openClaudeAttach(.init(
+            cwd: "/Users/me/Codes", executable: "/Users/me/.local/bin/claude", jobId: "9dd37798"
+        )))
+        XCTAssertEqual(try first.views()[0].titleUpdatesEnabled, true)
+        let restarted = controller()
+        let view = try restarted.views()[0]
+        XCTAssertEqual(view.titleUpdatesEnabled, true)
+        XCTAssertTrue(restarted.focus(view))
+    }
+
     func testTrackedAttachmentCanLaunchGhosttyWhenItWasNotRunning() throws {
         var identity: NativeGhosttyTerminalController.ApplicationIdentity?
         let controller = NativeGhosttyTerminalController(

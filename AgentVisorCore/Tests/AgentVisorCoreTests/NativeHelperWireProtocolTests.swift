@@ -2,6 +2,34 @@ import XCTest
 @testable import AgentVisorCore
 
 final class NativeHelperWireProtocolTests: XCTestCase {
+    func testRecoveredGhosttyViewEvidenceSurvivesTheActualFocusRequestDecoder() throws {
+        for titleEnabled in [true, false] {
+            let target = NativeHelperGhosttyTerminalView(applicationPID: 7, processStartToken: "instance",
+                terminalId: "manual", title: "ccx-thinking-block-sneha", cwd: "/Users/me/Codes",
+                titleUpdatesEnabled: titleEnabled ? true : nil, viewMode: .conversation)
+            var fields = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(target)) as? [String: Any])
+            func request() throws -> Data {
+                try JSONSerialization.data(withJSONObject: ["version": 1, "id": "focus", "method": "focus_ghostty_terminal",
+                    "params": ["target": fields]])
+            }
+            XCTAssertEqual(try NativeHelperRequest.decode(request()), .focusGhosttyTerminal(id: "focus", target: target))
+            fields["unexpected"] = true
+            XCTAssertThrowsError(try NativeHelperRequest.decode(request()))
+        }
+    }
+
+    func testGhosttyFooterScopeIsOptionalBoundedAndStrict() throws {
+        func request(_ params: Any) throws -> Data {
+            try JSONSerialization.data(withJSONObject: ["version": 1, "id": "views",
+                "method": "ghostty_terminal_views", "params": params])
+        }
+        XCTAssertEqual(try NativeHelperRequest.decode(request(["conversationTitles": ["ccx-thinking-block-sneha"]])),
+                       .ghosttyTerminalViews(id: "views", conversationTitles: ["ccx-thinking-block-sneha"]))
+        XCTAssertThrowsError(try NativeHelperRequest.decode(request(["conversationTitles": Array(repeating: "name", count: 65)])))
+        XCTAssertThrowsError(try NativeHelperRequest.decode(request(["conversationTitles": [""]])))
+        XCTAssertThrowsError(try NativeHelperRequest.decode(request(["conversationTitles": ["name"], "unexpected": true])))
+    }
+
     func testPillPresentationAcceptsDurableAttention() throws {
         XCTAssertNoThrow(try NativeHelperRequest.decode(Data(#"{"version":1,"id":"pills","method":"present_pills","params":{"pills":[{"id":"test","title":"Test","phase":"ready","attentionTier":"ready","completionUnseen":true,"priority":0,"accessibilityLabel":"Test, unopened"}]}}"#.utf8)))
     }

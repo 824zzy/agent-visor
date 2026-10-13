@@ -27,7 +27,7 @@ import {
 } from "@agent-visor/protocol";
 
 export interface NativeHelperAdapter {
-  ghosttyTerminalViews?(): Promise<NativeHelperGhosttyTerminalView[]>;
+  ghosttyTerminalViews?(conversationTitles?: readonly string[]): Promise<NativeHelperGhosttyTerminalView[]>;
   focusGhosttyTerminal?(target: NativeHelperGhosttyTerminalView): Promise<void>;
   /** False when the signed helper process is not available for a real action. */
   isAvailable?(): boolean;
@@ -424,9 +424,20 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     await this.accepted("open_claude_attach", { target });
   }
 
-  async ghosttyTerminalViews(): Promise<NativeHelperGhosttyTerminalView[]> {
-    const response = await this.request("ghostty_terminal_views");
+  async ghosttyTerminalViews(conversationTitles?: readonly string[]): Promise<NativeHelperGhosttyTerminalView[]> {
+    let response = await this.request("ghostty_terminal_views");
     if (response.result.type !== "ghostty_terminal_views") throw new Error("Unexpected helper response.");
+    if (conversationTitles?.length) {
+      const catalog = new Set(conversationTitles);
+      const matches = [...new Set(response.result.views.flatMap(view => {
+        const name = /^[✳◐◑] /.test(view.title) ? view.title.slice(2) : view.title;
+        return catalog.has(name) ? [name] : [];
+      }))];
+      if (matches.length) {
+        response = await this.request("ghostty_terminal_views", { conversationTitles: matches });
+        if (response.result.type !== "ghostty_terminal_views") throw new Error("Unexpected helper response.");
+      }
+    }
     return response.result.views;
   }
 

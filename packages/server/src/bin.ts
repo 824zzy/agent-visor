@@ -104,9 +104,9 @@ await runDaemon(async (lifetime) => {
       () => settings.current().codexHomes,
       (home) => settings.addDiscoveredCodexHome(home),
       () => settings.current().ignoredCodexHomes,
-      async () => {
+      async (titles) => {
         if (!nativeHelper?.ghosttyTerminalViews) throw new Error("Native terminal view reader is unavailable.");
-        return nativeHelper.ghosttyTerminalViews();
+        return nativeHelper.ghosttyTerminalViews(titles);
       },
       report => claudePresenceDiagnostics.record(report),
     ),

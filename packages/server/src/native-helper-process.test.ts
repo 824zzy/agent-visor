@@ -79,6 +79,24 @@ describe("native helper framed connection", () => {
     vi.unstubAllEnvs();
   });
 
+  it("inspects footer evidence only for catalog names currently present in Ghostty", async () => {
+    helper = await NativeHelperProcess.start("/fixture/Helper.app/Contents/MacOS/helper", () => {});
+    respond = request => peer.write(frame({ version: 1, id: request.id, ok: true,
+      result: { type: "ghostty_terminal_views", views: [
+        { applicationPID: 7, processStartToken: "instance", terminalId: "claude",
+          title: "ccx-thinking-block-sneha", cwd: "/repo",
+          ...(request.params ? { viewMode: "conversation" } : {}) },
+        { applicationPID: 7, processStartToken: "instance", terminalId: "shell", title: "private-shell", cwd: "/other" },
+      ] } }));
+    const views = await helper.ghosttyTerminalViews(["ccx-thinking-block-sneha", "not-open"]);
+    expect(views[0]?.viewMode).toBe("conversation");
+    expect(requests.map(r => r.params)).toEqual([undefined, { conversationTitles: ["ccx-thinking-block-sneha"] }]);
+    requests = [];
+    await helper.ghosttyTerminalViews(["not-open"]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.params).toBeUndefined();
+  });
+
   it("opens a later native pill after a malformed reply, without an app-launch fallback", async () => {
     const effects: unknown[] = [];
     let activation: Promise<void> | undefined;

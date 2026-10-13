@@ -28,11 +28,28 @@ import {
   daemonErrorSchema,
   clientMessageSchema,
   nativeServicesStateSchema,
+  nativeHelperResponseSchema,
+  nativeHelperRequestSchema,
   serverMessageSchema,
   sessionSnapshotSchema,
 } from "./index.js";
 
 describe("session snapshot protocol", () => {
+  it("accepts bounded Ghostty footer scopes and rejects broader requests", () => {
+    const base = { version: 1, id: "views", method: "ghostty_terminal_views" };
+    expect(nativeHelperRequestSchema.safeParse(base).success).toBe(true);
+    expect(nativeHelperRequestSchema.safeParse({ ...base, params: { conversationTitles: ["ccx-thinking-block-sneha"] } }).success).toBe(true);
+    expect(nativeHelperRequestSchema.safeParse({ ...base, params: { conversationTitles: Array(65).fill("name") } }).success).toBe(false);
+    expect(nativeHelperRequestSchema.safeParse({ ...base, params: { conversationTitles: ["name"], unexpected: true } }).success).toBe(false);
+  });
+
+  it.each(["conversation", "overview"])("preserves Ghostty %s evidence across the helper boundary", (viewMode) => {
+    const response = nativeHelperResponseSchema.parse({ version: 1, id: "views", ok: true,
+      result: { type: "ghostty_terminal_views", views: [{ applicationPID: 7, processStartToken: "instance",
+        terminalId: "manual", title: "ccx-thinking-block-sneha", cwd: "/Users/me/Codes", viewMode }] } });
+    expect(response).toMatchObject({ result: { views: [{ viewMode }] } });
+  });
+
   it("keeps native helper limits aligned with the Swift wire contract", () => {
     expect(NATIVE_HELPER_MAX_TEXT_BYTES).toBe(65_536);
     expect(NATIVE_HELPER_MAX_FRAME_BYTES).toBe(1_048_576);

@@ -282,7 +282,7 @@ export class ClaudeProvider implements ProviderAdapter {
       [...inventoryRows.values()].filter((row) => !hiddenInventoryJobs.has(row.id!.toLowerCase())),
       inventory?.authoritative === true, parkedGhosttyApplications,
       this.environment.ghosttyTerminalViews
-        ? () => this.environment.ghosttyTerminalViews!() : undefined,
+        ? (titles) => this.environment.ghosttyTerminalViews!(titles) : undefined,
     );
     // Observability must never change session discovery or cause a retry.
     try { this.reportPresence?.(presence); } catch { /* Diagnostic sink unavailable. */ }

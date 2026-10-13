@@ -17,7 +17,7 @@ export function liveProviders(
   codexHomes: () => CodexHome[] = () => [],
   saveDiscoveredCodexHome?: (home: CodexHome) => Promise<void>,
   ignoredCodexHomes: () => string[] = () => [],
-  ghosttyTerminalViews?: () => Promise<GhosttyTerminalView[]>,
+  ghosttyTerminalViews?: (conversationTitles?: readonly string[]) => Promise<GhosttyTerminalView[]>,
   reportClaudePresence?: (report: ClaudePresenceReport) => void,
 ): ProviderAdapter[] {
   const environment = new LiveProviderEnvironment(home, { observedWindowMs, ghosttyTerminalViews });

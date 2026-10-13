@@ -142,7 +142,13 @@ private func handle(
     guard getpeereid(client, &peerUID, &peerGID) == 0, peerUID == getuid() else { return }
 
     var decoder = NativeHelperFrameDecoder()
-    let ghostty = NativeGhosttyTerminalController()
+    let dataPath = ProcessInfo.processInfo.environment["AGENT_VISOR_DATA_DIR"]
+    let dataRoot = dataPath.flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : nil }
+        ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Agent Visor")
+    let ghostty = NativeGhosttyTerminalController(
+        storageURL: dataRoot.appendingPathComponent("ghostty-terminal-evidence.json"),
+        readViewText: { NativeGhosttyViewModeReader.readFooter(application: $0, title: $1) }
+    )
     var bytes = [UInt8](repeating: 0, count: 16_384)
 
     while true {
@@ -187,9 +193,9 @@ private func response(
         switch try NativeHelperRequest.decode(data) {
         case .screenTopology(let id):
             return .screenTopology(id: id, screens: screenTopology())
-        case .ghosttyTerminalViews(let id):
+        case .ghosttyTerminalViews(let id, let titles):
             do {
-                return .ghosttyTerminalViews(id: id, views: try ghostty.views())
+                return .ghosttyTerminalViews(id: id, views: try ghostty.views(conversationTitles: titles))
             } catch {
                 return .error(id: id, code: .failed, message: "Current Ghostty terminal views could not be read.")
             }
