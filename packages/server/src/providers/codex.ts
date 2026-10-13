@@ -252,7 +252,10 @@ export class CodexProvider implements ProviderAdapter {
     // time is not activity: opening an old thread also writes settings records.
     // Catalog membership is a separate policy: a dormant thread stays listed
     // and openable as Recent.
-    const phase = transcript?.pendingQuestionIds?.length && lifecycle?.phase === "working" ? "needs_you" : lifecycle
+    const asyncQuestionAt = transcript?.pendingAsyncQuestions?.reduce<string | undefined>(
+      (latest, question) => !latest || question.observedAt > latest ? question.observedAt : latest, undefined,
+    );
+    const phase = asyncQuestionAt || (transcript?.pendingQuestionIds?.length && lifecycle?.phase === "working") ? "needs_you" : lifecycle
       ? transcriptPhase({
         marker: lifecycle.phase === "working" ? "started" : "completed",
         transcriptModifiedAt: lifecycle.phase === "ready" ? lifecycle.observedAt : transcript?.activityAt,
@@ -284,7 +287,8 @@ export class CodexProvider implements ProviderAdapter {
       cwd: thread.cwd,
       owner,
       section,
-      updatedAt: section === "needs_you" ? transcript?.questionAt ?? lifecycle!.observedAt : codexLifecycle?.observedAt ?? iso(thread.updatedAt * 1_000),
+      updatedAt: section === "needs_you" ? [transcript?.questionAt, asyncQuestionAt].filter((at): at is string => Boolean(at)).sort().at(-1)!
+        : codexLifecycle?.observedAt ?? iso(thread.updatedAt * 1_000),
       ...(codexLifecycle ? { codexLifecycle } : {}),
       conversationState: thread.archived ? "archived" : "open",
       ...(codexLifecycle ? { turnState: section === "needs_you" ? "needs_you" as const : codexLifecycle.phase === "working" ? "working" as const : "ready" as const } : {}),

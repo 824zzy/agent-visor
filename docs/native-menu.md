@@ -58,6 +58,18 @@ Full-screen detection uses native `AXFullScreen` evidence on the selected displa
 
 ## Session items
 
+Codex async questions remain yellow Needs you while unanswered, including after
+delivery acknowledgment, sibling work, turn completion, and later turn starts.
+A structured user reply resolves only its exact call ID and question index in that
+conversation. Both array and single-object reply envelopes are supported. Explicit
+delivery rejection removes the request; unknown output and malformed replies do not.
+Blocking questions retain their existing matching-result and turn-boundary rules.
+Native-owned questions are answered in Codex; Agent Visor does not acquire a writer.
+Checkpoints retain only bounded request IDs, indices, and timestamps. Normal rows
+use 8 KiB prefixes; oversized user replies use a 64 KiB prefix of the new transcript
+delta. Content beyond that bound cannot claim acknowledgment. The usual menu age
+cap and managed-session visibility rules still apply.
+
 Needs you items come first, then unopened Ready completions, In progress, opened Ready completions, and source-backed recent History shortcuts. Each group sorts by authoritative activity (`updatedAt`) newest first, then stable session ID. Opening a completion moves it behind running work. The acknowledgment belongs to the latest provider turn, with authoritative activity as the fallback for providers without turn IDs. A later completion becomes unopened even if polling did not observe its Working phase. The daemon assigns priority and the helper adopts it without a second ordering policy.
 
 Codex completion freshness uses the recorded completion time. Running freshness uses start and actual turn-progress records, including bounded headers of large answer/tool rows. File modification times, settings, client metadata, and context records do not refresh either claim. Opening an old conversation cannot turn History into unopened Ready or revive a dormant start marker. Transcript revisions still track file changes so Chat refreshes normally.

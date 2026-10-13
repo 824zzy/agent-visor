@@ -58,6 +58,11 @@ class StatusEnvironment extends LiveProviderEnvironment {
     this.content += JSON.stringify({ type: "event_msg", timestamp: this.now().toISOString(),
       payload: { type, ...(turnId ? { turn_id: turnId } : {}) } }) + "\n";
   }
+  response(payload: Record<string, unknown>) {
+    this.clock += 1_000;
+    this.modifiedAt = this.clock;
+    this.content += JSON.stringify({ type: "response_item", timestamp: this.now().toISOString(), payload }) + "\n";
+  }
 }
 
 function setup() {
@@ -74,6 +79,181 @@ function setup() {
 }
 
 describe("Codex desktop lifecycle status", () => {
+  it.each(["request_user_input_async", "functions.request_user_input_async"])(
+    "keeps an unanswered %s yellow after its delivery acknowledgment", async (name) => {
+      const { environment, repository } = setup();
+      environment.append("task_started", "turn-1");
+      environment.response({ type: "function_call", name, call_id: "async-question",
+        arguments: JSON.stringify({ questions: [{ title: "Which option?", options: ["A", "B"] }] }) });
+      environment.response({ type: "function_call_output", call_id: "async-question", output: '{"accepted":true}' });
+      const snapshot = await repository.refresh();
+      expect(snapshot.sessions[0]).toMatchObject({ section: "needs_you", subtitle: "Answer required in Codex" });
+      expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("needs_you");
+    },
+  );
+
+  it("keeps async attention across work and turn boundaries until its exact user reply", async () => {
+    const { environment, repository, hook } = setup();
+    environment.append("task_started", "turn-1");
+    environment.response({ type: "function_call", name: "request_user_input_async", call_id: "async-question",
+      arguments: JSON.stringify({ questions: [{ title: "Which option?" }] }) });
+    const questionAt = environment.now().toISOString();
+    environment.response({ type: "function_call_output", call_id: "async-question", output: '{"accepted":true}' });
+    environment.response({ type: "custom_tool_call_output", call_id: "sibling", output: "done" });
+    expect((await repository.refresh()).sessions[0]).toMatchObject({ section: "needs_you", updatedAt: questionAt });
+    environment.append("task_complete", "turn-1");
+    let snapshot = await repository.refresh();
+    expect(snapshot.sessions[0]).toMatchObject({ section: "needs_you", updatedAt: questionAt });
+    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("needs_you");
+    expect(hook("PostToolUse", "processing").sessions[0]?.section).toBe("needs_you");
+    environment.append("task_started", "turn-2");
+    const reply = (callId: string) => environment.response({ type: "message", role: "user", content: [{
+      type: "input_text", text: `<send_user_message_question_reply>${JSON.stringify([{
+        questionItemId: JSON.stringify(["request_user_input_async", callId, 0]), answer: "A",
+      }])}</send_user_message_question_reply>`,
+    }] });
+    environment.response({ type: "message", role: "user", content: [{ type: "input_text", text: "Keep working." }] });
+    reply("another-call");
+    snapshot = await repository.refresh();
+    expect(snapshot.sessions[0]).toMatchObject({ section: "needs_you", updatedAt: questionAt });
+    reply("async-question");
+    snapshot = await repository.refresh();
+    expect(snapshot.sessions[0]?.section).toBe("working");
+    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("working");
+  });
+
+  it("does not leave yellow attention for an async question whose delivery was rejected", async () => {
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn-1");
+    environment.response({ type: "function_call", name: "request_user_input_async", call_id: "rejected",
+      arguments: JSON.stringify({ questions: [{ title: "Which option?" }] }) });
+    expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+    environment.response({ type: "function_call_output", call_id: "rejected", output: '{"accepted":false}' });
+    expect((await repository.refresh()).sessions[0]?.section).toBe("working");
+  });
+
+  it("resolves only replied async items and ignores malformed or quoted reply content", async () => {
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn-1");
+    environment.response({ type: "function_call", name: "request_user_input_async", call_id: "two-questions",
+      arguments: JSON.stringify({ questions: [{ title: "First?" }, { title: "Second?" }] }) });
+    environment.append("task_complete", "turn-1");
+    const item = (index: number) => ({ questionItemId: JSON.stringify(["request_user_input_async", "two-questions", index]), answer: "A" });
+    const envelope = (items: unknown[]) => `<send_user_message_question_reply>${JSON.stringify(items)}</send_user_message_question_reply>`;
+    const message = (text: string, role = "user") => environment.response({ type: "message", role, content: [{ type: "input_text", text }] });
+    message(envelope([item(0), item(1)]), "assistant");
+    message(`Please explain this example: ${envelope([item(0), item(1)])}`);
+    message(envelope([{ ...item(0), questionItemId: JSON.stringify(["request_user_input", "two-questions", 0]) }, item(99)]));
+    expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+    message(envelope([item(0)]));
+    expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+    message(envelope([{ questionItemId: "not-json", answer: "A" }, item(1)]));
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions[0]?.section).toBe("ready");
+    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("ready");
+  });
+
+  it.each(["not-json", JSON.stringify({ questions: [] }), JSON.stringify({ questions: [null] }),
+    JSON.stringify({ questions: [{ title: "" }] }), JSON.stringify({ questions: ["not-a-question"] }),
+  ])("does not invent question attention for malformed async arguments (%#)", async (args) => {
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn-1");
+    environment.response({ type: "function_call", name: "request_user_input_async", call_id: "invalid", arguments: args });
+    expect((await repository.refresh()).sessions[0]?.section).toBe("working");
+  });
+
+  it("clears an async question after a large exact reply without treating large sibling output as an answer", async () => {
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn-1");
+    environment.response({ type: "function_call", name: "request_user_input_async", call_id: "large-reply",
+      arguments: JSON.stringify({ questions: [{ title: "Explain?" }] }) });
+    const reply = `<send_user_message_question_reply>${JSON.stringify([{
+      questionItemId: JSON.stringify(["request_user_input_async", "large-reply", 0]), answer: "中文🙂".repeat(3_000),
+    }])}</send_user_message_question_reply>`;
+    environment.response({ type: "function_call_output", call_id: "sibling", output: reply });
+    expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+    environment.response({ type: "message", role: "user", content: [{ type: "input_text", text: reply }] });
+    expect((await repository.refresh()).sessions[0]?.section).toBe("working");
+  });
+
+  it("accepts the source client's single-object async reply format", async () => {
+    const { environment, repository } = setup();
+    environment.append("task_started", "turn-1");
+    environment.response({ type: "function_call", name: "request_user_input_async", call_id: "single-reply",
+      arguments: JSON.stringify({ questions: [{ title: "Which option?" }] }) });
+    expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+    environment.response({ type: "message", role: "user", content: [{ type: "input_text",
+      text: `<send_user_message_question_reply>${JSON.stringify({
+        questionItemId: JSON.stringify(["request_user_input_async", "single-reply", 0]), question: "Which option?", answer: "A",
+      })}</send_user_message_question_reply>`,
+    }] });
+    expect((await repository.refresh()).sessions[0]?.section).toBe("working");
+  });
+
+  it("does not acknowledge another conversation with the same async call ID", async () => {
+    const { environment, repository } = setup();
+    const other = new StatusEnvironment();
+    const otherId = "another-codex-thread";
+    const otherFile = "/fixture/.codex/other.jsonl";
+    const stamp = environment.stamp.bind(environment);
+    const scan = environment.scanLinePrefixes.bind(environment);
+    environment.stamp = (file) => file === otherFile ? other.stamp(rollout) : stamp(file);
+    environment.scanLinePrefixes = (file, limit, visit, startAt) => file === otherFile
+      ? other.scanLinePrefixes(rollout, limit, visit, startAt) : scan(file, limit, visit, startAt);
+    environment.sqlite = async () => [{ id: sessionId, cwd, rollout_path: rollout, title: "First", updated_at: environment.clock / 1000, archived: 0, source: "vscode" },
+      { id: otherId, cwd, rollout_path: otherFile, title: "Second", updated_at: other.clock / 1000, archived: 0, source: "vscode" }];
+    for (const source of [environment, other]) {
+      source.append("task_started", "turn-1");
+      source.response({ type: "function_call", name: "request_user_input_async", call_id: "same-call",
+        arguments: JSON.stringify({ questions: [{ title: "Which option?" }] }) });
+    }
+    expect((await repository.refresh()).sessions.map((session) => session.section)).toEqual(["needs_you", "needs_you"]);
+    environment.response({ type: "message", role: "user", content: [{ type: "input_text",
+      text: `<send_user_message_question_reply>${JSON.stringify([{
+        questionItemId: JSON.stringify(["request_user_input_async", "same-call", 0]), answer: "A",
+      }])}</send_user_message_question_reply>`,
+    }] });
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions.find((session) => session.id === sessionId)?.section).toBe("working");
+    expect(snapshot.sessions.find((session) => session.id === otherId)?.section).toBe("needs_you");
+  });
+
+  it("waits for a complete large reply on disk and restores async attention after a cold read", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "codex-async-status-"));
+    const codex = path.join(directory, ".codex");
+    mkdirSync(codex);
+    const file = path.join(codex, "rollout.jsonl");
+    const clock = new Date("2026-08-30T21:45:30Z");
+    const event = (type: string, payload: Record<string, unknown>) => JSON.stringify({ timestamp: clock.toISOString(), type, payload }) + "\n";
+    writeFileSync(path.join(codex, "state_5.sqlite"), "fixture");
+    writeFileSync(file, event("event_msg", { type: "task_started", turn_id: "turn-1" })
+      + event("response_item", { type: "function_call", name: "request_user_input_async", call_id: "disk-question",
+        arguments: JSON.stringify({ questions: [{ title: "Explain?" }] }) })
+      + event("response_item", { type: "function_call_output", call_id: "disk-question", output: '{"accepted":true}' })
+      + event("event_msg", { type: "task_complete", turn_id: "turn-1" }));
+    const environment = new LiveProviderEnvironment(directory, { now: () => clock });
+    environment.processes = async () => [];
+    environment.sqlite = async () => [{ id: sessionId, cwd, rollout_path: file, title: "Disk question",
+      updated_at: clock.valueOf() / 1_000, archived: 0, source: "vscode" }];
+    const repository = new SessionRepository([new CodexProvider(environment)], { now: () => clock });
+    try {
+      expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+      const reply = event("response_item", { type: "message", role: "user", content: [{ type: "input_text",
+        text: `<send_user_message_question_reply>${JSON.stringify([{
+          questionItemId: JSON.stringify(["request_user_input_async", "disk-question", 0]), answer: "中文🙂".repeat(3_000),
+        }])}</send_user_message_question_reply>`,
+      }] });
+      appendFileSync(file, reply.slice(0, -2));
+      expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+      appendFileSync(file, reply.slice(-2));
+      expect((await repository.refresh()).sessions[0]?.section).toBe("ready");
+      const cold = new SessionRepository([new CodexProvider(environment)], { now: () => clock });
+      expect((await cold.refresh()).sessions[0]?.section).toBe("ready");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a native question Needs you until its exact output or turn boundary", async () => {
     const { environment, repository, hook } = setup();
     environment.append("task_started", "turn-1");
