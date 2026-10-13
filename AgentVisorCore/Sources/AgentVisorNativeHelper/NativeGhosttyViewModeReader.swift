@@ -13,7 +13,10 @@ enum NativeGhosttyViewModeReader {
         }
         let name = title.range(of: #"^[✳◐◑] "#, options: .regularExpression) != nil ? String(title.dropFirst(2)) : title
         let caption = lines.dropLast().last(where: { $0.range(of: #"\s[—─-]+$"#, options: .regularExpression) != nil })
-        guard last.hasSuffix("← for agents"), !name.isEmpty,
+        // Claude replaces the hint with a bounded agent/completion count when
+        // background jobs exist. The exact current caption is still required.
+        let agentHint = #"← (?:for agents|(?:[1-9][0-9]?|99\+) (?:agents?|done))$"#
+        guard last.range(of: agentHint, options: .regularExpression) != nil, !name.isEmpty,
               let caption, caption.range(of: #"^(?:[—─-]+\s*)?"# + NSRegularExpression.escapedPattern(for: name) + #"\s+[—─-]+$"#,
                                          options: .regularExpression) != nil else {
             return nil
@@ -23,13 +26,29 @@ enum NativeGhosttyViewModeReader {
 
     /// A unique window and a single content surface are required. Split panes,
     /// duplicate titles and unavailable Accessibility evidence stay unknown.
-    static func readFooter(application: NativeGhosttyTerminalController.ApplicationIdentity, title: String) -> String? {
-        guard AXIsProcessTrusted(),
-              NativeGhosttyTerminalController.liveApplication() == application else { return nil }
+    static func readFooter(application: NativeGhosttyTerminalController.ApplicationIdentity, title: String,
+                           report: (NativeGhosttyViewReadReport) -> Void = { _ in }) -> String? {
+        var observation = NativeGhosttyViewReadReport(reason: .accessibilityNeeded)
+        var footer: String?
+        defer {
+            if let footer {
+                switch mode(footer: footer, title: title) {
+                case .conversation: observation.reason = .conversation
+                case .overview: observation.reason = .overview
+                case nil: observation.reason = .unsupportedFooter
+                }
+            }
+            report(observation)
+        }
+        guard AXIsProcessTrusted() else { return nil }
+        observation.reason = .applicationChanged
+        guard NativeGhosttyTerminalController.liveApplication() == application else { return nil }
         let root = AXUIElementCreateApplication(application.pid)
         AXUIElementSetMessagingTimeout(root, 0.05)
         let deadline = ProcessInfo.processInfo.systemUptime + 0.25
+        observation.reason = .windowsUnavailable
         guard let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement], windows.count <= 64 else { return nil }
+        observation.windows = windows.count
         func sameTitle(_ value: String) -> Bool {
             let strip: (String) -> String = { value in
                 value.range(of: #"^[✳◐◑] "#, options: .regularExpression) != nil ? String(value.dropFirst(2)) : value
@@ -38,30 +57,48 @@ enum NativeGhosttyViewModeReader {
         }
         var matching: [AXUIElement] = []
         for window in windows {
+            observation.reason = .deadline
             guard ProcessInfo.processInfo.systemUptime < deadline else { return nil }
             if let name = attribute(window, kAXTitleAttribute) as? String, sameTitle(name) { matching.append(window) }
         }
+        observation.matchingWindows = matching.count
+        observation.reason = matching.isEmpty ? .windowNotFound : .windowAmbiguous
         guard matching.count == 1, let window = matching.first else { return nil }
         var pending = [window]
         var areas: [AXUIElement] = []
         var visited = 0
         while let element = pending.popLast() {
             visited += 1
-            guard visited <= 256, ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+            observation.elements = min(256, visited)
+            observation.reason = .traversalLimit
+            guard visited <= 256 else { return nil }
+            observation.reason = .deadline
+            guard ProcessInfo.processInfo.systemUptime < deadline else { return nil }
             if (attribute(element, kAXRoleAttribute) as? String) == kAXTextAreaRole {
                 areas.append(element)
+                observation.textAreas = areas.count
+                observation.reason = .textAreaAmbiguous
                 if areas.count > 1 { return nil }
             } else if let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
+                observation.reason = .traversalLimit
                 guard children.count <= 256, pending.count + children.count <= 256 else { return nil }
                 pending.append(contentsOf: children)
             }
         }
-        guard ProcessInfo.processInfo.systemUptime < deadline, let area = areas.first,
-              let text = attribute(area, kAXValueAttribute) as? String,
-              text.utf16.count <= 1_048_576,
-              let latestTitle = attribute(window, kAXTitleAttribute) as? String, sameTitle(latestTitle),
-              NativeGhosttyTerminalController.liveApplication() == application else { return nil }
-        return String(text.suffix(4_096))
+        observation.reason = .deadline
+        guard ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+        observation.reason = .textAreaMissing
+        guard let area = areas.first else { return nil }
+        observation.reason = .textUnavailable
+        guard let text = attribute(area, kAXValueAttribute) as? String else { return nil }
+        observation.reason = .textTooLarge
+        guard text.utf16.count <= 1_048_576 else { return nil }
+        observation.reason = .titleChanged
+        guard let latestTitle = attribute(window, kAXTitleAttribute) as? String, sameTitle(latestTitle) else { return nil }
+        observation.reason = .applicationChanged
+        guard NativeGhosttyTerminalController.liveApplication() == application else { return nil }
+        footer = String(text.suffix(4_096))
+        return footer
     }
 
     private static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {

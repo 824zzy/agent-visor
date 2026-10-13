@@ -151,7 +151,114 @@ function repository(environment: FixtureEnvironment): SessionRepository {
   return new SessionRepository([new ClaudeProvider(environment)], { now: () => environment.now() });
 }
 
+function completedIdleFixture() {
+  const environment = new FixtureEnvironment();
+  addProcess(environment, 900, executable);
+  addMetadata(environment, 900, {
+    sessionId: managerID, cwd, kind: "interactive", status: "idle", parkedJobId: "8e45ed2c",
+  });
+  const row = backgroundRow("8e45ed2c", ccID, "working", { name: "ccx-thinking-block-sneha", status: "idle" });
+  environment.inventory = inventorySuccess([row]);
+  environment.ghosttyViews = [{ applicationPID: 7, processStartToken: ghosttyInstance,
+    terminalId: "current", title: row.name!, cwd, viewMode: "conversation" }];
+  const transcript = home + "/.claude/projects/-Users-me-Codes-agent-visor/" + ccID + ".jsonl";
+  const completedAt = new Date(nowMs - 40 * 60_000).toISOString();
+  const tail = JSON.stringify({ type: "system", subtype: "turn_duration", timestamp: completedAt });
+  environment.headTails.set(transcript, { head: "", tail });
+  environment.stamps.set(transcript, { size: tail.length, modifiedAt: new Date(completedAt) });
+  return { environment, row, transcript, tail, completedAt };
+}
+
 describe("Claude agent-view integration", () => {
+  it("shows a completed idle conversation as Ready while its background worker remains running", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, {
+      sessionId: managerID, cwd, kind: "interactive", status: "idle", parkedJobId: "8e45ed2c",
+    });
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "working", { name: "ccx-thinking-block-sneha", status: "idle" }),
+    ]);
+    environment.ghosttyViews = [{ applicationPID: 7, processStartToken: ghosttyInstance,
+      terminalId: "current", title: "ccx-thinking-block-sneha", cwd, viewMode: "conversation" }];
+    const completedAt = new Date(nowMs - 40 * 60_000).toISOString();
+    const transcript = home + "/.claude/projects/-Users-me-Codes-agent-visor/" + ccID + ".jsonl";
+    const tail = JSON.stringify({ type: "system", subtype: "turn_duration", timestamp: completedAt });
+    environment.headTails.set(transcript, { head: "", tail });
+    environment.stamps.set(transcript, { size: tail.length, modifiedAt: new Date(completedAt) });
+
+    const snapshot = await repository(environment).refresh();
+    expect(snapshot.sessions).toMatchObject([{ id: ccID, section: "ready", updatedAt: completedAt,
+      sessionState: { turn: "ready" }, claudePresence: "conversation" }]);
+    expect(menuPresentation(snapshot, [], nowMs).pills).toMatchObject([
+      { id: ccID, phase: "ready", title: "ccx-thinking-block-sneha" },
+    ]);
+  });
+
+  it("keeps a newly busy turn orange even before its older completion disappears from the transcript", async () => {
+    const { environment, row } = completedIdleFixture();
+    const source = repository(environment);
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toMatchObject([{ phase: "ready" }]);
+    environment.inventory = inventorySuccess([{ ...row, status: "busy" }], true, nowMs + 1_000);
+    environment.clock = new Date(nowMs + 1_000);
+    const busy = await source.refresh();
+    expect(busy.sessions).toMatchObject([{ id: ccID, section: "working", sessionState: { turn: "working" } }]);
+    expect(menuPresentation(busy, [], nowMs + 1_000).pills).toMatchObject([{ id: ccID, phase: "working" }]);
+  });
+
+  it("invalidates the older completion when a new prompt arrives while the inventory still says idle", async () => {
+    const { environment, transcript, tail } = completedIdleFixture();
+    const source = repository(environment);
+    await source.refresh();
+    const next = tail + "\n" + JSON.stringify({ type: "user", timestamp: now.toISOString(), message: { content: "Next task" } });
+    environment.headTails.set(transcript, { head: tail, tail: next });
+    environment.stamps.set(transcript, { size: next.length, modifiedAt: now });
+    const started = await source.refresh();
+    expect(menuPresentation(started, [], nowMs).pills).toMatchObject([{ id: ccID, phase: "working" }]);
+  });
+
+  it.each(["approval", "input"])("keeps an idle blocked %s request yellow despite an older completed turn", async (waitingFor) => {
+    const { environment, row } = completedIdleFixture();
+    environment.inventory = inventorySuccess([{ ...row, state: "blocked", waitingFor }]);
+    const snapshot = await repository(environment).refresh();
+    expect(snapshot.sessions).toMatchObject([{ id: ccID, section: "needs_you", sessionState: { turn: "needs_you" } }]);
+    expect(menuPresentation(snapshot, [], nowMs).pills).toMatchObject([{ id: ccID, phase: "needs_you" }]);
+  });
+
+  it.each(["question", "approval"] as const)("keeps a registered pending %s yellow across an idle inventory refresh", async (type) => {
+    const { environment } = completedIdleFixture();
+    const source = repository(environment);
+    await source.refresh();
+    source.registerExternalAction(ccID, type === "question" ? {
+      type, toolUseId: "current-question", questions: [{ id: "confirm", question: "Continue?", choices: ["Yes"], multiple: false }],
+    } : {
+      type, toolUseId: "current-approval", toolName: "Bash", input: { command: "echo fixture" }, canPersist: false,
+    }, async () => { throw new Error("Status checks must not answer a pending action"); });
+    const snapshot = await source.refresh();
+    expect(menuPresentation(snapshot, [], nowMs).pills).toMatchObject([{ id: ccID, phase: "needs_you" }]);
+    expect(source.pendingActions(ccID)).toMatchObject([{ type }]);
+  });
+
+  it("does not preserve Ready from old completed evidence when the inventory loses authority", async () => {
+    const { environment, row } = completedIdleFixture();
+    const source = repository(environment);
+    await source.refresh();
+    environment.inventory = inventoryFailure(inventorySuccess([row], false, nowMs + 31_000));
+    environment.clock = new Date(nowMs + 31_000);
+    expect((await source.refresh()).sessions).toMatchObject([{ id: ccID, section: "history" }]);
+    expect(menuPresentation(source.current(), [], environment.clock.valueOf()).pills).toEqual([]);
+  });
+
+  it("keeps an idle completed conversation out of pills when its surface returns to overview", async () => {
+    const { environment } = completedIdleFixture();
+    const source = repository(environment);
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toHaveLength(1);
+    environment.ghosttyViews[0]!.viewMode = "overview";
+    const overview = await source.refresh();
+    expect(overview.sessions).toMatchObject([{ id: ccID, section: "ready", ambientEligible: false }]);
+    expect(menuPresentation(overview, [], nowMs).pills).toEqual([]);
+  });
+
   it("publishes one Paseo-owned conversation while an alias remains in the native overview inventory", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, executable, "claude");

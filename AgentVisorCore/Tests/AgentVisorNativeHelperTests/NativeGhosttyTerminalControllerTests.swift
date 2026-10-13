@@ -5,6 +5,45 @@ import JavaScriptCore
 import Darwin
 
 final class NativeGhosttyTerminalControllerTests: XCTestCase {
+    func testAgentCountsDoNotHideTheDisplayedConversation() throws {
+        // Claude Code 2.1.296 replaces "for agents" with counts while jobs exist.
+        for hint in ["← 1 agent", "← 3 agents", "← 2 done", "← 99+ agents"] {
+            let context = try XCTUnwrap(JSContext())
+            context.evaluateScript(#"""
+            var focused = [];
+            function Application(){return {
+                running: function(){return true}, terminals: function(){return [{
+                    id: function(){return 'manual'}, name: function(){return 'ccx-thinking-block-sneha'},
+                    workingDirectory: function(){return '/Users/me/Codes'}
+                }]}, focus: function(t){focused.push(t.id())}, activate: function(){}
+            };}
+            """#)
+            let controller = NativeGhosttyTerminalController(readViewText: { _, _ in
+                // Layout independently confirmed by the user's current footer screenshot.
+                "──────────────── ccx-thinking-block-sneha —\n❯\n────────────────\nOpus 5.5 | high | 34% | thinking-block-simplify\naccept edits on (shift+tab to cycle) · \(hint)"
+            }, resolveApplication: { .init(pid: 7, token: "same-instance") },
+                execute: { context.evaluateScript($0)?.toString() })
+            let view = try XCTUnwrap(controller.views(conversationTitles: ["ccx-thinking-block-sneha"]).first)
+            XCTAssertEqual(view.viewMode, .conversation, hint)
+            XCTAssertTrue(controller.focus(view), hint)
+            XCTAssertEqual(context.evaluateScript("JSON.stringify(focused)")?.toString(), #"["manual"]"#)
+        }
+    }
+
+    func testAgentCountsInOverviewHistoryDoNotRestoreAPhantomPill() throws {
+        var footer = "ccx-thinking-block-sneha —\naccept edits on · ← 3 agents"
+        let rows = #"[{"terminalId":"manual","title":"ccx-thinking-block-sneha","cwd":"/Users/me/Codes"}]"#
+        let controller = NativeGhosttyTerminalController(readViewText: { _, _ in footer },
+            resolveApplication: { .init(pid: 7, token: "same-instance") }, execute: { _ in rows })
+        let current = try XCTUnwrap(controller.views().first)
+        XCTAssertEqual(current.viewMode, .conversation)
+        footer += "\nNeeds input\nCompleted\n❯ describe a task for a new session\naccept edits · enter to return · space to reply · ctrl+x to delete · ? for shortcuts"
+        XCTAssertEqual(try controller.views().first?.viewMode, .overview)
+        XCTAssertFalse(controller.focus(current))
+        footer = "another-conversation —\naccept edits on · ← 3 agents"
+        XCTAssertNil(try controller.views().first?.viewMode)
+    }
+
     func testApplicationReplacementDuringFooterReadCannotPublishConversationEvidence() {
         var identity = NativeGhosttyTerminalController.ApplicationIdentity(pid: 7, token: "original")
         let controller = NativeGhosttyTerminalController(readViewText: { _, _ in

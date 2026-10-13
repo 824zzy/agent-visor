@@ -145,9 +145,12 @@ private func handle(
     let dataPath = ProcessInfo.processInfo.environment["AGENT_VISOR_DATA_DIR"]
     let dataRoot = dataPath.flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : nil }
         ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Agent Visor")
+    let ghosttyDiagnostics = NativeGhosttyViewDiagnostics(
+        fileURL: dataRoot.appendingPathComponent("diagnostics/ghostty-view-read.json")
+    )
     let ghostty = NativeGhosttyTerminalController(
         storageURL: dataRoot.appendingPathComponent("ghostty-terminal-evidence.json"),
-        readViewText: { NativeGhosttyViewModeReader.readFooter(application: $0, title: $1) }
+        readViewText: { NativeGhosttyViewModeReader.readFooter(application: $0, title: $1, report: ghosttyDiagnostics.record) }
     )
     var bytes = [UInt8](repeating: 0, count: 16_384)
 

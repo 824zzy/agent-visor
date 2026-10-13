@@ -696,7 +696,16 @@ function inventoryTurnState(
       : lifecycle ? "ready" : "unknown";
   }
   const state = string(row.state).toLowerCase();
-  if (state === "working") return "working";
+  if (state === "working") {
+    // The background worker can remain Working after its current turn has
+    // completed. A fresh idle status corroborates that durable completion;
+    // an alive worker alone does not prove an active conversation turn.
+    const completedAt = Date.parse(summary.lifecycle?.observedAt ?? "");
+    if (string(row.status).toLowerCase() === "idle" && !string(row.waitingFor)
+      && summary.completed && summary.lifecycle?.phase === "ready"
+      && Number.isFinite(completedAt) && completedAt <= checkedAt) return "ready";
+    return "working";
+  }
   if (state === "blocked") return "needs_you";
   if (state === "done") return "ready";
   if (state === "failed") return "needs_you";
