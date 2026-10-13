@@ -123,12 +123,17 @@ export class CodexTranscriptReader {
             ...(currentTurnId ? { turnId: currentTurnId } : {}),
           };
           pendingQuestionIds.clear();
+          // Codex derives async question attention from its current in-progress
+          // turn. Terminal or replacement boundaries end that interaction.
+          pendingAsyncQuestions.clear();
           questionAt = undefined;
           activityAt = observedAt;
         } else if (lifecycle?.phase === "working" && isTurnProgress(value.type, value.payload)) {
           const observedAt = new Date(value.timestamp).toISOString();
           if (observedAt < lifecycle.observedAt || (activityAt && observedAt < activityAt)) return;
           if ("turn_id" in value.payload && value.payload.turn_id !== lifecycle.turnId) return;
+          const metadata = value.payload.internal_chat_message_metadata_passthrough;
+          if (isRecord(metadata) && "turn_id" in metadata && metadata.turn_id !== lifecycle.turnId) return;
           activityAt = observedAt;
           const callId = typeof value.payload.call_id === "string" ? value.payload.call_id : undefined;
           if (callId && callId.length <= 512) {

@@ -58,8 +58,12 @@ Full-screen detection uses native `AXFullScreen` evidence on the selected displa
 
 ## Session items
 
-Codex async questions remain yellow Needs you while unanswered, including after
-delivery acknowledgment, sibling work, turn completion, and later turn starts.
+Codex async questions remain yellow Needs you while unanswered in their owning
+in-progress turn, including after delivery acknowledgment and sibling work.
+The owning turn's completion or abortion ends pending status. A replacement turn
+starts with no inherited question requests; duplicate starts and late boundaries
+for other turns do not clear the current question. Provider turn metadata prevents
+late question records from resurrecting requests belonging to earlier turns.
 A structured user reply resolves only its exact call ID and question index in that
 conversation. Both array and single-object reply envelopes are supported. Explicit
 delivery rejection removes the request; unknown output and malformed replies do not.

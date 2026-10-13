@@ -79,6 +79,81 @@ function setup() {
 }
 
 describe("Codex desktop lifecycle status", () => {
+  it.each(["task_complete", "turn_aborted"])(
+    "clears async question attention when its owning turn emits %s", async (event) => {
+      const { environment, repository } = setup();
+      environment.append("task_started", "owning-turn");
+      environment.response({ type: "function_call", name: "request_user_input_async", call_id: "finished-question",
+        arguments: JSON.stringify({ questions: [{ title: "Which option?" }] }) });
+      environment.response({ type: "function_call_output", call_id: "finished-question", output: '{"accepted":true}' });
+      expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+      environment.append(event, "owning-turn");
+      const snapshot = await repository.refresh();
+      expect(snapshot.sessions[0]?.section).toBe("ready");
+      expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("ready");
+    },
+  );
+
+  it("clears replaced async questions without letting duplicate starts or late terminal events clear a current question", async () => {
+    const { environment, repository } = setup();
+    const ask = (callId: string) => environment.response({ type: "function_call", name: "request_user_input_async", call_id: callId,
+      arguments: JSON.stringify({ questions: [{ title: "Which option?" }] }) });
+    environment.append("task_started", "turn-1");
+    ask("old-question");
+    expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+    environment.append("task_started", "turn-1");
+    expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+    environment.append("task_started", "turn-2");
+    expect((await repository.refresh()).sessions[0]?.section).toBe("working");
+    ask("current-question");
+    expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+    environment.append("task_complete", "turn-1");
+    environment.append("turn_aborted", "turn-1");
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions[0]?.section).toBe("needs_you");
+    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("needs_you");
+    environment.append("task_complete", "turn-2");
+    expect((await repository.refresh()).sessions[0]?.section).toBe("ready");
+  });
+
+  it.each(["request_user_input", "request_user_input_async"])(
+    "does not resurrect a late %s belonging to a previous turn", async (name) => {
+      const { environment, repository } = setup();
+      environment.append("task_started", "previous-turn");
+      environment.append("task_complete", "previous-turn");
+      environment.append("task_started", "current-turn");
+      const question = (turnId: string, callId: string) => environment.response({ type: "function_call", name, call_id: callId,
+        arguments: JSON.stringify({ questions: [{ title: "Which option?" }] }),
+        internal_chat_message_metadata_passthrough: { turn_id: turnId },
+      });
+      question("previous-turn", "late-old-question");
+      expect((await repository.refresh()).sessions[0]?.section).toBe("working");
+      question("current-turn", "current-question");
+      expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+    },
+  );
+
+  it("does not resurrect cold historical questions or let old requests hide a new active question", async () => {
+    const { environment, repository } = setup();
+    for (let index = 0; index < 40; index += 1) {
+      environment.append("task_started", `old-turn-${index}`);
+      environment.response({ type: "function_call", name: "request_user_input_async", call_id: `old-question-${index}`,
+        arguments: JSON.stringify({ questions: [{ title: "Old question?" }] }) });
+      environment.append("task_complete", `old-turn-${index}`);
+    }
+    environment.clock += 24 * 60 * 60_000;
+    expect((await repository.refresh()).sessions[0]?.section).toBe("history");
+    environment.append("task_started", "active-turn");
+    environment.response({ type: "function_call", name: "request_user_input_async", call_id: "active-question",
+      arguments: JSON.stringify({ questions: [{ title: "Current question?" }] }) });
+    const questionAt = environment.now().toISOString();
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions[0]).toMatchObject({ section: "needs_you", updatedAt: questionAt });
+    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("needs_you");
+    const cold = new SessionRepository([new CodexProvider(environment)], { now: () => environment.now() });
+    expect((await cold.refresh()).sessions[0]).toMatchObject({ section: "needs_you", updatedAt: questionAt });
+  });
+
   it.each(["request_user_input_async", "functions.request_user_input_async"])(
     "keeps an unanswered %s yellow after its delivery acknowledgment", async (name) => {
       const { environment, repository } = setup();
@@ -92,7 +167,7 @@ describe("Codex desktop lifecycle status", () => {
     },
   );
 
-  it("keeps async attention across work and turn boundaries until its exact user reply", async () => {
+  it("keeps active async attention across background work and waiting until its exact user reply", async () => {
     const { environment, repository, hook } = setup();
     environment.append("task_started", "turn-1");
     environment.response({ type: "function_call", name: "request_user_input_async", call_id: "async-question",
@@ -101,12 +176,11 @@ describe("Codex desktop lifecycle status", () => {
     environment.response({ type: "function_call_output", call_id: "async-question", output: '{"accepted":true}' });
     environment.response({ type: "custom_tool_call_output", call_id: "sibling", output: "done" });
     expect((await repository.refresh()).sessions[0]).toMatchObject({ section: "needs_you", updatedAt: questionAt });
-    environment.append("task_complete", "turn-1");
+    environment.clock += 2 * 60 * 60_000;
     let snapshot = await repository.refresh();
     expect(snapshot.sessions[0]).toMatchObject({ section: "needs_you", updatedAt: questionAt });
     expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("needs_you");
     expect(hook("PostToolUse", "processing").sessions[0]?.section).toBe("needs_you");
-    environment.append("task_started", "turn-2");
     const reply = (callId: string) => environment.response({ type: "message", role: "user", content: [{
       type: "input_text", text: `<send_user_message_question_reply>${JSON.stringify([{
         questionItemId: JSON.stringify(["request_user_input_async", callId, 0]), answer: "A",
@@ -117,6 +191,7 @@ describe("Codex desktop lifecycle status", () => {
     snapshot = await repository.refresh();
     expect(snapshot.sessions[0]).toMatchObject({ section: "needs_you", updatedAt: questionAt });
     reply("async-question");
+    environment.response({ type: "function_call_output", call_id: "resumed-work", output: "working" });
     snapshot = await repository.refresh();
     expect(snapshot.sessions[0]?.section).toBe("working");
     expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("working");
@@ -137,7 +212,6 @@ describe("Codex desktop lifecycle status", () => {
     environment.append("task_started", "turn-1");
     environment.response({ type: "function_call", name: "request_user_input_async", call_id: "two-questions",
       arguments: JSON.stringify({ questions: [{ title: "First?" }, { title: "Second?" }] }) });
-    environment.append("task_complete", "turn-1");
     const item = (index: number) => ({ questionItemId: JSON.stringify(["request_user_input_async", "two-questions", index]), answer: "A" });
     const envelope = (items: unknown[]) => `<send_user_message_question_reply>${JSON.stringify(items)}</send_user_message_question_reply>`;
     const message = (text: string, role = "user") => environment.response({ type: "message", role, content: [{ type: "input_text", text }] });
@@ -148,6 +222,8 @@ describe("Codex desktop lifecycle status", () => {
     message(envelope([item(0)]));
     expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
     message(envelope([{ questionItemId: "not-json", answer: "A" }, item(1)]));
+    expect((await repository.refresh()).sessions[0]?.section).toBe("working");
+    environment.append("task_complete", "turn-1");
     const snapshot = await repository.refresh();
     expect(snapshot.sessions[0]?.section).toBe("ready");
     expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("ready");
@@ -229,8 +305,7 @@ describe("Codex desktop lifecycle status", () => {
     writeFileSync(file, event("event_msg", { type: "task_started", turn_id: "turn-1" })
       + event("response_item", { type: "function_call", name: "request_user_input_async", call_id: "disk-question",
         arguments: JSON.stringify({ questions: [{ title: "Explain?" }] }) })
-      + event("response_item", { type: "function_call_output", call_id: "disk-question", output: '{"accepted":true}' })
-      + event("event_msg", { type: "task_complete", turn_id: "turn-1" }));
+      + event("response_item", { type: "function_call_output", call_id: "disk-question", output: '{"accepted":true}' }));
     const environment = new LiveProviderEnvironment(directory, { now: () => clock });
     environment.processes = async () => [];
     environment.sqlite = async () => [{ id: sessionId, cwd, rollout_path: file, title: "Disk question",
@@ -238,6 +313,8 @@ describe("Codex desktop lifecycle status", () => {
     const repository = new SessionRepository([new CodexProvider(environment)], { now: () => clock });
     try {
       expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
+      const coldPending = new SessionRepository([new CodexProvider(environment)], { now: () => clock });
+      expect((await coldPending.refresh()).sessions[0]?.section).toBe("needs_you");
       const reply = event("response_item", { type: "message", role: "user", content: [{ type: "input_text",
         text: `<send_user_message_question_reply>${JSON.stringify([{
           questionItemId: JSON.stringify(["request_user_input_async", "disk-question", 0]), answer: "中文🙂".repeat(3_000),
@@ -246,8 +323,11 @@ describe("Codex desktop lifecycle status", () => {
       appendFileSync(file, reply.slice(0, -2));
       expect((await repository.refresh()).sessions[0]?.section).toBe("needs_you");
       appendFileSync(file, reply.slice(-2));
-      expect((await repository.refresh()).sessions[0]?.section).toBe("ready");
+      expect((await repository.refresh()).sessions[0]?.section).toBe("working");
       const cold = new SessionRepository([new CodexProvider(environment)], { now: () => clock });
+      expect((await cold.refresh()).sessions[0]?.section).toBe("working");
+      appendFileSync(file, event("event_msg", { type: "task_complete", turn_id: "turn-1" }));
+      expect((await repository.refresh()).sessions[0]?.section).toBe("ready");
       expect((await cold.refresh()).sessions[0]?.section).toBe("ready");
     } finally {
       rmSync(directory, { recursive: true, force: true });
