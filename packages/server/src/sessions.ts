@@ -54,6 +54,7 @@ import { CompletionAttention } from "./completion-attention.js";
 export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie" | "paseo";
 
 export type SessionControlTarget =
+  | { kind: "cmux_surface"; target: import("./providers/cmux.js").CmuxSurfaceTarget }
   | { kind: "application"; target: NativeHelperFocusTarget }
   | { kind: "terminal"; target: NativeHelperTerminalTarget }
   | { kind: "codex_thread"; target: NativeHelperCodexThreadTarget }
@@ -1496,6 +1497,7 @@ export class SessionRepository {
     // so a click cannot reuse a cached route to the wrong screen.
     if (session.provider === "paseo" || (session.provider === "claude_code"
       && (session.controlTarget?.kind === "claude_background"
+        || session.controlTarget?.kind === "cmux_surface"
         || session.controlTarget?.kind === "terminal"))) {
       const resolved = await this.resolveExactSession(sessionId, false, true);
       if (!resolved || resolved.resolutionUnavailable || !resolved.controlTarget) {

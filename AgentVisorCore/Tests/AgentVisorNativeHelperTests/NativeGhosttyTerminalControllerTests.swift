@@ -5,6 +5,102 @@ import JavaScriptCore
 import Darwin
 
 final class NativeGhosttyTerminalControllerTests: XCTestCase {
+    func testChildAgentPanelKeepsTheParentConversationAndExactFocus() throws {
+        let context = try XCTUnwrap(JSContext())
+        context.evaluateScript(#"""
+        var focused = [];
+        function Application(){return {
+            running: function(){return true}, terminals: function(){return [{
+                id: function(){return 'manual'}, name: function(){return 'ccx-thinking-block-sneha'},
+                workingDirectory: function(){return '/Users/me/Codes'}
+            }]}, focus: function(t){focused.push(t.id())}, activate: function(){}
+        };}
+        """#)
+        let controller = NativeGhosttyTerminalController(readViewText: { _, _ in
+            // Current conversation plus the expanded child panel in the user's screenshot.
+            """
+            ──────────────── ccx-thinking-block-sneha —
+            ❯
+            Opus 5.5 | high | 51% | thinking-block-simplify
+            accept edits on (shift+tab to cycle) · ← 1 agent
+            ● main
+            ○ talos-review:devops-reviewer Drafting the resilience finding 17m 15s · ↓ 265.9k tokens
+            """
+        }, resolveApplication: { .init(pid: 7, token: "same-instance") },
+            execute: { context.evaluateScript($0)?.toString() })
+        let view = try XCTUnwrap(controller.views(conversationTitles: ["ccx-thinking-block-sneha"]).first)
+        XCTAssertEqual(view.viewMode, .conversation)
+        XCTAssertTrue(controller.focus(view))
+        XCTAssertEqual(context.evaluateScript("JSON.stringify(focused)")?.toString(), #"["manual"]"#)
+    }
+
+    func testLongChildPanelKeepsItsCurrentCaptionWithoutAttachmentTrust() throws {
+        for (count, mainMarker, childMarker) in [(9, "●", "○"), (32, "○", "●")] {
+            let children = (1...count).map { "\(childMarker) reviewer-\($0) Reviewing 1m 2s" }.joined(separator: "\n")
+            let footer = "ccx-thinking-block-sneha —\n❯\naccept edits on · ← \(count) agents\n\(mainMarker) main\n" + children
+            func controller() -> NativeGhosttyTerminalController {
+                NativeGhosttyTerminalController(readViewText: { _, _ in footer },
+                    resolveApplication: { .init(pid: 7, token: "same-instance") }, execute: { _ in
+                        #"[{"terminalId":"manual","title":"ccx-thinking-block-sneha","cwd":"/Users/me/Codes"}]"#
+                    })
+            }
+            // A fresh helper re-reads the panel; no persisted title trust is needed.
+            XCTAssertEqual(try controller().views().first?.viewMode, .conversation)
+            XCTAssertEqual(try controller().views().first?.viewMode, .conversation)
+        }
+    }
+
+    func testChildPanelCannotRestoreOverviewQuotedOrUnrecognizedContent() throws {
+        let conversation = "ccx-thinking-block-sneha —\naccept edits on · ← 1 agent"
+        let panel = "\n● main\n○ talos-review:devops-reviewer Drafting 17m 15s · ↓ 265.9k tokens"
+        var footer = conversation + panel
+        var focuses = 0
+        let controller = NativeGhosttyTerminalController(readViewText: { _, _ in footer },
+            resolveApplication: { .init(pid: 7, token: "same-instance") }, execute: { source in
+                if source == GhosttyTerminalViewScript.list {
+                    return #"[{"terminalId":"manual","title":"ccx-thinking-block-sneha","cwd":"/Users/me/Codes"}]"#
+                }
+                focuses += 1
+                return "ok"
+            })
+        let current = try XCTUnwrap(controller.views().first)
+        XCTAssertEqual(current.viewMode, .conversation)
+        footer += "\nNeeds input\nCompleted\n❯ describe a task for a new session\nenter to return · space to reply · ctrl+x to delete"
+        XCTAssertEqual(try controller.views().first?.viewMode, .overview)
+        XCTAssertFalse(controller.focus(current))
+        for invalid in [
+            "An example: " + conversation + panel,
+            "another-conversation —\naccept edits on · ← 1 agent" + panel,
+            "```\n" + conversation + panel + "\n```",
+            conversation + panel + "\n❯ next prompt",
+            conversation + "\n● main\n○ reviewer without runtime evidence",
+            conversation + "\n● main",
+            conversation + "\n● main\n" + Array(repeating: "○ reviewer Reviewing 1s", count: 33).joined(separator: "\n"),
+            // A permission dialog can replace the footer. A retained title or
+            // earlier conversation caption cannot identify its current view.
+            conversation + panel + "\n" + """
+            Waiting for 1 background agent to finish
+            Bash command · from the talos-review:devops-reviewer agent
+            Claude requested permissions to write to /Users/me/Codes/project/.claude
+            Do you want to proceed?
+            1. Yes
+            2. Yes, and always allow access
+            3. Yes, and switch to auto mode
+            4. No
+            Esc to cancel · Tab to amend · ctrl+x ctrl+k twice to stop background agents
+            """,
+        ] {
+            footer = invalid
+            XCTAssertNil(try controller.views().first?.viewMode)
+            XCTAssertFalse(controller.focus(current))
+        }
+        XCTAssertEqual(focuses, 0)
+        footer = conversation
+        XCTAssertEqual(try controller.views().first?.viewMode, .conversation)
+        footer += panel
+        XCTAssertEqual(try controller.views().first?.viewMode, .conversation)
+    }
+
     func testAgentCountsDoNotHideTheDisplayedConversation() throws {
         // Claude Code 2.1.296 replaces "for agents" with counts while jobs exist.
         for hint in ["← 1 agent", "← 3 agents", "← 2 done", "← 99+ agents"] {

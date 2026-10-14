@@ -28,6 +28,32 @@ The source action opens `paseo://h/<server-id>/agent/<agent-id>` through Paseo's
 registered link handler. Paseo-managed Chat sending is not exposed in Agent Visor.
 Remote Paseo hosts and other provider families are outside this adapter's scope.
 
+## cmux-hosted Claude conversations
+
+Live interactive Claude metadata identifies a cmux conversation by its canonical
+session UUID. The cmux adapter verifies the parent application, process start
+times, and the process's `CMUX_WORKSPACE_ID`, `CMUX_SURFACE_ID`, and
+`CMUX_SOCKET_PATH`. A bounded local `system.identify` request must confirm that
+exact terminal surface before an owner action is advertised. Titles and the
+currently focused surface are not used to choose a target.
+
+A click refreshes discovery, rechecks the conversation and process identities,
+then sends `surface.focus` with explicit window, workspace, and surface UUIDs.
+It confirms the focused UUIDs afterward. The adapter sends no terminal input,
+attach, resume, restore, or surface-creation request. cmux routes expose readable
+Chat history; Agent Visor does not acquire terminal input control.
+
+Parked agent overviews contribute no pill. Ghostty view detection and overview
+suppression keep their existing adapter. Unknown surfaces, unavailable sockets,
+access denials, malformed responses, and changed identities cannot fall back to
+Apple Terminal or a new attachment. Process metadata is read with fixed bounds;
+credentials, argv, and terminal text are neither stored nor logged.
+
+cmux's socket access policy remains unchanged. Its default process-ancestry
+restriction can deny a separately launched Agent Visor. The adapter does not
+change permissions, inject a proxy into a session, or start a source process.
+An authorized access configuration is required for live discovery and focus.
+
 ## Ownership
 
 The TypeScript daemon selects active and recent sessions, assigns priority, reads provider usage, and sends a typed presentation.
@@ -93,6 +119,10 @@ Claude Code's retained background inventory is a resumable catalog, not evidence
 Ghostty conversation detection uses current title and view evidence. A plain title can be confirmed from Claude's current conversation footer, including when the already running frontend has title updates disabled. A metadata-only read first selects visible titles matching the Claude catalog; only those names are sent in the bounded footer scope. The passive Accessibility reader requires a unique matching window and one terminal content area; duplicate titles, split panes, unavailable permission, unsupported footers and changed process identities remain unconfirmed. It does not prompt for permission, focus a window or send input. Only the final 4 KiB is classified, with bounded traversal and messaging deadlines. Terminal text is transient: only an optional conversation/overview classification crosses the helper protocol, and no text is saved. The local `diagnostics/claude-presence.jsonl` records changes in read status and counts of conversation, overview, unrecognized, and matched titles. It stores no titles, paths, session IDs, or error text; unchanged polls add no records, and the file rotates at 64 KiB with one previous file.
 
 Conversation footers accept both `← for agents` and Claude's bounded `← N agent(s)` / `← N done` forms, including the `99+` cap. They still require the exact current session caption and reject a different caption, quoted history, and overview content. `diagnostics/ghostty-view-read.json` holds one latest native read outcome: a fixed reason code and bounded counts of windows, matching windows, inspected elements, and text areas. It distinguishes Accessibility access, missing/ambiguous surfaces, deadlines, unavailable values, unsupported footers, and confirmed modes. The atomic file is at most 1 KiB, uses owner-only permissions, contains no text, titles, IDs, or paths, and is not rewritten for identical observations.
+
+An expanded child-agent panel below that footer remains part of the parent conversation. The reader accepts its main row followed by up to 32 marked child rows with elapsed runtime, then applies the same current-caption and footer checks. It does not search arbitrary earlier transcript text for a footer; incomplete, quoted, oversized, and unrecognized panel layouts stay unconfirmed. Opening or closing this panel does not add child pills or replace the parent's exact Ghostty surface. Clicks recheck the current mode before and after focus, so entering the real agent overview still rejects an old conversation target.
+
+A permission dialog that replaces the current caption and footer remains unconfirmed. Its pending state alone cannot establish which conversation the terminal displays, and neither an earlier caption nor the frontend's parked job can substitute for current view evidence.
 
 Claude's background job lifecycle and its current conversation turn are separate. A fresh authoritative `working` or `blocked` job with `status: idle`, no pending wait, and an explicit completed main turn is Ready even when that completion is older than 30 seconds. A current `status: busy` without a waiting reason is Working even if the aggregate job state still says `blocked`. Explicit input/approval waits and registered blocking questions/permissions remain Needs you. A blocked job with missing, incomplete, or invalid completion evidence remains Needs you unless its current worker is explicitly busy; unfamiliar worker statuses do not invent Ready. Failed/stopped job policy is unchanged. Expired inventory cannot use an old completion to preserve Ready. This classification does not establish presence or change click targets: a completed conversation in the agent overview still contributes no ambient pill.
 

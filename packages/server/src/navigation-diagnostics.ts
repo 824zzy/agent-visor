@@ -12,7 +12,7 @@ type Details = {
 };
 type Recorder = (stage: Stage, details?: Details) => void;
 const context = new AsyncLocalStorage<Recorder>();
-const targetKinds = new Set(["url", "cursor_workspace", "codex_thread", "claude_background", "terminal", "application"]);
+const targetKinds = new Set(["url", "cursor_workspace", "codex_thread", "claude_background", "terminal", "application", "cmux_surface"]);
 const methods = new Set(["focus", "open_codex_thread", "focus_terminal", "open_claude_attach", "focus_ghostty_terminal"]);
 const outcomes = new Set(["accepted", "failed", "timeout", "connection_closed", "invalid_response"]);
 const fingerprint = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 16);

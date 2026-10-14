@@ -39,6 +39,7 @@ import type {
 import { normalizeChatText } from "./chat.js";
 import { openClaudeBackgroundSession, type ClaudeBackgroundTarget } from "./claude-background.js";
 import { openCursorWorkspace } from "./cursor-workspace.js";
+import { focusCmuxSurface, type CmuxSurfaceTarget } from "./providers/cmux.js";
 import { isVerifiableProcessInstanceToken } from "./providers/shared.js";
 import { isTerminalRoute, resolveSessionState, sessionTurnState } from "./session-state.js";
 
@@ -130,6 +131,7 @@ export class NativeSessionControls implements SessionControls {
     ) => boolean | Promise<boolean> = stopCodexTurn,
     private readonly openClaudeBackground: (target: ClaudeBackgroundTarget) => Promise<void> = openClaudeBackgroundSession,
     private readonly openCursor: (cwd: string) => Promise<void> = openCursorWorkspace,
+    private readonly openCmux: (target: CmuxSurfaceTarget, isCurrent: () => boolean) => Promise<void> = focusCmuxSurface,
   ) {
     this.imageLeases = new ChatImageLeaseStore({ root: imageRoot });
   }
@@ -243,6 +245,7 @@ export class NativeSessionControls implements SessionControls {
         await this.attachClaudeBackground(target);
       }
       else if (control.kind === "terminal") await this.helper.focusTerminal(control.target);
+      else if (control.kind === "cmux_surface") await this.openCmux(control.target, () => serial === this.focusSerial);
       else await this.helper.focus(control.target);
     });
     if (dedupeKey) {

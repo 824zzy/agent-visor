@@ -10,6 +10,7 @@ export function ownerForProcess(pid: number, processes: ProcessRecord[]): string
 
   while (process && !visited.has(process.pid)) {
     visited.add(process.pid);
+    if (process.command.endsWith("/cmux.app/Contents/MacOS/cmux")) return "cmux";
     const identity = `${process.command} ${process.arguments}`.toLowerCase();
     if (identity.includes("ghostty")) return "Ghostty";
     if (identity.includes("iterm")) return "iTerm2";

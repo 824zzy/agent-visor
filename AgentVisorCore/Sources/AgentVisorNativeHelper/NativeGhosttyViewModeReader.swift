@@ -5,8 +5,20 @@ import Foundation
 /// Reads only; never focuses a window, sends input, or retains terminal text.
 enum NativeGhosttyViewModeReader {
     static func mode(footer: String, title: String) -> NativeHelperGhosttyViewMode? {
-        let lines = String(footer.suffix(4_096)).components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.suffix(8)
+        let content = String(footer.suffix(4_096)).components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        var lines = content.suffix(8)
+        // Claude's expanded child panel follows the conversation footer. Peel
+        // only a bounded panel with its main row and timed child rows, then
+        // apply the same current-caption and footer checks as a plain view.
+        if let main = content.lastIndex(where: { $0.range(of: #"^[●•○◯] main$"#, options: .regularExpression) != nil }) {
+            let children = content.suffix(from: main + 1)
+            let childRow = #"^[●•○◯] [A-Za-z0-9][A-Za-z0-9_.:-]*\s+.*\b[0-9]+(?:ms|s|m|h)(?:\s*[0-9]+(?:s|m))?(?:\s+·\s+.*)?$"#
+            if !children.isEmpty, children.count <= 32,
+               children.allSatisfy({ $0.range(of: childRow, options: .regularExpression) != nil }) {
+                lines = content.prefix(upTo: main).suffix(8)
+            }
+        }
         guard let last = lines.last else { return nil }
         if last.contains("enter to return") && last.contains("space to reply") && last.contains("ctrl+x to delete") {
             return .overview

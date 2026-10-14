@@ -204,6 +204,8 @@ export class ClaudeProvider implements ProviderAdapter {
         pid,
         await this.environment.processStartedAt(pid),
       );
+      const cmuxTarget = kind === "interactive" && owner === "cmux"
+        ? await this.environment.cmuxSurface?.(pid, sessionID, cwd) : undefined;
       // A background worker's tty is a private daemon PTY, not a visible
       // terminal tab. It must be attached through Claude's CLI instead.
       const terminalTarget = kind === "interactive" ? terminalTargetForProcess(
@@ -244,6 +246,7 @@ export class ClaudeProvider implements ProviderAdapter {
         : undefined;
       const controlTarget = backgroundTarget
         ? { kind: "claude_background" as const, target: { ...backgroundTarget, ...(attached ? { attached } : {}) } }
+        : cmuxTarget ? { kind: "cmux_surface" as const, target: cmuxTarget }
         : terminalTarget
         ? { kind: "terminal" as const, target: terminalTarget }
         : desktopSession ? { kind: "url" as const, url: desktopSession.url }

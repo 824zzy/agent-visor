@@ -366,6 +366,42 @@ describe("Claude agent-view integration", () => {
       event: "PermissionRequest", status: "waiting_for_approval", receivedAt: now.toISOString() });
     expect(source.current().sessions).toHaveLength(1);
   });
+  it("restores and focuses only the parent when a child-panel read confirms its conversation", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "working", { name: "ccx-thinking-block-sneha", status: "busy" }),
+      backgroundRow("64b38993", blockedID, "done", { name: "another retained conversation" }),
+    ]);
+    const view: GhosttyTerminalView = { applicationPID: 7, processStartToken: ghosttyInstance,
+      terminalId: "manual", title: "ccx-thinking-block-sneha", cwd };
+    environment.ghosttyViews = [view];
+    const source = repository(environment);
+    const helper = new FakeNativeHelper();
+    source.setControls(new NativeSessionControls(helper));
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+
+    // The native child-panel read supplies the same exact conversation route.
+    // Retained background jobs do not gain pills from that observation.
+    view.viewMode = "conversation";
+    const snapshot = await source.refresh();
+    expect(menuPresentation(snapshot, [], nowMs).pills).toMatchObject([
+      { id: ccID, title: "ccx-thinking-block-sneha", phase: "working" },
+    ]);
+    expect(menuPresentation(snapshot, [], nowMs).pills).toHaveLength(1);
+    expect(await source.focusSession(ccID)).toBeUndefined();
+    expect(helper.ghosttyTerminalFocusRequests).toMatchObject([{
+      terminalId: "manual", applicationPID: 7, processStartToken: ghosttyInstance, cwd, viewMode: "conversation",
+    }]);
+    expect(helper.claudeAttachRequests).toEqual([]);
+    view.viewMode = "overview";
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    const restarted = repository(environment);
+    expect(menuPresentation(await restarted.refresh(), [], nowMs).pills).toEqual([]);
+    view.viewMode = "conversation";
+    expect(menuPresentation(await restarted.refresh(), [], nowMs).pills.map(pill => pill.id)).toEqual([ccID]);
+  });
+
   it("restores a plain-title conversation and exact click across restart while hiding its stale title in overview", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, executable);
