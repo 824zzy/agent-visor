@@ -245,7 +245,13 @@ export class NativeSessionControls implements SessionControls {
         await this.attachClaudeBackground(target);
       }
       else if (control.kind === "terminal") await this.helper.focusTerminal(control.target);
-      else if (control.kind === "cmux_surface") await this.openCmux(control.target, () => serial === this.focusSerial);
+      else if (control.kind === "cmux_surface") {
+        await this.openCmux(control.target, () => serial === this.focusSerial);
+        if (serial !== this.focusSerial) return;
+        // cmux's focused IDs prove selection inside the app. The native helper
+        // activates the verified owner so an explicit pill click also reveals it.
+        await this.helper.focus({ pid: control.target.applicationPID, bundleIdentifier: "com.cmuxterm.app" });
+      }
       else await this.helper.focus(control.target);
     });
     if (dedupeKey) {

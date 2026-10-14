@@ -135,6 +135,27 @@ describe("cmux Claude source integration", () => {
     expect(helper.claudeAttachRequests).toEqual([]);
   });
 
+  it("activates the exact owning cmux application when a pill selects a background surface", async () => {
+    const { client, requests } = await socketFixture();
+    const environment = new CmuxEnvironment(); environment.cmuxSurface = client.resolve.bind(client);
+    const helper = new FakeNativeHelper();
+    const source = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
+    source.setControls(new NativeSessionControls(helper, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, client.focus.bind(client)));
+    await source.refresh();
+    const effects: unknown[] = [];
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: sessionID }, source,
+      effect => effects.push(effect));
+
+    expect(effects).toEqual([]);
+    expect(helper.focusRequests).toEqual([{ pid: 7, bundleIdentifier: "com.cmuxterm.app" }]);
+    expect(requests.filter(r => r.method !== "system.identify")).toEqual([
+      { method: "surface.focus", params: { window_id: windowId, workspace_id: workspaceId, surface_id: surfaceId } },
+    ]);
+    expect(helper.terminalSendRequests).toEqual([]);
+    expect(helper.claudeAttachRequests).toEqual([]);
+  });
+
   it("accepts exact focus after cmux's workspace selection settles without repeating the focus request", async () => {
     const { client, requests } = await socketFixture({ settlingReads: 2 });
     const environment = new CmuxEnvironment(); environment.cmuxSurface = client.resolve.bind(client);
