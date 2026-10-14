@@ -170,6 +170,29 @@ function completedIdleFixture() {
 }
 
 describe("Claude agent-view integration", () => {
+  it("shows a completed idle blocked conversation as Ready when no action is waiting", async () => {
+    const { environment, row, completedAt } = completedIdleFixture();
+    environment.inventory = inventorySuccess([{ ...row, state: "blocked" }]);
+    const source = repository(environment);
+
+    const snapshot = await source.refresh();
+    expect(snapshot.sessions).toMatchObject([{ id: ccID, section: "ready", updatedAt: completedAt,
+      sessionState: { turn: "ready" }, claudePresence: "conversation" }]);
+    expect(menuPresentation(snapshot, [], nowMs).pills).toMatchObject([{ id: ccID, phase: "ready" }]);
+  });
+
+  it("turns a completed blocked conversation orange when its worker becomes busy without a waiting action", async () => {
+    const { environment, row } = completedIdleFixture();
+    environment.inventory = inventorySuccess([{ ...row, state: "blocked" }]);
+    const source = repository(environment);
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toMatchObject([{ phase: "ready" }]);
+
+    environment.clock = new Date(nowMs + 1_000);
+    environment.inventory = inventorySuccess([{ ...row, state: "blocked", status: "busy" }], true, nowMs + 1_000);
+    const busy = await source.refresh();
+    expect(menuPresentation(busy, [], environment.clock.valueOf()).pills).toMatchObject([{ id: ccID, phase: "working" }]);
+  });
+
   it("shows a completed idle conversation as Ready while its background worker remains running", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, executable);
@@ -217,16 +240,27 @@ describe("Claude agent-view integration", () => {
     expect(menuPresentation(started, [], nowMs).pills).toMatchObject([{ id: ccID, phase: "working" }]);
   });
 
-  it.each(["approval", "input"])("keeps an idle blocked %s request yellow despite an older completed turn", async (waitingFor) => {
+  it.each([
+    { waitingFor: "approval", status: "idle" },
+    { waitingFor: "input", status: "idle" },
+    { waitingFor: "approval", status: "busy" },
+    { waitingFor: "input", status: "busy" },
+  ])("keeps a $status blocked $waitingFor request yellow despite an older completed turn", async ({ waitingFor, status }) => {
     const { environment, row } = completedIdleFixture();
-    environment.inventory = inventorySuccess([{ ...row, state: "blocked", waitingFor }]);
+    environment.inventory = inventorySuccess([{ ...row, state: "blocked", status, waitingFor }]);
     const snapshot = await repository(environment).refresh();
     expect(snapshot.sessions).toMatchObject([{ id: ccID, section: "needs_you", sessionState: { turn: "needs_you" } }]);
     expect(menuPresentation(snapshot, [], nowMs).pills).toMatchObject([{ id: ccID, phase: "needs_you" }]);
   });
 
-  it.each(["question", "approval"] as const)("keeps a registered pending %s yellow across an idle inventory refresh", async (type) => {
-    const { environment } = completedIdleFixture();
+  it.each([
+    { type: "question", state: "working" },
+    { type: "approval", state: "working" },
+    { type: "question", state: "blocked" },
+    { type: "approval", state: "blocked" },
+  ] as const)("keeps a registered pending $type yellow across an idle $state inventory refresh", async ({ type, state }) => {
+    const { environment, row } = completedIdleFixture();
+    environment.inventory = inventorySuccess([{ ...row, state }]);
     const source = repository(environment);
     await source.refresh();
     source.registerExternalAction(ccID, type === "question" ? {
@@ -237,26 +271,73 @@ describe("Claude agent-view integration", () => {
     const snapshot = await source.refresh();
     expect(menuPresentation(snapshot, [], nowMs).pills).toMatchObject([{ id: ccID, phase: "needs_you" }]);
     expect(source.pendingActions(ccID)).toMatchObject([{ type }]);
+    environment.inventory = inventorySuccess([{ ...row, state, status: "busy" }]);
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toMatchObject([{ id: ccID, phase: "needs_you" }]);
   });
 
-  it("does not preserve Ready from old completed evidence when the inventory loses authority", async () => {
+  it.each([
+    { tool: "Bash", type: "approval", input: { command: "echo fixture" } },
+    { tool: "AskUserQuestion", type: "question", input: { questions: [{ question: "Continue?", options: ["Yes"] }] } },
+  ])("retains a real $type hook over completed idle and busy blocked inventory refreshes", async ({ tool, type, input }) => {
     const { environment, row } = completedIdleFixture();
+    environment.inventory = inventorySuccess([{ ...row, state: "blocked" }]);
     const source = repository(environment);
     await source.refresh();
-    environment.inventory = inventoryFailure(inventorySuccess([row], false, nowMs + 31_000));
+    source.applyHook({ sessionId: ccID, cwd, provider: "claude_code", event: "PermissionRequest",
+      status: "waiting_for_approval", expectsResponse: true, receivedAt: now.toISOString(),
+      tool, toolUseId: "pending-tool", toolInput: input });
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toMatchObject([{ id: ccID, phase: "needs_you" }]);
+    expect(source.pendingActions(ccID)).toMatchObject([{ type }]);
+    environment.inventory = inventorySuccess([{ ...row, state: "blocked", status: "busy" }]);
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toMatchObject([{ id: ccID, phase: "needs_you" }]);
+  });
+
+  it.each(["working", "blocked"])("does not preserve Ready from old completed %s evidence when the inventory loses authority", async (state) => {
+    const { environment, row } = completedIdleFixture();
+    environment.inventory = inventorySuccess([{ ...row, state }]);
+    const source = repository(environment);
+    await source.refresh();
+    environment.inventory = inventoryFailure(inventorySuccess([{ ...row, state }], false, nowMs + 31_000));
     environment.clock = new Date(nowMs + 31_000);
     expect((await source.refresh()).sessions).toMatchObject([{ id: ccID, section: "history" }]);
     expect(menuPresentation(source.current(), [], environment.clock.valueOf()).pills).toEqual([]);
   });
 
-  it("keeps an idle completed conversation out of pills when its surface returns to overview", async () => {
-    const { environment } = completedIdleFixture();
+  it.each(["working", "blocked"])("keeps an idle completed %s conversation out of pills when its surface returns to overview", async (state) => {
+    const { environment, row } = completedIdleFixture();
+    environment.inventory = inventorySuccess([{ ...row, state }]);
     const source = repository(environment);
     expect(menuPresentation(await source.refresh(), [], nowMs).pills).toHaveLength(1);
     environment.ghosttyViews[0]!.viewMode = "overview";
     const overview = await source.refresh();
     expect(overview.sessions).toMatchObject([{ id: ccID, section: "ready", ambientEligible: false }]);
     expect(menuPresentation(overview, [], nowMs).pills).toEqual([]);
+  });
+
+  it.each([
+    { scenario: "missing transcript", tail: "" },
+    { scenario: "new tool work", tail: JSON.stringify({ type: "assistant", timestamp: now.toISOString(),
+      message: { stop_reason: "tool_use" } }) },
+    { scenario: "new user input", tail: JSON.stringify({ type: "user", timestamp: now.toISOString(),
+      message: { content: "Next task" } }) },
+    { scenario: "missing completion timestamp", tail: JSON.stringify({ type: "system", subtype: "turn_duration" }) },
+    { scenario: "invalid completion timestamp", tail: JSON.stringify({ type: "system", subtype: "turn_duration", timestamp: "invalid" }) },
+    { scenario: "future completion timestamp", tail: JSON.stringify({ type: "system", subtype: "turn_duration",
+      timestamp: new Date(nowMs + 30_000).toISOString() }) },
+  ])("does not invent Ready for an idle blocked job with $scenario", async ({ tail }) => {
+    const { environment, row, transcript, tail: completed } = completedIdleFixture();
+    environment.inventory = inventorySuccess([{ ...row, state: "blocked" }]);
+    environment.headTails.set(transcript, { head: completed, tail });
+    environment.stamps.set(transcript, { size: tail.length, modifiedAt: now });
+    const snapshot = await repository(environment).refresh();
+    expect(menuPresentation(snapshot, [], nowMs).pills).toMatchObject([{ id: ccID, phase: "needs_you" }]);
+  });
+
+  it("keeps an unfamiliar blocked worker status yellow despite an older completion", async () => {
+    const { environment, row } = completedIdleFixture();
+    environment.inventory = inventorySuccess([{ ...row, state: "blocked", status: "future-status" }]);
+    const snapshot = await repository(environment).refresh();
+    expect(menuPresentation(snapshot, [], nowMs).pills).toMatchObject([{ id: ccID, phase: "needs_you" }]);
   });
 
   it("publishes one Paseo-owned conversation while an alias remains in the native overview inventory", async () => {
