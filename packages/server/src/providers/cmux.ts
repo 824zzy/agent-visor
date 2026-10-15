@@ -4,6 +4,7 @@ import { lstat, open } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { machineWork, runProcess } from "../machine.js";
+import { navigationStep } from "../navigation-diagnostics.js";
 import { isRecord, isVerifiableProcessInstanceToken, processInstanceToken } from "./shared.js";
 
 export type CmuxProcessContext = {
@@ -63,14 +64,23 @@ export class CmuxClient {
     await this.rpc(current.socketPath, "surface.focus", {
       window_id: current.windowId, workspace_id: current.workspaceId, surface_id: current.surfaceId,
     });
-    // cmux schedules workspace focus restoration after acknowledging the request.
-    // Read its settled identity briefly; never repeat focus or send terminal input.
+    navigationStep("cmux_focus", { windowId: current.windowId, workspaceId: current.workspaceId,
+      surfaceId: current.surfaceId, outcome: "accepted" });
+    // Unscoped identify can return cmux's published read snapshot from before
+    // selection. Read the exact window's live selection instead, allowing brief
+    // focus restoration without repeating focus or sending terminal input.
     for (let attempt = 0; attempt < 4; attempt++) {
-      if (!isCurrent()) return;
-      const result = await this.rpc(current.socketPath, "system.identify", {});
+      if (!isCurrent()) { navigationStep("superseded"); return; }
+      const result = await this.rpc(current.socketPath, "system.identify", { window_id: current.windowId });
       const focused = result.focused;
-      if (isRecord(focused) && sameID(focused.window_id, current.windowId)
-        && sameID(focused.workspace_id, current.workspaceId) && sameID(focused.surface_id, current.surfaceId)) return;
+      const identityMatch = isRecord(focused) && sameID(focused.window_id, current.windowId)
+        && sameID(focused.workspace_id, current.workspaceId) && sameID(focused.surface_id, current.surfaceId);
+      navigationStep("cmux_readback", { windowId: current.windowId, workspaceId: current.workspaceId,
+        surfaceId: current.surfaceId, focusedWindowId: isRecord(focused) ? focused.window_id : undefined,
+        focusedWorkspaceId: isRecord(focused) ? focused.workspace_id : undefined,
+        focusedSurfaceId: isRecord(focused) ? focused.surface_id : undefined,
+        attempt: attempt + 1, identityMatch, scope: "window" });
+      if (identityMatch) return;
       if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 50));
     }
     throw new Error("The requested cmux surface could not be focused.");

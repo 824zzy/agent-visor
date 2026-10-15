@@ -1,7 +1,8 @@
 import path from "node:path";
 import os from "node:os";
 import { createServer, type Socket } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { ClaudeProvider } from "./claude.js";
 import type { ProviderEnvironment, ProcessRecord } from "./environment.js";
@@ -11,6 +12,7 @@ import { CmuxClient, type CmuxProcessContext } from "./cmux.js";
 import { processInstanceToken } from "./shared.js";
 import { NativeSessionControls } from "../session-controls.js";
 import { FakeNativeHelper } from "../native-helper.js";
+import { NavigationDiagnostics } from "../navigation-diagnostics.js";
 
 const home = "/Users/cmux-fixture";
 const cwd = home + "/Codes";
@@ -27,6 +29,7 @@ async function socketFixture(options: {
   invalid?: "missing" | "different_surface" | "browser" | "denied" | "wrong_request" | "oversized" | "timeout";
   wrongFocus?: boolean;
   settlingReads?: number;
+  staleAmbientIdentity?: boolean;
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "av-cmux-"));
   const socketPath = path.join(root, "cmux.sock");
@@ -52,8 +55,10 @@ async function socketFixture(options: {
         const reportedCaller = options.invalid === "missing" ? null
           : options.invalid === "different_surface" ? { ...caller, surface_id: windowId }
           : options.invalid === "browser" ? { ...caller, surface_type: "browser" } : caller;
-        const reportedFocus = request.method === "system.identify" && focused && ++focusReads <= (options.settlingReads ?? 0)
-          ? { ...caller, surface_id: windowId } : focused;
+        const reportedFocus = request.method === "system.identify" && focused
+          && ((options.staleAmbientIdentity && request.params.window_id !== windowId)
+            || ++focusReads <= (options.settlingReads ?? 0))
+          ? { ...caller, workspace_id: windowId, surface_id: windowId } : focused;
         const result = request.method === "system.identify"
           ? { socket_path: socketPath, bundle_identifier: "com.cmuxterm.app", caller: reportedCaller, focused: reportedFocus }
           : caller;
@@ -178,6 +183,29 @@ describe("cmux Claude source integration", () => {
     expect(helper.claudeAttachRequests).toEqual([]);
   });
 
+  it("opens the exact pill when cmux's ambient read snapshot still reports the previous workspace", async () => {
+    // Captured cmux 0.65.1 behavior: unscoped identify returns a published
+    // snapshot; an explicit window read returns its current selected surface.
+    const { client, requests } = await socketFixture({ staleAmbientIdentity: true });
+    const environment = new CmuxEnvironment(); environment.cmuxSurface = client.resolve.bind(client);
+    const helper = new FakeNativeHelper();
+    const source = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
+    source.setControls(new NativeSessionControls(helper, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, client.focus.bind(client)));
+    expect(menuPresentation(await source.refresh(), [], now.valueOf()).pills)
+      .toMatchObject([{ id: sessionID, owner: "cmux" }]);
+    const effects: unknown[] = [];
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: sessionID }, source,
+      effect => effects.push(effect));
+    expect(effects).toEqual([]);
+    expect(helper.focusRequests).toEqual([{ pid: 7, bundleIdentifier: "com.cmuxterm.app" }]);
+    expect(requests.filter(r => r.method !== "system.identify")).toEqual([
+      { method: "surface.focus", params: { window_id: windowId, workspace_id: workspaceId, surface_id: surfaceId } },
+    ]);
+    expect(helper.terminalSendRequests).toEqual([]);
+    expect(helper.claudeAttachRequests).toEqual([]);
+  });
+
   it("binds UTC Claude process metadata to the same live process before resolving its surface", async () => {
     const { socketPath } = await socketFixture();
     const environment = new CmuxEnvironment();
@@ -232,6 +260,41 @@ describe("cmux Claude source integration", () => {
       undefined, undefined, undefined, undefined, client.focus.bind(client)));
     await source.refresh();
     expect(await source.focusSession(sessionID)).toContain("could not be focused");
+  });
+
+  it("records the mismatched cmux identities for a failed pill without recording conversation contents", async () => {
+    const { client } = await socketFixture({ wrongFocus: true });
+    const environment = new CmuxEnvironment(); environment.cmuxSurface = client.resolve.bind(client);
+    const helper = new FakeNativeHelper();
+    const source = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
+    source.setControls(new NativeSessionControls(helper, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, client.focus.bind(client)));
+    await source.refresh();
+    const root = await mkdtemp(path.join(os.tmpdir(), "av-cmux-trace-"));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+    const diagnostics = new NavigationDiagnostics(root);
+    const effects: unknown[] = [];
+    await diagnostics.run(sessionID, "standard", () => activateMenuPill({
+      version: 1, type: "event", event: "activate_pill", sessionId: sessionID,
+    }, source, effect => effects.push(effect)));
+    await diagnostics.flush();
+    const text = await readFile(path.join(root, "diagnostics/pill-navigation.jsonl"), "utf8");
+    const reads = text.trim().split("\n").map(line => JSON.parse(line))
+      .filter(row => row.stage === "cmux_readback");
+    const hash = (value: string) => createHash("sha256").update(value.toLowerCase()).digest("hex").slice(0, 16);
+    expect(reads).toHaveLength(4);
+    expect(reads).toEqual(expect.arrayContaining([expect.objectContaining({
+      attempt: 1, windowHash: hash(windowId), workspaceHash: hash(workspaceId), surfaceHash: hash(surfaceId),
+      focusedWindowHash: hash(windowId), focusedWorkspaceHash: hash(workspaceId), focusedSurfaceHash: hash(windowId),
+      identityMatch: false,
+    })]));
+    expect(text).not.toContain(environment.metadata.name);
+    expect(text).not.toContain(cwd);
+    expect(text).not.toContain(sessionID);
+    expect(text).not.toContain(surfaceId);
+    expect(effects).toMatchObject([{ type: "native_effect", action: "session_focus_failed",
+      message: "The requested cmux surface could not be focused." }]);
+    expect(helper.focusRequests).toEqual([]);
   });
 
   it("does not create a pill for a parked cmux agent overview", async () => {

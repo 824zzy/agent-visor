@@ -5,10 +5,14 @@ import path from "node:path";
 import { nativeHelperFocusFailureReasonSchema } from "@agent-visor/protocol";
 
 type Stage = "received" | "dismissed" | "chat" | "target" | "helper_request"
-  | "helper_response" | "failed" | "completed" | "superseded";
+  | "helper_response" | "failed" | "completed" | "superseded"
+  | "cmux_focus" | "cmux_readback";
 type Details = {
   targetKind?: string; pid?: number; home?: string; requestId?: string;
   method?: string; outcome?: string; reason?: string; systemCode?: number;
+  windowId?: unknown; workspaceId?: unknown; surfaceId?: unknown;
+  focusedWindowId?: unknown; focusedWorkspaceId?: unknown; focusedSurfaceId?: unknown;
+  attempt?: number; identityMatch?: boolean; scope?: "ambient" | "window";
 };
 type Recorder = (stage: Stage, details?: Details) => void;
 const context = new AsyncLocalStorage<Recorder>();
@@ -16,6 +20,14 @@ const targetKinds = new Set(["url", "cursor_workspace", "codex_thread", "claude_
 const methods = new Set(["focus", "open_codex_thread", "focus_terminal", "open_claude_attach", "focus_ghostty_terminal"]);
 const outcomes = new Set(["accepted", "failed", "timeout", "connection_closed", "invalid_response"]);
 const fingerprint = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 16);
+const identityHashes = (details: Details) => Object.fromEntries([
+  ["windowId", "windowHash"], ["workspaceId", "workspaceHash"], ["surfaceId", "surfaceHash"],
+  ["focusedWindowId", "focusedWindowHash"], ["focusedWorkspaceId", "focusedWorkspaceHash"], ["focusedSurfaceId", "focusedSurfaceHash"],
+].flatMap(([key, output]) => {
+  const value = details[key as keyof Details];
+  return typeof value === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value)
+    ? [[output, fingerprint(value.toLowerCase())]] : [];
+}));
 
 /** Capture at request creation: socket callbacks do not inherit a click's async context. */
 export function navigationRecorder(method?: string): Recorder {
@@ -46,6 +58,10 @@ export class NavigationDiagnostics {
         ...(outcomes.has(details.outcome ?? "") ? { outcome: details.outcome } : {}),
         ...(nativeHelperFocusFailureReasonSchema.safeParse(details.reason).success ? { reason: details.reason } : {}),
         ...(Number.isInteger(details.systemCode) && Math.abs(details.systemCode!) <= 2_147_483_648 ? { systemCode: details.systemCode } : {}),
+        ...identityHashes(details),
+        ...(Number.isInteger(details.attempt) && details.attempt! >= 1 && details.attempt! <= 4 ? { attempt: details.attempt } : {}),
+        ...(typeof details.identityMatch === "boolean" ? { identityMatch: details.identityMatch } : {}),
+        ...(["ambient", "window"].includes(details.scope ?? "") ? { scope: details.scope } : {}),
       };
       this.append(JSON.stringify(safe) + "\n");
     };
