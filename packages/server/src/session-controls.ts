@@ -106,7 +106,7 @@ export class NativeSessionControls implements SessionControls {
   /** Last typed provider probe, retained across ambient rediscovery. */
   private readonly codexRouteProbeBySession = new Map<string, SessionRouteProbeResult>();
   /** Repeated clicks on one Claude job share the same native focus action. */
-  private readonly claudeFocusByJob = new Map<string, Promise<void>>();
+  private readonly claudeFocusByJob = new Map<string, Promise<void | "superseded">>();
   /** The latest requested target; alternating clicks must still supersede an older promise. */
   private latestClaudeFocusKey: string | undefined;
   // A canonical transcript ID is global evidence, not a per-page hint. Keep
@@ -185,7 +185,7 @@ export class NativeSessionControls implements SessionControls {
     return result;
   }
 
-  focus(session: DiscoveredProviderSession): Promise<void> {
+  focus(session: DiscoveredProviderSession): Promise<void | "superseded"> {
     const claudeTarget = session.provider === "claude_code"
       && session.controlTarget?.kind === "claude_background"
       ? session.controlTarget.target : undefined;
@@ -198,7 +198,7 @@ export class NativeSessionControls implements SessionControls {
     const serial = ++this.focusSerial;
     this.latestClaudeFocusKey = dedupeKey;
     const operation = this.queueAction(session.id, async () => {
-      if (serial !== this.focusSerial) { navigationStep("superseded"); return; }
+      if (serial !== this.focusSerial) { navigationStep("superseded"); return "superseded" as const; }
       const control = session.controlTarget;
       if (!control) throw new Error("Exact session focus is unavailable.");
       navigationStep("target", {
@@ -209,7 +209,7 @@ export class NativeSessionControls implements SessionControls {
         // Check ownership inside the same action queue as Send. An ambient
         // discovery record says nothing about a locally acquired writer.
         const release = await this.relinquishIdleCodexRoute(session.id);
-        if (serial !== this.focusSerial) return;
+        if (serial !== this.focusSerial) return "superseded" as const;
         if (release === "blocked") {
           const probe = this.codexRouteStatus(session.id);
           throw new Error(probe.releasePending
@@ -236,7 +236,7 @@ export class NativeSessionControls implements SessionControls {
             // A close/switch between discovery and focus must never target an
             // unrelated surface. Fall back to selecting the canonical job.
           }
-          if (serial !== this.focusSerial) return;
+          if (serial !== this.focusSerial) return "superseded" as const;
         }
         // A matching `claude attach <jobId>` argv proves only how a terminal
         // was launched. Claude can move that terminal into Agent View or a
@@ -247,7 +247,7 @@ export class NativeSessionControls implements SessionControls {
       else if (control.kind === "terminal") await this.helper.focusTerminal(control.target);
       else if (control.kind === "cmux_surface") {
         await this.openCmux(control.target, () => serial === this.focusSerial);
-        if (serial !== this.focusSerial) return;
+        if (serial !== this.focusSerial) return "superseded" as const;
         // cmux's focused IDs prove selection inside the app. The native helper
         // activates the verified owner so an explicit pill click also reveals it.
         await this.helper.focus({ pid: control.target.applicationPID, bundleIdentifier: "com.cmuxterm.app" });

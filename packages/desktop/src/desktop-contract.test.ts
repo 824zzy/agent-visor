@@ -23,6 +23,16 @@ import { runIfSingleInstance } from "./single-instance.js";
 const daemonUrl = "ws://127.0.0.1:49152?token=secret";
 
 describe("desktop launch contract", () => {
+  it("preserves the correlation ID for a session URL launch and rejects malformed identities", () => {
+    const message = { type: "native_action", action: "open_session_url",
+      url: "paseo://h/srv_local/agent/fixture-agent", requestId: "4c1dcd85-d86a-4f69-bc64-8a840b86d210" };
+    expect(nativeActionFromDaemonMessage(message)).toEqual({
+      action: "open_session_url", url: message.url, requestId: message.requestId,
+    });
+    for (const requestId of ["", "not-an-id", 42]) {
+      expect(nativeActionFromDaemonMessage({ ...message, requestId })).toBeUndefined();
+    }
+  });
   it("accepts an exact Paseo agent route and rejects other Paseo URI forms", () => {
     const url = "paseo://h/srv_local/agent/28a801ab-3b50-46ca-829c-783c202b79c4";
     expect(nativeActionFromDaemonMessage({ type: "native_action", action: "open_session_url", url }))
@@ -325,6 +335,10 @@ describe("desktop launch contract", () => {
     expect(nativeEffectFromDaemonMessage({
       type: "native_effect", action: "session_focus_failed", message: "The turn is still running.",
     })).toEqual({ action: "session_focus_failed", message: "The turn is still running." });
+    expect(nativeEffectFromDaemonMessage({
+      type: "native_effect", action: "session_focus_failed", message: "The source is unavailable.",
+      chatSessionId: "finished",
+    })).toEqual({ action: "session_focus_failed", message: "The source is unavailable.", chatSessionId: "finished" });
     for (const message of ["", " ", "x".repeat(1_001), 42]) {
       expect(nativeEffectFromDaemonMessage({
         type: "native_effect", action: "session_focus_failed", message,

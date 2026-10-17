@@ -88,7 +88,7 @@ export type NativeAction =
   | { action: "open_settings" }
   | { action: "open_chat"; sessionId: string }
   | { action: "open_owner"; owner: string; sessionId: string }
-  | { action: "open_session_url"; url: string };
+  | { action: "open_session_url"; url: string; requestId?: string };
 
 export function nativeActionFromDaemonMessage(value: unknown): NativeAction | undefined {
   if (typeof value !== "object" || value === null) return undefined;
@@ -107,18 +107,22 @@ export function nativeActionFromDaemonMessage(value: unknown): NativeAction | un
       : undefined;
   }
   if (message.action === "open_session_url" && typeof message.url === "string") {
+    if (message.requestId !== undefined && (typeof message.requestId !== "string"
+      || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(message.requestId))) return undefined;
+    const action = { action: "open_session_url" as const, url: message.url,
+      ...(typeof message.requestId === "string" ? { requestId: message.requestId } : {}) };
     if (/^paseo:\/\/h\/[a-zA-Z0-9_-]{1,128}\/agent\/[a-zA-Z0-9_-]{1,128}$/.test(message.url)) {
-      return { action: "open_session_url", url: message.url };
+      return action;
     }
     if (/^claude:\/\/claude\.ai\/epitaxy\/local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(message.url)
       && !/[\r\n]/.test(message.url)) {
-      return { action: "open_session_url", url: message.url };
+      return action;
     }
     try {
       const url = new URL(message.url);
       return url.protocol === "codex:" && url.hostname === "threads"
         && /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(url.pathname)
-        ? { action: "open_session_url", url: message.url }
+        ? action
         : undefined;
     } catch { return undefined; }
   }
@@ -132,7 +136,7 @@ export function nativeActionFromDaemonMessage(value: unknown): NativeAction | un
 }
 
 export type NativeEffect =
-  | { action: "session_focus_failed"; message: string }
+  | { action: "session_focus_failed"; message: string; chatSessionId?: string }
   | { action: "set_login_item"; enabled: boolean }
   | { action: "open_update"; url: string }
   | { action: "request_notifications" }
@@ -145,7 +149,9 @@ export function nativeEffectFromDaemonMessage(value: unknown): NativeEffect | un
   if (message.action === "session_focus_failed") {
     return typeof message.message === "string" && message.message.trim().length > 0
       && message.message.length <= 1_000
-      ? { action: "session_focus_failed", message: message.message }
+      ? { action: "session_focus_failed", message: message.message,
+        ...(typeof message.chatSessionId === "string" && message.chatSessionId.length > 0
+          && message.chatSessionId.length <= 128 ? { chatSessionId: message.chatSessionId } : {}) }
       : undefined;
   }
   if (message.action === "request_notifications") return { action: "request_notifications" };

@@ -28,7 +28,7 @@ export async function activateMenuPill(
   event: Extract<NativeHelperEvent, { event: "activate_pill" }>,
   source: Pick<SessionSnapshotSource, "current" | "focusSession" | "acknowledgeFailure">,
   dispatch: (message: NonNullable<ReturnType<typeof nativeActionFor>> | {
-    type: "native_effect"; action: "session_focus_failed"; message: string;
+    type: "native_effect"; action: "session_focus_failed"; message: string; chatSessionId?: string;
   }) => void,
 ): Promise<void> {
   if (event.intent === "dismiss") {
@@ -52,12 +52,32 @@ export async function activateMenuPill(
   });
 }
 
+/** Banner activation uses the same exact owner route as a normal pill click. */
+export async function activateSessionNotification(
+  event: Extract<NativeHelperEvent, { event: "notification_action" }>,
+  source: Parameters<typeof activateMenuPill>[1],
+  dispatch: Parameters<typeof activateMenuPill>[2],
+): Promise<void> {
+  if (event.action !== "activate") return;
+  const action = nativeActionFor(event, source.current());
+  if (action) {
+    navigationStep("chat");
+    dispatch(action);
+    return;
+  }
+  await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: event.sessionId }, source, message => {
+    const session = source.current().sessions.find(({ id }) => id === event.sessionId);
+    dispatch(message.type === "native_effect" && session?.canEnterChat
+      ? { ...message, chatSessionId: session.id } : message);
+  });
+}
+
 export function nativeActionFor(event: NativeHelperEvent, snapshot: SessionSnapshot) {
   if (event.event === "notification_permission") return undefined;
   if (event.event === "notification_action") {
     if (event.action !== "activate") return undefined;
     const session = snapshot.sessions.find((candidate) => candidate.id === event.sessionId);
-    return session?.canEnterChat
+    return session?.canEnterChat && (!session.canOpenOwner || session.sessionState?.routeOwnership === "owned")
       ? { type: "native_action", action: "open_chat", sessionId: session.id } as const
       : undefined;
   }

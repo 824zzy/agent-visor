@@ -42,7 +42,7 @@ export class NavigationDiagnostics {
 
   constructor(private readonly dataRoot: string) {}
 
-  run<T>(sessionId: string, intent: "standard" | "chat" | "dismiss", action: () => Promise<T>, origin: "pill" | "sessions" = "pill"): Promise<T> {
+  run<T>(sessionId: string, intent: "standard" | "chat" | "dismiss", action: () => Promise<T>, origin: "pill" | "sessions" | "notification" = "pill"): Promise<T> {
     const clickId = randomUUID();
     const started = performance.now();
     const sessionHash = fingerprint(sessionId);

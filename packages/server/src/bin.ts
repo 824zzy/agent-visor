@@ -7,7 +7,7 @@ import { runBackground } from "./background-task.js";
 import { stopCodexTurns } from "./codex-turn.js";
 import { startHookSocket, type RunningHookSocket } from "./hook-socket.js";
 import { startAlfredSocket } from "./alfred.js";
-import { activateMenuPill, menuPresentation, nativeActionFor } from "./menu.js";
+import { activateMenuPill, activateSessionNotification, menuPresentation, nativeActionFor } from "./menu.js";
 import { runProcess } from "./machine.js";
 import {
   NativeHelperProcess,
@@ -30,9 +30,13 @@ import { UsageGlances } from "./usage-glances.js";
 import { checkForUpdates } from "./updates.js";
 import { agentVisorVersion } from "./runtime-version.js";
 import { NavigationDiagnostics } from "./navigation-diagnostics.js";
+import { DesktopSessionNavigation } from "./desktop-navigation.js";
 import { ClaudePresenceDiagnostics } from "./claude-presence-diagnostics.js";
 
 await runDaemon(async (lifetime) => {
+  const desktopNavigation = new DesktopSessionNavigation(sendToDesktop);
+  const receiveDesktopNavigation = (message: unknown) => desktopNavigation.receive(message);
+  process.on("message", receiveDesktopNavigation);
   let hookSocket: RunningHookSocket | undefined;
   let alfredSocket: Awaited<ReturnType<typeof startAlfredSocket>> | undefined;
   let nativeHelper: NativeHelperProcess | undefined;
@@ -55,6 +59,8 @@ await runDaemon(async (lifetime) => {
   let refreshTimer: NodeJS.Timeout | undefined;
   let flushNavigationDiagnostics = async () => {};
   lifetime.onStop(async () => {
+    process.off("message", receiveDesktopNavigation);
+    desktopNavigation.close();
     for (const timer of [refreshTimer, usageTimer, menuTimer, permissionTimer, updateTimer]) {
       clearInterval(timer);
     }
@@ -147,9 +153,10 @@ await runDaemon(async (lifetime) => {
         }
         if (event.event === "notification_action") {
           if (event.action === "activate") {
-            repository.acknowledgeReady(event.sessionId);
-            const action = nativeActionFor(event, repository.current());
-            if (action) sendToDesktop(action);
+            runBackground("notification focus", () => navigationDiagnostics.run(
+              event.sessionId, "standard",
+              () => activateSessionNotification(event, repository, sendToDesktop), "notification",
+            ));
             return;
           }
           runBackground("notification action", () => handleNotificationAction({
@@ -169,7 +176,6 @@ await runDaemon(async (lifetime) => {
         if (event.event === "activate_pill") {
           runBackground("session focus", () => navigationDiagnostics.run(
             event.sessionId, event.intent ?? "standard", async () => {
-              if (event.intent !== "dismiss") repository.acknowledgeReady(event.sessionId);
               await activateMenuPill(event, repository, (message) => sendToDesktop(message));
             },
           ));
@@ -233,7 +239,7 @@ await runDaemon(async (lifetime) => {
     helperAdapter,
     path.join(dataRoot, "chat-images"),
     undefined,
-    async (url) => { sendToDesktop({ type: "native_action", action: "open_session_url", url }); },
+    url => desktopNavigation.open(url),
     (sessionId, pending, respond, generation) => repository.registerExternalAction(
       sessionId, pending, respond, generation,
     ),

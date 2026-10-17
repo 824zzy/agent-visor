@@ -211,7 +211,12 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
           showingSessionFocusError = true;
           void dialog.showMessageBox({
             type: "warning", message: "Couldn’t open this session",
-            detail: effect.message, buttons: ["OK"],
+            detail: effect.message, buttons: effect.chatSessionId ? ["OK", "Open in Agent Visor"] : ["OK"],
+            defaultId: 0, cancelId: 0,
+          }).then(({ response }) => {
+            if (response === 1 && effect.chatSessionId) {
+              navigateRenderer({ page: "chat", sessionId: effect.chatSessionId });
+            }
           }).catch((error: unknown) => console.error(error))
             .finally(() => { showingSessionFocusError = false; });
         }
@@ -250,7 +255,15 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
           return;
         }
         if (action.action === "open_session_url") {
-          await shell.openExternal(action.url);
+          let ok = false;
+          try {
+            await shell.openExternal(action.url);
+            ok = true;
+          } finally {
+            if (action.requestId && child.connected) {
+              child.send({ type: "session_url_result", requestId: action.requestId, ok }, () => {});
+            }
+          }
           return;
         }
         const application = ownerApplication(action.owner);

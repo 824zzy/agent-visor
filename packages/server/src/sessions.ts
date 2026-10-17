@@ -186,7 +186,8 @@ export type ChatCanonicalUserEntry = Pick<Extract<ChatItem, { kind: "user" }>,
 export interface SessionControls {
   /** False when the native helper cannot currently execute terminal actions. */
   isAvailable?(): boolean;
-  focus(session: DiscoveredProviderSession): Promise<void>;
+  /** Superseded navigation did not open the session and must not mark it seen. */
+  focus(session: DiscoveredProviderSession): Promise<void | "superseded">;
   send(
     session: DiscoveredProviderSession,
     text: string,
@@ -1517,7 +1518,8 @@ export class SessionRepository {
       return "Too many chat actions are queued for this session.";
     }
     try {
-      await this.controls.focus(structuredClone(session));
+      const result = await this.controls.focus(structuredClone(session));
+      if (result === "superseded") return undefined;
       // Focus can fail or outlive the completion the user clicked. Only a
       // successful opening of that same completion may demote its pill.
       if (completion !== undefined && completion === this.readyCompletionIdentity(sessionId)) {
