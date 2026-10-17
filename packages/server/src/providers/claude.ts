@@ -52,6 +52,7 @@ type InventoryRead = {
 type BackgroundMetadata = {
   sessionID?: string;
   process?: ProcessRecord;
+  status?: string;
 };
 
 type FailureLifecycle = {
@@ -164,6 +165,7 @@ export class ClaudeProvider implements ProviderAdapter {
           backgroundMetadata.set(row.id!, {
             ...(fullSessionID(sessionID) ? { sessionID: fullSessionID(sessionID) } : {}),
             process,
+            status,
           });
           continue;
         }
@@ -307,10 +309,14 @@ export class ClaudeProvider implements ProviderAdapter {
         transcripts.add(transcript);
         const transcriptStamp = await this.environment.stamp(transcript);
         const summary = await this.transcriptSummary(transcript, transcriptStamp);
+        const interactiveIndex = results.findIndex((candidate) =>
+          candidate.id.toLowerCase() === transcriptSessionID.toLowerCase());
+        const interactive = results[interactiveIndex];
         const session = await this.backgroundSession(
           row, metadata, summary, transcript, transcriptStamp, processes, claudeExecutable,
           inventory.authoritative, inventory.observedAt, this.environment.now().valueOf(),
           interactiveSessionIds.has(transcriptSessionID.toLowerCase()) || presenceByJob.get(row.id!)?.reason === "conversation",
+          interactive?.turnState,
         );
         if (session) {
           const evidence = presenceByJob.get(row.id!);
@@ -322,9 +328,6 @@ export class ClaudeProvider implements ProviderAdapter {
             session.controlTarget.target.application = "Ghostty";
             session.owner = "Ghostty";
           }
-          const interactiveIndex = results.findIndex((candidate) =>
-            candidate.id.toLowerCase() === session.id.toLowerCase());
-          const interactive = results[interactiveIndex];
           if (interactive) {
             // One current UI identity and its retained job are one conversation.
             // Inventory supplies its name/state; current metadata supplies the
@@ -444,6 +447,7 @@ export class ClaudeProvider implements ProviderAdapter {
     observedAt: number,
     checkedAt: number,
     ambientEligible: boolean,
+    interactiveTurnState?: DiscoveredProviderSession["turnState"],
   ): Promise<DiscoveredProviderSession | undefined> {
     // Do not publish a temporary public ID for a row whose UUID is absent.
     // The next inventory refresh can safely promote it once identity is
@@ -465,20 +469,35 @@ export class ClaudeProvider implements ProviderAdapter {
         jobId, cwd: row.cwd, executable, application,
         ...(attached ? { attached } : {}),
       } : undefined;
-    const failurePresentation = this.failurePresentation(sessionID, row, authoritative);
-    const state = failurePresentation?.turnState
-      ?? inventoryTurnState(row, summary, authoritative, checkedAt);
-    const inventoryName = meaningfulInventoryName(row.name, jobId);
-    const title = inventoryName || summary.customTitle
-      || summary.firstUser || `Claude Code · ${jobId}`;
     const lifecycle = summary.lifecycle;
     const updatedAt = lifecycle?.observedAt
       ?? iso(transcriptStamp?.modifiedAt ?? new Date(row.startedAt));
+    const runtime = metadata?.process ?? processes.find((process) => process.pid === row.pid);
+    const hasRuntime = runtime !== undefined && isClaudeCommand(runtime.command, this.environment.home);
+    const jobState = string(row.state).toLowerCase();
+    const metadataStatus = hasRuntime ? string(metadata?.status).toLowerCase() : "";
+    const currentStatus = interactiveTurnState === "working" || metadataStatus === "busy" ? "busy"
+      : interactiveTurnState === "ready" ? "idle" : metadataStatus;
+    const workerStatus = string(row.status).toLowerCase() || currentStatus;
+    const currentWorkerStatus = workerStatus === "busy" || readyStatuses.has(workerStatus);
+    // A fresh --all read can repeat a dormant job's last state indefinitely.
+    // Current requests/runtime evidence survive age; an aggregate value alone does not.
+    const staleUnverified = authoritative && (jobState === "blocked" || jobState === "working")
+      && checkedAt - Date.parse(updatedAt) > this.environment.observedWindowMs
+      && !ambientEligible && !hasRuntime
+      && !currentWorkerStatus && !string(row.waitingFor);
+    const failurePresentation = this.failurePresentation(sessionID, row, authoritative);
+    const state = staleUnverified ? "history" : failurePresentation?.turnState
+      ?? inventoryTurnState({ ...row, status: workerStatus }, summary, authoritative, checkedAt);
+    const inventoryName = meaningfulInventoryName(row.name, jobId);
+    const title = inventoryName || summary.customTitle
+      || summary.firstUser || `Claude Code · ${jobId}`;
     return {
       id: sessionID,
       provider: "claude_code",
       title,
-      subtitle: state === "working" ? "Claude Code is working"
+      subtitle: staleUnverified ? `Last reported ${jobState}`
+        : state === "working" ? "Claude Code is working"
         : state === "needs_you" ? row.waitingFor || "Claude Code needs attention"
         : state === "ready" ? "Ready to continue"
         : state === "history" ? "Claude Code session stopped" : "Check Claude for current status",

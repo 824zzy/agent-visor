@@ -1,7 +1,7 @@
 # Sessions Browser Interaction Design
 
 Status: Accepted
-Last reviewed: 2026-09-09
+Last reviewed: 2026-10-16
 
 ## Purpose
 
@@ -29,6 +29,10 @@ With an empty query, the browser shows four sections:
 Ready sessions with activity in the last seven days share one section and one combined count, ordered by activity newest first regardless of acknowledgment. Opening a Ready row marks it as acknowledged without changing its rank or lifecycle state. The menu-bar pill priority order remains independent of browser section grouping.
 
 Completed conversations older than seven days appear in History with a gray dot and `Completed` subtitle. The exact seven-day boundary remains Ready. Grouping, row text, status color, and accessibility labels use the same browser presentation, including search results. Agent Room records retain their management label. Working turns and pending approvals do not become completed merely because they are old.
+
+Claude background jobs can remain in the catalog after their worker disappears. A retained `blocked` or `working` value moves to History once its activity is older than the observed-session window and no current worker, known worker status, displayed conversation, or waiting reason corroborates it. Its subtitle states the last reported state; its exact open and Chat actions remain available. Refreshing the catalog does not renew its activity time.
+
+Real unanswered questions and permissions remain `Needs you` regardless of the underlying job's age. Current Busy status, including matching live worker metadata when the catalog omits that field, keeps a turn `In progress`. These status rules do not make an agent overview into a conversation pill.
 
 Freshness is recalculated every minute and on window focus, visibility changes, and return to Sessions, even if the provider snapshot has not changed. Regrouping preserves the top visible session and its offset, subject to the scroll bounds, plus the keyboard target and query. This presentation does not archive conversations or change source/Chat capabilities, turn state, route ownership, or open drafts.
 

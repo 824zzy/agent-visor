@@ -170,6 +170,155 @@ function completedIdleFixture() {
 }
 
 describe("Claude agent-view integration", () => {
+  it.each([
+    { state: "blocked", status: undefined },
+    { state: "working", status: undefined },
+    { state: "blocked", status: "future-status" },
+    { state: "blocked", status: "exited" },
+  ])("moves a stale unverified $state/$status job to History without forgetting its conversation", async ({ state, status }) => {
+    const environment = new FixtureEnvironment();
+    environment.inventory = inventorySuccess([backgroundRow("8e45ed2c", ccID, state, {
+      name: "Retained conversation", startedAt: nowMs - 8 * 24 * 60 * 60_000, status,
+    })]);
+
+    const snapshot = await repository(environment).refresh();
+    expect(snapshot.sessions).toMatchObject([{ id: ccID, section: "history", attentionTier: "history",
+      sessionState: { turn: "unknown" }, canOpenOwner: true, canEnterChat: true }]);
+    expect(menuPresentation(snapshot, [], nowMs).pills).toEqual([]);
+  });
+
+  it.each(["question", "approval"] as const)("keeps a real unanswered %s yellow when its old job is otherwise unverified", async type => {
+    const environment = new FixtureEnvironment();
+    environment.inventory = inventorySuccess([backgroundRow("8e45ed2c", ccID, "blocked", {
+      startedAt: nowMs - 8 * 24 * 60 * 60_000, status: undefined,
+    })]);
+    const source = repository(environment);
+    expect((await source.refresh()).sessions[0]?.section).toBe("history");
+    source.registerExternalAction(ccID, type === "question" ? {
+      type, toolUseId: "unanswered-question", questions: [{ id: "confirm", question: "Continue?", choices: ["Yes"], multiple: false }],
+    } : {
+      type, toolUseId: "unanswered-approval", toolName: "Bash", input: { command: "echo fixture" }, canPersist: false,
+    }, async () => { throw new Error("Discovery must not answer the user's request"); });
+
+    environment.clock = new Date(nowMs + 3 * 24 * 60 * 60_000);
+    environment.inventory = inventorySuccess(environment.inventory.kind === "success" ? environment.inventory.rows : [], true,
+      environment.clock.valueOf());
+    const snapshot = await source.refresh();
+    expect(snapshot.sessions).toMatchObject([{ id: ccID, section: "needs_you", attentionTier: "needs_you",
+      sessionState: { turn: "needs_you" } }]);
+    expect(source.pendingActions(ccID)).toMatchObject([{ type }]);
+    expect(menuPresentation(snapshot, [], environment.clock.valueOf()).navigatorPills).toMatchObject([{ id: ccID, phase: "needs_you" }]);
+    expect(menuPresentation(snapshot, [], environment.clock.valueOf()).pills).toEqual([]);
+  });
+
+  it.each(["blocked", "working"])("keeps an old %s job orange when its current worker reports busy", async state => {
+    const environment = new FixtureEnvironment();
+    environment.inventory = inventorySuccess([backgroundRow("8e45ed2c", ccID, state, {
+      startedAt: nowMs - 3 * 24 * 60 * 60_000, status: "busy",
+    })]);
+    const snapshot = await repository(environment).refresh();
+    expect(snapshot.sessions).toMatchObject([{ id: ccID, section: "working", attentionTier: "working",
+      sessionState: { turn: "working" } }]);
+    expect(menuPresentation(snapshot, [], nowMs).navigatorPills).toMatchObject([{ id: ccID, phase: "working" }]);
+  });
+
+  it.each(["approval", "input"])("keeps an old job yellow when fresh inventory confirms it is waiting for %s", async waitingFor => {
+    const environment = new FixtureEnvironment();
+    environment.inventory = inventorySuccess([backgroundRow("8e45ed2c", ccID, "blocked", {
+      startedAt: nowMs - 3 * 24 * 60 * 60_000, status: undefined, waitingFor,
+    })]);
+    const snapshot = await repository(environment).refresh();
+    expect(snapshot.sessions).toMatchObject([{ id: ccID, section: "needs_you", attentionTier: "needs_you",
+      sessionState: { turn: "needs_you" } }]);
+    expect(menuPresentation(snapshot, [], nowMs).navigatorPills).toMatchObject([{ id: ccID, phase: "needs_you" }]);
+  });
+
+  it.each(["bg", "interactive"])("keeps an old blocked job orange when matching live %s worker metadata reports busy", async kind => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, { sessionId: ccID, jobId: "8e45ed2c", cwd,
+      kind, entrypoint: "cli", status: "busy" });
+    environment.inventory = inventorySuccess([backgroundRow("8e45ed2c", ccID, "blocked", {
+      startedAt: nowMs - 3 * 24 * 60 * 60_000, status: undefined,
+    })]);
+    expect((await repository(environment).refresh()).sessions).toMatchObject([
+      { id: ccID, section: "working", sessionState: { turn: "working" } },
+    ]);
+  });
+
+  it("moves an unverified job to History after the observed window despite fresh catalog reads and restart", async () => {
+    const environment = new FixtureEnvironment();
+    const row = backgroundRow("8e45ed2c", ccID, "blocked", {
+      startedAt: nowMs - environment.observedWindowMs, status: undefined,
+    });
+    environment.inventory = inventorySuccess([row]);
+    const source = repository(environment);
+    expect((await source.refresh()).sessions[0]?.section).toBe("needs_you");
+
+    environment.clock = new Date(nowMs + 1);
+    environment.inventory = inventorySuccess([row], true, environment.clock.valueOf());
+    const snapshot = await source.refresh();
+    expect(snapshot.sessions).toMatchObject([{ id: ccID, section: "history",
+      updatedAt: new Date(row.startedAt).toISOString(), sessionState: { turn: "unknown" } }]);
+    expect((await repository(environment).refresh()).sessions).toMatchObject([
+      { id: ccID, section: "history", updatedAt: new Date(row.startedAt).toISOString() },
+    ]);
+  });
+
+  it.each([
+    { command: executable, section: "working", turn: "working" },
+    { command: "/usr/bin/python3", section: "history", turn: "unknown" },
+  ])("verifies an old job's worker PID instead of trusting a PID reused by $command", async ({ command, section, turn }) => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, command);
+    environment.inventory = inventorySuccess([backgroundRow("8e45ed2c", ccID, "working", {
+      startedAt: nowMs - 3 * 24 * 60 * 60_000, status: undefined, pid: 900,
+    })]);
+    expect((await repository(environment).refresh()).sessions).toMatchObject([
+      { id: ccID, section, sessionState: { turn } },
+    ]);
+  });
+
+  it.each([
+    { tool: "Bash", type: "approval", input: { command: "echo fixture" } },
+    { tool: "AskUserQuestion", type: "question", input: { questions: [{ question: "Continue?", options: ["Yes"] }] } },
+  ])("keeps an unanswered $type hook yellow over a stale unverified job", async ({ tool, type, input }) => {
+    const environment = new FixtureEnvironment();
+    environment.inventory = inventorySuccess([backgroundRow("8e45ed2c", ccID, "blocked", {
+      startedAt: nowMs - 8 * 24 * 60 * 60_000, status: undefined,
+    })]);
+    const source = repository(environment);
+    await source.refresh();
+    source.applyHook({ sessionId: ccID, cwd, provider: "claude_code", event: "PermissionRequest",
+      status: "waiting_for_approval", expectsResponse: true, receivedAt: now.toISOString(),
+      tool, toolUseId: "unanswered-hook", toolInput: input });
+    expect((await source.refresh()).sessions).toMatchObject([
+      { id: ccID, section: "needs_you", sessionState: { turn: "needs_you" } },
+    ]);
+    expect(source.pendingActions(ccID)).toMatchObject([{ type }]);
+  });
+
+  it("retains the exact open route for a History job without reviving an overview pill", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 950, executable, "claude attach 8e45ed2c");
+    environment.inventory = inventorySuccess([backgroundRow("8e45ed2c", ccID, "blocked", {
+      startedAt: nowMs - 3 * 24 * 60 * 60_000, status: undefined,
+    })]);
+    const source = repository(environment);
+    const helper = new FakeNativeHelper();
+    source.setControls(new NativeSessionControls(helper));
+    const snapshot = await source.refresh();
+    expect(snapshot.sessions[0]?.section).toBe("history");
+    expect(menuPresentation(snapshot, [], nowMs).pills).toEqual([]);
+    const effects: unknown[] = [];
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: ccID }, source,
+      effect => effects.push(effect));
+    expect(effects).toEqual([]);
+    expect(helper.claudeAttachRequests).toEqual([{ cwd, executable, jobId: "8e45ed2c" }]);
+    expect(helper.terminalSendRequests).toEqual([]);
+    expect(menuPresentation(source.current(), [], nowMs).pills).toEqual([]);
+  });
+
   it("shows a completed idle blocked conversation as Ready when no action is waiting", async () => {
     const { environment, row, completedAt } = completedIdleFixture();
     environment.inventory = inventorySuccess([{ ...row, state: "blocked" }]);
