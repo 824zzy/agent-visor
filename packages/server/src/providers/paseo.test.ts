@@ -16,6 +16,28 @@ const agent = () => ({
 });
 
 describe("Paseo session pills", () => {
+  it("keeps physical pills identical when only the confirmed source profile changes", async () => {
+    const row = { ...agent(), provider: "claude" };
+    const repository = new SessionRepository([new PaseoProvider({ read: async () => ({
+      serverId: "srv_local", providers: { "claude-copilot": "claude" }, agents: [row],
+    }) })], { now: () => now });
+    const before = await repository.refresh();
+    const previous = menuPresentation(before, [], now.valueOf());
+    expect(previous.pills[0]?.inspector).toMatchObject({
+      runtimeItems: ["Claude Code · Paseo"], detailRows: [],
+    });
+
+    row.provider = "claude-copilot";
+    const after = await repository.refresh();
+    const current = menuPresentation(after, [], now.valueOf());
+    expect(current.pills[0]?.inspector?.detailRows).toEqual([
+      { label: "Profile", value: "claude-copilot" },
+    ]);
+    expect(current.pills.map(({ inspector: _, ...pill }) => pill))
+      .toEqual(previous.pills.map(({ inspector: _, ...pill }) => pill));
+    expect(after.revision).toBeGreaterThan(before.revision);
+  });
+
   it("publishes an SDK conversation from a profile that extends Claude with its exact Paseo route", async () => {
     const provider = new PaseoProvider({ read: async () => ({
       serverId: "srv_local", providers: { "claude-copilot": "claude" }, agents: [agent()],

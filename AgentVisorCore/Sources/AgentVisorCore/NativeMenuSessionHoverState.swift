@@ -68,7 +68,7 @@ public struct NativeMenuSessionHoverState: Sendable {
         if let inspector = pill.inspector {
             let rows = [
                 SessionHoverDetailRow(
-                    label: "Latest turn",
+                    label: "Source",
                     value: inspector.runtimeItems.joined(separator: " · ")
                 ),
             ] + inspector.detailRows.map {

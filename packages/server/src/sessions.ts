@@ -76,6 +76,7 @@ export type DiscoveredProviderSession = {
   project?: string;
   cwd: string;
   owner: string;
+  sourceProfile?: SessionSummary["sourceProfile"];
   section: SessionSection;
   updatedAt: string;
   canOpenOwner: boolean;
@@ -3593,6 +3594,7 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
         session.subtitle?.trim(),
       ].filter(Boolean).join(" · "),
       source: providerNames[session.provider],
+      ...(session.sourceProfile ? { sourceProfile: session.sourceProfile } : {}),
       project: session.project?.trim() || path.basename(session.cwd) || session.cwd,
       owner: session.owner,
       cwd: session.cwd,

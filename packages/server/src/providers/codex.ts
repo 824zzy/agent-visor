@@ -277,6 +277,8 @@ export class CodexProvider implements ProviderAdapter {
     const controlTarget = terminalTarget
       ? { kind: "terminal" as const, target: terminalTarget }
       : desktopTarget;
+    const sourceProfile = instance.id === "native"
+      ? undefined : instance.label.replace(/^Codex · /, "").trim();
     return {
       id: sessionID,
       provider: "codex",
@@ -286,6 +288,7 @@ export class CodexProvider implements ProviderAdapter {
         : (terminalTarget ? "Codex CLI session" : `${instance.label} app session`),
       cwd: thread.cwd,
       owner,
+      ...(sourceProfile ? { sourceProfile } : {}),
       section,
       updatedAt: section === "needs_you" ? [transcript?.questionAt, asyncQuestionAt].filter((at): at is string => Boolean(at)).sort().at(-1)!
         : codexLifecycle?.observedAt ?? iso(thread.updatedAt * 1_000),

@@ -162,7 +162,9 @@ Each item matches the released 24-point dark capsule, six-point status dot, seve
 
 Hovering for 0.35 seconds opens a compact session inspector. Leaving the item dismisses it, while clicking keeps the normal source action or opens Chat for an ownerless Chat-capable row.
 
-The inspector matches Swift’s content order: title, phase badge, latest runtime, conditional detail rows, project path, conditional context, activity, and direct-open shortcut.
+The inspector matches Swift’s content order: title, phase badge, source, conditional detail rows, project path, conditional context, activity, and direct-open shortcut.
+
+Source identifies both the agent and its host when they differ, such as `Claude Code · cmux` or `Claude Code · Paseo`. A confirmed named profile appears immediately below it in a `Profile` row, including Paseo's `claude-copilot` and named Codex Desktop instances. Built-in or unknown profiles omit that row. Titles, working directories, and terminal names never establish a profile. These details stay in the existing hover panel; pill labels, status dots, widths, and packing do not change.
 
 Reasoning, mode, access, model, and context appear only when the daemon has authoritative values. Missing provider data never creates placeholder claims.
 

@@ -106,6 +106,20 @@ class CmuxEnvironment implements ProviderEnvironment {
 }
 
 describe("cmux Claude source integration", () => {
+  it("shows the exact cmux owner in hover without guessing a profile from the Claude title", async () => {
+    const { client, requests } = await socketFixture();
+    const environment = new CmuxEnvironment();
+    environment.cmuxSurface = client.resolve.bind(client);
+    const source = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
+    const presentation = menuPresentation(await source.refresh(), [], now.valueOf());
+
+    expect(presentation.pills).toMatchObject([{
+      title: "ccx-thinking-block-sneha", owner: "cmux", phase: "ready",
+      inspector: { runtimeItems: ["Claude Code · cmux"], detailRows: [] },
+    }]);
+    expect(requests.map(request => request.method)).toEqual(["system.identify"]);
+  });
+
   it("recognizes the cmux owner without advertising an Apple Terminal input route", async () => {
     const source = new SessionRepository([new ClaudeProvider(new CmuxEnvironment())], { now: () => now });
     const snapshot = await source.refresh();

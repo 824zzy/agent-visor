@@ -94,6 +94,8 @@ export const sessionSummarySchema = z.object({
   title: z.string().min(1),
   subtitle: z.string(),
   source: z.string().min(1),
+  /** Display name of a provider-confirmed source profile, separate from session status. */
+  sourceProfile: z.string().min(1).max(128).optional(),
   project: z.string().min(1),
   owner: z.string().min(1),
   cwd: z.string().min(1),

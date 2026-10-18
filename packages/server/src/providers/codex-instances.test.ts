@@ -51,6 +51,32 @@ function createThread(home: string, title: string): string {
 }
 
 describe("Codex Desktop instances", () => {
+  it("shows the confirmed custom Codex profile in hover details without changing the pill name", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "visor-codex-hover-"));
+    try {
+      createThread(path.join(root, ".codex"), "Native task");
+      createThread(path.join(root, "copilot"), "Copilot task");
+      const environment = new TwoDesktopEnvironment(root, { now: () => new Date("2026-09-28T23:05:00Z") });
+      const source = new SessionRepository([new CodexProvider(environment, () => [
+        { path: path.join(root, "copilot"), label: "Codex · Copilot" },
+      ])], { now: () => environment.now() });
+      const presentation = menuPresentation(await source.refresh(), [], environment.now().valueOf());
+
+      expect(presentation.navigatorPills.find(pill => pill.title === "Copilot task")).toMatchObject({
+        title: "Copilot task", phase: "ready",
+        inspector: {
+          runtimeItems: ["Codex Desktop"],
+          detailRows: [{ label: "Profile", value: "Copilot" }],
+        },
+      });
+      expect(presentation.navigatorPills.find(pill => pill.title === "Native task")?.inspector).toMatchObject({
+        runtimeItems: ["Codex Desktop"], detailRows: [],
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps equal thread UUIDs separate and routes each verified owner", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "visor-codex-homes-"));
     try {

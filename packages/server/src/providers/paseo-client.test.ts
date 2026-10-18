@@ -5,6 +5,9 @@ import { WebSocketServer } from "ws";
 import { afterEach, expect, it } from "vitest";
 import { PaseoClient } from "./paseo-client.js";
 import { liveProviders } from "./index.js";
+import { nativeHelperRequestSchema, sessionSnapshotSchema } from "@agent-visor/protocol";
+import { SessionRepository } from "../sessions.js";
+import { menuPresentation } from "../menu.js";
 
 const roots: string[] = [];
 const servers: WebSocketServer[] = [];
@@ -66,6 +69,27 @@ it("reads the live authenticated directory and custom Claude profile without any
     serverId: "srv_fixture", providers: { "claude-copilot": "claude" },
     agents: [{ id: "agent_one", title: "Work" }],
   });
+  expect(f.requests).toEqual(["hello", "fetch_agents_request"]);
+});
+
+it("shows the confirmed Claude profile in hover details without changing the Paseo pill title", async () => {
+  const f = await fixture();
+  const now = new Date("2026-10-12T21:00:00.000Z");
+  const provider = liveProviders(f.home).find(provider => provider.id === "paseo")!;
+  const repository = new SessionRepository([provider], { now: () => now });
+  const snapshot = sessionSnapshotSchema.parse(await repository.refresh());
+  const presentation = menuPresentation(snapshot, [], now.valueOf());
+
+  expect(presentation.pills[0]).toMatchObject({
+    title: "Work", source: "Paseo", owner: "Paseo", phase: "history",
+    inspector: {
+      runtimeItems: ["Claude Code · Paseo"],
+      detailRows: [{ label: "Profile", value: "claude-copilot" }],
+    },
+  });
+  expect(nativeHelperRequestSchema.safeParse({
+    version: 1, id: "hover-source", method: "present_pills", params: presentation,
+  }).success).toBe(true);
   expect(f.requests).toEqual(["hello", "fetch_agents_request"]);
 });
 

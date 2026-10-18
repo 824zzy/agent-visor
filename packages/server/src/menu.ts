@@ -184,7 +184,7 @@ function presentationPill(
     inspector: {
       status: inspectorStatus(session.section, session.subtitle),
       runtimeItems: [runtimeSource(session.source, session.owner)],
-      detailRows: [],
+      detailRows: session.sourceProfile ? [{ label: "Profile", value: session.sourceProfile }] : [],
       projectPath: displayPath(session.cwd),
       activityAt: session.updatedAt,
     },
@@ -211,7 +211,8 @@ function inspectorStatus(section: SessionSnapshot["sessions"][number]["section"]
 }
 
 function runtimeSource(source: string, owner: string): string {
-  if (source === "Codex" && owner === "Codex") return "Codex Desktop";
+  if (source === "Paseo") return "Claude Code · Paseo";
+  if (source === "Codex" && (owner === "Codex" || owner.startsWith("Codex ·"))) return "Codex Desktop";
   return source.localeCompare(owner, undefined, { sensitivity: "accent" }) === 0
     ? source
     : `${source} · ${owner}`;

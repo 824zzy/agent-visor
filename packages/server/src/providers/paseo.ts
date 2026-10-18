@@ -34,6 +34,7 @@ export class PaseoProvider implements ProviderAdapter {
       return {
         id: `paseo:${snapshot.serverId}:${agent.id}`, provider: this.id,
         title: agent.title || "Claude Code session", cwd: agent.cwd, owner: "Paseo",
+        ...(snapshot.providers[agent.provider] === "claude" ? { sourceProfile: agent.provider } : {}),
         subtitle: waiting ? "Answer or approval required in Paseo" : failed ? "Check the error in Paseo"
           : working ? "Claude Code is working" : "Ready to continue in Paseo",
         section, turnState: section === "history" ? agent.status === "idle" ? "ready" : "unknown" : section,
