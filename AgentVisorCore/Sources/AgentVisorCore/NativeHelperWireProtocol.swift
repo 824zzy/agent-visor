@@ -265,6 +265,47 @@ public struct NativeHelperGhosttyTerminalView: Codable, Equatable {
     }
 }
 
+/// A process-instance-bound Ghostty surface identified by a short-lived nonce
+/// marker. Unlike the legacy title view, this identity is sufficient for an
+/// exact native focus operation and carries no terminal content or input data.
+public struct NativeHelperGhosttyBinding: Codable, Equatable {
+    public let applicationPID: Int32
+    public let processStartToken: String
+    public let windowId: String
+    public let tabId: String
+    public let terminalId: String
+    public let nonce: String
+
+    public init(
+        applicationPID: Int32,
+        processStartToken: String,
+        windowId: String,
+        tabId: String,
+        terminalId: String,
+        nonce: String
+    ) {
+        self.applicationPID = applicationPID
+        self.processStartToken = processStartToken
+        self.windowId = windowId
+        self.tabId = tabId
+        self.terminalId = terminalId
+        self.nonce = nonce
+    }
+
+    public var isValid: Bool {
+        applicationPID > 0
+            && validIdentity(processStartToken, maximum: 128)
+            && validIdentity(windowId, maximum: 128)
+            && validIdentity(tabId, maximum: 128)
+            && validIdentity(terminalId, maximum: 128)
+            && nonce.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil
+    }
+
+    private func validIdentity(_ value: String, maximum: Int) -> Bool {
+        !value.isEmpty && value.utf16.count <= maximum && !value.contains("\0")
+    }
+}
+
 public struct NativeHelperFocusTarget: Codable, Equatable {
     public let pid: Int32
     public let bundleIdentifier: String
@@ -441,6 +482,9 @@ public enum NativeHelperRequest: Equatable {
     case focusTerminal(id: String, target: NativeHelperTerminalTarget)
     case ghosttyTerminalViews(id: String, conversationTitles: [String] = [])
     case focusGhosttyTerminal(id: String, target: NativeHelperGhosttyTerminalView)
+    case ghosttyBindingStatus(id: String)
+    case resolveGhosttyBinding(id: String, nonce: String)
+    case focusGhosttyBinding(id: String, target: NativeHelperGhosttyBinding)
     case sendTerminal(id: String, target: NativeHelperTerminalTarget, text: String, submit: Bool)
     case cancelTerminal(id: String, target: NativeHelperTerminalTarget)
     case cyclePermissionMode(id: String, target: NativeHelperTerminalTarget)
@@ -448,6 +492,8 @@ public enum NativeHelperRequest: Equatable {
     public var id: String {
         switch self {
         case .ghosttyTerminalViews(let id, _), .focusGhosttyTerminal(let id, _),
+             .ghosttyBindingStatus(let id), .resolveGhosttyBinding(let id, _),
+             .focusGhosttyBinding(let id, _),
              .screenTopology(let id), .accessibilityStatus(let id),
              .notificationStatus(let id), .requestNotifications(let id),
              .reconcileNotifications(let id, _, _),
@@ -472,6 +518,7 @@ public enum NativeHelperRequest: Equatable {
             "present_pills", "reconcile_notifications", "reconcile_pi_restoration",
                 "focus", "open_codex_thread", "open_claude_attach", "focus_terminal", "send_terminal",
                 "cancel_terminal", "cycle_permission_mode", "focus_ghostty_terminal",
+                "resolve_ghostty_binding", "focus_ghostty_binding",
         ].contains(method) || (method == "ghostty_terminal_views" && object["params"] != nil)
             ? ["version", "id", "method", "params"]
             : ["version", "id", "method"]
@@ -500,6 +547,21 @@ public enum NativeHelperRequest: Equatable {
                 throw NativeHelperWireError.invalidRequest
             }
             return .focusGhosttyTerminal(id: wire.id, target: target)
+        case "ghostty_binding_status":
+            return .ghosttyBindingStatus(id: wire.id)
+        case "resolve_ghostty_binding":
+            guard let params = wire.params,
+                  Set(params.keys) == ["nonce"],
+                  let nonce = params.nonce,
+                  nonce.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else {
+                throw NativeHelperWireError.invalidRequest
+            }
+            return .resolveGhosttyBinding(id: wire.id, nonce: nonce)
+        case "focus_ghostty_binding":
+            guard let target = wire.params?.ghosttyBindingTarget, target.isValid else {
+                throw NativeHelperWireError.invalidRequest
+            }
+            return .focusGhosttyBinding(id: wire.id, target: target)
         case "screen_topology":
             return .screenTopology(id: wire.id)
         case "accessibility_status":
@@ -708,6 +770,8 @@ public enum NativeHelperErrorCode: String, Codable {
 
 public enum NativeHelperResponse {
     case ghosttyTerminalViews(id: String, views: [NativeHelperGhosttyTerminalView])
+    case ghosttyBindingStatus(id: String, available: Bool)
+    case ghosttyBinding(id: String, binding: NativeHelperGhosttyBinding)
     case screenTopology(id: String, screens: [NativeHelperScreen])
     case accessibilityStatus(id: String, trusted: Bool)
     case notificationStatus(id: String, status: NativeHelperNotificationPermission)
@@ -721,6 +785,20 @@ public enum NativeHelperResponse {
             return try encoder.encode(SuccessEnvelope(
                 version: nativeHelperProtocolVersion, id: id, ok: true,
                 result: .ghosttyTerminalViews(views)
+            ))
+        case .ghosttyBindingStatus(let id, let available):
+            return try encoder.encode(SuccessEnvelope(
+                version: nativeHelperProtocolVersion,
+                id: id,
+                ok: true,
+                result: .ghosttyBindingStatus(available)
+            ))
+        case .ghosttyBinding(let id, let binding):
+            return try encoder.encode(SuccessEnvelope(
+                version: nativeHelperProtocolVersion,
+                id: id,
+                ok: true,
+                result: .ghosttyBinding(binding)
             ))
         case .screenTopology(let id, let screens):
             return try encoder.encode(SuccessEnvelope(
@@ -911,6 +989,19 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         let required: Set<String> = ["applicationPID", "processStartToken", "terminalId", "title", "cwd"]
         return required.isSubset(of: Set(target.keys))
             && Set(target.keys).isSubset(of: required.union(["titleUpdatesEnabled", "viewMode"]))
+    case "resolve_ghostty_binding":
+        guard let params = object["params"] as? [String: Any],
+              Set(params.keys) == ["nonce"],
+              let nonce = params["nonce"] as? String else { return false }
+        return nonce.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil
+    case "focus_ghostty_binding":
+        guard let params = object["params"] as? [String: Any],
+              Set(params.keys) == ["target"],
+              let target = params["target"] as? [String: Any] else { return false }
+        let required: Set<String> = [
+            "applicationPID", "processStartToken", "windowId", "tabId", "terminalId", "nonce",
+        ]
+        return Set(target.keys) == required
     case "present_pills":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys).contains("pills"),
@@ -1039,6 +1130,8 @@ private struct WireParameters: Decodable {
     let claudeAttachTarget: NativeHelperClaudeAttachTarget?
     let terminalTarget: NativeHelperTerminalTarget?
     let ghosttyTerminalTarget: NativeHelperGhosttyTerminalView?
+    let ghosttyBindingTarget: NativeHelperGhosttyBinding?
+    let nonce: String?
     let conversationTitles: [String]?
     let text: String?
     let submit: Bool?
@@ -1111,6 +1204,10 @@ private struct WireParameters: Decodable {
         ghosttyTerminalTarget = try? container.decodeIfPresent(
             NativeHelperGhosttyTerminalView.self, forKey: .init("target")
         )
+        ghosttyBindingTarget = try? container.decodeIfPresent(
+            NativeHelperGhosttyBinding.self, forKey: .init("target")
+        )
+        nonce = try container.decodeIfPresent(String.self, forKey: .init("nonce"))
         conversationTitles = try container.decodeIfPresent([String].self, forKey: .init("conversationTitles"))
         text = try container.decodeIfPresent(String.self, forKey: .init("text"))
         submit = try container.decodeIfPresent(Bool.self, forKey: .init("submit"))
@@ -1303,6 +1400,8 @@ private struct SuccessEnvelope: Encodable {
 
 private enum ResultBody: Encodable {
     case ghosttyTerminalViews([NativeHelperGhosttyTerminalView])
+    case ghosttyBindingStatus(Bool)
+    case ghosttyBinding(NativeHelperGhosttyBinding)
     case screenTopology([NativeHelperScreen])
     case accessibilityStatus(Bool)
     case notificationStatus(NativeHelperNotificationPermission)
@@ -1314,6 +1413,12 @@ private enum ResultBody: Encodable {
         case .ghosttyTerminalViews(let views):
             try container.encode("ghostty_terminal_views", forKey: .init("type"))
             try container.encode(views, forKey: .init("views"))
+        case .ghosttyBindingStatus(let available):
+            try container.encode("ghostty_binding_status", forKey: .init("type"))
+            try container.encode(available, forKey: .init("available"))
+        case .ghosttyBinding(let binding):
+            try container.encode("ghostty_binding", forKey: .init("type"))
+            try container.encode(binding, forKey: .init("binding"))
         case .screenTopology(let screens):
             try container.encode("screen_topology", forKey: .init("type"))
             try container.encode(screens, forKey: .init("screens"))

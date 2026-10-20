@@ -6,6 +6,7 @@ import type { NativeHelperGhosttyTerminalView } from "@agent-visor/protocol";
 import { machineWork, runProcess, summaryWork } from "../machine.js";
 import { readCodexSettingsCatalog, type CodexSettingsCatalog } from "../codex-turn.js";
 import { CmuxClient, type CmuxSurfaceTarget } from "./cmux.js";
+import { HerdrClient, type HerdrSurfaceTarget } from "./herdr.js";
 import {
   ClaudeAgentInventory,
   resolveClaudeExecutable,
@@ -60,6 +61,7 @@ export interface ProviderEnvironment {
   /** Current Ghostty titles; runtime ownership alone cannot identify an attached job. */
   ghosttyTerminalViews?(conversationTitles?: readonly string[]): Promise<GhosttyTerminalView[]>;
   /** Exact local cmux surface; discovery never focuses or sends input. */
+  herdrSurface?(pid: number, sessionId: string, cwd: string): Promise<HerdrSurfaceTarget | undefined>;
   cmuxSurface?(pid: number, sessionId: string, cwd: string): Promise<CmuxSurfaceTarget | undefined>;
 }
 
@@ -74,6 +76,7 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
   private readonly claudeInventory: ClaudeAgentInventory;
   private claudeExecutablePath?: Promise<string | undefined>;
   private readonly cmux = new CmuxClient();
+  private readonly herdr = new HerdrClient();
   readonly ghosttyTerminalViews?: (conversationTitles?: readonly string[]) => Promise<GhosttyTerminalView[]>;
 
   constructor(
@@ -93,6 +96,10 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
   }
 
   private readonly clock: () => Date;
+
+  herdrSurface(pid: number, sessionId: string, cwd: string): Promise<HerdrSurfaceTarget | undefined> {
+    return this.herdr.resolve(pid, sessionId, cwd);
+  }
 
   cmuxSurface(pid: number, sessionId: string, cwd: string): Promise<CmuxSurfaceTarget | undefined> {
     return this.cmux.resolve(pid, sessionId, cwd);

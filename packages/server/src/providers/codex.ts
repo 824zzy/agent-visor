@@ -238,7 +238,10 @@ export class CodexProvider implements ProviderAdapter {
     const storedTitle = indexTitles.get(thread.id) || thread.title;
     const title = storedTitle || await codexRolloutTitle(this.environment, thread.rolloutPath);
     const rolloutStamp = await this.environment.stamp(thread.rolloutPath);
-    const transcript = !terminalTarget
+    const unverifiedHost = owner === "Herdr" || owner === "Unknown";
+    // A live CLI keeps its hook-owned lifecycle even if its host has no
+    // verified focus route. Route loss must not import desktop lifecycle.
+    const transcript = !terminalTarget && !unverifiedHost
       ? await this.transcriptReader.read(this.environment, sessionID, thread.rolloutPath, thread.id)
       : undefined;
     const lifecycle = transcript?.lifecycle;
@@ -276,7 +279,7 @@ export class CodexProvider implements ProviderAdapter {
         : undefined;
     const controlTarget = terminalTarget
       ? { kind: "terminal" as const, target: terminalTarget }
-      : desktopTarget;
+      : unverifiedHost ? undefined : desktopTarget;
     const sourceProfile = instance.id === "native"
       ? undefined : instance.label.replace(/^Codex · /, "").trim();
     return {
@@ -308,7 +311,7 @@ export class CodexProvider implements ProviderAdapter {
       chatPath: thread.rolloutPath,
       ...(instance.id === "native" ? { messageTransport: "codex_app_server" as const } : {}),
       ...(instance.id === "native" && !terminalTarget
-        ? { routeState: "available" as const, routeOwnership: "unverified" as const }
+        ? { routeState: unverifiedHost ? "unavailable" as const : "available" as const, routeOwnership: "unverified" as const }
         : {}),
       ...(modelCatalog ? { modelCatalog } : {}),
       ...(controlTarget ? { controlTarget } : {}),

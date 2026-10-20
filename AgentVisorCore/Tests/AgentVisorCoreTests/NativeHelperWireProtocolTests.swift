@@ -63,6 +63,48 @@ final class NativeHelperWireProtocolTests: XCTestCase {
         XCTAssertEqual(body["type"] as? String, "ghostty_terminal_views")
         XCTAssertEqual((body["views"] as? [[String: Any]])?.first?["terminalId"] as? String, "surface-a")
     }
+
+    func testNonceBoundGhosttyBindingRequestsAndResponsesAreStrict() throws {
+        let nonce = String(repeating: "e", count: 32)
+        let target = NativeHelperGhosttyBinding(
+            applicationPID: 701,
+            processStartToken: "ghostty-start-1",
+            windowId: "window-1",
+            tabId: "tab-1",
+            terminalId: "terminal-1",
+            nonce: nonce
+        )
+        let resolve = try JSONSerialization.data(withJSONObject: [
+            "version": 1, "id": "resolve", "method": "resolve_ghostty_binding",
+            "params": ["nonce": nonce],
+        ])
+        XCTAssertEqual(
+            try NativeHelperRequest.decode(resolve),
+            .resolveGhosttyBinding(id: "resolve", nonce: nonce)
+        )
+        let focus = try JSONSerialization.data(withJSONObject: [
+            "version": 1, "id": "focus", "method": "focus_ghostty_binding",
+            "params": ["target": try JSONSerialization.jsonObject(with: JSONEncoder().encode(target))],
+        ])
+        XCTAssertEqual(
+            try NativeHelperRequest.decode(focus),
+            .focusGhosttyBinding(id: "focus", target: target)
+        )
+        XCTAssertThrowsError(try NativeHelperRequest.decode(Data(#"{"version":1,"id":"bad","method":"resolve_ghostty_binding","params":{"nonce":"EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"}}"#.utf8)))
+
+        let status = try NativeHelperResponse.ghosttyBindingStatus(id: "status", available: true).encoded()
+        let statusObject = try XCTUnwrap(JSONSerialization.jsonObject(with: status) as? [String: Any])
+        let statusResult = try XCTUnwrap(statusObject["result"] as? [String: Any])
+        XCTAssertEqual(statusResult["type"] as? String, "ghostty_binding_status")
+        XCTAssertEqual(statusResult["available"] as? Bool, true)
+
+        let resolved = try NativeHelperResponse.ghosttyBinding(id: "resolved", binding: target).encoded()
+        let resolvedObject = try XCTUnwrap(JSONSerialization.jsonObject(with: resolved) as? [String: Any])
+        let resolvedResult = try XCTUnwrap(resolvedObject["result"] as? [String: Any])
+        XCTAssertEqual(resolvedResult["type"] as? String, "ghostty_binding")
+        XCTAssertEqual((resolvedResult["binding"] as? [String: Any])?["terminalId"] as? String, "terminal-1")
+    }
+
     func testParsesWireTimestampsWithAndWithoutFractionalSeconds() {
         XCTAssertNotNil(NativeHelperTimestamp.parse("2026-08-24T12:00:00.000Z"))
         XCTAssertNotNil(NativeHelperTimestamp.parse("2026-08-24T12:00:00Z"))

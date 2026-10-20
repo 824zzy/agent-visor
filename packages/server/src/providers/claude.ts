@@ -206,6 +206,8 @@ export class ClaudeProvider implements ProviderAdapter {
         pid,
         await this.environment.processStartedAt(pid),
       );
+      const herdrTarget = kind === "interactive" && owner === "Herdr"
+        ? await this.environment.herdrSurface?.(pid, sessionID, cwd) : undefined;
       const cmuxTarget = kind === "interactive" && owner === "cmux"
         ? await this.environment.cmuxSurface?.(pid, sessionID, cwd) : undefined;
       // A background worker's tty is a private daemon PTY, not a visible
@@ -246,7 +248,8 @@ export class ClaudeProvider implements ProviderAdapter {
       const attached = backgroundTarget
         ? await attachedTerminalTarget(backgroundTarget.jobId, backgroundTarget.cwd, processes, this.environment)
         : undefined;
-      const controlTarget = backgroundTarget
+      const controlTarget = herdrTarget ? { kind: "herdr_surface" as const, target: herdrTarget }
+        : owner === "Herdr" || owner === "Unknown" ? undefined : backgroundTarget
         ? { kind: "claude_background" as const, target: { ...backgroundTarget, ...(attached ? { attached } : {}) } }
         : cmuxTarget ? { kind: "cmux_surface" as const, target: cmuxTarget }
         : terminalTarget
@@ -267,7 +270,7 @@ export class ClaudeProvider implements ProviderAdapter {
           ?? iso(transcriptStamp?.modifiedAt ?? metadataStamp?.modifiedAt ?? this.environment.now()),
         canOpenOwner: controlTarget !== undefined,
         canEnterChat: true,
-        sessionClass: terminalTarget || backgroundTarget ? "terminal" : "interactive",
+        sessionClass: terminalTarget || backgroundTarget || owner === "Herdr" ? "terminal" : "interactive",
         ...(kind === "bg" ? { ambientEligible: false } : {}),
         conversationState: "open",
         turnState,
@@ -335,9 +338,9 @@ export class ClaudeProvider implements ProviderAdapter {
             results[interactiveIndex] = {
               ...session,
               owner: interactive.owner,
-              canOpenOwner: interactive.canOpenOwner || session.canOpenOwner,
-              ...(interactive.controlTarget ? { controlTarget: interactive.controlTarget } : {}),
-              ...(interactive.messageTransport ? { messageTransport: interactive.messageTransport } : {}),
+              canOpenOwner: interactive.canOpenOwner,
+              controlTarget: interactive.controlTarget,
+              messageTransport: interactive.messageTransport,
             };
           } else results.push(session);
         }
@@ -457,13 +460,16 @@ export class ClaudeProvider implements ProviderAdapter {
       : fullSessionID(metadata?.sessionID) ?? fullSessionID(row.sessionId);
     if (!sessionID) return undefined;
     const jobId = row.id!.toLowerCase();
+    const runtime = metadata?.process ?? processes.find((process) => process.pid === row.pid);
+    const runtimeOwner = runtime ? ownerForProcess(runtime.pid, processes) : undefined;
     const attached = await attachedTerminalTarget(jobId, row.cwd, processes, this.environment);
     const application = attached?.application
       ?? (metadata?.process
         ? terminalApplication(ownerForProcess(metadata.process.pid, processes))
         : undefined)
       ?? "Terminal";
-    const target = authoritative && isKnownInventoryState(row.state)
+    const unverifiedHost = runtimeOwner === "Herdr" || runtimeOwner === "Unknown";
+    const target = !unverifiedHost && authoritative && isKnownInventoryState(row.state)
       && executable && path.isAbsolute(executable)
       ? {
         jobId, cwd: row.cwd, executable, application,
@@ -472,7 +478,6 @@ export class ClaudeProvider implements ProviderAdapter {
     const lifecycle = summary.lifecycle;
     const updatedAt = lifecycle?.observedAt
       ?? iso(transcriptStamp?.modifiedAt ?? new Date(row.startedAt));
-    const runtime = metadata?.process ?? processes.find((process) => process.pid === row.pid);
     const hasRuntime = runtime !== undefined && isClaudeCommand(runtime.command, this.environment.home);
     const jobState = string(row.state).toLowerCase();
     const metadataStatus = hasRuntime ? string(metadata?.status).toLowerCase() : "";
@@ -502,7 +507,7 @@ export class ClaudeProvider implements ProviderAdapter {
         : state === "ready" ? "Ready to continue"
         : state === "history" ? "Claude Code session stopped" : "Check Claude for current status",
       cwd: row.cwd,
-      owner: application,
+      owner: unverifiedHost ? runtimeOwner : application,
       section: state === "unknown" || state === "history" ? "history" : state,
       updatedAt,
       ...(state === "ready" && lifecycle?.phase === "ready" ? { completionAt: lifecycle.observedAt } : {}),

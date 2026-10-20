@@ -15,7 +15,7 @@ import { PiProvider } from "./pi.js";
 import { ZedProvider } from "./zed.js";
 import { applicationTargetForProcess, processInstanceToken } from "./shared.js";
 import { SessionRepository, type DiscoveredProviderSession } from "../sessions.js";
-import { activateMenuPill, menuPresentation } from "../menu.js";
+import { activateMenuPill, activateSessionNotification, menuPresentation } from "../menu.js";
 import { NativeSessionControls } from "../session-controls.js";
 import { FakeNativeHelper } from "../native-helper.js";
 import { ClaudeDesktopSessions } from "./claude-desktop.js";
@@ -102,6 +102,155 @@ function claudeDesktopStateFixture() {
     },
   };
 }
+
+describe("Herdr hosted conversations", () => {
+  function herdrFixture() {
+    const environment = new FixtureEnvironment();
+    environment.processRows = [
+      { pid: 42, parentPID: 20, tty: "ttys023", command: "/usr/local/bin/claude", arguments: "claude" },
+      { pid: 20, parentPID: 10, tty: "ttys023", command: "/bin/zsh", arguments: "zsh" },
+      { pid: 10, parentPID: 1, command: "/Users/me/.local/bin/herdr", arguments: "herdr server" },
+      // The visible client is a separate process tree, not this pane's owner.
+      { pid: 70, parentPID: 7, tty: "ttys034", command: "/Users/me/.local/bin/herdr", arguments: "herdr" },
+      terminalProcesses[1]!,
+    ];
+    environment.directories.set(`${home}/.claude/sessions`, ["42.json"]);
+    environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({
+      sessionId: "herdr-conversation", cwd, kind: "interactive", status: "idle", name: "codes-6e",
+    }));
+    environment.starts.set(42, now);
+    const helper = new FakeNativeHelper();
+    const repository = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
+    repository.setControls(new NativeSessionControls(helper));
+    return { environment, repository, helper };
+  }
+
+  it("keeps a detached Herdr conversation Ready without inventing an Apple Terminal route", async () => {
+    const { repository } = herdrFixture();
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions).toMatchObject([{
+      id: "herdr-conversation", title: "codes-6e", owner: "Herdr", section: "ready",
+      sessionClass: "terminal", canOpenOwner: false,
+    }]);
+    expect(menuPresentation(snapshot, [], now.valueOf()).pills).toMatchObject([{
+      id: "herdr-conversation", phase: "ready",
+      inspector: { runtimeItems: ["Claude Code · Herdr"] },
+    }]);
+  });
+
+  it("reports unavailable Herdr navigation without opening Chat or clearing attention", async () => {
+    const { repository, helper } = herdrFixture();
+    await repository.refresh();
+    const before = repository.current();
+    const effects: unknown[] = [];
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: "herdr-conversation" },
+      repository, message => effects.push(message));
+    expect(effects).toEqual([{
+      type: "native_effect", action: "session_focus_failed",
+      message: "This session is running in Herdr. Exact Herdr navigation is not available in this build. Open its pane in Herdr; no new session was created.",
+    }]);
+    expect(repository.current()).toEqual(before);
+    expect([
+      ...helper.terminalFocusRequests, ...helper.focusRequests, ...helper.codexThreadRequests,
+      ...helper.claudeAttachRequests, ...helper.ghosttyTerminalFocusRequests, ...helper.terminalSendRequests,
+    ]).toEqual([]);
+  });
+
+  it("reports unavailable Herdr notification navigation but keeps explicit Chat access", async () => {
+    const { repository } = herdrFixture();
+    await repository.refresh();
+    const effects: unknown[] = [];
+    await activateSessionNotification({ version: 1, type: "event", event: "notification_action", action: "activate", sessionId: "herdr-conversation" },
+      repository, message => effects.push(message));
+    expect(effects).toMatchObject([{ type: "native_effect", action: "session_focus_failed" }]);
+    effects.length = 0;
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: "herdr-conversation", intent: "chat" },
+      repository, message => effects.push(message));
+    expect(effects).toEqual([{ type: "native_action", action: "open_chat", sessionId: "herdr-conversation" }]);
+  });
+
+  it.each(["Herdr", "Unknown"])("does not replace a %s Codex CLI route with a Codex Desktop deep link", async owner => {
+    const { environment } = herdrFixture();
+    environment.processRows[0] = { ...environment.processRows[0]!, command: "/usr/local/bin/codex", arguments: "codex" };
+    if (owner === "Unknown") environment.processRows = [environment.processRows[0]!];
+    environment.cwdByPID.set(42, cwd);
+    const database = `${home}/.codex/sqlite/state_5.sqlite`;
+    const rollout = `${home}/.codex/sessions/rollout-herdr.jsonl`;
+    environment.stamps.set(database, { modifiedAt: now, size: 100 });
+    environment.stamps.set(rollout, { modifiedAt: now, size: 100 });
+    environment.sqliteRows.set(database, [{ id: "herdr-codex", rollout_path: rollout, cwd,
+      title: "Herdr CLI", updated_at: Math.floor(now.valueOf() / 1000), archived: 0, source: "cli" }]);
+    const sessions = await new CodexProvider(environment).discover();
+    expect(sessions).toMatchObject([{ owner, canOpenOwner: false, routeState: "unavailable" }]);
+    expect(sessions[0]?.controlTarget).toBeUndefined();
+  });
+
+  it.each(["Herdr", "Unknown"])("does not turn a %s background worker into a Terminal attach route", async owner => {
+    const { environment } = herdrFixture();
+    const id = "8e45ed2c-cd3b-4140-a8da-4614085a3536";
+    environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({
+      sessionId: id, cwd, kind: "bg", jobId: "8e45ed2c", entrypoint: "cli", status: "idle",
+    }));
+    if (owner === "Unknown") environment.processRows = [environment.processRows[0]!];
+    const inventoryEnvironment = Object.assign(environment, {
+      claudeExecutable: async () => "/usr/local/bin/claude",
+      claudeAgentInventory: async () => ({ kind: "success" as const, root: `${home}/.claude`, authoritative: true,
+        startedAt: now.valueOf(), completedAt: now.valueOf(), rows: [{ id: "8e45ed2c", sessionId: id,
+          kind: "background", cwd, pid: 42, state: "done", status: "idle", startedAt: now.valueOf() }] }),
+    });
+    const sessions = await new ClaudeProvider(inventoryEnvironment).discover();
+    expect(sessions).toMatchObject([{ id, owner, canOpenOwner: false }]);
+    expect(sessions[0]?.controlTarget).toBeUndefined();
+  });
+
+  it("does not fall through a Herdr pane to an ancestor GUI application", async () => {
+    const { environment } = herdrFixture();
+    environment.processRows[2] = { ...environment.processRows[2]!, parentPID: 7 };
+    environment.processRows[4] = { pid: 7, parentPID: 1,
+      command: "/Applications/Cursor.app/Contents/MacOS/Cursor", arguments: "Cursor" };
+    const sessions = await new ClaudeProvider(environment).discover();
+    expect(sessions).toMatchObject([{ owner: "Herdr", canOpenOwner: false }]);
+    expect(sessions[0]?.controlTarget).toBeUndefined();
+  });
+
+  it("does not invent Apple Terminal when the sampled parent process is missing", async () => {
+    const { environment } = herdrFixture();
+    environment.processRows = [environment.processRows[0]!];
+    const sessions = await new ClaudeProvider(environment).discover();
+    expect(sessions).toMatchObject([{ owner: "Unknown", canOpenOwner: false }]);
+    expect(sessions[0]?.controlTarget).toBeUndefined();
+  });
+
+  it("does not retain a background attach route when the current interactive host is unknown", async () => {
+    const { environment } = herdrFixture();
+    const id = "8e45ed2c-cd3b-4140-a8da-4614085a3536";
+    environment.processRows = [environment.processRows[0]!];
+    environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({
+      sessionId: id, cwd, kind: "interactive", status: "idle", name: "codes-6e",
+    }));
+    const inventoryEnvironment = Object.assign(environment, {
+      claudeExecutable: async () => "/usr/local/bin/claude",
+      claudeAgentInventory: async () => ({ kind: "success" as const, root: `${home}/.claude`, authoritative: true,
+        startedAt: now.valueOf(), completedAt: now.valueOf(), rows: [{ id: "8e45ed2c", sessionId: id,
+          kind: "background", cwd, state: "done", startedAt: now.valueOf() }] }),
+    });
+    const sessions = await new ClaudeProvider(inventoryEnvironment).discover();
+    expect(sessions).toMatchObject([{ id, owner: "Unknown", canOpenOwner: false }]);
+    expect(sessions[0]?.controlTarget).toBeUndefined();
+  });
+
+  it("rejects a retained Herdr route even when an old control target is present", async () => {
+    const helper = new FakeNativeHelper();
+    const row: DiscoveredProviderSession = { id: "retained-herdr", provider: "claude_code", cwd,
+      owner: "Herdr", section: "ready", turnState: "ready", updatedAt: now.toISOString(),
+      canOpenOwner: true, canEnterChat: true, controlTarget: { kind: "application", target: { pid: 7 } } };
+    const repository = new SessionRepository([{ id: "claude_code", discover: async () => [row] }], { now: () => now });
+    repository.setControls(new NativeSessionControls(helper));
+    await repository.refresh();
+    expect(await repository.focusSession(row.id)).toContain("Herdr");
+    expect(helper.focusRequests).toEqual([]);
+  });
+});
 
 describe("Claude Desktop turn reconciliation", () => {
   const user = (timestamp: string) => ({ type: "user", timestamp, message: { role: "user", content: "A prompt" } });

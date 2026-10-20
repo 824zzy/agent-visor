@@ -40,6 +40,7 @@ import { normalizeChatText } from "./chat.js";
 import { openClaudeBackgroundSession, type ClaudeBackgroundTarget } from "./claude-background.js";
 import { openCursorWorkspace } from "./cursor-workspace.js";
 import { focusCmuxSurface, type CmuxSurfaceTarget } from "./providers/cmux.js";
+import { focusHerdrSurface, type HerdrSurfaceTarget } from "./providers/herdr.js";
 import { isVerifiableProcessInstanceToken } from "./providers/shared.js";
 import { isTerminalRoute, resolveSessionState, sessionTurnState } from "./session-state.js";
 
@@ -132,6 +133,8 @@ export class NativeSessionControls implements SessionControls {
     private readonly openClaudeBackground: (target: ClaudeBackgroundTarget) => Promise<void> = openClaudeBackgroundSession,
     private readonly openCursor: (cwd: string) => Promise<void> = openCursorWorkspace,
     private readonly openCmux: (target: CmuxSurfaceTarget, isCurrent: () => boolean) => Promise<void> = focusCmuxSurface,
+    private readonly openHerdr: (target: HerdrSurfaceTarget, isCurrent: () => boolean) => Promise<void>
+      = (target, isCurrent) => focusHerdrSurface(target, this.helper, isCurrent),
   ) {
     this.imageLeases = new ChatImageLeaseStore({ root: imageRoot });
   }
@@ -245,6 +248,11 @@ export class NativeSessionControls implements SessionControls {
         await this.attachClaudeBackground(target);
       }
       else if (control.kind === "terminal") await this.helper.focusTerminal(control.target);
+      else if (control.kind === "herdr_surface") {
+        try { await this.openHerdr(control.target, () => serial === this.focusSerial); }
+        catch (error) { if (serial !== this.focusSerial) return "superseded" as const; throw error; }
+        if (serial !== this.focusSerial) return "superseded" as const;
+      }
       else if (control.kind === "cmux_surface") {
         await this.openCmux(control.target, () => serial === this.focusSerial);
         if (serial !== this.focusSerial) return "superseded" as const;

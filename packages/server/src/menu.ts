@@ -77,7 +77,8 @@ export function nativeActionFor(event: NativeHelperEvent, snapshot: SessionSnaps
   if (event.event === "notification_action") {
     if (event.action !== "activate") return undefined;
     const session = snapshot.sessions.find((candidate) => candidate.id === event.sessionId);
-    return session?.canEnterChat && (!session.canOpenOwner || session.sessionState?.routeOwnership === "owned")
+    return session?.owner !== "Herdr" && session?.canEnterChat
+      && (!session.canOpenOwner || session.sessionState?.routeOwnership === "owned")
       ? { type: "native_action", action: "open_chat", sessionId: session.id } as const
       : undefined;
   }
@@ -96,7 +97,7 @@ export function nativeActionFor(event: NativeHelperEvent, snapshot: SessionSnaps
   // resolves focus asynchronously when an owner route exists. A Chat-capable
   // row without that route needs an authoritative primary action instead of
   // silently dropping a normal click/Return.
-  return !session.canOpenOwner && session.canEnterChat
+  return session.owner !== "Herdr" && !session.canOpenOwner && session.canEnterChat
     ? { type: "native_action", action: "open_chat", sessionId: session.id } as const
     : undefined;
 }

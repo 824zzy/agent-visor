@@ -10,6 +10,9 @@ export function ownerForProcess(pid: number, processes: ProcessRecord[]): string
 
   while (process && !visited.has(process.pid)) {
     visited.add(process.pid);
+    // Detached multiplexer panes are not Apple Terminal tabs. Stop at the
+    // server boundary; the visible client has a separate process ancestry.
+    if (path.basename(process.command) === "herdr") return "Herdr";
     if (process.command.endsWith("/cmux.app/Contents/MacOS/cmux")) return "cmux";
     const identity = `${process.command} ${process.arguments}`.toLowerCase();
     if (identity.includes("ghostty")) return "Ghostty";
@@ -24,7 +27,7 @@ export function ownerForProcess(pid: number, processes: ProcessRecord[]): string
     process = byPID.get(process.parentPID);
   }
 
-  return "Terminal";
+  return "Unknown";
 }
 
 export function applicationTargetForProcess(

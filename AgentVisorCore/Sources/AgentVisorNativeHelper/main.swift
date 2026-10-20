@@ -152,6 +152,7 @@ private func handle(
         storageURL: dataRoot.appendingPathComponent("ghostty-terminal-evidence.json"),
         readViewText: { NativeGhosttyViewModeReader.readFooter(application: $0, title: $1, report: ghosttyDiagnostics.record) }
     )
+    let ghosttyBinding = NativeGhosttyBindingController()
     var bytes = [UInt8](repeating: 0, count: 16_384)
 
     while true {
@@ -169,7 +170,8 @@ private func handle(
                     menu: menu,
                     notifications: notifications,
                     piRestoration: piRestoration,
-                    ghostty: ghostty
+                    ghostty: ghostty,
+                    ghosttyBinding: ghosttyBinding
                 )
                 try writer.write(try NativeHelperFrameCodec.frame(response.encoded()), to: client)
             }
@@ -190,7 +192,8 @@ private func response(
     menu: NativeMenuController,
     notifications: NativeNotificationController,
     piRestoration: NativePiRestorationController,
-    ghostty: NativeGhosttyTerminalController
+    ghostty: NativeGhosttyTerminalController,
+    ghosttyBinding: NativeGhosttyBindingController
 ) -> NativeHelperResponse {
     do {
         switch try NativeHelperRequest.decode(data) {
@@ -206,6 +209,21 @@ private func response(
             return ghostty.focus(target)
                 ? .accepted(id: id)
                 : .error(id: id, code: .failed, message: "The displayed Claude conversation changed or could not be focused.")
+        case .ghosttyBindingStatus(let id):
+            return .ghosttyBindingStatus(id: id, available: ghosttyBinding.status())
+        case .resolveGhosttyBinding(let id, let nonce):
+            do {
+                return .ghosttyBinding(id: id, binding: try ghosttyBinding.resolve(nonce: nonce))
+            } catch {
+                return .error(id: id, code: .failed, message: "The requested Ghostty surface could not be resolved.")
+            }
+        case .focusGhosttyBinding(let id, let target):
+            do {
+                try ghosttyBinding.focus(target)
+                return .accepted(id: id)
+            } catch {
+                return .error(id: id, code: .failed, message: "The requested Ghostty surface could not be focused.")
+            }
         case .accessibilityStatus(let id):
             return .accessibilityStatus(id: id, trusted: AXIsProcessTrusted())
         case .notificationStatus(let id):

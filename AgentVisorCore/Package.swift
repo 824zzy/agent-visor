@@ -7,11 +7,14 @@ let package = Package(
     products: [
         .library(name: "AgentVisorCore", targets: ["AgentVisorCore"]),
         .executable(name: "AgentVisorNativeHelper", targets: ["AgentVisorNativeHelper"]),
+        .executable(name: "AgentVisorNativeFocusProof", targets: ["AgentVisorNativeFocusProof"]),
     ],
     targets: [
         .target(name: "AgentVisorCore"),
         .executableTarget(name: "AgentVisorNativeHelper", dependencies: ["AgentVisorCore"]),
         .testTarget(name: "AgentVisorCoreTests", dependencies: ["AgentVisorCore"]),
         .testTarget(name: "AgentVisorNativeHelperTests", dependencies: ["AgentVisorNativeHelper"]),
+        .executableTarget(name: "AgentVisorNativeFocusProof", dependencies: ["AgentVisorCore"]),
+        .testTarget(name: "AgentVisorNativeFocusProofTests", dependencies: ["AgentVisorNativeFocusProof"]),
     ]
 )

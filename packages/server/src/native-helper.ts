@@ -21,6 +21,7 @@ import {
   type NativeHelperPill,
   type NativeHelperTerminalTarget,
   type NativeHelperGhosttyTerminalView,
+  type NativeHelperGhosttyBinding,
   type NativeHelperResponse,
   type NativeHelperScreen,
   type NativeHelperUsageGlance,
@@ -29,6 +30,9 @@ import {
 export interface NativeHelperAdapter {
   ghosttyTerminalViews?(conversationTitles?: readonly string[]): Promise<NativeHelperGhosttyTerminalView[]>;
   focusGhosttyTerminal?(target: NativeHelperGhosttyTerminalView): Promise<void>;
+  ghosttyBindingStatus?(): Promise<boolean>;
+  resolveGhosttyBinding?(nonce: string): Promise<NativeHelperGhosttyBinding>;
+  focusGhosttyBinding?(target: NativeHelperGhosttyBinding): Promise<void>;
   /** False when the signed helper process is not available for a real action. */
   isAvailable?(): boolean;
   screenTopology(): Promise<NativeHelperScreen[]>;
@@ -118,6 +122,21 @@ export class FakeNativeHelper implements NativeHelperAdapter {
   async ghosttyTerminalViews() { return structuredClone(this.ghosttyViews); }
   async focusGhosttyTerminal(target: NativeHelperGhosttyTerminalView) {
     this.ghosttyTerminalFocusRequests.push(structuredClone(target));
+  }
+  ghosttyBindingAvailable = false;
+  ghosttyBinding: NativeHelperGhosttyBinding | undefined;
+  readonly ghosttyBindingResolveRequests: string[] = [];
+  readonly ghosttyBindingFocusRequests: NativeHelperGhosttyBinding[] = [];
+  async ghosttyBindingStatus(): Promise<boolean> { return this.ghosttyBindingAvailable; }
+  async resolveGhosttyBinding(nonce: string): Promise<NativeHelperGhosttyBinding> {
+    this.ghosttyBindingResolveRequests.push(nonce);
+    if (!this.ghosttyBinding || this.ghosttyBinding.nonce !== nonce) {
+      throw new Error("The requested Ghostty binding is unavailable.");
+    }
+    return structuredClone(this.ghosttyBinding);
+  }
+  async focusGhosttyBinding(target: NativeHelperGhosttyBinding): Promise<void> {
+    this.ghosttyBindingFocusRequests.push(structuredClone(target));
   }
   readonly focusRequests: NativeHelperFocusTarget[] = [];
   readonly codexThreadRequests: NativeHelperCodexThreadTarget[] = [];
@@ -443,6 +462,26 @@ export class NativeHelperProcess implements NativeHelperAdapter {
 
   async focusGhosttyTerminal(target: NativeHelperGhosttyTerminalView): Promise<void> {
     await this.accepted("focus_ghostty_terminal", { target });
+  }
+
+  async ghosttyBindingStatus(): Promise<boolean> {
+    const response = await this.request("ghostty_binding_status");
+    if (response.result.type !== "ghostty_binding_status") {
+      throw new Error("Unexpected helper response.");
+    }
+    return response.result.available;
+  }
+
+  async resolveGhosttyBinding(nonce: string): Promise<NativeHelperGhosttyBinding> {
+    const response = await this.request("resolve_ghostty_binding", { nonce });
+    if (response.result.type !== "ghostty_binding") {
+      throw new Error("Unexpected helper response.");
+    }
+    return response.result.binding;
+  }
+
+  async focusGhosttyBinding(target: NativeHelperGhosttyBinding): Promise<void> {
+    await this.accepted("focus_ghostty_binding", { target });
   }
 
   async focusTerminal(target: NativeHelperTerminalTarget): Promise<void> {

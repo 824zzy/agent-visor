@@ -159,6 +159,28 @@ describe("FakeNativeHelper", () => {
 
     expect(helper.presentedPills).toEqual([pill]);
   });
+
+  it("records nonce-bound Ghostty resolution and focus without terminal fallback", async () => {
+    const helper = new FakeNativeHelper();
+    const binding = {
+      applicationPID: 701,
+      processStartToken: "ghostty-start-1",
+      windowId: "window-1",
+      tabId: "tab-1",
+      terminalId: "terminal-1",
+      nonce: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    };
+    helper.ghosttyBindingAvailable = true;
+    helper.ghosttyBinding = binding;
+
+    await expect(helper.ghosttyBindingStatus()).resolves.toBe(true);
+    await expect(helper.resolveGhosttyBinding(binding.nonce)).resolves.toEqual(binding);
+    await helper.focusGhosttyBinding(binding);
+
+    expect(helper.ghosttyBindingResolveRequests).toEqual([binding.nonce]);
+    expect(helper.ghosttyBindingFocusRequests).toEqual([binding]);
+    expect(helper.terminalFocusRequests).toEqual([]);
+  });
 });
 
 describe("native helper request preflight", () => {

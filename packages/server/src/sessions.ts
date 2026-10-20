@@ -54,6 +54,7 @@ import { CompletionAttention } from "./completion-attention.js";
 export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie" | "paseo";
 
 export type SessionControlTarget =
+  | { kind: "herdr_surface"; target: import("./providers/herdr.js").HerdrSurfaceTarget }
   | { kind: "cmux_surface"; target: import("./providers/cmux.js").CmuxSurfaceTarget }
   | { kind: "application"; target: NativeHelperFocusTarget }
   | { kind: "terminal"; target: NativeHelperTerminalTarget }
@@ -1492,6 +1493,9 @@ export class SessionRepository {
 
   async focusSession(sessionId: string): Promise<string | undefined> {
     let session = this.controlBySession.get(sessionId);
+    if (session?.owner === "Herdr" && session.controlTarget?.kind !== "herdr_surface") {
+      return "This session is running in Herdr. Exact Herdr navigation is not available in this build. Open its pane in Herdr; no new session was created.";
+    }
     if (!session || !this.controls) return "Exact session focus is unavailable.";
     const completion = this.readyCompletionIdentity(sessionId);
     // Claude terminals can enter Agent View or another conversation without
@@ -1500,6 +1504,7 @@ export class SessionRepository {
     if (session.provider === "paseo" || (session.provider === "claude_code"
       && (session.controlTarget?.kind === "claude_background"
         || session.controlTarget?.kind === "cmux_surface"
+        || session.controlTarget?.kind === "herdr_surface"
         || session.controlTarget?.kind === "terminal"))) {
       const resolved = await this.resolveExactSession(sessionId, false, true);
       if (!resolved || resolved.resolutionUnavailable || !resolved.controlTarget) {

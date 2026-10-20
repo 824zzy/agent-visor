@@ -165,6 +165,26 @@ const requests = [
     method: "focus_terminal",
     params: { target: { application: "Ghostty", tty: "ttys012", cwd: "/tmp/project" } },
   },
+  { version: 1, id: "ghostty-binding-status", method: "ghostty_binding_status" },
+  {
+    version: 1,
+    id: "resolve-ghostty-binding",
+    method: "resolve_ghostty_binding",
+    params: { nonce: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+  },
+  {
+    version: 1,
+    id: "focus-ghostty-binding",
+    method: "focus_ghostty_binding",
+    params: { target: {
+      applicationPID: 701,
+      processStartToken: "ghostty-start-1",
+      windowId: "window-1",
+      tabId: "tab-1",
+      terminalId: "terminal-1",
+      nonce: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    } },
+  },
   {
     version: 1,
     id: "open-codex-thread",
@@ -217,6 +237,44 @@ describe("native helper protocol", () => {
     expect(nativeHelperResponseSchema.safeParse({
       version: 1, id: "views", ok: true, result: { type: "ghostty_terminal_views", views: [target] },
     }).success).toBe(true);
+  });
+
+  it("carries nonce-bound Ghostty identity and rejects unsafe markers", () => {
+    const binding = {
+      applicationPID: 701,
+      processStartToken: "ghostty-start-1",
+      windowId: "window-1",
+      tabId: "tab-1",
+      terminalId: "terminal-1",
+      nonce: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    };
+    expect(nativeHelperRequestSchema.safeParse({
+      version: 1, id: "status", method: "ghostty_binding_status",
+    }).success).toBe(true);
+    expect(nativeHelperRequestSchema.safeParse({
+      version: 1, id: "resolve", method: "resolve_ghostty_binding",
+      params: { nonce: binding.nonce },
+    }).success).toBe(true);
+    expect(nativeHelperRequestSchema.safeParse({
+      version: 1, id: "focus", method: "focus_ghostty_binding",
+      params: { target: binding },
+    }).success).toBe(true);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1, id: "status", ok: true,
+      result: { type: "ghostty_binding_status", available: true },
+    }).success).toBe(true);
+    expect(nativeHelperResponseSchema.safeParse({
+      version: 1, id: "resolve", ok: true,
+      result: { type: "ghostty_binding", binding },
+    }).success).toBe(true);
+    expect(nativeHelperRequestSchema.safeParse({
+      version: 1, id: "unsafe", method: "resolve_ghostty_binding",
+      params: { nonce: binding.nonce.toUpperCase() },
+    }).success).toBe(false);
+    expect(nativeHelperRequestSchema.safeParse({
+      version: 1, id: "unsafe", method: "focus_ghostty_binding",
+      params: { target: { ...binding, extra: true } },
+    }).success).toBe(false);
   });
   it("accepts the terminal text boundary but rejects one more UTF-16 unit", () => {
     const base = {

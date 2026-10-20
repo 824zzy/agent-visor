@@ -1007,6 +1007,15 @@ export const nativeHelperGhosttyTerminalViewSchema = z.object({
   viewMode: z.enum(["conversation", "overview"]).optional(),
 }).strict();
 
+export const nativeHelperGhosttyBindingSchema = z.object({
+  applicationPID: z.number().int().positive().max(2_147_483_647),
+  processStartToken: z.string().min(1).max(128).regex(/^[^\0]+$/),
+  windowId: z.string().min(1).max(128).regex(/^[^\0]+$/),
+  tabId: z.string().min(1).max(128).regex(/^[^\0]+$/),
+  terminalId: z.string().min(1).max(128).regex(/^[^\0]+$/),
+  nonce: z.string().regex(/^[0-9a-f]{32}$/),
+}).strict();
+
 export const nativeHelperNotificationSchema = z.object({
   id: z.string().min(1).max(128),
   sessionId: z.string().min(1).max(512),
@@ -1053,6 +1062,17 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
     ...helperEnvelope,
     method: z.literal("focus_ghostty_terminal"),
     params: z.object({ target: nativeHelperGhosttyTerminalViewSchema }).strict(),
+  }).strict(),
+  z.object({ ...helperEnvelope, method: z.literal("ghostty_binding_status") }).strict(),
+  z.object({
+    ...helperEnvelope,
+    method: z.literal("resolve_ghostty_binding"),
+    params: z.object({ nonce: z.string().regex(/^[0-9a-f]{32}$/) }).strict(),
+  }).strict(),
+  z.object({
+    ...helperEnvelope,
+    method: z.literal("focus_ghostty_binding"),
+    params: z.object({ target: nativeHelperGhosttyBindingSchema }).strict(),
   }).strict(),
   z.object({
     ...helperEnvelope,
@@ -1149,6 +1169,14 @@ const nativeHelperResultSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("ghostty_terminal_views"),
     views: z.array(nativeHelperGhosttyTerminalViewSchema).max(64),
+  }).strict(),
+  z.object({
+    type: z.literal("ghostty_binding_status"),
+    available: z.boolean(),
+  }).strict(),
+  z.object({
+    type: z.literal("ghostty_binding"),
+    binding: nativeHelperGhosttyBindingSchema,
   }).strict(),
   z.object({
     type: z.literal("screen_topology"),
@@ -1265,6 +1293,7 @@ export type NativeHelperPiRestorationUpdate = z.infer<
 >;
 export type NativeHelperTerminalTarget = z.infer<typeof nativeHelperTerminalTargetSchema>;
 export type NativeHelperGhosttyTerminalView = z.infer<typeof nativeHelperGhosttyTerminalViewSchema>;
+export type NativeHelperGhosttyBinding = z.infer<typeof nativeHelperGhosttyBindingSchema>;
 export type NativeServicesState = z.infer<typeof nativeServicesStateSchema>;
 export type NativeHelperPill = z.infer<typeof nativeHelperPillSchema>;
 export type NativeHelperUsageGlance = z.infer<typeof nativeHelperUsageGlanceSchema>;
