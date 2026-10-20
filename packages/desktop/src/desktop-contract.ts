@@ -139,8 +139,7 @@ export type NativeEffect =
   | { action: "session_focus_failed"; message: string; chatSessionId?: string }
   | { action: "set_login_item"; enabled: boolean }
   | { action: "open_update"; url: string }
-  | { action: "request_notifications" }
-  | { action: "set_badge"; count: number };
+  | { action: "request_notifications" };
 
 export function nativeEffectFromDaemonMessage(value: unknown): NativeEffect | undefined {
   if (typeof value !== "object" || value === null) return undefined;
@@ -155,11 +154,6 @@ export function nativeEffectFromDaemonMessage(value: unknown): NativeEffect | un
       : undefined;
   }
   if (message.action === "request_notifications") return { action: "request_notifications" };
-  if (message.action === "set_badge") {
-    return Number.isInteger(message.count) && Number(message.count) >= 0 && Number(message.count) <= 512
-      ? { action: "set_badge", count: Number(message.count) }
-      : undefined;
-  }
   if (message.action === "set_login_item" && typeof message.enabled === "boolean") {
     return { action: "set_login_item", enabled: message.enabled };
   }

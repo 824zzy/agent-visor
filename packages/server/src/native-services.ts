@@ -16,8 +16,7 @@ import type { UpdateState } from "./updates.js";
 export type DesktopNativeEffect =
   | { action: "set_login_item"; enabled: boolean }
   | { action: "open_update"; url: string }
-  | { action: "request_notifications" }
-  | { action: "set_badge"; count: number };
+  | { action: "request_notifications" };
 
 export class NativeServicesRepository implements NativeServicesSource {
   private revision = 0;
@@ -144,7 +143,7 @@ export class NativeServicesRepository implements NativeServicesSource {
     const notifications = snapshot.sessions.flatMap((session) => {
       // Headless Codex exec records are machine-owned. Keep them in the
       // session snapshot for search, but never turn their lifecycle into a
-      // user-facing notification or Dock badge.
+      // user-facing notification.
       if (session.sessionClass === "automation"
         || (session.section !== "needs_you" && session.section !== "ready")) return [];
       const pending = this.options.pendingAction?.(session.id);
@@ -177,9 +176,6 @@ export class NativeServicesRepository implements NativeServicesSource {
       .catch((error: unknown) => {
         console.warn(`Agent Visor notification update failed: ${String(error)}`);
       });
-    if (!previousKeys ? currentKeys.size > 0 : currentKeys.size !== previousKeys.size) {
-      this.options.emitDesktop({ action: "set_badge", count: currentKeys.size });
-    }
   }
 
   async refresh(): Promise<void> {

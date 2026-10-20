@@ -111,6 +111,8 @@ void runIfSingleInstance(
     await chmod(userDataPath, 0o700);
     app.setPath("userData", userDataPath);
     await app.whenReady();
+    // Clear badges left by older builds before waiting for session discovery.
+    app.dock?.setBadge("");
     if (migration.status === "migrated") {
       console.info(`Agent Visor data migration completed (${migration.entryCount} entries).`);
     }
@@ -228,8 +230,6 @@ async function startDaemon(): Promise<{ process: ChildProcess; url: string }> {
         void shell.openExternal(
           "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
         );
-      } else if (effect.action === "set_badge") {
-        app.dock?.setBadge(effect.count ? String(effect.count) : "");
       }
       return;
     }

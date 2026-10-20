@@ -54,7 +54,7 @@ as `automation`; Codex Desktop and live Codex CLI records remain
   in the menu navigator's search catalog whenever that navigator is open, so
   users can search and inspect their read-only history.
 - Automation records do not create physical menu-bar pills, Ready attention,
-  notifications, Dock badges, or normal pill overflow entries.
+  notifications or normal pill overflow entries.
 - Ambient labels for automation use a stable `Codex automation · <project>`
   label. Raw `exec` prompts must never become menu-bar pill titles.
 - Automation records with an available canonical transcript expose Agent

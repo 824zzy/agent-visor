@@ -352,7 +352,7 @@ describe("desktop launch contract", () => {
     })).toBeUndefined();
     expect(nativeEffectFromDaemonMessage({
       type: "native_effect", action: "set_badge", count: 2,
-    })).toEqual({ action: "set_badge", count: 2 });
+    })).toBeUndefined();
     expect(nativeEffectFromDaemonMessage({
       type: "native_effect", action: "set_login_item", enabled: true,
     })).toEqual({ action: "set_login_item", enabled: true });

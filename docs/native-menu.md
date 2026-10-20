@@ -176,7 +176,7 @@ Unarchived source-backed Codex history with activity in the last seven days rema
 
 Codex `exec` rows are classified as machine-owned automation. They remain in
 the bounded navigator catalog for search and read-only inspection, but never
-enter physical pill packing, Ready attention, notifications, Dock badges, or
+enter physical pill packing, Ready attention, notifications, or
 the normal `+N` overflow set. Their ambient catalog label is
 `Codex automation · <project>`; the raw automation prompt is not a pill title.
 

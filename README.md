@@ -98,7 +98,7 @@ visibility, notification sound, and agent connections.
 
 The Electron shell owns the window and daemon lifecycle. A small signed Swift
 helper owns macOS-only work such as Accessibility checks, menu-bar panels,
-global shortcuts, display topology, notifications, Dock badges, and exact
+global shortcuts, display topology, notifications, and exact
 owner focus. Closing the window hides it; Quit stops only processes started by
 Agent Visor and leaves provider applications running.
 
@@ -249,7 +249,7 @@ understood.
 3. On macOS 15 or later, add Agent Visor under **System Settings > Privacy & Security > Full Disk Access**. This lets the app read transcripts under <code>~/.claude</code>, <code>~/.codex</code>, <code>~/.cursor</code>, and <code>~/.pi</code>.
 4. Start or open a supported agent session. Agent Visor discovers it when the source provides enough evidence.
 5. Open **Settings > Agents** to connect Claude Code, Codex, or Auggie. Running Codex Desktop profiles with a separate `CODEX_HOME` are discovered automatically; you can also add, rename, or remove a home there. Pi is installed automatically when detected; Cursor is observed automatically and remains read-only.
-6. Enable **Notifications** if you want Ready, approval, question, and Dock-badge notices.
+6. Enable **Notifications** if you want Ready, approval, and question notices. Agent Visor does not show a Dock badge and clears badges left by older builds on launch.
 
 Pi requires no manual configuration. Agent Visor installs only its bundled
 metadata-only extension at <code>~/.pi/agent/extensions/agent-visor.ts</code>. It does not

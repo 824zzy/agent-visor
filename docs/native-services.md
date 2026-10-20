@@ -88,7 +88,10 @@ Clicking a notice opens the exact Agent Visor Chat. Approve and Deny use the exi
 
 Repeated snapshots do not create duplicate notices. Replaced or resolved attention removes its old notice.
 
-The Dock badge shows the current attention count. A focused Sessions window suppresses the notice without delaying it.
+Agent Visor does not show a Dock badge. On launch it clears any badge left by
+an older build before waiting for session discovery. This does not acknowledge
+completions or change pills, notifications, or notification preferences. A
+focused Sessions window suppresses the notice without delaying it.
 
 The Notifications settings action requests access and opens macOS Notification settings for repair.
 

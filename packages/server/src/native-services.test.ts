@@ -269,7 +269,7 @@ describe("native services", () => {
     expect(helper.presentedNewNotifications).toBe(true);
   });
 
-  it("replaces stale approvals, removes resolved notices, and updates the Dock badge", async () => {
+  it("replaces stale approvals and removes resolved notices without Dock badges", async () => {
     let toolUseId = "tool-1";
     const { services, effects, helper } = await notificationFixture(() => ({
       type: "approval", toolUseId, toolName: "Bash", input: {}, canPersist: false,
@@ -296,8 +296,7 @@ describe("native services", () => {
       { ids: [expect.not.stringMatching(firstId ?? "")], presentNew: true },
       { ids: [], presentNew: true },
     ]);
-    expect(effects).toContainEqual({ action: "set_badge", count: 1 });
-    expect(effects).toContainEqual({ action: "set_badge", count: 0 });
+    expect(effects).toEqual([]);
   });
 
   it("does not add approval actions to a question", async () => {
@@ -315,17 +314,25 @@ describe("native services", () => {
     expect(helper.presentedNotifications[0]?.toolUseId).toBeUndefined();
   });
 
-  it("restores the Dock badge without replaying an initial Ready notice", async () => {
+  it.each([
+    { label: "unopened completions", section: "ready", completionUnseen: true, notices: 19 },
+    { label: "acknowledged completions", section: "ready", completionUnseen: false, notices: 19 },
+    { label: "questions", section: "needs_you", completionUnseen: false, notices: 19 },
+    { label: "working sessions", section: "working", completionUnseen: false, notices: 0 },
+    { label: "history", section: "history", completionUnseen: false, notices: 0 },
+  ] as const)("keeps notification behavior for $label without a Dock badge or replayed banner", async ({ section, completionUnseen, notices }) => {
     const { services, effects, helper } = await notificationFixture();
 
     services.reconcileSessions({
       type: "session_snapshot", revision: 1,
-      sessions: [{ ...session, source: "Pi", section: "ready", subtitle: "Ready" }],
+      sessions: Array.from({ length: 19 }, (_, index) => ({
+        ...session, id: `session-${index}`, source: "Pi", section, completionUnseen,
+      })),
     });
 
-    expect(helper.presentedNotifications).toHaveLength(1);
+    expect(helper.presentedNotifications).toHaveLength(notices);
     expect(helper.presentedNewNotifications).toBe(false);
-    expect(effects).toEqual([{ action: "set_badge", count: 1 }]);
+    expect(effects).toEqual([]);
   });
 
   it("does not notify or badge for a Ready Codex automation record", async () => {
