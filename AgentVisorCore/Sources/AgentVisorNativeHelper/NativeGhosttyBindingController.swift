@@ -42,18 +42,73 @@ public final class NativeGhosttyBindingController {
     private let execute: (String) -> String?
     private let permission: () -> Bool
     private let isFrontmost: (Int32) -> Bool
+    private let surface: (String) -> NativeGhosttyAppleEvents.Surface?
+    private let focusSurface: (String) -> Bool
+    private let processIdentity: ([NativeHelperProcessIdentity]) -> String?
+    private struct Prepared {
+        let target: NativeHelperGhosttyBinding
+        let processes: [NativeHelperProcessIdentity]
+        let identity: String
+    }
+    private var prepared: [String: Prepared] = [:]
 
     public init(
         resolveApplication: @escaping () -> NativeGhosttyTerminalController.ApplicationIdentity? =
             NativeGhosttyTerminalController.liveApplication,
         execute: @escaping (String) -> String? = NativeGhosttyTerminalController.liveScript,
         permission: @escaping () -> Bool = NativeGhosttyBindingController.liveAutomationPermission,
-        isFrontmost: @escaping (Int32) -> Bool = NativeGhosttyBindingController.liveIsFrontmost
+        isFrontmost: @escaping (Int32) -> Bool = NativeGhosttyBindingController.liveIsFrontmost,
+        surface: ((String) -> NativeGhosttyAppleEvents.Surface?)? = nil,
+        focusSurface: ((String) -> Bool)? = nil,
+        processIdentity: @escaping ([NativeHelperProcessIdentity]) -> String? = NativeGhosttyBindingController.liveProcessIdentity
     ) {
         self.resolveApplication = resolveApplication
         self.execute = execute
         self.permission = permission
         self.isFrontmost = isFrontmost
+        self.surface = surface ?? { id in
+            guard let app = resolveApplication() else { return nil }
+            return NativeGhosttyAppleEvents(pid: app.pid).surface(id: id)
+        }
+        self.focusSurface = focusSurface ?? { id in
+            guard let app = resolveApplication() else { return false }
+            return NativeGhosttyAppleEvents(pid: app.pid).focus(terminalID: id, expectedTitle: nil, expectedCWD: nil)
+        }
+        self.processIdentity = processIdentity
+    }
+
+    /// Capture a native capability while a nonce proves the client→surface
+    /// association. It remains usable after the visible lease is released,
+    /// only while that same foreground client, route processes and app live.
+    public func prepare(_ target: NativeHelperGhosttyBinding, processes: [NativeHelperProcessIdentity]) -> Bool {
+        let guarded = processes + [.init(pid: target.applicationPID, processStartToken: target.processStartToken)]
+        if let saved = prepared[target.nonce] {
+            if saved.target == target, saved.processes == guarded, permission(),
+               processIdentity(guarded) == saved.identity,
+               resolveApplication() == .init(pid: target.applicationPID, token: target.processStartToken),
+               surface(target.terminalId) != nil { return true }
+            prepared.removeValue(forKey: target.nonce)
+            return false
+        }
+        guard target.isValid, !processes.isEmpty, processes.count <= 4,
+              Set(processes.map(\.pid)).count == processes.count, permission(),
+              resolveApplication() == .init(pid: target.applicationPID, token: target.processStartToken),
+              let current = surface(target.terminalId), current.title == "AVB:" + target.nonce else { return false }
+        guard let identity = processIdentity(guarded), surface(target.terminalId)?.title == current.title,
+              resolveApplication() == .init(pid: target.applicationPID, token: target.processStartToken) else { return false }
+        if prepared.count >= 128 { prepared.removeAll() }
+        prepared[target.nonce] = Prepared(target: target, processes: guarded, identity: identity)
+        return true
+    }
+
+    public static func liveProcessIdentity(_ processes: [NativeHelperProcessIdentity]) -> String? {
+        var identities: [String] = []
+        for (index, expected) in processes.enumerated() {
+            guard let live = NativeProcessIdentityProbe.read(pid: expected.pid), live.token == expected.processStartToken,
+                  index != 0 || live.isForeground else { return nil }
+            identities.append("\(live.pid):\(live.preciseStartMicros):\(live.tty ?? "")")
+        }
+        return identities.joined(separator: "|")
     }
 
     /// Returns true only when exactly one live Ghostty process is resolvable
@@ -98,6 +153,21 @@ public final class NativeGhosttyBindingController {
     }
 
     public func focus(_ target: NativeHelperGhosttyBinding) throws {
+        if let saved = prepared[target.nonce] {
+            guard saved.target == target, permission(), processIdentity(saved.processes) == saved.identity,
+                  resolveApplication() == .init(pid: target.applicationPID, token: target.processStartToken),
+                  surface(target.terminalId) != nil else {
+                prepared.removeValue(forKey: target.nonce)
+                throw NativeGhosttyBindingError.stale
+            }
+            guard focusSurface(target.terminalId), isFrontmost(target.applicationPID),
+                  processIdentity(saved.processes) == saved.identity,
+                  resolveApplication() == .init(pid: target.applicationPID, token: target.processStartToken) else {
+                prepared.removeValue(forKey: target.nonce)
+                throw NativeGhosttyBindingError.focusFailed
+            }
+            return
+        }
         guard target.isValid, Self.isValidNonce(target.nonce) else {
             throw NativeGhosttyBindingError.stale
         }

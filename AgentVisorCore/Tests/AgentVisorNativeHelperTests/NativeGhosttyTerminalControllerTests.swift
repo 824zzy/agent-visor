@@ -5,6 +5,18 @@ import JavaScriptCore
 import Darwin
 
 final class NativeGhosttyTerminalControllerTests: XCTestCase {
+    func testDisplayedConversationCanUseNativeExactFocusWithoutAnInterpreter() {
+        var selected: String?
+        let controller = NativeGhosttyTerminalController(readViewText: { _, _ in
+            "conversation —\naccept edits on · ← for agents"
+        }, resolveApplication: { .init(pid: 7, token: "same-instance") },
+            execute: { _ in XCTFail("Native focus must not invoke an interpreter"); return nil },
+            nativeFocus: { target in selected = target.terminalId; return true })
+        let view = NativeHelperGhosttyTerminalView(applicationPID: 7, processStartToken: "same-instance",
+            terminalId: "exact", title: "conversation", cwd: "/project", viewMode: .conversation)
+        XCTAssertTrue(controller.focus(view))
+        XCTAssertEqual(selected, "exact")
+    }
     func testChildAgentPanelKeepsTheParentConversationAndExactFocus() throws {
         let context = try XCTUnwrap(JSContext())
         context.evaluateScript(#"""

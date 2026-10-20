@@ -150,9 +150,12 @@ private func handle(
     )
     let ghostty = NativeGhosttyTerminalController(
         storageURL: dataRoot.appendingPathComponent("ghostty-terminal-evidence.json"),
-        readViewText: { NativeGhosttyViewModeReader.readFooter(application: $0, title: $1, report: ghosttyDiagnostics.record) }
+        readViewText: { NativeGhosttyViewModeReader.readFooter(application: $0, title: $1, report: ghosttyDiagnostics.record) },
+        nativeFocus: { target in NativeGhosttyAppleEvents(pid: target.applicationPID).focus(
+            terminalID: target.terminalId, expectedTitle: target.title, expectedCWD: target.cwd) }
     )
     let ghosttyBinding = NativeGhosttyBindingController()
+    let preparedGhostty = NativeGhosttyPreparedRoutes()
     var bytes = [UInt8](repeating: 0, count: 16_384)
 
     while true {
@@ -171,7 +174,8 @@ private func handle(
                     notifications: notifications,
                     piRestoration: piRestoration,
                     ghostty: ghostty,
-                    ghosttyBinding: ghosttyBinding
+                    ghosttyBinding: ghosttyBinding,
+                    preparedGhostty: preparedGhostty
                 )
                 try writer.write(try NativeHelperFrameCodec.frame(response.encoded()), to: client)
             }
@@ -193,7 +197,8 @@ private func response(
     notifications: NativeNotificationController,
     piRestoration: NativePiRestorationController,
     ghostty: NativeGhosttyTerminalController,
-    ghosttyBinding: NativeGhosttyBindingController
+    ghosttyBinding: NativeGhosttyBindingController,
+    preparedGhostty: NativeGhosttyPreparedRoutes
 ) -> NativeHelperResponse {
     do {
         switch try NativeHelperRequest.decode(data) {
@@ -224,6 +229,9 @@ private func response(
             } catch {
                 return .error(id: id, code: .failed, message: "The requested Ghostty surface could not be focused.")
             }
+        case .prepareGhosttyBinding(let id, let target, let processes):
+            return ghosttyBinding.prepare(target, processes: processes) ? .accepted(id: id)
+                : .error(id: id, code: .failed, message: "The exact Herdr surface could not be prepared.")
         case .accessibilityStatus(let id):
             return .accessibilityStatus(id: id, trusted: AXIsProcessTrusted())
         case .notificationStatus(let id):
@@ -271,10 +279,17 @@ private func response(
                 )
             }
             return .accepted(id: id)
-        case .focusTerminal(let id, let target):
-            return NativeTerminalController().focus(target)
+        case .focusTerminal(let id, let target, let conversationOnly):
+            let result: Bool
+            if let conversationOnly {
+                result = preparedGhostty.focusOrPrepare(target, conversationOnly: conversationOnly)
+            } else { result = NativeTerminalController().focus(target) }
+            return result
                 ? .accepted(id: id)
                 : .error(id: id, code: .failed, message: "The requested terminal could not be focused.")
+        case .prepareTerminal(let id, let target, let conversationOnly):
+            return preparedGhostty.prepare(target, conversationOnly: conversationOnly) ? .accepted(id: id)
+                : .error(id: id, code: .failed, message: "The exact Ghostty route could not be prepared.")
         case .openClaudeAttach(let id, let target):
             return ghostty.openClaudeAttach(target)
                 ? .accepted(id: id)

@@ -6,7 +6,8 @@ import { nativeHelperFocusFailureReasonSchema } from "@agent-visor/protocol";
 
 type Stage = "received" | "dismissed" | "chat" | "target" | "helper_request"
   | "helper_response" | "failed" | "completed" | "superseded"
-  | "cmux_focus" | "cmux_readback";
+  | "cmux_focus" | "cmux_readback" | "route_prepared" | "route_recovery" | "herdr_readback"
+  | "route_queued" | "route_dequeued" | "process_validated" | "herdr_rpc_request" | "herdr_rpc_response" | "lease_released";
 type Details = {
   targetKind?: string; pid?: number; home?: string; requestId?: string;
   method?: string; outcome?: string; reason?: string; systemCode?: number;
@@ -16,8 +17,9 @@ type Details = {
 };
 type Recorder = (stage: Stage, details?: Details) => void;
 const context = new AsyncLocalStorage<Recorder>();
-const targetKinds = new Set(["url", "cursor_workspace", "codex_thread", "claude_background", "terminal", "application", "cmux_surface"]);
-const methods = new Set(["focus", "open_codex_thread", "focus_terminal", "open_claude_attach", "focus_ghostty_terminal"]);
+const targetKinds = new Set(["url", "cursor_workspace", "codex_thread", "claude_background", "terminal", "application", "cmux_surface", "herdr_surface"]);
+const methods = new Set(["focus", "open_codex_thread", "focus_terminal", "open_claude_attach", "focus_ghostty_terminal", "ghostty_binding_status", "resolve_ghostty_binding", "focus_ghostty_binding", "prepare_ghostty_binding", "prepare_terminal",
+  "client.target", "client.list", "client.get", "client.focus_exclusive", "client.bind_begin", "client.bind_end"]);
 const outcomes = new Set(["accepted", "failed", "timeout", "connection_closed", "invalid_response"]);
 const fingerprint = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 16);
 const identityHashes = (details: Details) => Object.fromEntries([
@@ -42,14 +44,20 @@ export class NavigationDiagnostics {
 
   constructor(private readonly dataRoot: string) {}
 
-  run<T>(sessionId: string, intent: "standard" | "chat" | "dismiss", action: () => Promise<T>, origin: "pill" | "sessions" | "notification" = "pill"): Promise<T> {
+  run<T>(sessionId: string, intent: "standard" | "chat" | "dismiss", action: () => Promise<T>,
+    origin: "pill" | "sessions" | "notification" = "pill", activatedAt?: number): Promise<T> {
     const clickId = randomUUID();
     const started = performance.now();
+    const transit = typeof activatedAt === "number" ? Date.now() - activatedAt : undefined;
+    const nativeTransit = origin === "pill" && transit !== undefined && Number.isFinite(transit)
+      && transit >= 0 && transit <= 60_000 ? transit : undefined;
     const sessionHash = fingerprint(sessionId);
     const record: Recorder = (stage, details = {}) => {
+      const elapsedMs = Math.round(performance.now() - started);
       const safe = {
         observedAt: new Date().toISOString(), clickId, sessionHash, intent, origin, stage,
-        elapsedMs: Math.round(performance.now() - started),
+        elapsedMs,
+        ...(nativeTransit !== undefined ? { nativeElapsedMs: Math.round(nativeTransit) + elapsedMs } : {}),
         ...(targetKinds.has(details.targetKind ?? "") ? { targetKind: details.targetKind } : {}),
         ...(Number.isInteger(details.pid) && details.pid! > 0 && details.pid! <= 2_147_483_647 ? { pid: details.pid } : {}),
         ...(typeof details.home === "string" ? { homeHash: fingerprint(details.home) } : {}),

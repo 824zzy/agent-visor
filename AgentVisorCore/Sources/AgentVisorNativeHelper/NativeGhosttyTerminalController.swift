@@ -13,6 +13,7 @@ public final class NativeGhosttyTerminalController {
     }
     private let resolveApplication: () -> ApplicationIdentity?
     private let execute: (String) -> String?
+    private let nativeFocus: ((NativeHelperGhosttyTerminalView) -> Bool)?
     private let openAttach: (NativeHelperClaudeAttachTarget) -> String?
     private let readViewText: (ApplicationIdentity, String) -> String?
     private struct TitleEvidence: Codable, Equatable {
@@ -28,12 +29,14 @@ public final class NativeGhosttyTerminalController {
         execute: @escaping (String) -> String? = NativeGhosttyTerminalController.liveScript,
         openAttach: @escaping (NativeHelperClaudeAttachTarget) -> String? = {
             NativeTerminalController().openClaudeAttachSurface($0)
-        }
+        },
+        nativeFocus: ((NativeHelperGhosttyTerminalView) -> Bool)? = nil
     ) {
         self.storageURL = storageURL
         self.readViewText = readViewText
         self.resolveApplication = resolveApplication
         self.execute = execute
+        self.nativeFocus = nativeFocus
         self.openAttach = openAttach
         if let storageURL, let input = try? FileHandle(forReadingFrom: storageURL) {
             defer { try? input.close() }
@@ -115,7 +118,8 @@ public final class NativeGhosttyTerminalController {
         }
         let requiresRecheck = target.viewMode == .conversation || target.titleUpdatesEnabled == true
         if requiresRecheck, !currentConversation(target) { return false }
-        guard execute(GhosttyTerminalViewScript.focus(target)) == "ok" else { return false }
+        let focused = nativeFocus?(target) ?? (execute(GhosttyTerminalViewScript.focus(target)) == "ok")
+        guard focused else { return false }
         return !requiresRecheck || currentConversation(target)
     }
 

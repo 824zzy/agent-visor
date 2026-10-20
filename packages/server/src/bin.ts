@@ -177,7 +177,7 @@ await runDaemon(async (lifetime) => {
           runBackground("session focus", () => navigationDiagnostics.run(
             event.sessionId, event.intent ?? "standard", async () => {
               await activateMenuPill(event, repository, (message) => sendToDesktop(message));
-            },
+            }, "pill", event.activatedAt,
           ));
           return;
         }

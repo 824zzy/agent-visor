@@ -170,6 +170,28 @@ function completedIdleFixture() {
 }
 
 describe("Claude agent-view integration", () => {
+  it("opens a prepared interactive conversation while unrelated inventory reads are unavailable", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, { sessionId: ccID, cwd, kind: "interactive", status: "idle", name: "Direct conversation" });
+    const source = repository(environment);
+    const helper = new FakeNativeHelper();
+    source.setControls(new NativeSessionControls(helper));
+    await source.refresh();
+    await Promise.resolve();
+    expect(helper.terminalPreparationRequests).toMatchObject([{ pid: 900, tty: "ttys001", cwd }]);
+    expect(helper.terminalFocusRequests).toEqual([]);
+
+    // The clicked process metadata remains readable. A list-wide filesystem
+    // outage must not hold up an already discovered exact terminal route.
+    environment.directory = async () => { throw new Error("Unrelated inventory unavailable"); };
+    const effects: unknown[] = [];
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: ccID }, source,
+      effect => effects.push(effect));
+    expect(effects).toEqual([]);
+    expect(helper.terminalFocusRequests).toMatchObject([{ pid: 900, tty: "ttys001", cwd }]);
+  });
+
   it.each([
     { state: "blocked", status: undefined },
     { state: "working", status: undefined },

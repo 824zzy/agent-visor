@@ -1,4 +1,5 @@
 import path from "node:path";
+import { navigationStep } from "../navigation-diagnostics.js";
 import { TRANSCRIPT_STALE_CEILING_MS, type NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import type { ProviderAdapter, DiscoveredProviderSession } from "../sessions.js";
 import type { FileStamp, ProcessRecord, ProviderEnvironment } from "./environment.js";
@@ -71,6 +72,7 @@ export class ClaudeProvider implements ProviderAdapter {
   private inventoryBackgroundIds: ReadonlySet<string> = new Set();
   /** Tombstones suppress late hooks until a fresh row or interactive record proves reuse. */
   private removedConversationIds: ReadonlyMap<string, number> = new Map();
+  private interactiveFocus = new Map<string, { session: DiscoveredProviderSession; metadataPath: string }>();
 
   constructor(
     private readonly environment: ProviderEnvironment,
@@ -103,6 +105,7 @@ export class ClaudeProvider implements ProviderAdapter {
     const desktopProfiles = new Map<string, ReturnType<ClaudeDesktopSessions["read"]>>();
     const spares = new Set<string>();
     const interactiveSessionIds = new Set<string>();
+    const interactiveMetadata = new Map<string, string>();
     const parkedSessionIds = new Set<string>();
     const parkedGhosttyApplications = new Map<number, string | undefined>();
 
@@ -282,6 +285,7 @@ export class ClaudeProvider implements ProviderAdapter {
         ...(terminalTarget ? { messageTransport: "terminal" as const } : {}),
       });
       if (kind === "interactive") {
+        interactiveMetadata.set(sessionID, metadataPath);
         const interactiveID = fullSessionID(sessionID);
         if (interactiveID) interactiveSessionIds.add(interactiveID.toLowerCase());
       }
@@ -395,6 +399,16 @@ export class ClaudeProvider implements ProviderAdapter {
       ...[...parkedSessionIds].filter((id) => !interactiveSessionIds.has(id.toLowerCase())),
       ...this.removedConversationIds.keys(),
     ]);
+    // Discovery prepares the exact process route. A click re-reads only that
+    // process's metadata; the native/Herdr controller still verifies its live
+    // incarnation at the action boundary. Never cache parked/background views.
+    this.interactiveFocus = new Map(results.flatMap(session => {
+      const metadataPath = interactiveMetadata.get(session.id);
+      const target = session.controlTarget;
+      return metadataPath && (target?.kind === "herdr_surface"
+        || (target?.kind === "terminal" && target.target.application === "Ghostty"))
+        ? [[session.id, { session: structuredClone(session), metadataPath }]] : [];
+    }));
     return results;
   }
 
@@ -410,6 +424,22 @@ export class ClaudeProvider implements ProviderAdapter {
   }
 
   async resolveForFocus(sessionId: string): Promise<DiscoveredProviderSession | undefined> {
+    const prepared = this.interactiveFocus.get(sessionId);
+    if (prepared) {
+      try {
+        const raw = await this.environment.read(prepared.metadataPath, 256 * 1_024);
+        const metadata: unknown = raw ? JSON.parse(raw) : undefined;
+        if (isRecord(metadata) && metadata.sessionId === sessionId && metadata.cwd === prepared.session.cwd
+          && metadata.kind === "interactive" && metadata.parkedJobId === undefined && metadata.spare !== true
+          && !terminalStatuses.has(string(metadata.status).toLowerCase())
+          && !string(metadata.entrypoint).toLowerCase().startsWith("sdk")) {
+          navigationStep("route_prepared", { targetKind: prepared.session.controlTarget?.kind });
+          return structuredClone(prepared.session);
+        }
+      } catch { /* A changed/unreadable route requires full recovery. */ }
+      this.interactiveFocus.delete(sessionId);
+    }
+    navigationStep("route_recovery");
     return (await this.discover(true)).find((session) => session.id === sessionId);
   }
 

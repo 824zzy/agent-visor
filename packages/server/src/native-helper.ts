@@ -22,12 +22,16 @@ import {
   type NativeHelperTerminalTarget,
   type NativeHelperGhosttyTerminalView,
   type NativeHelperGhosttyBinding,
+  type NativeHelperProcessIdentity,
   type NativeHelperResponse,
   type NativeHelperScreen,
   type NativeHelperUsageGlance,
 } from "@agent-visor/protocol";
 
 export interface NativeHelperAdapter {
+  /** Prepare exact Ghostty surface identity without focusing or sending input. */
+  prepareTerminal?(target: NativeHelperTerminalTarget, conversationOnly?: boolean): Promise<void>;
+  prepareGhosttyBinding?(target: NativeHelperGhosttyBinding, processes: NativeHelperProcessIdentity[]): Promise<void>;
   ghosttyTerminalViews?(conversationTitles?: readonly string[]): Promise<NativeHelperGhosttyTerminalView[]>;
   focusGhosttyTerminal?(target: NativeHelperGhosttyTerminalView): Promise<void>;
   ghosttyBindingStatus?(): Promise<boolean>;
@@ -60,7 +64,7 @@ export interface NativeHelperAdapter {
   openCodexThread(target: NativeHelperCodexThreadTarget): Promise<void>;
   /** Attach to a Claude background job in a new window of the running terminal. */
   openClaudeAttach(target: NativeHelperClaudeAttachTarget): Promise<void>;
-  focusTerminal(target: NativeHelperTerminalTarget): Promise<void>;
+  focusTerminal(target: NativeHelperTerminalTarget, conversationOnly?: boolean): Promise<void>;
   sendTerminal(target: NativeHelperTerminalTarget, text: string, submit: boolean): Promise<void>;
   cancelTerminal(target: NativeHelperTerminalTarget): Promise<void>;
   /** Send Claude Code's provider-native Shift+Tab to the exact terminal. */
@@ -117,6 +121,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export class FakeNativeHelper implements NativeHelperAdapter {
+  readonly ghosttyBindingPreparationRequests: Array<{ target: NativeHelperGhosttyBinding; processes: NativeHelperProcessIdentity[] }> = [];
+  async prepareGhosttyBinding(target: NativeHelperGhosttyBinding, processes: NativeHelperProcessIdentity[]): Promise<void> {
+    this.ghosttyBindingPreparationRequests.push(structuredClone({ target, processes }));
+  }
+  readonly terminalPreparationRequests: NativeHelperTerminalTarget[] = [];
+  readonly terminalPreparationPolicies: boolean[] = [];
+  readonly terminalFocusPolicies: Array<boolean | undefined> = [];
   readonly ghosttyTerminalFocusRequests: NativeHelperGhosttyTerminalView[] = [];
   ghosttyViews: NativeHelperGhosttyTerminalView[] = [];
   async ghosttyTerminalViews() { return structuredClone(this.ghosttyViews); }
@@ -250,6 +261,11 @@ export class FakeNativeHelper implements NativeHelperAdapter {
     this.focusRequests.push(structuredClone(target));
   }
 
+  async prepareTerminal(target: NativeHelperTerminalTarget, conversationOnly = true): Promise<void> {
+    this.terminalPreparationRequests.push(structuredClone(target));
+    this.terminalPreparationPolicies.push(conversationOnly);
+  }
+
   async openCodexThread(target: NativeHelperCodexThreadTarget): Promise<void> {
     this.codexThreadRequests.push(structuredClone(target));
   }
@@ -258,8 +274,9 @@ export class FakeNativeHelper implements NativeHelperAdapter {
     this.claudeAttachRequests.push(structuredClone(target));
   }
 
-  async focusTerminal(target: NativeHelperTerminalTarget): Promise<void> {
+  async focusTerminal(target: NativeHelperTerminalTarget, conversationOnly?: boolean): Promise<void> {
     this.terminalFocusRequests.push(structuredClone(target));
+    this.terminalFocusPolicies.push(conversationOnly);
   }
 
   async sendTerminal(target: NativeHelperTerminalTarget, text: string, submit: boolean): Promise<void> {
@@ -435,6 +452,10 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     await this.accepted("focus", { target });
   }
 
+  async prepareTerminal(target: NativeHelperTerminalTarget, conversationOnly = true): Promise<void> {
+    await this.accepted("prepare_terminal", { target, conversationOnly });
+  }
+
   async openCodexThread(target: NativeHelperCodexThreadTarget): Promise<void> {
     await this.accepted("open_codex_thread", { target });
   }
@@ -484,8 +505,12 @@ export class NativeHelperProcess implements NativeHelperAdapter {
     await this.accepted("focus_ghostty_binding", { target });
   }
 
-  async focusTerminal(target: NativeHelperTerminalTarget): Promise<void> {
-    await this.accepted("focus_terminal", { target });
+  async prepareGhosttyBinding(target: NativeHelperGhosttyBinding, processes: NativeHelperProcessIdentity[]): Promise<void> {
+    await this.accepted("prepare_ghostty_binding", { target, processes });
+  }
+
+  async focusTerminal(target: NativeHelperTerminalTarget, conversationOnly?: boolean): Promise<void> {
+    await this.accepted("focus_terminal", { target, ...(conversationOnly !== undefined ? { conversationOnly } : {}) });
   }
 
   async sendTerminal(target: NativeHelperTerminalTarget, text: string, submit: boolean): Promise<void> {

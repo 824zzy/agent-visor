@@ -2,6 +2,11 @@ import XCTest
 @testable import AgentVisorCore
 
 final class NativeHelperWireProtocolTests: XCTestCase {
+    func testPillActivationCarriesItsNativeTimestamp() throws {
+        let data = try NativeHelperEvent.activatePill(sessionId: "session", activatedAt: 1_792_518_000_123).encoded()
+        let value = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(value["activatedAt"] as? Double, 1_792_518_000_123)
+    }
     func testRecoveredGhosttyViewEvidenceSurvivesTheActualFocusRequestDecoder() throws {
         for titleEnabled in [true, false] {
             let target = NativeHelperGhosttyTerminalView(applicationPID: 7, processStartToken: "instance",

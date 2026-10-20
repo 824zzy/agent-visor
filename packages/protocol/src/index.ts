@@ -1016,6 +1016,11 @@ export const nativeHelperGhosttyBindingSchema = z.object({
   nonce: z.string().regex(/^[0-9a-f]{32}$/),
 }).strict();
 
+export const nativeHelperProcessIdentitySchema = z.object({
+  pid: z.number().int().positive().max(2_147_483_647),
+  processStartToken: z.string().min(1).max(256).regex(/^[^\0]+$/),
+}).strict();
+
 export const nativeHelperNotificationSchema = z.object({
   id: z.string().min(1).max(128),
   sessionId: z.string().min(1).max(512),
@@ -1076,6 +1081,13 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
   }).strict(),
   z.object({
     ...helperEnvelope,
+    method: z.literal("prepare_ghostty_binding"),
+    params: z.object({ target: nativeHelperGhosttyBindingSchema,
+      processes: z.array(nativeHelperProcessIdentitySchema).min(1).max(4),
+    }).strict(),
+  }).strict(),
+  z.object({
+    ...helperEnvelope,
     method: z.literal("screen_topology"),
   }).strict(),
   z.object({
@@ -1131,7 +1143,17 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
   z.object({
     ...helperEnvelope,
     method: z.literal("focus_terminal"),
-    params: z.object({ target: nativeHelperTerminalTargetSchema }).strict(),
+    params: z.object({ target: nativeHelperTerminalTargetSchema, conversationOnly: z.boolean().optional() }).strict()
+      .refine(value => value.conversationOnly === undefined || value.target.application === "Ghostty"),
+  }).strict(),
+  z.object({
+    ...helperEnvelope,
+    method: z.literal("prepare_terminal"),
+    params: z.object({ target: nativeHelperTerminalTargetSchema.extend({
+      application: z.literal("Ghostty"),
+      pid: z.number().int().positive().max(2_147_483_647),
+      processStartToken: z.string().min(1).max(256).regex(/^[^\0]+$/),
+    }), conversationOnly: z.boolean().optional() }).strict(),
   }).strict(),
   z.object({
     ...helperEnvelope,
@@ -1227,6 +1249,7 @@ export const nativeHelperResponseSchema = z.union([
       type: z.literal("event"),
       event: z.literal("activate_pill"),
       sessionId: z.string().min(1).max(128),
+      activatedAt: z.number().nonnegative().max(8_640_000_000_000_000).optional(),
       intent: z.enum(["standard", "chat", "dismiss"]).optional(),
     }).strict(),
     z.object({
@@ -1294,6 +1317,7 @@ export type NativeHelperPiRestorationUpdate = z.infer<
 export type NativeHelperTerminalTarget = z.infer<typeof nativeHelperTerminalTargetSchema>;
 export type NativeHelperGhosttyTerminalView = z.infer<typeof nativeHelperGhosttyTerminalViewSchema>;
 export type NativeHelperGhosttyBinding = z.infer<typeof nativeHelperGhosttyBindingSchema>;
+export type NativeHelperProcessIdentity = z.infer<typeof nativeHelperProcessIdentitySchema>;
 export type NativeServicesState = z.infer<typeof nativeServicesStateSchema>;
 export type NativeHelperPill = z.infer<typeof nativeHelperPillSchema>;
 export type NativeHelperUsageGlance = z.infer<typeof nativeHelperUsageGlanceSchema>;

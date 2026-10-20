@@ -13,6 +13,22 @@ import type { DiscoveredProviderSession } from "./sessions.js";
 import { processInstanceToken } from "./providers/shared.js";
 
 const roots: string[] = [];
+
+it("prepares direct Ghostty Codex routes and preserves the Claude conversation guard", async () => {
+  const helper = new FakeNativeHelper();
+  const controls = new NativeSessionControls(helper);
+  const codex = session({ provider: "codex" });
+  controls.reconcile(codex);
+  await controls.focus(codex);
+  expect(helper.terminalPreparationRequests).toEqual([target]);
+  expect(helper.terminalPreparationPolicies).toEqual([false]);
+  expect(helper.terminalFocusPolicies).toEqual([false]);
+  const claude = session({ id: "claude", provider: "claude_code" });
+  controls.reconcile(claude);
+  await controls.focus(claude);
+  expect(helper.terminalPreparationPolicies).toEqual([false, true]);
+  expect(helper.terminalFocusPolicies).toEqual([false, true]);
+});
 const target = {
   application: "Ghostty" as const,
   pid: 42,

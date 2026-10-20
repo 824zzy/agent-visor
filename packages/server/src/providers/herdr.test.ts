@@ -1,5 +1,5 @@
 import { createServer, type Socket } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { afterEach, expect, it } from "vitest";
@@ -11,6 +11,7 @@ import { SessionRepository } from "../sessions.js";
 import { activateMenuPill, menuPresentation } from "../menu.js";
 import { NativeSessionControls } from "../session-controls.js";
 import { FakeNativeHelper } from "../native-helper.js";
+import { NavigationDiagnostics } from "../navigation-diagnostics.js";
 
 const now = new Date("2026-10-20T03:00:00Z");
 const sessionId = "5118cfe0-3f5b-418e-8bf1-5260f6747f39";
@@ -34,6 +35,7 @@ async function fixture(beforeReply?: (method: string, socket: Socket) => void) {
   const clients = [client];
   const catalog = { boot_id: "boot-one", view_revision: 2, clients, unclassified_connections: 0 };
   const peers = new Set<Socket>();
+  let contextEnabled = true;
   const server = createServer(socket => {
     peers.add(socket); socket.on("close", () => peers.delete(socket));
     let input = ""; socket.setEncoding("utf8"); socket.on("data", chunk => {
@@ -64,7 +66,8 @@ async function fixture(beforeReply?: (method: string, socket: Socket) => void) {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   });
-  return { context, target, client, catalog, requests, herdr: new HerdrClient(async () => structuredClone(context)) };
+  return { context, target, client, catalog, requests, disableContext: () => { contextEnabled = false; },
+    herdr: new HerdrClient(async () => contextEnabled ? structuredClone(context) : undefined) };
 }
 
 function nativeHost() {
@@ -78,6 +81,95 @@ function nativeHost() {
     focusGhosttyBinding: async (binding: unknown) => { focused.push(binding); },
   };
 }
+
+it("prepares a Herdr surface without selecting it and focuses without a click-time title lease or process inventory", async () => {
+  const f = await fixture();
+  const target = (await f.herdr.resolve(42, sessionId, "/fixture/Codes"))!;
+  const prepared: unknown[] = [];
+  const native = { ...nativeHost(), prepareGhosttyBinding: async (binding: unknown, processes: unknown) => {
+    prepared.push({ binding, processes });
+  } };
+  await f.herdr.prepare(target, native);
+  expect(prepared).toHaveLength(1);
+  expect(native.focused).toEqual([]);
+  expect(f.client.terminal_id).toBe("terminal-one");
+  expect(f.client.binding?.state).toBe("released");
+  const beforeClick = f.requests.length;
+  f.disableContext();
+  const diagnostics = new NavigationDiagnostics(path.dirname(f.context.socketPath));
+  await diagnostics.run(sessionId, "standard", () => f.herdr.focus(target, native));
+  await diagnostics.flush();
+  const trace = await readFile(path.join(path.dirname(f.context.socketPath), "diagnostics/pill-navigation.jsonl"), "utf8");
+  const stages = trace.trim().split("\n").map(line => JSON.parse(line).stage);
+  expect(stages).toContain("route_prepared");
+  expect(stages).toContain("herdr_readback");
+  expect(stages).toContain("herdr_rpc_request");
+  expect(stages).toContain("herdr_rpc_response");
+  expect(stages).toContain("process_validated");
+  expect(stages).not.toContain("route_recovery");
+  expect(native.focused).toHaveLength(1);
+  expect(f.client.terminal_id).toBe("terminal-seven");
+  expect(f.requests.slice(beforeClick).some(request => request.method.startsWith("client.bind_"))).toBe(false);
+});
+
+it("keeps exact discovery available while its own background preparation is applying a title lease", async () => {
+  const f = await fixture();
+  const target = (await f.herdr.resolve(42, sessionId, "/fixture/Codes"))!;
+  let started!: () => void; let release!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const host = nativeHost();
+  const native = { ...host, prepareGhosttyBinding: async () => {}, resolveGhosttyBinding: async (nonce: string) => {
+    started(); await gate; return host.resolveGhosttyBinding(nonce);
+  } };
+  const preparing = f.herdr.prepare(target, native);
+  await reading;
+  try {
+    expect(await f.herdr.resolve(42, sessionId, "/fixture/Codes")).toMatchObject({ paneId: "w1:p7", sessionId });
+    expect(native.focused).toEqual([]);
+  } finally { release(); await preparing; }
+  expect(f.client.binding?.state).toBe("released");
+});
+
+it("rebuilds a lost helper capability once so later clicks use the prepared route again", async () => {
+  const f = await fixture();
+  const target = (await f.herdr.resolve(42, sessionId, "/fixture/Codes"))!;
+  const capabilities = new Set<string>();
+  const host = nativeHost();
+  const native = { ...host, prepareGhosttyBinding: async (binding: { nonce: string }) => {
+    if (!capabilities.has(binding.nonce) && f.client.binding?.state !== "applied") throw new Error("helper restarted");
+    capabilities.add(binding.nonce);
+  } };
+  await f.herdr.prepare(target, native);
+  capabilities.clear();
+  await f.herdr.focus(target, native);
+  expect(f.client.binding?.state).toBe("released");
+  const beforeNextClick = f.requests.length;
+  f.disableContext();
+  await f.herdr.focus(target, native);
+  expect(native.focused).toHaveLength(2);
+  expect(f.requests.slice(beforeNextClick).some(request => request.method.startsWith("client.bind_"))).toBe(false);
+});
+
+it("bounds queued background preparation while native metadata is unavailable", async () => {
+  const f = await fixture();
+  const target = (await f.herdr.resolve(42, sessionId, "/fixture/Codes"))!;
+  let started!: () => void; let release!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const host = nativeHost();
+  const native = { ...host, prepareGhosttyBinding: async () => {}, resolveGhosttyBinding: async (nonce: string) => {
+    started(); await gate; return host.resolveGhosttyBinding(nonce);
+  } };
+  const pending = Array.from({ length: 32 }, () => f.herdr.prepare(target, native));
+  await reading;
+  const overflow = f.herdr.prepare(target, native);
+  try {
+    expect(await Promise.race([overflow.then(() => "accepted", () => "rejected"),
+      new Promise(resolve => setTimeout(() => resolve("queued"), 20))])).toBe("rejected");
+    expect(native.focused).toEqual([]);
+  } finally { release(); await Promise.allSettled([...pending, overflow]); }
+});
 
 it("opens a verified Codex CLI in Herdr even when Desktop catalogs it as vscode", async () => {
   const f = await fixture();
@@ -108,12 +200,21 @@ it("opens a verified Codex CLI in Herdr even when Desktop catalogs it as vscode"
   const native = nativeHost(); Object.assign(helper, native);
   const repository = new SessionRepository([new CodexProvider(environment)], { now: () => now });
   repository.setControls(new NativeSessionControls(helper, undefined, undefined, undefined, undefined,
-    undefined, undefined, undefined, undefined, (target, isCurrent) => f.herdr.focus(target, helper, isCurrent)));
+    undefined, undefined, undefined, undefined, (target, isCurrent) => f.herdr.focus(target, helper, isCurrent),
+    target => f.herdr.prepare(target, helper)));
   await repository.refresh();
   repository.applyHook({ sessionId, provider: "codex", cwd: "/fixture/Codes", event: "Stop",
     status: "waiting_for_input", receivedAt: now.toISOString() });
   const effects: unknown[] = [];
-  await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId }, repository, effect => effects.push(effect));
+  const diagnostics = new NavigationDiagnostics(path.dirname(f.context.socketPath));
+  await diagnostics.run(sessionId, "standard", () => activateMenuPill(
+    { version: 1, type: "event", event: "activate_pill", sessionId }, repository, effect => effects.push(effect),
+  ));
+  await diagnostics.flush();
+  const trace = await readFile(path.join(path.dirname(f.context.socketPath), "diagnostics/pill-navigation.jsonl"), "utf8");
+  expect(trace.split("\n").filter(Boolean).map(line => JSON.parse(line))).toContainEqual(expect.objectContaining({
+    stage: "target", targetKind: "herdr_surface",
+  }));
   expect(repository.current().sessions).toMatchObject([{ id: sessionId, owner: "Herdr", canOpenOwner: true }]);
   expect(native.focused).toHaveLength(1);
   expect(helper.codexThreadRequests).toEqual([]);

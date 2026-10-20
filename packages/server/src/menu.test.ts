@@ -8,7 +8,7 @@ import {
   type SessionSnapshot,
 } from "@agent-visor/protocol";
 import { activateMenuPill, menuPresentation, nativeActionFor } from "./menu.js";
-import { NavigationDiagnostics } from "./navigation-diagnostics.js";
+import { NavigationDiagnostics, navigationStep } from "./navigation-diagnostics.js";
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -145,6 +145,20 @@ describe("menu presentation", () => {
       expect(text).not.toContain("private-session");
       expect(text).not.toContain("secret-token");
       expect((await stat(file)).mode & 0o777).toBe(0o600);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("includes native activation transit time without calling daemon time the full visible latency", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "visor-click-"));
+    try {
+      const diagnostics = new NavigationDiagnostics(root);
+      await diagnostics.run("session", "standard", async () => navigationStep("completed"), "pill", Date.now() - 100);
+      await diagnostics.flush();
+      const records = (await readFile(path.join(root, "diagnostics/pill-navigation.jsonl"), "utf8"))
+        .trim().split("\n").map(line => JSON.parse(line));
+      expect(records[0].nativeElapsedMs).toBeGreaterThanOrEqual(100);
+      expect(records[1].nativeElapsedMs).toBeGreaterThanOrEqual(records[0].nativeElapsedMs);
+      expect(records[0].nativeElapsedMs - records[0].elapsedMs).toBeGreaterThanOrEqual(100);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

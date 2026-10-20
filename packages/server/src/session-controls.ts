@@ -40,7 +40,7 @@ import { normalizeChatText } from "./chat.js";
 import { openClaudeBackgroundSession, type ClaudeBackgroundTarget } from "./claude-background.js";
 import { openCursorWorkspace } from "./cursor-workspace.js";
 import { focusCmuxSurface, type CmuxSurfaceTarget } from "./providers/cmux.js";
-import { focusHerdrSurface, type HerdrSurfaceTarget } from "./providers/herdr.js";
+import { focusHerdrSurface, prepareHerdrSurface, type HerdrSurfaceTarget } from "./providers/herdr.js";
 import { isVerifiableProcessInstanceToken } from "./providers/shared.js";
 import { isTerminalRoute, resolveSessionState, sessionTurnState } from "./session-state.js";
 
@@ -80,6 +80,8 @@ export const MAX_TERMINAL_DELIVERY_RECORDS = 64;
 const terminalEvidenceTTL = 5 * 60_000;
 
 export class NativeSessionControls implements SessionControls {
+  private readonly preparedTerminalBySession = new Map<string, string>();
+  private readonly preparedHerdrBySession = new Map<string, string>();
   private focusSerial = 0;
   // Provider actions are serialized per session. A queued terminal send must
   // register its delivery immediately before its helper write; otherwise a
@@ -135,6 +137,8 @@ export class NativeSessionControls implements SessionControls {
     private readonly openCmux: (target: CmuxSurfaceTarget, isCurrent: () => boolean) => Promise<void> = focusCmuxSurface,
     private readonly openHerdr: (target: HerdrSurfaceTarget, isCurrent: () => boolean) => Promise<void>
       = (target, isCurrent) => focusHerdrSurface(target, this.helper, isCurrent),
+    private readonly prepareHerdr: (target: HerdrSurfaceTarget) => Promise<void>
+      = target => prepareHerdrSurface(target, this.helper),
   ) {
     this.imageLeases = new ChatImageLeaseStore({ root: imageRoot });
   }
@@ -200,7 +204,9 @@ export class NativeSessionControls implements SessionControls {
     }
     const serial = ++this.focusSerial;
     this.latestClaudeFocusKey = dedupeKey;
+    navigationStep("route_queued");
     const operation = this.queueAction(session.id, async () => {
+      navigationStep("route_dequeued");
       if (serial !== this.focusSerial) { navigationStep("superseded"); return "superseded" as const; }
       const control = session.controlTarget;
       if (!control) throw new Error("Exact session focus is unavailable.");
@@ -247,10 +253,18 @@ export class NativeSessionControls implements SessionControls {
         // Reattach the exact background identity on every explicit selection.
         await this.attachClaudeBackground(target);
       }
-      else if (control.kind === "terminal") await this.helper.focusTerminal(control.target);
+      else if (control.kind === "terminal") {
+        try { await this.helper.focusTerminal(control.target,
+          control.target.application === "Ghostty" ? session.provider === "claude_code" : undefined); }
+        catch (error) { this.preparedTerminalBySession.delete(session.id); throw error; }
+      }
       else if (control.kind === "herdr_surface") {
         try { await this.openHerdr(control.target, () => serial === this.focusSerial); }
-        catch (error) { if (serial !== this.focusSerial) return "superseded" as const; throw error; }
+        catch (error) {
+          this.preparedHerdrBySession.delete(session.id);
+          if (serial !== this.focusSerial) return "superseded" as const;
+          throw error;
+        }
         if (serial !== this.focusSerial) return "superseded" as const;
       }
       else if (control.kind === "cmux_surface") {
@@ -364,6 +378,30 @@ export class NativeSessionControls implements SessionControls {
   }
 
   reconcile(session: DiscoveredProviderSession): void {
+    const herdr = session.controlTarget?.kind === "herdr_surface" ? session.controlTarget.target : undefined;
+    if (herdr && this.helper.prepareGhosttyBinding) {
+      const fingerprint = JSON.stringify({ ...herdr, viewRevision: 0, projectionRevision: 0 });
+      if (this.preparedHerdrBySession.get(session.id) !== fingerprint) {
+        if (this.preparedHerdrBySession.size >= 512) this.preparedHerdrBySession.clear();
+        this.preparedHerdrBySession.set(session.id, fingerprint);
+        void this.queueAction(session.id, () => this.prepareHerdr(herdr)).catch(() => {
+          if (this.preparedHerdrBySession.get(session.id) === fingerprint) this.preparedHerdrBySession.delete(session.id);
+        });
+      }
+    } else this.preparedHerdrBySession.delete(session.id);
+    const target = session.controlTarget?.kind === "terminal" ? session.controlTarget.target : undefined;
+    if (target?.application === "Ghostty"
+      && this.helper.prepareTerminal && hasStableTerminalIdentity(target)) {
+      const conversationOnly = session.provider === "claude_code";
+      const fingerprint = terminalTargetFingerprint(target) + "\u0000" + conversationOnly + "\u0000" + (session.title ?? "");
+      if (this.preparedTerminalBySession.get(session.id) !== fingerprint) {
+        if (this.preparedTerminalBySession.size >= 512) this.preparedTerminalBySession.clear();
+        this.preparedTerminalBySession.set(session.id, fingerprint);
+        void this.queueAction(session.id, () => this.helper.prepareTerminal!(target, conversationOnly)).catch(() => {
+          if (this.preparedTerminalBySession.get(session.id) === fingerprint) this.preparedTerminalBySession.delete(session.id);
+        });
+      }
+    } else this.preparedTerminalBySession.delete(session.id);
     if (sessionTurnState(session) !== "working") {
       this.clear(session.id);
       return;
@@ -625,6 +663,8 @@ export class NativeSessionControls implements SessionControls {
   }
 
   forget(sessionId: string): void {
+    this.preparedTerminalBySession.delete(sessionId);
+    this.preparedHerdrBySession.delete(sessionId);
     const nextEpoch = (this.actionEpochBySession.get(sessionId) ?? 0) + 1;
     this.actionEpochBySession.set(sessionId, nextEpoch);
     // ponytail: retain at most 512 removed-session epochs. The epoch is only

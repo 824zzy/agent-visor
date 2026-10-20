@@ -4,6 +4,26 @@ import JavaScriptCore
 import XCTest
 
 final class NativeGhosttyBindingControllerTests: XCTestCase {
+    func testPreparedBindingSurvivesLeaseReleaseButRejectsAReplacedClient() throws {
+        let nonce = String(repeating: "a", count: 32)
+        let target = NativeHelperGhosttyBinding(applicationPID: 7, processStartToken: "ghostty-one",
+            windowId: "window", tabId: "tab", terminalId: "surface", nonce: nonce)
+        var title = "AVB:" + nonce
+        var incarnation = "original-client"
+        var focused: [String] = []
+        let controller = NativeGhosttyBindingController(resolveApplication: { .init(pid: 7, token: "ghostty-one") },
+            execute: { _ in XCTFail("A prepared click must not launch an interpreter"); return nil },
+            permission: { true }, isFrontmost: { _ in true },
+            surface: { _ in .init(id: "surface", title: title, cwd: "/project") },
+            focusSurface: { id in focused.append(id); return true }, processIdentity: { _ in incarnation })
+        XCTAssertTrue(controller.prepare(target, processes: [.init(pid: 42, processStartToken: "client-one")]))
+        title = "Herdr"
+        try controller.focus(target)
+        XCTAssertEqual(focused, ["surface"])
+        incarnation = "replacement-client"
+        XCTAssertThrowsError(try controller.focus(target))
+        XCTAssertEqual(focused, ["surface"])
+    }
     func testResolvesExactlyOneSurfaceFromItsNonceMarker() throws {
         let nonce = String(repeating: "a", count: 32)
         let context = try XCTUnwrap(JSContext())

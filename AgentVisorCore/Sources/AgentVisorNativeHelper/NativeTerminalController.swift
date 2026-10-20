@@ -335,6 +335,10 @@ public final class NativeTerminalController {
     /// provider. TTY and cwd are checked as well so a reused process target
     /// cannot accidentally receive a prompt or Escape.
     public static func liveTargetMatches(_ target: NativeHelperTerminalTarget) -> Bool {
+        if let pid = target.pid, let live = NativeProcessIdentityProbe.read(pid: pid) {
+            return target.processStartToken == live.token
+                && live.tty == normalizedTTYValue(target.tty) && live.cwd == target.cwd
+        }
         guard let pid = target.pid, pid > 0,
               let suppliedToken = target.processStartToken,
               !suppliedToken.isEmpty,
@@ -358,6 +362,7 @@ public final class NativeTerminalController {
     }
 
     private static func liveProcessStartToken(pid: Int32) -> String? {
+        if let live = NativeProcessIdentityProbe.read(pid: pid) { return live.token }
         guard let startedAt = processStartedAt(pid: pid) else { return nil }
         return processInstanceToken(pid: pid, startTime: startedAt)
     }

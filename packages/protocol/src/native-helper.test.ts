@@ -6,6 +6,33 @@ import {
   nativeHelperUsageGlanceSchema,
 } from "./index.js";
 
+it("accepts the bounded native pill activation timestamp", () => {
+  const event = { version: 1, type: "event", event: "activate_pill", sessionId: "session", activatedAt: 1_792_518_000_123 };
+  expect(nativeHelperResponseSchema.safeParse(event).success).toBe(true);
+  expect(nativeHelperResponseSchema.safeParse({ ...event, activatedAt: -1 }).success).toBe(false);
+});
+
+it("requires an exact Ghostty process for background terminal preparation", () => {
+  const target = { application: "Ghostty", pid: 42, processStartToken: "start-a", tty: "ttys001", cwd: "/project" };
+  for (const changed of [ { ...target, application: "Terminal" }, { ...target, pid: undefined },
+    { ...target, processStartToken: undefined }, { ...target, processStartToken: "bad\0token" } ]) {
+    expect(nativeHelperRequestSchema.safeParse({ version: 1, id: "prepare", method: "prepare_terminal",
+      params: { target: changed } }).success).toBe(false);
+  }
+});
+
+it("accepts an explicit conversation policy only for exact Ghostty focus", () => {
+  const target = { application: "Ghostty", pid: 42, processStartToken: "start-a", tty: "ttys001", cwd: "/project" };
+  for (const method of ["focus_terminal", "prepare_terminal"]) {
+    for (const conversationOnly of [true, false]) {
+      const request = { version: 1, id: "policy", method, params: { target, conversationOnly } };
+      expect(nativeHelperRequestSchema.safeParse(request).success).toBe(true);
+      expect(nativeHelperRequestSchema.safeParse({ ...request,
+        params: { ...request.params, target: { ...target, application: "Terminal" } } }).success).toBe(false);
+    }
+  }
+});
+
 it("accepts compact CP usage details and rejects an unsafe usage link", () => {
   const glance = { id: "copilot", heading: "GitHub Copilot", width: 64,
     label: "CP 92%", detail: "GitHub Copilot credits", summary: "128,807 of 140,000 AI credits remaining",
@@ -17,6 +44,14 @@ it("accepts compact CP usage details and rejects an unsafe usage link", () => {
 });
 
 const requests = [
+  { version: 1, id: "prepare-binding", method: "prepare_ghostty_binding", params: {
+    target: { applicationPID: 7, processStartToken: "ghostty-one", windowId: "window", tabId: "tab",
+      terminalId: "surface", nonce: "a".repeat(32) },
+    processes: [{ pid: 42, processStartToken: "client-one" }],
+  } },
+  { version: 1, id: "prepare", method: "prepare_terminal", params: {
+    target: { application: "Ghostty", pid: 42, processStartToken: "start-a", tty: "ttys001", cwd: "/project" },
+  } },
   { version: 1, id: "screens", method: "screen_topology" },
   { version: 1, id: "access", method: "accessibility_status" },
   { version: 1, id: "notifications", method: "notification_status" },
