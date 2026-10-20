@@ -181,7 +181,7 @@ describe("Herdr hosted conversations", () => {
     environment.sqliteRows.set(database, [{ id: "herdr-codex", rollout_path: rollout, cwd,
       title: "Herdr CLI", updated_at: Math.floor(now.valueOf() / 1000), archived: 0, source: "cli" }]);
     const sessions = await new CodexProvider(environment).discover();
-    expect(sessions).toMatchObject([{ owner, canOpenOwner: false, routeState: "unavailable" }]);
+    expect(sessions).toMatchObject([{ owner: "Codex CLI", canOpenOwner: false, routeState: "unavailable" }]);
     expect(sessions[0]?.controlTarget).toBeUndefined();
   });
 
@@ -1123,7 +1123,10 @@ describe("live provider adapters", () => {
     environment.cwdByPID.set(60, cwd);
     environment.starts.set(60, new Date("2026-08-22T07:59:00.000Z"));
 
-    const sessions = await new CodexProvider(environment).discover();
+    const provider = new CodexProvider(environment);
+    provider.noteHook({ sessionId: "codex-cli", provider: "codex", cwd, pid: 60, tty: "/dev/ttys002",
+      event: "SessionStart", status: "idle", receivedAt: now.toISOString() });
+    const sessions = await provider.discover();
 
     expect(sessions).toMatchObject([{
       id: "codex-cli",

@@ -17,6 +17,7 @@ class StatusEnvironment extends LiveProviderEnvironment {
   modifiedAt = this.clock;
   unavailable = false;
   terminal = false;
+  source?: string;
   title = "Desktop task";
 
   constructor() { super("/fixture"); }
@@ -37,7 +38,7 @@ class StatusEnvironment extends LiveProviderEnvironment {
   override async read() { return undefined; }
   override async sqlite() {
     return [{ id: sessionId, cwd, rollout_path: rollout, title: this.title,
-      updated_at: this.modifiedAt / 1_000, archived: 0, source: this.terminal ? "cli" : "vscode" }];
+      updated_at: this.modifiedAt / 1_000, archived: 0, source: this.source ?? (this.terminal ? "cli" : "vscode") }];
   }
   override async scanLinePrefixes(
     _file: string, prefixBytes: number, visit: (line: string) => void, startAt = 0,
@@ -79,6 +80,30 @@ function setup() {
 }
 
 describe("Codex desktop lifecycle status", () => {
+  it("does not silently open Desktop for a CLI-origin conversation without a verified frontend binding", async () => {
+    const { environment, repository } = setup();
+    environment.content = metadata("codex-tui");
+    environment.append("task_complete", "cli-turn");
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions).toMatchObject([{
+      id: sessionId, owner: "Codex CLI", canOpenOwner: false, sessionClass: "terminal", section: "ready",
+    }]);
+    expect(repository.chatRecord(sessionId)?.controlTarget).toBeUndefined();
+    expect(await repository.focusSession(sessionId)).toContain("Codex CLI terminal");
+    expect(repository.current().sessions[0]?.completionUnseen).toBe(true);
+  });
+
+  it.each(["cli", "vscode"])("restores Desktop routing for %s catalog rows when a later client record proves the conversation moved to Desktop", async (source) => {
+    const { environment, repository } = setup();
+    environment.source = source;
+    environment.content = metadata("codex-tui");
+    environment.append("task_complete", "cli-turn");
+    expect((await repository.refresh()).sessions[0]?.canOpenOwner).toBe(false);
+    environment.content += metadata("Codex Desktop");
+    environment.append("task_complete", "desktop-turn");
+    expect((await repository.refresh()).sessions).toMatchObject([{ owner: "Codex", canOpenOwner: true, sessionClass: "interactive" }]);
+  });
+
   it.each(["task_complete", "turn_aborted"])(
     "clears async question attention when its owning turn emits %s", async (event) => {
       const { environment, repository } = setup();

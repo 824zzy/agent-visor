@@ -1493,6 +1493,9 @@ export class SessionRepository {
 
   async focusSession(sessionId: string): Promise<string | undefined> {
     let session = this.controlBySession.get(sessionId);
+    if (session?.owner === "Codex CLI" && !session.controlTarget) {
+      return "Agent Visor couldn’t identify this conversation’s Codex CLI terminal. Open it directly in your terminal.";
+    }
     if (session?.owner === "Herdr" && session.controlTarget?.kind !== "herdr_surface") {
       return "This session is running in Herdr. Exact Herdr navigation is not available in this build. Open its pane in Herdr; no new session was created.";
     }
@@ -1501,7 +1504,9 @@ export class SessionRepository {
     // Claude terminals can enter Agent View or another conversation without
     // changing their PID. Revalidate both interactive and background targets
     // so a click cannot reuse a cached route to the wrong screen.
-    if (session.provider === "paseo" || (session.provider === "claude_code"
+    if (session.provider === "paseo" || (session.provider === "codex"
+      && (session.controlTarget?.kind === "terminal" || session.controlTarget?.kind === "herdr_surface"))
+      || (session.provider === "claude_code"
       && (session.controlTarget?.kind === "claude_background"
         || session.controlTarget?.kind === "cmux_surface"
         || session.controlTarget?.kind === "herdr_surface"

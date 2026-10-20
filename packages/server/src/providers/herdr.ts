@@ -1,7 +1,7 @@
 import type { NativeHelperGhosttyBinding } from "@agent-visor/protocol";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createConnection } from "node:net";
-import { lstat, open } from "node:fs/promises";
+import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { isDeepStrictEqual } from "node:util";
@@ -12,6 +12,8 @@ export type HerdrProcessContext = {
   provider: "claude_code" | "codex"; pid: number; processStartToken: string;
   sessionId: string; cwd: string; serverPID: number; serverProcessStartToken: string;
   socketPath: string; paneId: string;
+  codexHome?: string;
+  codexWrapper?: { pid: number; processStartToken: string };
 };
 type ClientReference = { boot_id: string; client_id: number; generation: number };
 type ProcessInstance = { pid: number; start: number };
@@ -37,6 +39,8 @@ function contextValid(value: HerdrProcessContext): boolean {
   return (value.provider === "claude_code" || value.provider === "codex")
     && isVerifiableProcessInstanceToken(value.pid, value.processStartToken)
     && isVerifiableProcessInstanceToken(value.serverPID, value.serverProcessStartToken)
+    && (!value.codexWrapper || (value.provider === "codex"
+      && isVerifiableProcessInstanceToken(value.codexWrapper.pid, value.codexWrapper.processStartToken)))
     && uuid(value.sessionId) && path.isAbsolute(value.cwd) && value.cwd.length <= 4096
     && path.isAbsolute(value.socketPath) && Buffer.byteLength(value.socketPath) <= 103
     && /^w[1-9]\d*:p[1-9]\d*$/.test(value.paneId)
@@ -54,6 +58,22 @@ const same = isDeepStrictEqual;
 export class HerdrClient {
   constructor(private readonly readContext?: (pid: number) => Promise<HerdrProcessContext | undefined>,
               private readonly deadlineMs = 400, private readonly system: HerdrSystem = liveSystem) {}
+  /** Read the host's current native Codex identity, never a catalog/cwd guess. */
+  async resolveCodex(pid: number, cwd: string, expectedHome: string): Promise<HerdrSurfaceTarget | undefined> {
+    try {
+      const context = await (this.readContext ? this.readContext(pid)
+        : readLiveContext(pid, "00000000-0000-0000-0000-000000000000", cwd, this.system));
+      const home = await realpath(expectedHome).catch(() => path.resolve(expectedHome));
+      if (!context || context.provider !== "codex" || context.codexHome !== home || !contextValid(context)) return undefined;
+      const identity = await this.socketIdentity(context.socketPath);
+      const response = await this.rpc(context.socketPath, identity, "client.target", { pane_id: context.paneId });
+      const target = response.target;
+      if (!isRecord(target) || !isRecord(target.session) || target.session.agent !== "codex"
+        || target.session.kind !== "id" || typeof target.session.value !== "string" || !uuid(target.session.value)) return undefined;
+      const sessionId = target.session.value;
+      return new HerdrClient(async () => ({ ...context, sessionId }), this.deadlineMs, this.system).resolve(pid, sessionId, cwd);
+    } catch { return undefined; }
+  }
   async resolve(pid: number, sessionId: string, cwd: string, ownLeaseNonce?: string): Promise<HerdrSurfaceTarget | undefined> {
     try {
       const context = await (this.readContext ? this.readContext(pid) : readLiveContext(pid, sessionId, cwd, this.system));
@@ -63,7 +83,12 @@ export class HerdrClient {
       const result = await this.rpc(context.socketPath, identity, "client.target", { pane_id: context.paneId });
       const target = result.target;
       if (!isRecord(target) || !bounded(target.boot_id) || target.pane_id !== context.paneId
-        || !bounded(target.terminal_id) || !processInstance(target.process) || target.process.pid !== context.pid) return undefined;
+        || !bounded(target.terminal_id) || !processInstance(target.process)) return undefined;
+      if (target.process.pid !== context.pid) {
+        const wrapper = context.codexWrapper;
+        if (context.provider !== "codex" || !wrapper || target.process.pid !== wrapper.pid
+          || Math.floor(target.process.start / 1_000_000) !== Number(wrapper.processStartToken.split(":")[2]) / 1000) return undefined;
+      }
       // Claude's current per-PID session metadata proves its UUID. Codex
       // additionally needs the runtime's native session reference, not cwd.
       if ((context.provider === "codex" || target.session != null) && !sameSession(target.session, context)) return undefined;
@@ -191,6 +216,8 @@ function sameRoute(a: HerdrSurfaceTarget, b: HerdrSurfaceTarget): boolean {
   return a.pid === b.pid && a.processStartToken === b.processStartToken && a.sessionId === b.sessionId
     && a.cwd === b.cwd && a.paneId === b.paneId && a.socketPath === b.socketPath && a.socketIdentity === b.socketIdentity
     && a.serverPID === b.serverPID && a.serverProcessStartToken === b.serverProcessStartToken
+    && a.codexHome === b.codexHome
+    && same(a.codexWrapper, b.codexWrapper)
     && same(a.target, b.target) && same(a.client, b.client) && same(a.clientProcess, b.clientProcess);
 }
 
@@ -278,7 +305,21 @@ async function readLiveContext(pid: number, sessionId: string, cwd: string, syst
   const token = processInstanceToken(pid, child.started);
   const serverToken = processInstanceToken(serverPID, processes.get(serverPID)!.started);
   if (!token || !serverToken) return undefined;
-  return { provider, pid, processStartToken: token, sessionId, cwd,
+  let codexHome: string | undefined;
+  let codexWrapper: HerdrProcessContext["codexWrapper"];
+  if (provider === "codex") {
+    const rawHome = field("CODEX_HOME") ?? path.join(os.homedir(), ".codex");
+    if (!path.isAbsolute(rawHome) || rawHome.length > 4096 || /[\u0000-\u001f]/.test(rawHome)) return undefined;
+    codexHome = await realpath(rawHome).catch(() => path.resolve(rawHome));
+    const parent = processes.get(child.parent);
+    if (parent && ["node", "bun"].includes(path.basename(parent.command))
+      && [...processes.values()].filter(row => row.parent === child.parent && path.basename(row.command) === "codex").length === 1) {
+      const wrapperToken = processInstanceToken(child.parent, parent.started);
+      if (wrapperToken) codexWrapper = { pid: child.parent, processStartToken: wrapperToken };
+    }
+  }
+  return { provider, pid, processStartToken: token, sessionId, cwd, ...(codexHome ? { codexHome } : {}),
+    ...(codexWrapper ? { codexWrapper } : {}),
     serverPID, serverProcessStartToken: serverToken, socketPath, paneId };
 }
 

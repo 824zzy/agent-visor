@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { open, readdir, stat } from "node:fs/promises";
+import { open, readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { NativeHelperGhosttyTerminalView } from "@agent-visor/protocol";
@@ -38,6 +38,7 @@ export interface ProviderEnvironment {
   cwd(pid: number): Promise<string | undefined>;
   processStartedAt(pid: number): Promise<Date | undefined>;
   codexDesktopCommand?(pid: number): Promise<string | undefined>;
+  codexProcessHome?(pid: number): Promise<string | undefined>;
   directory(path: string): Promise<string[]>;
   isDirectory(path: string): Promise<boolean>;
   stamp(path: string): Promise<FileStamp | undefined>;
@@ -62,6 +63,8 @@ export interface ProviderEnvironment {
   ghosttyTerminalViews?(conversationTitles?: readonly string[]): Promise<GhosttyTerminalView[]>;
   /** Exact local cmux surface; discovery never focuses or sends input. */
   herdrSurface?(pid: number, sessionId: string, cwd: string): Promise<HerdrSurfaceTarget | undefined>;
+  /** Current Codex identity from its host, independent of the Desktop catalog source. */
+  herdrCodexSurface?(pid: number, cwd: string, home: string): Promise<HerdrSurfaceTarget | undefined>;
   cmuxSurface?(pid: number, sessionId: string, cwd: string): Promise<CmuxSurfaceTarget | undefined>;
 }
 
@@ -99,6 +102,10 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
 
   herdrSurface(pid: number, sessionId: string, cwd: string): Promise<HerdrSurfaceTarget | undefined> {
     return this.herdr.resolve(pid, sessionId, cwd);
+  }
+
+  herdrCodexSurface(pid: number, cwd: string, home: string): Promise<HerdrSurfaceTarget | undefined> {
+    return this.herdr.resolveCodex(pid, cwd, home);
   }
 
   cmuxSurface(pid: number, sessionId: string, cwd: string): Promise<CmuxSurfaceTarget | undefined> {
@@ -204,6 +211,16 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
       { deadlineMs: 1_000, maxOutputBytes: 64 * 1_024 },
     ));
     return result.status === "success" ? result.stdout : undefined;
+  }
+
+  async codexProcessHome(pid: number): Promise<string | undefined> {
+    const command = await this.codexDesktopCommand(pid);
+    if (!command) return undefined;
+    const values = [...command.matchAll(/(?:^| )CODEX_HOME=(.*?)(?= [A-Za-z_][A-Za-z0-9_]*=|$)/g)];
+    if (values.length > 1) return undefined;
+    const value = values[0]?.[1]?.trim() ?? path.join(this.home, ".codex");
+    if (!path.isAbsolute(value) || /[\u0000-\u001f]/.test(value)) return undefined;
+    return realpath(value).catch(() => path.resolve(value));
   }
 
   async directory(path: string): Promise<string[]> {

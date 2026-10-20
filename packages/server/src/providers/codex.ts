@@ -1,8 +1,9 @@
 import { transcriptPhase, type NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import path from "node:path";
-import type { DiscoveredProviderSession, ProviderAdapter } from "../sessions.js";
+import type { DiscoveredProviderSession, HookSessionEvent, ProviderAdapter } from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
 import { CodexTranscriptReader } from "./codex-lifecycle.js";
+import type { HerdrSurfaceTarget } from "./herdr.js";
 import {
   canonicalCodexHome, codexDesktopBindings, codexInstanceID, codexSessionID,
   codexThreadReference, isCodexDesktop, type CodexHome, type CodexInstance,
@@ -45,6 +46,8 @@ limit 1`;
 
 const codexSettingsCatalogTtlMs = 60_000;
 const maxSettingsCatalogCWDs = 64;
+type CliBinding = { cwd: string; owner: string; terminal?: NativeHelperTerminalTarget;
+  herdr?: HerdrSurfaceTarget; sessionFile?: string };
 
 export class CodexProvider implements ProviderAdapter {
   readonly id = "codex" as const;
@@ -55,6 +58,7 @@ export class CodexProvider implements ProviderAdapter {
   }>();
   private readonly transcriptReader = new CodexTranscriptReader();
   private readonly lastSessionsByInstance = new Map<string, DiscoveredProviderSession[]>();
+  private readonly cliHookByPID = new Map<number, HookSessionEvent>();
 
   constructor(
     private readonly environment: ProviderEnvironment,
@@ -62,6 +66,51 @@ export class CodexProvider implements ProviderAdapter {
     private readonly saveDiscoveredHome?: (home: CodexHome) => Promise<void>,
     private readonly ignoredHomes: () => string[] = () => [],
   ) {}
+
+  noteHook(event: HookSessionEvent): void {
+    if (event.provider !== this.id || !event.pid || !event.tty || !Number.isFinite(Date.parse(event.receivedAt))) return;
+    const previous = this.cliHookByPID.get(event.pid);
+    if (previous && previous.receivedAt > event.receivedAt) return;
+    if (event.event === "SessionEnd") {
+      if (previous?.sessionId === event.sessionId) this.cliHookByPID.delete(event.pid);
+    } else if (["SessionStart", "UserPromptSubmit"].includes(event.event)) {
+      this.cliHookByPID.set(event.pid, structuredClone(event));
+    }
+  }
+
+  private async cliBindings(instance: CodexInstance, processes: ProcessRecord[]): Promise<Map<string, CliBinding[]>> {
+    const bindings = new Map<string, CliBinding[]>();
+    if (instance.id !== "native") return bindings;
+    const live = processes.filter(process => process.tty && path.basename(process.command) === "codex"
+      && !/(?:app|mcp|exec)-server/.test(process.arguments));
+    for (const pid of this.cliHookByPID.keys()) if (!live.some(process => process.pid === pid)) this.cliHookByPID.delete(pid);
+    const add = (id: string, binding: CliBinding) => bindings.set(id, [...(bindings.get(id) ?? []), binding]);
+    for (const process of live) {
+      const cwd = await this.environment.cwd(process.pid);
+      if (!cwd) continue;
+      const herdr = await this.environment.herdrCodexSurface?.(process.pid, cwd, instance.path);
+      if (herdr?.provider === "codex" && herdr.pid === process.pid && herdr.cwd === cwd) {
+        add(herdr.sessionId, { cwd, owner: "Herdr", herdr }); continue;
+      }
+      const hook = this.cliHookByPID.get(process.pid);
+      if (!hook || hook.cwd !== cwd || hook.tty?.replace(/^\/dev\//, "") !== process.tty) continue;
+      if (this.environment.codexProcessHome && await this.environment.codexProcessHome(process.pid) !== instance.path) continue;
+      const started = await this.environment.processStartedAt(process.pid);
+      if (!started || started.valueOf() > Date.parse(hook.receivedAt)) continue;
+      add(hook.sessionId, { cwd, owner: ownerForProcess(process.pid, processes), sessionFile: hook.sessionFile,
+        terminal: terminalTargetForProcess(process, cwd, processes, processInstanceToken(process.pid, started)) });
+    }
+    return bindings;
+  }
+
+  private boundSession(instance: CodexInstance, thread: CodexRow, titles: Map<string, string>,
+    modelCatalog: DiscoveredProviderSession["modelCatalog"], bindings: Map<string, CliBinding[]>) {
+    const matches = (bindings.get(thread.id) ?? []).filter(binding => binding.cwd === thread.cwd
+      && (!binding.sessionFile || path.resolve(binding.sessionFile) === path.resolve(thread.rolloutPath)));
+    const binding = matches.length === 1 ? matches[0] : undefined;
+    return this.session(instance, thread, titles,
+      binding?.owner ?? (matches.length ? "Codex CLI" : instance.label), modelCatalog, binding?.terminal, binding?.herdr);
+  }
 
   private async instances(): Promise<CodexInstance[]> {
     const nativeHome = await canonicalCodexHome(path.join(this.environment.home, ".codex"));
@@ -102,10 +151,6 @@ export class CodexProvider implements ProviderAdapter {
       (this.environment.now().valueOf() - this.environment.observedWindowMs) / 1_000,
     );
     const processes = await this.environment.processes();
-    const cliProcesses = processes.filter((process) =>
-      process.tty
-      && path.basename(process.command) === "codex"
-      && !/(?:app|mcp|exec)-server/.test(process.arguments));
     for (const instance of instances) {
       let found: DiscoveredProviderSession[] = [];
       try {
@@ -126,39 +171,14 @@ export class CodexProvider implements ProviderAdapter {
         const cache = this.modelCatalogCache.get(instance.id) ?? {};
         this.modelCatalogCache.set(instance.id, cache);
         const modelCatalog = await codexModelCatalog(this.environment, instance.path, cache);
-        const usedThreads = new Set<string>();
-        for (const process of instance.id === "native" ? cliProcesses : []) {
-          const cwd = await this.environment.cwd(process.pid);
-          const thread = candidates
-            .filter((row) => row.source === "cli" && row.cwd === cwd && !usedThreads.has(row.id))
-            .sort((left, right) => right.updatedAt - left.updatedAt)[0];
-          if (!thread) continue;
-          usedThreads.add(thread.id);
-          found.push(await this.session(
-            instance, thread,
-            indexTitles,
-            ownerForProcess(process.pid, processes),
-            modelCatalog,
-            terminalTargetForProcess(
-              process,
-              thread.cwd,
-              processes,
-              processInstanceToken(
-                process.pid,
-                await this.environment.processStartedAt(process.pid),
-              ),
-            ),
-          ));
-        }
-
+        const bindings = await this.cliBindings(instance, processes);
         for (const thread of candidates) {
-          if (usedThreads.has(thread.id)
-            || !["vscode", "cli", "exec"].includes(thread.source)) continue;
+          if (!["vscode", "cli", "exec"].includes(thread.source)) continue;
           if (thread.cwd.includes(".claude-mem") || thread.cwd.includes("observer-sessions")) continue;
           const rollout = await this.environment.stamp(thread.rolloutPath);
           if (!rollout) continue;
           if (thread.source === "exec" && thread.updatedAt < automationCutoff) continue;
-          found.push(await this.session(instance, thread, indexTitles, instance.label, modelCatalog));
+          found.push(await this.boundSession(instance, thread, indexTitles, modelCatalog, bindings));
         }
         this.lastSessionsByInstance.set(instance.id, found);
       } catch {
@@ -194,33 +214,8 @@ export class CodexProvider implements ProviderAdapter {
     const cache = this.modelCatalogCache.get(instance.id) ?? {};
     this.modelCatalogCache.set(instance.id, cache);
     const modelCatalog = await codexModelCatalog(this.environment, instance.path, cache);
-    const processes = await this.environment.processes();
-    const cliCandidates = instance.id === "native" && thread.source === "cli"
-      ? await Promise.all(processes
-        .filter((process) => process.tty
-          && path.basename(process.command) === "codex"
-          && !/(?:app|mcp|exec)-server/.test(process.arguments))
-        .map(async (process) => ({ process, cwd: await this.environment.cwd(process.pid) })))
-      : [];
-    const cliProcess = cliCandidates.find(({ cwd }) => cwd === thread.cwd)?.process;
-    const terminalTarget = cliProcess
-      ? terminalTargetForProcess(
-        cliProcess,
-        thread.cwd,
-        processes,
-        processInstanceToken(
-          cliProcess.pid,
-          await this.environment.processStartedAt(cliProcess.pid),
-        ),
-      )
-      : undefined;
-    return this.session(
-      instance, thread,
-      indexTitles,
-      cliProcess ? ownerForProcess(cliProcess.pid, processes) : instance.label,
-      modelCatalog,
-      terminalTarget,
-    );
+    const processes = await (this.environment.processesFresh?.() ?? this.environment.processes());
+    return this.boundSession(instance, thread, indexTitles, modelCatalog, await this.cliBindings(instance, processes));
   }
 
   private async session(
@@ -230,20 +225,29 @@ export class CodexProvider implements ProviderAdapter {
     owner: string,
     modelCatalog?: DiscoveredProviderSession["modelCatalog"],
     terminalTarget?: NativeHelperTerminalTarget,
+    herdrTarget?: HerdrSurfaceTarget,
   ): Promise<DiscoveredProviderSession> {
     const sessionID = codexSessionID(instance.id, thread.id);
-    const sessionClass = thread.source === "exec"
-      ? "automation" as const
-      : thread.source === "cli" ? "terminal" as const : "interactive" as const;
     const storedTitle = indexTitles.get(thread.id) || thread.title;
     const title = storedTitle || await codexRolloutTitle(this.environment, thread.rolloutPath);
     const rolloutStamp = await this.environment.stamp(thread.rolloutPath);
-    const unverifiedHost = owner === "Herdr" || owner === "Unknown";
-    // A live CLI keeps its hook-owned lifecycle even if its host has no
-    // verified focus route. Route loss must not import desktop lifecycle.
-    const transcript = !terminalTarget && !unverifiedHost
+    let unverifiedHost = owner === "Herdr" || owner === "Unknown";
+    const latestTranscript = !terminalTarget && !unverifiedHost
       ? await this.transcriptReader.read(this.environment, sessionID, thread.rolloutPath, thread.id)
       : undefined;
+    const movedToDesktop = latestTranscript?.originator === "Codex Desktop";
+    // CLI lifecycle remains hook-owned unless a later client record proves
+    // Desktop ownership. Catalog source alone does not track client switches.
+    const transcript = thread.source !== "cli" || movedToDesktop ? latestTranscript : undefined;
+    // The latest client metadata is provenance, not a process binding. It may
+    // forbid a wrong Desktop fallback, but never identifies a terminal by cwd.
+    const cliWithoutBinding = !terminalTarget && !herdrTarget
+      && ((thread.source === "cli" && !movedToDesktop) || owner === "Codex CLI"
+        || ["codex-tui", "codex_cli_rs"].includes(transcript?.originator ?? ""));
+    if (cliWithoutBinding) { owner = "Codex CLI"; unverifiedHost = true; }
+    const sessionClass = thread.source === "exec"
+      ? "automation" as const
+      : (thread.source === "cli" && !movedToDesktop) || herdrTarget || cliWithoutBinding ? "terminal" as const : "interactive" as const;
     const lifecycle = transcript?.lifecycle;
     const managedBy = transcript?.originator === "Agent Room" ? "Agent Room" as const : undefined;
     // Transcript markers are claims, not liveness. A desktop turn whose process
@@ -277,7 +281,7 @@ export class CodexProvider implements ProviderAdapter {
       : instance.allowDefaultURL
         ? { kind: "url", url: `codex://threads/${thread.id}` }
         : undefined;
-    const controlTarget = terminalTarget
+    const controlTarget = herdrTarget ? { kind: "herdr_surface" as const, target: herdrTarget } : terminalTarget
       ? { kind: "terminal" as const, target: terminalTarget }
       : unverifiedHost ? undefined : desktopTarget;
     const sourceProfile = instance.id === "native"
@@ -310,7 +314,7 @@ export class CodexProvider implements ProviderAdapter {
       ...(managedBy ? { managedBy } : {}),
       chatPath: thread.rolloutPath,
       ...(instance.id === "native" ? { messageTransport: "codex_app_server" as const } : {}),
-      ...(instance.id === "native" && !terminalTarget
+      ...(instance.id === "native" && !terminalTarget && !herdrTarget
         ? { routeState: unverifiedHost ? "unavailable" as const : "available" as const, routeOwnership: "unverified" as const }
         : {}),
       ...(modelCatalog ? { modelCatalog } : {}),

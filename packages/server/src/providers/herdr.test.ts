@@ -6,6 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { HerdrClient, type HerdrProcessContext } from "./herdr.js";
 import { processInstanceToken } from "./shared.js";
 import { ClaudeProvider } from "./claude.js";
+import { CodexProvider } from "./codex.js";
 import { SessionRepository } from "../sessions.js";
 import { activateMenuPill, menuPresentation } from "../menu.js";
 import { NativeSessionControls } from "../session-controls.js";
@@ -77,6 +78,94 @@ function nativeHost() {
     focusGhosttyBinding: async (binding: unknown) => { focused.push(binding); },
   };
 }
+
+it("opens a verified Codex CLI in Herdr even when Desktop catalogs it as vscode", async () => {
+  const f = await fixture();
+  f.context.provider = "codex";
+  f.target.session = { agent: "codex", kind: "id", value: sessionId };
+  const records = [
+    { type: "session_meta", payload: { id: sessionId, originator: "codex-tui", source: "vscode" } },
+    { type: "event_msg", timestamp: now.toISOString(), payload: { type: "task_complete", turn_id: "done" } },
+  ].map(record => JSON.stringify(record)).join("\n") + "\n";
+  const environment = {
+    home: "/fixture", observedWindowMs: 42 * 60 * 60 * 1000, now: () => now,
+    processes: async () => [
+      { pid: 42, parentPID: 10, tty: "ttys023", command: "/usr/local/bin/codex", arguments: "codex" },
+      { pid: 10, parentPID: 1, command: "/usr/local/bin/herdr", arguments: "herdr server" },
+    ],
+    cwd: async () => "/fixture/Codes", processStartedAt: async () => now,
+    directory: async () => [], isDirectory: async () => false,
+    stamp: async () => ({ modifiedAt: now, size: Buffer.byteLength(records) }),
+    read: async () => undefined, readHeadTail: async () => ({ head: records, tail: records }),
+    scanLinePrefixes: async (_file: string, _bytes: number, visit: (line: string) => void) => {
+      records.trim().split("\n").forEach(visit); return Buffer.byteLength(records);
+    },
+    sqlite: async () => [{ id: sessionId, cwd: "/fixture/Codes", rollout_path: "/fixture/rollout.jsonl",
+      title: "Compare Codex CLI and desktop UX", updated_at: now.valueOf() / 1000, archived: 0, source: "vscode" }],
+    herdrCodexSurface: async (pid: number, cwd: string) => f.herdr.resolve(pid, sessionId, cwd),
+  };
+  const helper = new FakeNativeHelper();
+  const native = nativeHost(); Object.assign(helper, native);
+  const repository = new SessionRepository([new CodexProvider(environment)], { now: () => now });
+  repository.setControls(new NativeSessionControls(helper, undefined, undefined, undefined, undefined,
+    undefined, undefined, undefined, undefined, (target, isCurrent) => f.herdr.focus(target, helper, isCurrent)));
+  await repository.refresh();
+  repository.applyHook({ sessionId, provider: "codex", cwd: "/fixture/Codes", event: "Stop",
+    status: "waiting_for_input", receivedAt: now.toISOString() });
+  const effects: unknown[] = [];
+  await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId }, repository, effect => effects.push(effect));
+  expect(repository.current().sessions).toMatchObject([{ id: sessionId, owner: "Herdr", canOpenOwner: true }]);
+  expect(native.focused).toHaveLength(1);
+  expect(helper.codexThreadRequests).toEqual([]);
+  expect(helper.terminalFocusRequests).toEqual([]);
+  expect(effects).toEqual([]);
+});
+
+it("discovers the current Codex thread from the host without guessing from cwd or source", async () => {
+  const f = await fixture();
+  Object.assign(f.context, { provider: "codex", codexHome: "/fixture/.codex" });
+  f.target.session = { agent: "codex", kind: "id", value: sessionId };
+  const target = await f.herdr.resolveCodex(42, "/fixture/Codes", "/fixture/.codex");
+  expect(target).toMatchObject({ provider: "codex", sessionId, pid: 42, paneId: "w1:p7" });
+  expect(f.requests.every(request => ["client.target", "client.list"].includes(request.method))).toBe(true);
+});
+
+it.each(["wrong-home", "missing-session", "wrong-provider", "replaced-process", "second-client"])("does not bind an unverifiable Codex frontend (%s)", async change => {
+  const f = await fixture();
+  Object.assign(f.context, { provider: "codex", codexHome: "/fixture/.codex" });
+  f.target.session = { agent: "codex", kind: "id", value: sessionId };
+  if (change === "wrong-home") f.context.codexHome = "/fixture/copilot";
+  if (change === "missing-session") f.target.session = null;
+  if (change === "wrong-provider") f.target.session = { agent: "claude", kind: "id", value: sessionId };
+  if (change === "replaced-process") f.target.process.pid = 99;
+  if (change === "second-client") f.catalog.clients.push(structuredClone(f.client));
+  expect(await f.herdr.resolveCodex(42, "/fixture/Codes", "/fixture/.codex")).toBeUndefined();
+  expect(f.requests.some(request => request.method.startsWith("client.bind"))).toBe(false);
+});
+
+it.each(["valid", "duplicate-child", "wrong-wrapper-start"])("validates an npm Codex frontend wrapper (%s)", async change => {
+  const f = await fixture();
+  f.target.process.pid = 41;
+  f.target.session = { agent: "codex", kind: "id", value: sessionId };
+  if (change === "wrong-wrapper-start") f.target.process.start += 1_000_000;
+  const processTable = [
+    "42 41 Tue Oct 20 03:00:00 2026 /usr/local/bin/codex",
+    "41 10 Tue Oct 20 03:00:00 2026 node",
+    "10 1 Tue Oct 20 03:00:00 2026 /usr/local/bin/herdr",
+    ...(change === "duplicate-child" ? ["43 41 Tue Oct 20 03:00:00 2026 /usr/local/bin/codex"] : []),
+  ].join("\n");
+  const system = {
+    run: async (_executable: string, args: readonly string[]) => ({ status: "success" as const, exitCode: 0, stderr: "",
+      stdout: args.includes("pid=,ppid=,lstart=,comm=") ? processTable
+        : `codex HERDR_PANE_ID=w1:p7 HERDR_SOCKET_PATH=${f.context.socketPath} CODEX_HOME=/fixture/.codex` }),
+    readClaudeMetadata: async () => undefined,
+  };
+  const client = new HerdrClient(undefined, 400, system);
+  const target = await client.resolveCodex(42, "/fixture/Codes", "/fixture/.codex");
+  if (change !== "valid") { expect(target).toBeUndefined(); return; }
+  expect(target).toMatchObject({ provider: "codex", pid: 42, target: { process: { pid: 41 } } });
+  await expect(client.focus(target!, nativeHost())).resolves.toBeUndefined();
+});
 
 it.each(["second-client", "unknown-client", "unsupported"])("does not admit an unsafe client catalog: %s", async reason => {
   const f = await fixture();
