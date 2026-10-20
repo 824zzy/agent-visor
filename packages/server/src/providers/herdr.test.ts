@@ -215,7 +215,39 @@ it("binds live discovery to current process instances and Claude per-PID metadat
   });
 });
 
-it.each([false, true])("opens the codes-6e pill and acknowledges only successful navigation (native failure: %s)", async fail => {
+it.each([
+  { label: "one current server", owners: "p10\nf4\n", allowed: true },
+  { label: "multiple owners", owners: "p10\np20\n", allowed: false },
+  { label: "non-Herdr owner", owners: "p20\n", allowed: false },
+  { label: "missing process", owners: "p99\n", allowed: false },
+  { label: "no owner", owners: "", allowed: false },
+])("rediscovers a preserved Claude pane after handoff reparents its shell ($label)", async ({ owners, allowed }) => {
+  const f = await fixture();
+  const processTable = [
+    "42 20 Tue Oct 20 03:00:00 2026 /usr/local/bin/claude",
+    "20 1 Tue Oct 20 03:00:00 2026 /bin/zsh",
+    "10 1 Tue Oct 20 03:00:00 2026 /Users/me/.local/bin/herdr",
+  ].join("\n");
+  const system = {
+    run: async (executable: string, args: readonly string[]) => ({ status: "success" as const, exitCode: 0, stderr: "",
+      stdout: args.includes("pid=,ppid=,lstart=,comm=") ? processTable
+        : executable.endsWith("/lsof") ? owners
+        : `claude HERDR_PANE_ID=w1:p7 HERDR_SOCKET_PATH=${f.context.socketPath}` }),
+    readClaudeMetadata: async () => JSON.stringify({ pid: 42, sessionId, cwd: "/fixture/Codes",
+      kind: "interactive", procStart: "Tue Oct 20 03:00:00 2026" }),
+  };
+  const resolved = await new HerdrClient(undefined, 400, system).resolve(42, sessionId, "/fixture/Codes");
+  if (allowed) expect(resolved).toMatchObject({ serverPID: 10, target: f.target, client: f.client.client });
+  else {
+    expect(resolved).toBeUndefined();
+    expect(f.requests).toEqual([]);
+  }
+});
+
+it.each([
+  { fail: false, reparented: false }, { fail: true, reparented: false },
+  { fail: false, reparented: true }, { fail: true, reparented: true },
+])("opens the codes-6e pill and acknowledges only successful navigation (native failure: $fail, reparented: $reparented)", async ({ fail, reparented }) => {
   const f = await fixture();
   const home = "/fixture";
   const records = JSON.stringify({ type: "assistant", timestamp: "2026-10-20T02:59:00Z",
@@ -223,7 +255,7 @@ it.each([false, true])("opens the codes-6e pill and acknowledges only successful
   const environment = {
     home, observedWindowMs: 42 * 60 * 60 * 1000, now: () => now,
     processes: async () => [
-      { pid: 42, parentPID: 10, tty: "ttys023", command: "/usr/local/bin/claude", arguments: "claude" },
+      { pid: 42, parentPID: reparented ? 1 : 10, tty: "ttys023", command: "/usr/local/bin/claude", arguments: "claude" },
       { pid: 10, parentPID: 1, command: "/Users/me/.local/bin/herdr", arguments: "herdr server" },
     ],
     cwd: async () => "/fixture/Codes", processStartedAt: async () => now,

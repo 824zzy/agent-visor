@@ -199,15 +199,16 @@ export class ClaudeProvider implements ProviderAdapter {
       }
       const metadataStamp = await this.environment.stamp(metadataPath);
       const summary = await this.transcriptSummary(transcript, transcriptStamp);
-      const owner = process.tty
+      let owner = process.tty
         ? ownerForProcess(pid, processes)
         : entrypoint.includes("vscode") ? "Cursor" : "Claude";
       const processStartToken = processInstanceToken(
         pid,
         await this.environment.processStartedAt(pid),
       );
-      const herdrTarget = kind === "interactive" && owner === "Herdr"
+      const herdrTarget = kind === "interactive" && (owner === "Herdr" || owner === "Unknown")
         ? await this.environment.herdrSurface?.(pid, sessionID, cwd) : undefined;
+      if (herdrTarget) owner = "Herdr";
       const cmuxTarget = kind === "interactive" && owner === "cmux"
         ? await this.environment.cmuxSurface?.(pid, sessionID, cwd) : undefined;
       // A background worker's tty is a private daemon PTY, not a visible

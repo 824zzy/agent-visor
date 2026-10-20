@@ -237,7 +237,6 @@ async function readLiveContext(pid: number, sessionId: string, cwd: string, syst
     if (path.basename(row.command) === "herdr") { serverPID = ancestor; break; }
     ancestor = row.parent;
   }
-  if (!serverPID) return undefined;
   const provider = path.basename(child.command) === "codex" ? "codex" : "claude_code";
   if (provider === "claude_code" && path.basename(child.command) !== "claude"
     && !/\/\.local\/share\/claude\/versions\/\d+\.\d+\.\d+$/.test(child.command)) return undefined;
@@ -249,7 +248,23 @@ async function readLiveContext(pid: number, sessionId: string, cwd: string, syst
     return values.length === 1 ? values[0]![1]?.trim() : undefined;
   };
   const socketPath = field("HERDR_SOCKET_PATH"), paneId = field("HERDR_PANE_ID");
-  if (!socketPath || !paneId) return undefined;
+  if (!socketPath || !path.isAbsolute(socketPath) || Buffer.byteLength(socketPath) > 103
+    || /[\u0000-\u001f]/.test(socketPath) || !paneId || !/^w[1-9]\d*:p[1-9]\d*$/.test(paneId)) return undefined;
+  if (!serverPID) {
+    // Live handoff preserves pane processes but reparents their shells away
+    // from the old server. Resolve the current listener, then retain the same
+    // socket/process/session validation used by normal discovery.
+    const owners = await machineWork.run(() => system.run("/usr/sbin/lsof",
+      ["-nP", "-a", "-U", "-Fp", "--", socketPath],
+      { deadlineMs: 1000, maxOutputBytes: 32 * 1024 }));
+    if (owners.status !== "success") return undefined;
+    const pids = new Set(owners.stdout.split("\n").flatMap(line => /^p\d+$/.test(line) ? [Number(line.slice(1))] : []));
+    if (pids.size !== 1) return undefined;
+    const current = [...pids][0]!;
+    const server = processes.get(current);
+    if (!server || path.basename(server.command) !== "herdr") return undefined;
+    serverPID = current;
+  }
   const configRoot = field("CLAUDE_CONFIG_DIR");
   if (configRoot && (!path.isAbsolute(configRoot) || configRoot.length > 4096 || /[\u0000-\u001f]/.test(configRoot))) return undefined;
   if (provider === "claude_code") {
