@@ -359,7 +359,7 @@ staged-setting preservation, and an archived owner-only state.
 The distributable Electron candidate is built with the release identity:
 
 ~~~bash
-AV_VERSION=2.7.0 AV_BUILD=54 scripts/package-electron.sh
+AV_VERSION=2.8.0 AV_BUILD=56 scripts/package-electron.sh
 ~~~
 
 The script writes a signed ZIP under <code>build/electron</code>, verifies the nested

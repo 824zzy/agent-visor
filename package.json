@@ -1,6 +1,6 @@
 {
   "name": "agent-visor",
-  "version": "2.7.1",
+  "version": "2.8.0",
   "private": true,
   "packageManager": "npm@11.6.2",
   "workspaces": [

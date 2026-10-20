@@ -6,6 +6,33 @@
     <description>Agent Visor updates</description>
     <language>en</language>
     <item>
+      <title>v2.8.0</title>
+      <pubDate>Tue, 20 Oct 2026 17:23:49 +0000</pubDate>
+      <sparkle:version>56</sparkle:version>
+      <sparkle:shortVersionString>2.8.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumUpdateVersion>48</sparkle:minimumUpdateVersion>
+      <description><![CDATA[<h2>v2.8.0</h2>
+<h2>Agent Visor 2.8.0</h2>
+<ul>
+<li>Support for Paseo profiles, exact cmux surface navigation, and compatible Herdr client navigation.</li>
+<li>Source and profile details in pill hover panels, plus compact Copilot credit usage.</li>
+<li>Attention-first unopened completions and notification clicks that open the original session.</li>
+<li>More accurate Claude and Codex question, permission, working, and completion states.</li>
+<li>Verified Codex CLI ownership takes priority over Desktop routing; unavailable routes fail safely.</li>
+<li>Improved multi-display menu placement and native navigation diagnostics.</li>
+</ul>
+<p>Requires macOS 14 or newer. Herdr exact navigation requires a compatible Herdr build exposing guarded client navigation and native session identity. Codex CLI routing also requires Herdr's Codex SessionStart integration and a verified current frontend binding. Existing sessions without a genuine binding may remain unavailable until a normal session start or resume supplies it; live acceptance of the current long-running CLI route is still pending. Agent Visor does not bundle or upgrade Herdr.</p>
+<p>Updates open GitHub for manual installation. Roll back with v2.7.1 build 55 if needed.</p>
+]]></description>
+      <enclosure
+        url="https://github.com/824zzy/agent-visor/releases/download/v2.8.0/AgentVisor-v2.8.0.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="f3rr7PLlmUjPkyiy5VvtcfxBS7INt/jefjKJ1qJairkmQ6gXb9cQNzxJGDJ9+0glaqhxO0Fwf7l+dcSdlML2Aw=="
+        length="122857618"
+      />
+    </item>
+    <item>
       <title>v2.7.1</title>
       <pubDate>Mon, 14 Sep 2026 21:09:56 +0000</pubDate>
       <sparkle:version>55</sparkle:version>
