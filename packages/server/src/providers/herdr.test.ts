@@ -385,8 +385,15 @@ it("rejects contradictory native conversation identity rather than routing by pa
   expect(f.requests.every(({ method }) => method === "client.target")).toBe(true);
 });
 
-it("binds live discovery to current process instances and Claude per-PID metadata", async () => {
+it.each([
+  ...["w1:p7", "w1:pA", "w1:pB", "w1:pC", "wA:p0", "w0:p11", "w11:pZ"]
+    .map(paneId => ({ paneId, allowed: true })),
+  ...["w1:pI", "wI:pC", "w1:pC:extra", "w1:pc", "w1:p", "w1/pC"]
+    .map(paneId => ({ paneId, allowed: false })),
+])("binds live discovery for $paneId to current process instances and Claude per-PID metadata (allowed: $allowed)", async ({ paneId, allowed }) => {
   const f = await fixture();
+  f.context.paneId = paneId;
+  f.target.pane_id = paneId;
   const processTable = [
     "42 20 Tue Oct 20 03:00:00 2026 /usr/local/bin/claude",
     "20 10 Tue Oct 20 03:00:00 2026 /bin/zsh",
@@ -395,14 +402,31 @@ it("binds live discovery to current process instances and Claude per-PID metadat
   const system = {
     run: async (_executable: string, args: readonly string[]) => ({ status: "success" as const, exitCode: 0, stderr: "",
       stdout: args.includes("pid=,ppid=,lstart=,comm=") ? processTable
-        : `claude TERM_PROGRAM=herdr HERDR_PANE_ID=w1:p7 HERDR_SOCKET_PATH=${f.context.socketPath}` }),
+        : `claude TERM_PROGRAM=herdr HERDR_PANE_ID=${paneId} HERDR_SOCKET_PATH=${f.context.socketPath}` }),
     readClaudeMetadata: async () => JSON.stringify({ pid: 42, sessionId, cwd: "/fixture/Codes",
       kind: "interactive", procStart: "Tue Oct 20 03:00:00 2026" }),
   };
   const live = new HerdrClient(undefined, 400, system);
-  expect(await live.resolve(42, sessionId, "/fixture/Codes")).toMatchObject({
+  const resolved = await live.resolve(42, sessionId, "/fixture/Codes");
+  if (!allowed) {
+    expect(resolved).toBeUndefined();
+    expect(f.requests).toEqual([]);
+    return;
+  }
+  expect(resolved).toMatchObject({
     pid: 42, serverPID: 10, processStartToken: f.context.processStartToken, target: f.target,
   });
+});
+
+it.each([
+  "w1:pI", "w1:pL", "w1:pO", "w1:pU", "wI:pC", "w1:pc", "w1:p", "w:pC",
+  "w1/pC", "w1:pC:extra", " w1:pC", "w1:pC\n", `w1:p${"A".repeat(128)}`,
+])("rejects malformed Herdr pane references %j before contacting the server", async (paneId) => {
+  const f = await fixture();
+  f.context.paneId = paneId;
+  f.target.pane_id = paneId;
+  expect(await f.herdr.resolve(42, sessionId, "/fixture/Codes")).toBeUndefined();
+  expect(f.requests).toEqual([]);
 });
 
 it.each([
@@ -435,10 +459,16 @@ it.each([
 });
 
 it.each([
-  { fail: false, reparented: false }, { fail: true, reparented: false },
-  { fail: false, reparented: true }, { fail: true, reparented: true },
-])("opens the codes-6e pill and acknowledges only successful navigation (native failure: $fail, reparented: $reparented)", async ({ fail, reparented }) => {
+  { fail: false, reparented: false, paneId: "w1:p7", title: "codes-6e" },
+  { fail: true, reparented: false, paneId: "w1:p7", title: "codes-6e" },
+  { fail: false, reparented: true, paneId: "w1:p7", title: "codes-6e" },
+  { fail: true, reparented: true, paneId: "w1:p7", title: "codes-6e" },
+  { fail: false, reparented: false, paneId: "w1:pC", title: "ccx-deployment-improvement" },
+  { fail: true, reparented: true, paneId: "w1:pC", title: "ccx-deployment-improvement" },
+])("opens the $title pill in $paneId and acknowledges only successful navigation (native failure: $fail, reparented: $reparented)", async ({ fail, reparented, paneId, title }) => {
   const f = await fixture();
+  f.context.paneId = paneId;
+  f.target.pane_id = paneId;
   const home = "/fixture";
   const records = JSON.stringify({ type: "assistant", timestamp: "2026-10-20T02:59:00Z",
     message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "Done" }] } }) + "\n";
@@ -453,7 +483,7 @@ it.each([
     isDirectory: async () => true,
     stamp: async () => ({ modifiedAt: now, size: 512 }),
     read: async (value: string) => value.endsWith("/sessions/42.json") ? JSON.stringify({
-      pid: 42, sessionId, cwd: "/fixture/Codes", kind: "interactive", status: "idle", name: "codes-6e",
+      pid: 42, sessionId, cwd: "/fixture/Codes", kind: "interactive", status: "idle", name: title,
     }) : undefined,
     readHeadTail: async () => ({ head: records, tail: records }),
     scanLinePrefixes: async () => 0, sqlite: async () => [],
@@ -464,13 +494,15 @@ it.each([
   Object.assign(helper, { ghosttyBindingStatus: async () => true,
     resolveGhosttyBinding: async (nonce: string) => ({ applicationPID: 900, processStartToken: processInstanceToken(900, now)!,
       windowId: "window-seven", tabId: "tab-client", terminalId: "outer-client", nonce }),
-    focusGhosttyBinding: async () => { if (fail) throw new Error("Fixture native focus failed"); focused.push("outer-client"); } });
+    focusGhosttyBinding: async (binding: { terminalId: string }) => {
+      if (fail) throw new Error("Fixture native focus failed"); focused.push(binding.terminalId);
+    } });
   const repository = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
   repository.setControls(new NativeSessionControls(helper, undefined, undefined, undefined, undefined,
     undefined, undefined, undefined, undefined, (target, isCurrent) => f.herdr.focus(target, helper, isCurrent)));
   await repository.refresh();
   expect(repository.current().sessions).toMatchObject([{ id: sessionId, owner: "Herdr", canOpenOwner: true, completionUnseen: true }]);
-  expect(menuPresentation(repository.current(), [], now.valueOf()).pills).toMatchObject([{ id: sessionId, title: "codes-6e" }]);
+  expect(menuPresentation(repository.current(), [], now.valueOf()).pills).toMatchObject([{ id: sessionId, title }]);
   const effects: unknown[] = [];
   await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId }, repository, effect => effects.push(effect));
   expect(focused).toEqual(fail ? [] : ["outer-client"]);
@@ -479,6 +511,8 @@ it.each([
     expect(repository.current().sessions[0]?.completionUnseen).toBe(true);
   } else {
     expect(effects).toEqual([]);
+    expect(f.client.pane_id).toBe(paneId);
+    expect(f.client.terminal_id).toBe("terminal-seven");
     expect(repository.current().sessions[0]?.completionUnseen).toBeUndefined();
   }
   expect(f.client.binding?.state).toBe("released");

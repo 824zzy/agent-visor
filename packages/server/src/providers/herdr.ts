@@ -33,6 +33,10 @@ const bounded = (value: unknown): value is string => typeof value === "string"
 const positive = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) > 0;
 const revision = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
 const uuid = (value: string) => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
+// Herdr's public numbers use this alphabet (10 is A, 32 is 0), not decimal.
+const publicNumberPattern = "[123456789ABCDEFGHJKMNPQRSTVWXYZ0]+";
+const paneIdPattern = new RegExp(`^w${publicNumberPattern}:p${publicNumberPattern}$`);
+const validPaneId = (value: string) => bounded(value) && paneIdPattern.test(value);
 function processInstance(value: unknown): value is ProcessInstance {
   return isRecord(value) && positive(value.pid) && value.pid <= 2_147_483_647 && positive(value.start);
 }
@@ -47,7 +51,7 @@ function contextValid(value: HerdrProcessContext): boolean {
       && isVerifiableProcessInstanceToken(value.codexWrapper.pid, value.codexWrapper.processStartToken)))
     && uuid(value.sessionId) && path.isAbsolute(value.cwd) && value.cwd.length <= 4096
     && path.isAbsolute(value.socketPath) && Buffer.byteLength(value.socketPath) <= 103
-    && /^w[1-9]\d*:p[1-9]\d*$/.test(value.paneId)
+    && validPaneId(value.paneId)
     && !/[\u0000-\u001f]/.test(value.cwd + value.socketPath);
 }
 
@@ -425,7 +429,7 @@ async function readLiveContext(pid: number, sessionId: string, cwd: string, syst
   };
   const socketPath = field("HERDR_SOCKET_PATH"), paneId = field("HERDR_PANE_ID");
   if (!socketPath || !path.isAbsolute(socketPath) || Buffer.byteLength(socketPath) > 103
-    || /[\u0000-\u001f]/.test(socketPath) || !paneId || !/^w[1-9]\d*:p[1-9]\d*$/.test(paneId)) return undefined;
+    || /[\u0000-\u001f]/.test(socketPath) || !paneId || !validPaneId(paneId)) return undefined;
   if (!serverPID) {
     // Live handoff preserves pane processes but reparents their shells away
     // from the old server. Resolve the current listener, then retain the same
