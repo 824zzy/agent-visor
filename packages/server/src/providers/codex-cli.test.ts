@@ -292,3 +292,34 @@ it("does not authorize a CLI route from generic JSON after the secure observer r
   await repository.refresh();
   expect(repository.chatRecord(first)?.controlTarget).toBeUndefined();
 });
+
+class ExplicitlyUnsupportedModernEnvironment extends Environment {
+  override readonly readCodexTuiBinding = async () => undefined;
+  override readonly codexTuiTransportCapability = async () => "unsupported" as const;
+}
+
+class UnknownModernEnvironment extends Environment {
+  override readonly readCodexTuiBinding = async () => undefined;
+}
+
+it("keeps the exact legacy CLI route when modern transport absence is explicitly proven", async () => {
+  const environment = new ExplicitlyUnsupportedModernEnvironment();
+  const provider = new CodexProvider(environment);
+  provider.noteHook({ provider: "codex", sessionId: first, cwd, pid: 42, tty: "ttys001",
+    event: "SessionStart", status: "idle", receivedAt: now.toISOString() });
+  const repository = new SessionRepository([provider], { now: () => now });
+  await repository.refresh();
+  expect(repository.chatRecord(first)?.controlTarget).toMatchObject({
+    kind: "terminal", target: { pid: 42, cwd },
+  });
+});
+
+it("does not fall back to a legacy observer when modern transport probing is unknown", async () => {
+  const environment = new UnknownModernEnvironment();
+  const provider = new CodexProvider(environment);
+  provider.noteHook({ provider: "codex", sessionId: first, cwd, pid: 42, tty: "ttys001",
+    event: "SessionStart", status: "idle", receivedAt: now.toISOString() });
+  const repository = new SessionRepository([provider], { now: () => now });
+  await repository.refresh();
+  expect(repository.chatRecord(first)?.controlTarget).toBeUndefined();
+});
