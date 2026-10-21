@@ -402,13 +402,14 @@ public struct NativeHelperGhosttyResumeTarget: Codable, Equatable {
     }
 
     public var isValid: Bool {
-        provider == "claude_code"
+        (provider == "claude_code" || provider == "codex_cli")
             && validOpaque(attemptId, maximum: 128)
-            && sessionId.range(of: "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", options: .regularExpression) != nil
+            && sessionId.range(of: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", options: [.regularExpression, .caseInsensitive]) != nil
             && absolutePath(cwd, maximum: 4_096)
             && absolutePath(executable, maximum: 4_096)
             && (configRoot.map { absolutePath($0, maximum: 4_096) } ?? true)
             && (settingsFile.map { absolutePath($0, maximum: 4_096) } ?? true)
+            && (provider != "codex_cli" || (configRoot != nil && settingsFile == nil && settingSources == nil))
             && (settingSources?.count ?? 0) <= 3
             && (settingSources ?? []).allSatisfy { ["user", "project", "local"].contains($0) }
             && (profileRef.map { $0.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", options: .regularExpression) != nil } ?? true)
@@ -454,9 +455,9 @@ public struct NativeHelperGhosttyResumeDispatch: Codable, Equatable {
     }
 
     public var isValid: Bool {
-        provider == "claude_code"
+        (provider == "claude_code" || provider == "codex_cli")
             && validOpaque(attemptId, maximum: 128)
-            && sessionId.range(of: "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", options: .regularExpression) != nil
+            && sessionId.range(of: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", options: [.regularExpression, .caseInsensitive]) != nil
             && applicationPID > 0
             && validOpaque(processStartToken, maximum: 256)
             && validOpaque(windowId, maximum: 128)

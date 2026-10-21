@@ -290,7 +290,7 @@ export class FakeNativeHelper implements NativeHelperAdapter {
     this.ghosttyResumeRequests.push(structuredClone(target));
     const dispatch = structuredClone(this.ghosttyResumeDispatch ?? {
       attemptId: target.attemptId,
-      provider: "claude_code" as const,
+      provider: target.provider,
       sessionId: target.sessionId,
       applicationPID: 40_001,
       processStartToken: "fixture-ghostty-resume-process",

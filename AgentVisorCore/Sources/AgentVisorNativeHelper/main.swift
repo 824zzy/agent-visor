@@ -301,17 +301,18 @@ private func response(
             do {
                 return .ghosttyResumeDispatched(id: id, dispatch: try ghosttyResume.open(target))
             } catch let error as NativeGhosttyResumeError {
+                let providerName = target.provider == "codex_cli" ? "Codex" : "Claude"
                 switch error {
                 case .invalidTarget:
-                    return .error(id: id, code: .invalidRequest, message: "The Claude resume target is invalid.")
+                    return .error(id: id, code: .invalidRequest, message: "The \(providerName) resume target is invalid.")
                 case .permissionDenied:
                     return .error(id: id, code: .failed, message: "Ghostty Automation permission is unavailable.", reason: "activation_failed")
                 case .unavailable:
                     return .error(id: id, code: .failed, message: "The existing Ghostty process is unavailable.", reason: "surface_unavailable")
                 case .executableMismatch:
-                    return .error(id: id, code: .failed, message: "The recorded Claude executable identity changed.", reason: "executable_mismatch")
+                    return .error(id: id, code: .failed, message: "The recorded \(providerName) executable identity changed.", reason: "executable_mismatch")
                 case .profileUnavailable:
-                    return .error(id: id, code: .failed, message: "The recorded Claude profile is unavailable.", reason: "profile_unavailable")
+                    return .error(id: id, code: .failed, message: "The recorded \(providerName) profile is unavailable.", reason: "profile_unavailable")
                 case .creationUncertain, .applicationChanged:
                     return .error(id: id, code: .failed, message: "Ghostty resume creation has an uncertain outcome.", reason: "native_creation_uncertain")
                 case .malformedResponse, .surfaceUnavailable:

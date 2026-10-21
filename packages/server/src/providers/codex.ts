@@ -11,6 +11,9 @@ import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
 import { CodexTranscriptReader } from "./codex-lifecycle.js";
 import { type CodexCliObservation } from "./codex-cli-observer.js";
 import type { HerdrSurfaceTarget } from "./herdr.js";
+import type { RetainedHistoryRecord, RetainedHistoryResumeCapability } from "../retained-history.js";
+import type { ResumeLiveness, ResumeProviderAdapter, ResumeReconciliation, ResumeTargetResult } from "../resume.js";
+import { CodexResumeAdapter } from "./codex-resume.js";
 import {
   canonicalCodexHome, codexDesktopBindings, codexInstanceID, codexSessionID,
   codexThreadReference, isCodexDesktop, type CodexHome, type CodexInstance,
@@ -54,7 +57,8 @@ limit 1`;
 const codexSettingsCatalogTtlMs = 60_000;
 const maxSettingsCatalogCWDs = 64;
 type CliBinding = { cwd: string; owner: string; terminal?: NativeHelperTerminalTarget;
-  herdr?: HerdrSurfaceTarget; sessionFile?: string; observed?: boolean; proven?: boolean };
+  herdr?: HerdrSurfaceTarget; sessionFile?: string; observed?: boolean; proven?: boolean;
+  resume?: RetainedHistoryResumeCapability };
 
 export class CodexProvider implements ProviderAdapter {
   readonly id = "codex" as const;
@@ -69,13 +73,47 @@ export class CodexProvider implements ProviderAdapter {
   /** Explicit observer/host identity only; never a cached control capability. */
   private readonly cliOrigins = new Map<string, { cwd: string; sessionFile?: string }>();
   private retainedHistoryOriginLookup?: RetainedHistoryOriginLookup;
+  private lastDiscoveryAuthority: "authoritative" | "unavailable" = "authoritative";
+  private readonly resumeAdapter: CodexResumeAdapter;
 
   constructor(
     private readonly environment: ProviderEnvironment,
     private readonly configuredHomes: () => CodexHome[] = () => [],
     private readonly saveDiscoveredHome?: (home: CodexHome) => Promise<void>,
     private readonly ignoredHomes: () => string[] = () => [],
-  ) {}
+  ) {
+    this.resumeAdapter = new CodexResumeAdapter(
+      environment,
+      () => this.discoverFreshForResume(),
+      () => this.lastDiscoveryAuthority,
+    );
+  }
+
+  private async discoverFreshForResume(): Promise<DiscoveredProviderSession[] | undefined> {
+    const inventory = this.environment.processesFreshInventory
+      ? await this.environment.processesFreshInventory()
+      : undefined;
+    if (!inventory || inventory.state !== "authoritative") {
+      this.lastDiscoveryAuthority = "unavailable";
+      return undefined;
+    }
+    return this.discover(inventory.processes);
+  }
+
+  resumeLiveness(record: RetainedHistoryRecord): Promise<ResumeLiveness> {
+    return this.resumeAdapter.resumeLiveness(record);
+  }
+
+  resumeTarget(record: RetainedHistoryRecord, attemptId: string, nonce: string): ResumeTargetResult {
+    return this.resumeAdapter.resumeTarget(record, attemptId, nonce);
+  }
+
+  reconcileResume(
+    record: RetainedHistoryRecord,
+    dispatch: import("@agent-visor/protocol").NativeHelperGhosttyResumeDispatch,
+  ): Promise<ResumeReconciliation> {
+    return this.resumeAdapter.reconcileResume(record, dispatch);
+  }
 
   noteHook(event: HookSessionEvent): void {
     if (event.provider !== this.id || !event.pid || !event.tty || !Number.isFinite(Date.parse(event.receivedAt))) return;
@@ -90,7 +128,6 @@ export class CodexProvider implements ProviderAdapter {
 
   private async cliBindings(instance: CodexInstance, processes: ProcessRecord[]): Promise<Map<string, CliBinding[]>> {
     const bindings = new Map<string, CliBinding[]>();
-    if (instance.id !== "native") return bindings;
     const observations = new Map<number, CodexCliObservation>();
     const directory = path.join(instance.path, "agent-visor", "cli");
     for (const file of (await this.environment.directory(directory)).filter(file => /^\d+\.json$/.test(file)).slice(0, 512)) {
@@ -107,9 +144,27 @@ export class CodexProvider implements ProviderAdapter {
     for (const process of live) {
       const cwd = await this.environment.cwd(process.pid);
       if (!cwd) continue;
+      const started = await this.environment.processStartedAt(process.pid);
+      const processStartToken = process.processStartToken
+        ?? (started ? processInstanceToken(process.pid, started) : undefined);
+      const processWithToken = processStartToken ? { ...process, processStartToken } : process;
+      const resume = await this.codexResumeCapability(processWithToken, instance.path);
       const herdr = await this.environment.herdrCodexSurface?.(process.pid, cwd, instance.path);
       if (herdr?.provider === "codex" && herdr.pid === process.pid && herdr.cwd === cwd) {
-        add(herdr.sessionId, { cwd, owner: "Herdr", herdr, observed: true, proven: true }); continue;
+        add(herdr.sessionId, { cwd, owner: "Herdr", herdr, observed: true, proven: true,
+          ...(resume ? { resume } : {}) }); continue;
+      }
+      // A modern Codex server is its own identity boundary. If its exact
+      // thread/client inventory is unavailable or ambiguous, do not downgrade
+      // to the legacy hook/observer record or Desktop catalog.
+      if (this.environment.readCodexTuiBinding) {
+        const modern = await this.environment.readCodexTuiBinding(process.pid, instance.path).catch(() => undefined);
+        if (modern?.sessionIds.length === 1 && modern.inventory) {
+          add(modern.sessionIds[0]!, { cwd, owner: "Codex CLI", observed: true, proven: true,
+            ...(resume ? { resume } : {}),
+            terminal: terminalTargetForProcess(processWithToken, cwd, processes, processStartToken) });
+        }
+        continue;
       }
       const hook = this.cliHookByPID.get(process.pid);
       const observation = observations.get(process.pid);
@@ -117,16 +172,16 @@ export class CodexProvider implements ProviderAdapter {
       const identity = useObservation ? observation : hook;
       if (!identity || identity.tty?.replace(/^\/dev\//, "") !== process.tty) continue;
       if (this.environment.codexProcessHome && await this.environment.codexProcessHome(process.pid) !== instance.path) continue;
-      const started = await this.environment.processStartedAt(process.pid);
       if (!started || started.valueOf() > Date.parse(useObservation ? observation.observedAt : hook!.receivedAt)
         || (useObservation && (observation.ended
-          || observation.processStartToken !== processInstanceToken(process.pid, started)))) continue;
+          || observation.processStartToken !== processStartToken))) continue;
       const owner = ownerForProcess(process.pid, processes);
       const exactHerdr = owner === "Herdr"
         ? await this.environment.herdrSurface?.(process.pid, identity.sessionId, cwd) : undefined;
       add(identity.sessionId, { cwd, owner, sessionFile: identity.sessionFile, observed: true, proven: true,
         ...(exactHerdr ? { herdr: exactHerdr } : {}),
-        terminal: terminalTargetForProcess(process, cwd, processes, processInstanceToken(process.pid, started)) });
+        ...(resume ? { resume } : {}),
+        terminal: terminalTargetForProcess(processWithToken, cwd, processes, processStartToken) });
     }
     // Remember explicit CLI provenance even when its process/host route is now
     // unavailable. An old Desktop transcript must not silently take it over.
@@ -151,6 +206,33 @@ export class CodexProvider implements ProviderAdapter {
     return bindings;
   }
 
+  private async codexResumeCapability(
+    process: ProcessRecord,
+    configRoot: string,
+  ): Promise<RetainedHistoryResumeCapability | undefined> {
+    const token = process.processStartToken;
+    if (!token || !this.environment.processProvenance) return undefined;
+    const proof = await this.environment.processProvenance(process.pid, "codex_cli", token).catch(() => undefined);
+    if (!proof || proof.state !== "available") return undefined;
+    const value = proof.value;
+    if (value.argvState !== "complete" || value.pid !== process.pid
+      || value.processStartToken !== token || value.profileState === "unknown"
+      || value.configRootRef !== configRoot || value.settingsFileRef !== undefined
+      || value.settingSources !== undefined) return undefined;
+    return {
+      version: 1,
+      provider: "codex_cli",
+      host: "Ghostty",
+      executableRef: value.executableRef,
+      ...(value.executableVersion ? { executableVersion: value.executableVersion } : {}),
+      configRootRef: configRoot,
+      ...(value.profileRef ? { profileRef: value.profileRef } : {}),
+      profileState: value.profileState,
+      overrideNames: [...value.overrideNames],
+      provenanceObservedAt: value.observedAt,
+    };
+  }
+
   setRetainedHistoryOriginLookup(lookup: RetainedHistoryOriginLookup): void {
     this.retainedHistoryOriginLookup = lookup;
   }
@@ -165,7 +247,7 @@ export class CodexProvider implements ProviderAdapter {
     const binding = matches.length === 1 ? matches[0] : undefined;
     return this.session(instance, thread, titles,
       binding?.owner ?? (candidates.length ? "Codex CLI" : instance.label), modelCatalog, binding?.terminal, binding?.herdr,
-      binding?.observed === true, binding?.proven === true, instance.path);
+      binding?.observed === true, binding?.proven === true, instance.path, binding?.resume);
   }
 
   private async instances(): Promise<CodexInstance[]> {
@@ -199,19 +281,21 @@ export class CodexProvider implements ProviderAdapter {
     return homes;
   }
 
-  async discover(): Promise<DiscoveredProviderSession[]> {
+  async discover(processOverride?: ProcessRecord[]): Promise<DiscoveredProviderSession[]> {
+    let authority: "authoritative" | "unavailable" = "authoritative";
     const instances = await this.instances();
     const results: DiscoveredProviderSession[] = [];
     const retained: string[] = [];
     const automationCutoff = Math.floor(
       (this.environment.now().valueOf() - this.environment.observedWindowMs) / 1_000,
     );
-    const processes = await this.environment.processes();
+    const processes = processOverride ?? await this.environment.processes();
     for (const instance of instances) {
       let found: DiscoveredProviderSession[] = [];
       try {
         const database = await codexDatabase(this.environment, instance.path);
         if (!database) {
+          authority = "unavailable";
           this.lastSessionsByInstance.delete(instance.id);
           continue;
         }
@@ -238,6 +322,7 @@ export class CodexProvider implements ProviderAdapter {
         }
         this.lastSessionsByInstance.set(instance.id, found);
       } catch {
+        authority = "unavailable";
         // One unreadable home must not hide the others. Keep its last good
         // read, the same way the repository keeps a failed provider's.
         found = this.lastSessionsByInstance.get(instance.id) ?? [];
@@ -247,6 +332,7 @@ export class CodexProvider implements ProviderAdapter {
     }
     // A successful empty catalog is authoritative after every configured home was read.
     this.transcriptReader.retain(retained);
+    this.lastDiscoveryAuthority = authority;
     return results;
   }
 
@@ -307,8 +393,12 @@ export class CodexProvider implements ProviderAdapter {
     cliObserved = false,
     cliProven = false,
     configHome?: string,
+    resume?: RetainedHistoryResumeCapability,
   ): Promise<DiscoveredProviderSession> {
     const sessionID = codexSessionID(instance.id, thread.id);
+    // Keep the public native UUID separate from the durable home-qualified
+    // identity. Custom homes already carry their hash in `sessionID`; native
+    // history retains the explicit `native` home discriminator for old rows.
     const canonicalSessionID = `codex:${instance.id}:${thread.id}`;
     const retainedOrigin = this.retainedHistoryOriginLookup?.("codex", sessionID);
     const durableCliOrigin = retainedOrigin?.provider === "codex";
@@ -418,6 +508,7 @@ export class CodexProvider implements ProviderAdapter {
           ...(herdrTarget ? { host: "Herdr" as const } : {}),
           ...(retainedOrigin?.host && !terminalTarget && !herdrTarget ? { host: retainedOrigin.host } : {}),
           ...(retainedOrigin?.configHome ? { configHome: retainedOrigin.configHome } : configHome ? { configHome } : {}),
+          ...(resume ? { resume } : {}),
         },
       } : {}),
     };

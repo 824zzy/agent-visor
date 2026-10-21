@@ -60,6 +60,19 @@ public final class NativeGhosttyResumeController {
               homeDirectory.hasPrefix("/") else {
             throw NativeGhosttyResumeError.invalidTarget
         }
+        if target.provider == "codex_cli" {
+            guard let configRoot = target.configRoot, isDirectory(configRoot),
+                  URL(fileURLWithPath: configRoot).resolvingSymlinksInPath().path == configRoot,
+                  target.settingsFile == nil, target.settingSources == nil,
+                  target.profileState == "verified_absent" || target.profileRef != nil else {
+                throw NativeGhosttyResumeError.invalidTarget
+            }
+            if target.profileState == "present",
+               let profile = target.profileRef,
+               !isRegularFile((configRoot as NSString).appendingPathComponent("\(profile).config.toml")) {
+                throw NativeGhosttyResumeError.profileUnavailable
+            }
+        }
         guard permission() else { throw NativeGhosttyResumeError.permissionDenied }
         let application: NativeGhosttyTerminalController.ApplicationIdentity
         if let existing = resolveApplication() {
@@ -74,7 +87,10 @@ public final class NativeGhosttyResumeController {
             application = launched
         }
 
-        guard let output = execute(ClaudeGhosttyResumeScript.make(target: target, homeDirectory: homeDirectory)) else {
+        let script = target.provider == "codex_cli"
+            ? CodexGhosttyResumeScript.make(target: target, homeDirectory: homeDirectory)
+            : ClaudeGhosttyResumeScript.make(target: target, homeDirectory: homeDirectory)
+        guard let output = execute(script) else {
             // The script may have created a surface before the bounded helper
             // read timed out. Never retry this attempt from an uncertain call.
             throw NativeGhosttyResumeError.creationUncertain

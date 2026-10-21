@@ -7,6 +7,7 @@ import type {
   NativeHelperTerminalTarget,
 } from "@agent-visor/protocol";
 import type {
+  RetainedHistoryClaudeResumeCapability,
   RetainedHistoryRecord,
   RetainedHistoryResumeCapability,
 } from "../retained-history.js";
@@ -27,6 +28,7 @@ const pathLimit = 4_096;
 /** Claude-specific strategy. It owns only resume validation and reconciliation. */
 export class ClaudeResumeAdapter implements ResumeProviderAdapter {
   readonly id = "claude_code" as const;
+  readonly nativeProvider = "claude_code" as const;
 
   constructor(
     private readonly environment: ProviderEnvironment,
@@ -46,7 +48,10 @@ export class ClaudeResumeAdapter implements ResumeProviderAdapter {
     const live = discovered.find((session) => session.provider === "claude_code"
       && (session.id === record.id || session.id === record.canonicalId || record.aliases?.includes(session.id))
       && session.conversationState === "open"
-      && session.controlTarget !== undefined);
+      && record.host === "Ghostty"
+      && session.controlTarget?.kind === "terminal"
+      && session.controlTarget.target.application === "Ghostty"
+      && sameResumeProvenance(record.resume, session));
     if (live) return { state: "live", session: live };
     if (await hasPossibleOwner(record, inventory.processes, this.environment)) {
       return { state: "unknown", reason: "A Claude process may still own this conversation." };
@@ -56,10 +61,17 @@ export class ClaudeResumeAdapter implements ResumeProviderAdapter {
 
   resumeTarget(record: RetainedHistoryRecord, attemptId: string, nonce: string): ResumeTargetResult {
     if (record.provider !== "claude_code") return { state: "unavailable", reason: "This provider is not supported for Ghostty resume." };
+    if (record.host !== "Ghostty") return { state: "unavailable", reason: "This Claude session was not observed in a supported Ghostty host." };
     if (!fullSessionID.test(record.canonicalId)) return { state: "unavailable", reason: "The full Claude conversation ID is unavailable." };
     if (!isDirectory(record.cwd)) return { state: "unavailable", reason: "The original working directory is unavailable." };
     if (!record.resume) return { state: "unavailable", reason: "Claude launch provenance is unavailable for this row." };
     const capability = record.resume;
+    if (capability.provider !== "claude_code") {
+      return { state: "unavailable", reason: "Claude launch provenance is unavailable for this row." };
+    }
+    if (record.configHome !== undefined && record.configHome !== capability.configRootRef) {
+      return { state: "unavailable", reason: "The recorded Claude configuration identity changed." };
+    }
     const reason = validateCapability(capability, record.cwd);
     if (reason) return { state: "unavailable", reason };
     const transcriptReason = validateTranscriptPath(record, capability, this.environment.home);
@@ -84,7 +96,7 @@ export class ClaudeResumeAdapter implements ResumeProviderAdapter {
     record: RetainedHistoryRecord,
     dispatch: NativeHelperGhosttyResumeDispatch,
   ): Promise<ResumeReconciliation> {
-    if (dispatch.provider !== "claude_code" || dispatch.sessionId !== record.canonicalId) {
+    if (dispatch.provider !== "claude_code" || dispatch.sessionId !== record.canonicalId || record.host !== "Ghostty") {
       return { state: "unknown", reason: "The native resume receipt does not identify the retained conversation." };
     }
     const discovered = await this.discoverFresh().catch(() => undefined);
@@ -139,7 +151,7 @@ export class ClaudeResumeAdapter implements ResumeProviderAdapter {
 }
 
 function validateCapability(
-  capability: RetainedHistoryResumeCapability,
+  capability: RetainedHistoryClaudeResumeCapability,
   cwd: string,
 ): string | undefined {
   if (capability.host !== "Ghostty") return "This Claude session was not observed in a supported Ghostty host.";
@@ -195,7 +207,7 @@ function sameResumeProvenance(
   expected: RetainedHistoryResumeCapability | undefined,
   session: DiscoveredProviderSession,
 ): boolean {
-  if (!expected) return false;
+  if (!expected || expected.provider !== "claude_code") return false;
   const observed = session.historyIdentity?.resume;
   if (!observed) return false;
   return observed.provider === expected.provider
@@ -214,7 +226,7 @@ function sameProcessProvenance(
   expected: RetainedHistoryResumeCapability | undefined,
   observed: ProcessProvenance,
 ): boolean {
-  if (!expected || observed.argvState !== "complete") return false;
+  if (!expected || expected.provider !== "claude_code" || observed.argvState !== "complete") return false;
   return observed.executableRef === expected.executableRef
     && observed.executableVersion === expected.executableVersion
     && observed.configRootRef === expected.configRootRef
@@ -226,7 +238,7 @@ function sameProcessProvenance(
 }
 
 function normalizedSettingSources(
-  value: Pick<RetainedHistoryResumeCapability, "settingsFileRef" | "settingSources">,
+  value: Pick<RetainedHistoryClaudeResumeCapability, "settingsFileRef" | "settingSources">,
 ): Array<"user" | "project" | "local"> {
   return value.settingSources ?? (value.settingsFileRef ? ["user", "project", "local"] : []);
 }
