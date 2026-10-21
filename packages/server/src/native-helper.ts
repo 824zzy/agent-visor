@@ -14,6 +14,10 @@ import {
   type NativeHelperFocusTarget,
   type NativeHelperCodexThreadTarget,
   type NativeHelperClaudeAttachTarget,
+  type NativeHelperGhosttyResumeDispatch,
+  type NativeHelperGhosttyResumeTarget,
+  type NativeHelperProcessProvenanceResult,
+  type NativeHelperProcessProvenanceTarget,
   type NativeHelperNotification,
   type NativeHelperNotificationPermission,
   type NativeHelperPiRestorationCandidate,
@@ -64,6 +68,8 @@ export interface NativeHelperAdapter {
   openCodexThread(target: NativeHelperCodexThreadTarget): Promise<void>;
   /** Attach to a Claude background job in a new window of the running terminal. */
   openClaudeAttach(target: NativeHelperClaudeAttachTarget): Promise<void>;
+  openGhosttyResume(target: NativeHelperGhosttyResumeTarget): Promise<NativeHelperGhosttyResumeDispatch>;
+  readProcessProvenance(target: NativeHelperProcessProvenanceTarget): Promise<NativeHelperProcessProvenanceResult>;
   focusTerminal(target: NativeHelperTerminalTarget, conversationOnly?: boolean): Promise<void>;
   sendTerminal(target: NativeHelperTerminalTarget, text: string, submit: boolean): Promise<void>;
   cancelTerminal(target: NativeHelperTerminalTarget): Promise<void>;
@@ -152,6 +158,11 @@ export class FakeNativeHelper implements NativeHelperAdapter {
   readonly focusRequests: NativeHelperFocusTarget[] = [];
   readonly codexThreadRequests: NativeHelperCodexThreadTarget[] = [];
   readonly claudeAttachRequests: NativeHelperClaudeAttachTarget[] = [];
+  readonly ghosttyResumeRequests: NativeHelperGhosttyResumeTarget[] = [];
+  readonly ghosttyResumeDispatches: NativeHelperGhosttyResumeDispatch[] = [];
+  ghosttyResumeDispatch?: NativeHelperGhosttyResumeDispatch;
+  ghosttyResumeError?: Error;
+  processProvenanceResult?: NativeHelperProcessProvenanceResult;
   readonly terminalFocusRequests: NativeHelperTerminalTarget[] = [];
   readonly terminalSendRequests: Array<{ target: NativeHelperTerminalTarget; text: string; submit: boolean }> = [];
   readonly terminalCancelRequests: NativeHelperTerminalTarget[] = [];
@@ -274,6 +285,30 @@ export class FakeNativeHelper implements NativeHelperAdapter {
     this.claudeAttachRequests.push(structuredClone(target));
   }
 
+  async openGhosttyResume(target: NativeHelperGhosttyResumeTarget): Promise<NativeHelperGhosttyResumeDispatch> {
+    if (this.ghosttyResumeError) throw this.ghosttyResumeError;
+    this.ghosttyResumeRequests.push(structuredClone(target));
+    const dispatch = structuredClone(this.ghosttyResumeDispatch ?? {
+      attemptId: target.attemptId,
+      provider: "claude_code" as const,
+      sessionId: target.sessionId,
+      applicationPID: 40_001,
+      processStartToken: "fixture-ghostty-resume-process",
+      windowId: "fixture-window",
+      tabId: "fixture-tab",
+      terminalId: "fixture-terminal",
+      nonce: target.nonce,
+      dispatchedAt: new Date().toISOString(),
+    });
+    this.ghosttyResumeDispatches.push(structuredClone(dispatch));
+    return dispatch;
+  }
+
+  async readProcessProvenance(_target: NativeHelperProcessProvenanceTarget): Promise<NativeHelperProcessProvenanceResult> {
+    if (this.processProvenanceResult) return structuredClone(this.processProvenanceResult);
+    throw new Error("The fixture native helper has no process provenance.");
+  }
+
   async focusTerminal(target: NativeHelperTerminalTarget, conversationOnly?: boolean): Promise<void> {
     this.terminalFocusRequests.push(structuredClone(target));
     this.terminalFocusPolicies.push(conversationOnly);
@@ -306,6 +341,12 @@ export class UnavailableNativeHelper implements NativeHelperAdapter {
   async focus(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async openCodexThread(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async openClaudeAttach(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
+  async openGhosttyResume(): Promise<NativeHelperGhosttyResumeDispatch> {
+    throw new Error("The signed native helper is unavailable.");
+  }
+  async readProcessProvenance(): Promise<NativeHelperProcessProvenanceResult> {
+    throw new Error("The signed native helper is unavailable.");
+  }
   async focusTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async sendTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
   async cancelTerminal(): Promise<void> { throw new Error("The signed native helper is unavailable."); }
@@ -462,6 +503,24 @@ export class NativeHelperProcess implements NativeHelperAdapter {
 
   async openClaudeAttach(target: NativeHelperClaudeAttachTarget): Promise<void> {
     await this.accepted("open_claude_attach", { target });
+  }
+
+  async openGhosttyResume(target: NativeHelperGhosttyResumeTarget): Promise<NativeHelperGhosttyResumeDispatch> {
+    const response = await this.request("open_ghostty_resume", { target });
+    if (response.result.type !== "ghostty_resume_dispatched") {
+      throw new Error("Unexpected helper response.");
+    }
+    return response.result.dispatch;
+  }
+
+  async readProcessProvenance(target: NativeHelperProcessProvenanceTarget): Promise<NativeHelperProcessProvenanceResult> {
+    const response = await this.request("read_process_provenance", { target });
+    if (response.result.type !== "process_provenance") {
+      throw new Error("Unexpected helper response.");
+    }
+    return response.result.state === "available"
+      ? { state: "available", value: response.result.value }
+      : { state: "unavailable", reason: response.result.reason };
   }
 
   async ghosttyTerminalViews(conversationTitles?: readonly string[]): Promise<NativeHelperGhosttyTerminalView[]> {

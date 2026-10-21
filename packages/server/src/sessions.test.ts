@@ -18,6 +18,7 @@ import { processInstanceToken } from "./providers/shared.js";
 import { FakeNativeHelper } from "./native-helper.js";
 import { NativeSessionControls } from "./session-controls.js";
 import type { CodexRouteEvent } from "./codex-turn.js";
+import type { RetainedHistoryResumeCapability } from "./retained-history.js";
 
 const live: DiscoveredProviderSession = {
   id: "pi-1",
@@ -65,6 +66,202 @@ class FakeProvider implements ProviderAdapter {
 }
 
 describe("SessionRepository", () => {
+  it("resumes an eligible closed Claude row through one exact Ghostty dispatch", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-claude-resume-red-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const transcriptPath = path.join(directory, "claude-resume-red.jsonl");
+    const sessionID = "11111111-1111-4111-8111-111111111111";
+    writeFileSync(transcriptPath, `${JSON.stringify({
+      type: "user",
+      uuid: "resume-red-user",
+      timestamp: "2026-10-21T18:00:00.000Z",
+      message: { role: "user", content: "Resume this exact conversation" },
+    })}\n`);
+    let open = true;
+    const observed: DiscoveredProviderSession = {
+      id: sessionID,
+      provider: "claude_code",
+      title: "Resume this exact conversation",
+      subtitle: "Ready to continue",
+      project: "agent-visor",
+      cwd: directory,
+      owner: "Ghostty",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: true,
+      chatPath: transcriptPath,
+      historyIdentity: { verified: true, host: "Ghostty", canonicalId: sessionID },
+      controlTarget: {
+        kind: "terminal",
+        target: {
+          application: "Ghostty",
+          pid: 4001,
+          processStartToken: "live-resume-red",
+          tty: "ttys401",
+          cwd: directory,
+        },
+      },
+    };
+    const provider: ProviderAdapter = {
+      id: "claude_code",
+      discover: async () => open ? [structuredClone(observed)] : [],
+      resumeLiveness: async () => ({ state: "stopped" }),
+      resumeTarget: (_record: unknown, attemptId: string, nonce: string) => ({
+        // The production adapter binds both correlation values into the
+        // typed target before native dispatch; the tracer keeps that seam
+        // explicit while the later provider test supplies real provenance.
+        state: "eligible",
+        target: {
+          attemptId,
+          provider: "claude_code",
+          sessionId: sessionID,
+          cwd: directory,
+          executable: "/Users/me/.local/bin/claude",
+          profileState: "verified_absent",
+          nonce,
+        },
+      }),
+      reconcileResume: async () => ({
+        state: "matched",
+        sessionId: sessionID,
+        terminal: {
+          applicationPID: 40_001,
+          processStartToken: "fixture-ghostty-resume-process",
+          terminalId: "fixture-terminal",
+          title: "Resume this exact conversation",
+          cwd: directory,
+          viewMode: "conversation",
+        },
+      }),
+    } as ProviderAdapter & Record<string, unknown>;
+    const repository = new SessionRepository([provider], { retainedHistoryPath: historyPath });
+    const helper = new FakeNativeHelper();
+    repository.setControls(new NativeSessionControls(helper));
+    try {
+      await repository.refresh();
+      open = false;
+      await repository.refresh();
+      const result = await (repository as unknown as {
+        resumeSession(id: string): Promise<{ state: string; sessionId?: string }>;
+      }).resumeSession(sessionID);
+      expect(result).toMatchObject({ state: "matched", sessionId: sessionID });
+      expect((helper as FakeNativeHelper & { ghosttyResumeRequests: unknown[] }).ghosttyResumeRequests)
+        .toHaveLength(1);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the captured completion attention after an uncertain resume", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-claude-resume-attention-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const attentionPath = path.join(directory, "completion-attention.json");
+    const transcriptPath = path.join(directory, "claude-resume-attention.jsonl");
+    const sessionID = "22222222-2222-4222-8222-222222222222";
+    const completionAt = "2026-10-21T18:00:00.000Z";
+    const resume: RetainedHistoryResumeCapability = {
+      version: 1,
+      provider: "claude_code",
+      host: "Ghostty",
+      executableRef: "/Users/me/.local/bin/claude",
+      profileState: "verified_absent",
+      overrideNames: [],
+      provenanceObservedAt: completionAt,
+    };
+    writeFileSync(transcriptPath, `${JSON.stringify({
+      type: "user",
+      uuid: "resume-attention-user",
+      timestamp: completionAt,
+      message: { role: "user", content: "Keep this completion visible" },
+    })}\n`);
+    let live = true;
+    const observed: DiscoveredProviderSession = {
+      id: sessionID,
+      provider: "claude_code",
+      title: "Keep this completion visible",
+      subtitle: "Ready to continue",
+      project: "agent-visor",
+      cwd: directory,
+      owner: "Ghostty",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      completionAt,
+      updatedAt: completionAt,
+      canOpenOwner: true,
+      canEnterChat: true,
+      chatPath: transcriptPath,
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty",
+        pid: 2_222,
+        processStartToken: "resume-attention-process",
+        tty: "ttys222",
+        cwd: directory,
+      } },
+      historyIdentity: {
+        verified: true,
+        current: true,
+        canonicalId: sessionID,
+        host: "Ghostty",
+        resume,
+      },
+    };
+    const provider: ProviderAdapter = {
+      id: "claude_code",
+      discover: async () => live ? [structuredClone(observed)] : [],
+      resumeLiveness: async () => ({ state: "stopped" }),
+      resumeTarget: (_record, attemptId, nonce) => ({
+        state: "eligible",
+        target: {
+          attemptId,
+          provider: "claude_code",
+          sessionId: sessionID,
+          cwd: directory,
+          executable: resume.executableRef,
+          profileState: resume.profileState,
+          nonce,
+        },
+      }),
+      reconcileResume: async () => ({ state: "unknown", reason: "The fixture surface is unverified." }),
+    };
+    const repository = new SessionRepository([provider], {
+      now: () => new Date("2026-10-21T18:03:00.000Z"),
+      retainedHistoryPath: historyPath,
+      completionAttentionPath: attentionPath,
+    });
+    const helper = new FakeNativeHelper();
+    repository.setControls(new NativeSessionControls(helper));
+    try {
+      expect((await repository.refresh()).sessions[0]).toMatchObject({
+        id: sessionID,
+        attentionTier: "ready",
+        completionUnseen: true,
+      });
+      live = false;
+      await repository.refresh();
+
+      await expect(repository.resumeSession(sessionID)).resolves.toMatchObject({
+        state: "uncertain",
+        sessionId: sessionID,
+      });
+      expect(helper.ghosttyResumeRequests).toHaveLength(1);
+
+      live = true;
+      expect((await repository.refresh()).sessions[0]).toMatchObject({
+        id: sessionID,
+        attentionTier: "ready",
+        completionUnseen: true,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("retains an observed Claude terminal conversation after close and reconstruction", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-session-history-"));
     const historyPath = path.join(directory, "retained-history.json");

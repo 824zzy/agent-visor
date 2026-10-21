@@ -109,6 +109,7 @@ final class NativeProcessProvenanceProbeTests: XCTestCase {
             environment: [
                 "HOME=/tmp/agent-visor-provenance-home",
                 "CLAUDE_CONFIG_DIR=/tmp/agent-visor-explicit-config",
+                "AGENT_VISOR_RESUME_NONCE=0123456789abcdef0123456789abcdef",
                 "ANTHROPIC_API_KEY=redacted-fixture-value",
                 "UNRELATED_SECRET=must-not-appear",
             ]
@@ -134,6 +135,7 @@ final class NativeProcessProvenanceProbeTests: XCTestCase {
         XCTAssertEqual(value.settingSources, [.user, .project, .local])
         XCTAssertEqual(value.configRootRef, "/tmp/agent-visor-explicit-config")
         XCTAssertEqual(value.profileState, .verifiedAbsent)
+        XCTAssertEqual(value.resumeNonce, "0123456789abcdef0123456789abcdef")
         XCTAssertEqual(value.overrideNames, ["ANTHROPIC_API_KEY"])
         XCTAssertEqual(value.argvState, .complete)
         XCTAssertFalse(String(describing: result).contains("redacted-fixture-value"))
@@ -206,6 +208,33 @@ final class NativeProcessProvenanceProbeTests: XCTestCase {
         XCTAssertNil(value.profileRef)
         XCTAssertEqual(value.profileState, .verifiedAbsent)
         XCTAssertFalse(String(describing: result).contains("123e4567-e89b-12d3-a456-426614174000"))
+    }
+
+    func testDiscardsAmbiguousResumeNonceRatherThanSelectingOneEnvironmentEntry() throws {
+        let data = makeKernelProcargs(
+            executablePath: "/usr/bin/claude",
+            argv: ["claude", "--resume", "123e4567-e89b-12d3-a456-426614174000"],
+            environment: [
+                "HOME=/tmp/agent-visor-ambiguous-nonce-home",
+                "AGENT_VISOR_RESUME_NONCE=0123456789abcdef0123456789abcdef",
+                "AGENT_VISOR_RESUME_NONCE=not-a-valid-nonce",
+            ]
+        )
+
+        let result = NativeProcessProvenanceProbe.parse(
+            data,
+            pid: 49,
+            expected: .claudeCode,
+            processStartToken: "v1:49:fixture",
+            homeDirectory: "/Users/fixture"
+        )
+
+        guard case .available(let value) = result else {
+            return XCTFail("expected otherwise valid provenance, got \(result)")
+        }
+        XCTAssertNil(value.resumeNonce)
+        XCTAssertEqual(value.overrideNames, [])
+        XCTAssertFalse(String(describing: result).contains("not-a-valid-nonce"))
     }
 
     func testAcceptsCodexResumeIdentityAndAbsoluteDirectorySelectors() throws {

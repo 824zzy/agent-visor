@@ -13,6 +13,10 @@ import {
   resolveClaudeExecutable,
   type ClaudeAgentInventoryResult,
 } from "./claude-agent-inventory.js";
+import {
+  UnavailableProcessProvenanceReader,
+  type ProcessProvenanceReader,
+} from "./process-provenance.js";
 
 export type ProcessRecord = {
   pid: number;
@@ -23,6 +27,10 @@ export type ProcessRecord = {
   command: string;
   arguments: string;
 };
+
+export type FreshProcessInventory =
+  | { state: "authoritative"; observedAt: string; processes: ProcessRecord[] }
+  | { state: "unknown"; observedAt: string; reason: "scan_failed" | "permission" | "timeout" | "malformed" };
 
 export type FileStamp = {
   modifiedAt: Date;
@@ -36,6 +44,10 @@ export interface ProviderEnvironment {
   processes(): Promise<ProcessRecord[]>;
   /** Bypass the short ambient process cache for an explicit focus recheck. */
   processesFresh?(): Promise<ProcessRecord[]>;
+  /** Explicit-resume probe; unlike processesFresh(), failure is never []. */
+  processesFreshInventory?(): Promise<FreshProcessInventory>;
+  /** Boundary-preserving argv evidence used only by explicit resume. */
+  processProvenance?(pid: number, expected: "claude_code" | "codex_cli", processStartToken?: string): ReturnType<ProcessProvenanceReader["read"]>;
   cwd(pid: number): Promise<string | undefined>;
   processStartedAt(pid: number): Promise<Date | undefined>;
   codexDesktopCommand?(pid: number): Promise<string | undefined>;
@@ -80,6 +92,7 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
   private readonly cwdByPID = new Map<number, Promise<string | undefined>>();
   private readonly startedAtByPID = new Map<number, Promise<Date | undefined>>();
   private readonly claudeInventory: ClaudeAgentInventory;
+  private readonly provenanceReader: ProcessProvenanceReader;
   private claudeExecutablePath?: Promise<string | undefined>;
   private readonly cmux = new CmuxClient();
   private readonly herdr = new HerdrClient();
@@ -90,6 +103,7 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
     options: {
       observedWindowMs?: number | (() => number); now?: () => Date;
       ghosttyTerminalViews?: (conversationTitles?: readonly string[]) => Promise<GhosttyTerminalView[]>;
+      processProvenanceReader?: ProcessProvenanceReader;
     } = {},
   ) {
     this.observedWindow = options.observedWindowMs ?? 42 * 60 * 60 * 1_000;
@@ -99,6 +113,8 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
       home,
       now: () => this.now(),
     });
+    this.provenanceReader = options.processProvenanceReader
+      ?? new UnavailableProcessProvenanceReader();
   }
 
   private readonly clock: () => Date;
@@ -174,6 +190,55 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
     this.cwdByPID.clear();
     this.startedAtByPID.clear();
     return this.processes();
+  }
+
+  async processesFreshInventory(): Promise<FreshProcessInventory> {
+    const result = await Promise.all([
+      "pid=,ppid=,tty=,comm=", "pid=,args=",
+    ].map(fields => machineWork.run(() => runProcess(
+      "/bin/ps", ["-axww", "-o", fields],
+      { deadlineMs: 1_000, maxOutputBytes: 4 * 1_048_576 },
+    ))));
+    const observedAt = this.now().toISOString();
+    if (result.some((value) => value.status === "timed_out")) {
+      return { state: "unknown", observedAt, reason: "timeout" };
+    }
+    if (result.some((value) => value.status !== "success")) {
+      return { state: "unknown", observedAt, reason: "scan_failed" };
+    }
+    const commands = result[0];
+    const args = result[1];
+    if (!commands || !args || commands.status !== "success" || args.status !== "success") {
+      return { state: "unknown", observedAt, reason: "scan_failed" };
+    }
+    const argumentsByPID = new Map(args.stdout.split("\n").flatMap(line => {
+      const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+      return match ? [[Number(match[1]), match[2] ?? ""] as const] : [];
+    }));
+    const processes: ProcessRecord[] = [];
+    for (const line of commands.stdout.split("\n")) {
+      const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/.exec(line);
+      if (!match) {
+        if (line.trim()) return { state: "unknown", observedAt, reason: "malformed" };
+        continue;
+      }
+      const pid = Number(match[1]);
+      const commandLine = argumentsByPID.get(pid);
+      if (commandLine === undefined) return { state: "unknown", observedAt, reason: "malformed" };
+      const rawTTY = match[3];
+      processes.push({
+        pid,
+        parentPID: Number(match[2]),
+        tty: rawTTY && !["?", "??", "-"].includes(rawTTY) ? rawTTY : undefined,
+        command: match[4] ?? "",
+        arguments: commandLine,
+      });
+    }
+    return { state: "authoritative", observedAt, processes };
+  }
+
+  processProvenance(pid: number, expected: "claude_code" | "codex_cli", processStartToken?: string) {
+    return this.provenanceReader.read(pid, expected, processStartToken);
   }
 
   async cwd(pid: number): Promise<string | undefined> {

@@ -170,6 +170,42 @@ export async function startServer(options: {
           requestId: parsed.data.id,
           sessionId: parsed.data.sessionId,
         });
+      } else if (parsed.data.type === "resume_session") {
+        try {
+          const result = source.resumeSession
+            ? await source.resumeSession(parsed.data.sessionId)
+            : { state: "unavailable" as const, sessionId: parsed.data.sessionId,
+              reason: "Closed terminal resume is unavailable." };
+          const ok = result.state === "focused" || result.state === "matched";
+          sendDaemonMessage(socket, {
+            type: "resume_action_result",
+            id: parsed.data.id,
+            action: "resume",
+            sessionId: parsed.data.sessionId,
+            state: result.state === "uncertain" ? "uncertain" : result.state,
+            ok,
+            ...(!ok && "reason" in result ? { error: result.reason } : {}),
+          }, {
+            requestType: parsed.data.type,
+            requestId: parsed.data.id,
+            sessionId: parsed.data.sessionId,
+          });
+        } catch (error) {
+          reportRequestFailure(error);
+          sendDaemonMessage(socket, {
+            type: "resume_action_result",
+            id: parsed.data.id,
+            action: "resume",
+            sessionId: parsed.data.sessionId,
+            state: "uncertain",
+            ok: false,
+            error: requestFailureMessage(error),
+          }, {
+            requestType: parsed.data.type,
+            requestId: parsed.data.id,
+            sessionId: parsed.data.sessionId,
+          });
+        }
       } else if (parsed.data.type === "update_settings"
         || parsed.data.type === "native_service_action"
         || parsed.data.type === "set_agent_connection") {

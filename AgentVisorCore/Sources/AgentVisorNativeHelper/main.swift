@@ -154,6 +154,7 @@ private func handle(
         nativeFocus: { target in NativeGhosttyAppleEvents(pid: target.applicationPID).focus(
             terminalID: target.terminalId, expectedTitle: target.title, expectedCWD: target.cwd) }
     )
+    let ghosttyResume = NativeGhosttyResumeController()
     let ghosttyBinding = NativeGhosttyBindingController()
     let preparedGhostty = NativeGhosttyPreparedRoutes()
     var bytes = [UInt8](repeating: 0, count: 16_384)
@@ -174,6 +175,7 @@ private func handle(
                     notifications: notifications,
                     piRestoration: piRestoration,
                     ghostty: ghostty,
+                    ghosttyResume: ghosttyResume,
                     ghosttyBinding: ghosttyBinding,
                     preparedGhostty: preparedGhostty
                 )
@@ -197,6 +199,7 @@ private func response(
     notifications: NativeNotificationController,
     piRestoration: NativePiRestorationController,
     ghostty: NativeGhosttyTerminalController,
+    ghosttyResume: NativeGhosttyResumeController,
     ghosttyBinding: NativeGhosttyBindingController,
     preparedGhostty: NativeGhosttyPreparedRoutes
 ) -> NativeHelperResponse {
@@ -294,6 +297,39 @@ private func response(
             return ghostty.openClaudeAttach(target)
                 ? .accepted(id: id)
                 : .error(id: id, code: .failed, message: "Ghostty could not open the Claude background session.")
+        case .openGhosttyResume(let id, let target):
+            do {
+                return .ghosttyResumeDispatched(id: id, dispatch: try ghosttyResume.open(target))
+            } catch let error as NativeGhosttyResumeError {
+                switch error {
+                case .invalidTarget:
+                    return .error(id: id, code: .invalidRequest, message: "The Claude resume target is invalid.")
+                case .permissionDenied:
+                    return .error(id: id, code: .failed, message: "Ghostty Automation permission is unavailable.", reason: "activation_failed")
+                case .unavailable:
+                    return .error(id: id, code: .failed, message: "The existing Ghostty process is unavailable.", reason: "surface_unavailable")
+                case .executableMismatch:
+                    return .error(id: id, code: .failed, message: "The recorded Claude executable identity changed.", reason: "executable_mismatch")
+                case .profileUnavailable:
+                    return .error(id: id, code: .failed, message: "The recorded Claude profile is unavailable.", reason: "profile_unavailable")
+                case .creationUncertain, .applicationChanged:
+                    return .error(id: id, code: .failed, message: "Ghostty resume creation has an uncertain outcome.", reason: "native_creation_uncertain")
+                case .malformedResponse, .surfaceUnavailable:
+                    return .error(id: id, code: .failed, message: "The created Ghostty surface could not be verified.", reason: "surface_unavailable")
+                }
+            }
+        case .readProcessProvenance(let id, let target):
+            guard let identity = NativeProcessIdentityProbe.read(pid: target.pid),
+                  identity.token == target.processStartToken else {
+                return .processProvenance(id: id, result: .unavailable(.processMissing))
+            }
+            let result = NativeProcessProvenanceProbe.read(
+                pid: target.pid,
+                expected: target.provider,
+                processStartToken: identity.token,
+                homeDirectory: target.homeDirectory
+            )
+            return .processProvenance(id: id, result: result)
         case .sendTerminal(let id, let target, let text, let submit):
             return NativeTerminalController().send(text, to: target, submit: submit)
                 ? .accepted(id: id)

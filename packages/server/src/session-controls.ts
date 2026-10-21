@@ -7,6 +7,9 @@ import {
   type ChatImage,
   type ChatPage,
   type ChatSettingsPatch,
+  type NativeHelperGhosttyResumeDispatch,
+  type NativeHelperGhosttyResumeTarget,
+  type NativeHelperGhosttyTerminalView,
   type NativeHelperTerminalTarget,
 } from "@agent-visor/protocol";
 import {
@@ -152,6 +155,16 @@ export class NativeSessionControls implements SessionControls {
     // Herdr validates the exact live pane, session and native process on focus.
     // This does not grant send/cancel authority or bypass Claude's view checks.
     return session.provider === "codex" && session.controlTarget?.kind === "herdr_surface";
+  }
+
+  async openGhosttyResume(target: NativeHelperGhosttyResumeTarget): Promise<NativeHelperGhosttyResumeDispatch> {
+    if (!this.helper.openGhosttyResume) throw new Error("Closed terminal resume is unavailable.");
+    return this.helper.openGhosttyResume(target);
+  }
+
+  async focusGhosttyTerminal(target: NativeHelperGhosttyTerminalView): Promise<void> {
+    if (!this.helper.focusGhosttyTerminal) throw new Error("Exact Ghostty surface focus is unavailable.");
+    await this.helper.focusGhosttyTerminal(target);
   }
 
   private async relinquishIdleCodexRoute(sessionId: string): Promise<CodexRouteRelinquishResult> {

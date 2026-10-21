@@ -1,19 +1,32 @@
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { navigationStep } from "../navigation-diagnostics.js";
 import { verifiedTerminalRoute } from "../session-state.js";
-import { TRANSCRIPT_STALE_CEILING_MS, type NativeHelperTerminalTarget } from "@agent-visor/protocol";
+import {
+  TRANSCRIPT_STALE_CEILING_MS,
+  type NativeHelperGhosttyResumeDispatch,
+  type NativeHelperTerminalTarget,
+} from "@agent-visor/protocol";
 import type {
   ProviderAdapter,
   DiscoveredProviderSession,
   ProviderDiscoveryAuthority,
 } from "../sessions.js";
-import type { FileStamp, ProcessRecord, ProviderEnvironment } from "./environment.js";
 import type {
-  ClaudeAgentInventoryRow,
-  ClaudeAgentInventoryResult,
+  RetainedHistoryRecord,
+  RetainedHistoryResumeCapability,
+  RetainedHistoryResumeUnavailableReason,
+} from "../retained-history.js";
+import type { ResumeLiveness, ResumeReconciliation, ResumeTargetResult } from "../resume.js";
+import type { FileStamp, ProcessRecord, ProviderEnvironment } from "./environment.js";
+import {
+  trustedClaudeExecutableCandidates,
+  type ClaudeAgentInventoryResult,
+  type ClaudeAgentInventoryRow,
 } from "./claude-agent-inventory.js";
 import { ClaudeDesktopSessions } from "./claude-desktop.js";
 import { resolveClaudePresence, type ClaudePresenceReport } from "./claude-presence.js";
+import { ClaudeResumeAdapter } from "./claude-resume.js";
 export type { ClaudePresenceReport } from "./claude-presence.js";
 import {
   applicationTargetForProcess, isRecord, iso, ownerForProcess, processInstanceToken,
@@ -79,19 +92,53 @@ export class ClaudeProvider implements ProviderAdapter {
   private removedConversationIds: ReadonlyMap<string, number> = new Map();
   private interactiveFocus = new Map<string, { session: DiscoveredProviderSession; metadataPath: string }>();
   private lastDiscoveryAuthority: ProviderDiscoveryAuthority = "authoritative";
+  private readonly resumeAdapter: ClaudeResumeAdapter;
 
   constructor(
     private readonly environment: ProviderEnvironment,
     private readonly reportPresence?: (report: ClaudePresenceReport) => void,
   ) {
     this.desktopSessions = new ClaudeDesktopSessions(environment);
+    this.resumeAdapter = new ClaudeResumeAdapter(
+      environment,
+      () => this.discoverFreshForResume(),
+      () => this.discoveryAuthority(),
+    );
   }
 
-  async discover(forceInventory = false): Promise<DiscoveredProviderSession[]> {
+  /** Explicit cold resume gets a bounded authoritative process snapshot.
+   * An empty fallback from an ambient scan is never treated as stopped. */
+  private async discoverFreshForResume(): Promise<DiscoveredProviderSession[] | undefined> {
+    const inventory = this.environment.processesFreshInventory
+      ? await this.environment.processesFreshInventory()
+      : undefined;
+    if (!inventory || inventory.state !== "authoritative") {
+      this.lastDiscoveryAuthority = "unavailable";
+      return undefined;
+    }
+    return this.discover(true, inventory.processes);
+  }
+
+  resumeLiveness(record: RetainedHistoryRecord): Promise<ResumeLiveness> {
+    return this.resumeAdapter.resumeLiveness(record);
+  }
+
+  resumeTarget(record: RetainedHistoryRecord, attemptId: string, nonce: string): ResumeTargetResult {
+    return this.resumeAdapter.resumeTarget(record, attemptId, nonce);
+  }
+
+  reconcileResume(
+    record: RetainedHistoryRecord,
+    dispatch: NativeHelperGhosttyResumeDispatch,
+  ): Promise<ResumeReconciliation> {
+    return this.resumeAdapter.reconcileResume(record, dispatch);
+  }
+
+  async discover(forceInventory = false, processOverride?: ProcessRecord[]): Promise<DiscoveredProviderSession[]> {
     const directory = path.join(this.environment.home, ".claude", "sessions");
-    const processes = forceInventory && this.environment.processesFresh
+    const processes = processOverride ?? (forceInventory && this.environment.processesFresh
       ? await this.environment.processesFresh()
-      : await this.environment.processes();
+      : await this.environment.processes());
     const byPID = new Map(processes.map((process) => [process.pid, process]));
     const inventoryRead = await this.readInventory(forceInventory);
     const inventory = inventoryRead.snapshot;
@@ -107,9 +154,10 @@ export class ClaudeProvider implements ProviderAdapter {
     const backgroundMetadata = new Map<string, BackgroundMetadata>();
     const hiddenInventoryJobs = new Set<string>();
     const resumedJobSessionIds = new Set<string>();
-    const claudeExecutable = inventoryMode && this.environment.claudeExecutable
+    const resolvedClaudeExecutable = this.environment.claudeExecutable
       ? await this.environment.claudeExecutable()
       : undefined;
+    const claudeExecutable = inventoryMode ? resolvedClaudeExecutable : undefined;
     const results: DiscoveredProviderSession[] = [];
     const transcripts = new Set<string>();
     const desktopProfiles = new Map<string, ReturnType<ClaudeDesktopSessions["read"]>>();
@@ -270,6 +318,15 @@ export class ClaudeProvider implements ProviderAdapter {
         ? { kind: "terminal" as const, target: terminalTarget }
         : desktopSession ? { kind: "url" as const, url: desktopSession.url }
         : applicationTarget ? { kind: "application" as const, target: applicationTarget } : undefined;
+      const resumeEvidence = kind === "interactive" && terminalTarget?.application === "Ghostty"
+        ? await claudeResumeEvidence(
+          this.environment,
+          sessionID,
+          transcriptStamp !== undefined,
+          pid,
+          processStartToken,
+        )
+        : undefined;
 
       results.push({
         id: sessionID,
@@ -293,6 +350,15 @@ export class ClaudeProvider implements ProviderAdapter {
         chatPath: transcript,
         ...(controlTarget ? { controlTarget } : {}),
         ...(terminalTarget ? { messageTransport: "terminal" as const } : {}),
+        ...(resumeEvidence ? {
+          historyIdentity: {
+            verified: true,
+            current: true,
+            canonicalId: fullSessionID(sessionID) ?? sessionID,
+            ...(resumeEvidence.capability ? { resume: resumeEvidence.capability } : {}),
+            ...(resumeEvidence.reason ? { resumeUnavailableReason: resumeEvidence.reason } : {}),
+          },
+        } : {}),
       });
       if (kind === "interactive") {
         interactiveMetadata.set(sessionID, metadataPath);
@@ -684,6 +750,66 @@ async function attachedTerminalTarget(
 function isNativeClaudeBinary(command: string, home: string): boolean {
   return path.dirname(command) === path.join(home, ".local/share/claude/versions")
     && /^\d+\.\d+\.\d+$/.test(path.basename(command));
+}
+
+async function claudeResumeEvidence(
+  environment: ProviderEnvironment,
+  sessionID: string,
+  transcriptPresent: boolean,
+  pid: number,
+  processStartToken: string | undefined,
+): Promise<{
+  capability?: RetainedHistoryResumeCapability;
+  reason?: RetainedHistoryResumeUnavailableReason;
+}> {
+  if (!fullSessionID(sessionID)) return { reason: "ambiguous_identity" };
+  if (!transcriptPresent) return { reason: "missing_transcript" };
+  if (!processStartToken || !environment.processProvenance) {
+    return { reason: "missing_provenance" };
+  }
+  const observed = await environment.processProvenance(
+    pid,
+    "claude_code",
+    processStartToken,
+  ).catch(() => undefined);
+  if (!observed || observed.state !== "available") {
+    return { reason: observed?.state === "unavailable" && observed.reason === "executable_untrusted"
+      ? "ambiguous_identity" : "missing_provenance" };
+  }
+  if (!isTrustedClaudeExecutable(observed.value.executableRef, environment.home)) {
+    return { reason: "ambiguous_identity" };
+  }
+  const value = observed.value;
+  const capability: RetainedHistoryResumeCapability = {
+    version: 1,
+    provider: "claude_code",
+    host: "Ghostty",
+    executableRef: value.executableRef,
+    ...(value.executableVersion ? { executableVersion: value.executableVersion } : {}),
+    ...(value.configRootRef ? { configRootRef: value.configRootRef } : {}),
+    ...(value.settingsFileRef ? { settingsFileRef: value.settingsFileRef } : {}),
+    ...(value.settingSources ? { settingSources: value.settingSources } : {}),
+    ...(value.profileRef ? { profileRef: value.profileRef } : {}),
+    profileState: value.profileState === "present" ? "present" : "verified_absent",
+    overrideNames: value.overrideNames,
+    provenanceObservedAt: value.observedAt,
+  };
+  return {
+    capability,
+    ...(value.overrideNames.length ? { reason: "unsupported_override" as const } : {}),
+  };
+}
+
+function isTrustedClaudeExecutable(executable: string, home: string): boolean {
+  try {
+    if (realpathSync(executable) !== executable) return false;
+    if (isNativeClaudeBinary(executable, home)) return true;
+    return trustedClaudeExecutableCandidates(home).some((candidate) => {
+      try { return realpathSync(candidate) === executable; } catch { return false; }
+    });
+  } catch {
+    return false;
+  }
 }
 
 function isClaudeCommand(command: string, home: string): boolean {

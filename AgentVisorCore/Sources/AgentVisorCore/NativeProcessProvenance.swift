@@ -51,6 +51,9 @@ public struct NativeProcessProvenance: Codable, Equatable, Sendable {
     public let settingSources: [NativeProcessSettingSource]?
     /// Allowlisted environment names only. Values are never retained.
     public let overrideNames: [String]
+    /// One-shot launch correlation evidence. This is intentionally transient
+    /// and is never copied into retained history capabilities.
+    public let resumeNonce: String?
     public let argvState: NativeProcessProvenanceArgvState
     public let observedAt: String
 
@@ -66,6 +69,7 @@ public struct NativeProcessProvenance: Codable, Equatable, Sendable {
         settingsFileRef: String? = nil,
         settingSources: [NativeProcessSettingSource]? = nil,
         overrideNames: [String],
+        resumeNonce: String? = nil,
         argvState: NativeProcessProvenanceArgvState,
         observedAt: String
     ) {
@@ -80,6 +84,7 @@ public struct NativeProcessProvenance: Codable, Equatable, Sendable {
         self.settingsFileRef = settingsFileRef
         self.settingSources = settingSources
         self.overrideNames = overrideNames
+        self.resumeNonce = resumeNonce
         self.argvState = argvState
         self.observedAt = observedAt
     }

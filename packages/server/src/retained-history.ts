@@ -25,6 +25,31 @@ export type RetainedHistoryProvider = "claude_code" | "codex";
 export type RetainedHistoryHost = "Ghostty" | "cmux" | "Herdr" | "iTerm2" | "Terminal";
 export type RetainedHistoryRemovalReason = "agent_visor" | "provider_archived";
 export type RetainedHistoryRemovalResult = "removed" | "not_found" | "storage_unavailable";
+export type RetainedHistoryResumeUnavailableReason =
+  | "missing_provenance"
+  | "unsupported_profile"
+  | "unsupported_override"
+  | "missing_transcript"
+  | "missing_executable"
+  | "host_not_supported"
+  | "ambiguous_identity";
+
+/** Safe launch references retained from a verified live observation. */
+export type RetainedHistoryResumeCapability = {
+  version: 1;
+  provider: "claude_code";
+  host: "Ghostty";
+  executableRef: string;
+  executableVersion?: string;
+  configRootRef?: string;
+  settingsFileRef?: string;
+  settingSources?: Array<"user" | "project" | "local">;
+  profileRef?: string;
+  profileState: "present" | "verified_absent";
+  /** Names only; values, tokens, URLs, and the environment are discarded. */
+  overrideNames: string[];
+  provenanceObservedAt: string;
+};
 
 export type RetainedHistoryObservation = {
   id: string;
@@ -43,6 +68,12 @@ export type RetainedHistoryObservation = {
   /** Exact provider configuration home, when the provider observer proved it. */
   configHome?: string;
   transcriptPath?: string;
+  /** Launch authority captured from the exact live provider observation. */
+  resume?: RetainedHistoryResumeCapability;
+  /** Why this row remains History-only when resume provenance is incomplete. */
+  resumeUnavailableReason?: RetainedHistoryResumeUnavailableReason;
+  /** Provider completion identity, separate from retained updatedAt. */
+  completionIdentity?: string;
   updatedAt: string;
   observedAt: string;
   /** Explicit current frontend/process observation; never inferred by the store. */
@@ -471,6 +502,14 @@ function normalizeObservation(value: RetainedHistoryObservation): NormalizedHist
   const transcriptPath = value.transcriptPath === undefined
     ? undefined : absolutePath(value.transcriptPath, MAX_TEXT_LENGTH);
   if (value.transcriptPath !== undefined && !transcriptPath) return undefined;
+  const resume = value.resume === undefined ? undefined : normalizeResumeCapability(value.resume);
+  if (value.resume !== undefined && !resume) return undefined;
+  const resumeUnavailableReason = value.resumeUnavailableReason === undefined
+    ? undefined : normalizeResumeUnavailableReason(value.resumeUnavailableReason);
+  if (value.resumeUnavailableReason !== undefined && !resumeUnavailableReason) return undefined;
+  const completionIdentity = value.completionIdentity === undefined
+    ? undefined : bounded(value.completionIdentity, MAX_ID_LENGTH);
+  if (value.completionIdentity !== undefined && !completionIdentity) return undefined;
   return {
     id,
     provider: value.provider,
@@ -485,6 +524,9 @@ function normalizeObservation(value: RetainedHistoryObservation): NormalizedHist
     cwd,
     ...(configHome ? { configHome } : {}),
     ...(transcriptPath ? { transcriptPath } : {}),
+    ...(resume ? { resume } : {}),
+    ...(resumeUnavailableReason ? { resumeUnavailableReason } : {}),
+    ...(completionIdentity ? { completionIdentity } : {}),
     updatedAt,
     observedAt,
   };
@@ -608,6 +650,74 @@ function bounded(value: unknown, max: number): string | undefined {
 function absolutePath(value: unknown, max: number): string | undefined {
   const candidate = bounded(value, max);
   return candidate?.startsWith("/") ? candidate : undefined;
+}
+
+function normalizeResumeCapability(value: unknown): RetainedHistoryResumeCapability | undefined {
+  if (!isRecord(value) || value.version !== 1 || value.provider !== "claude_code"
+    || value.host !== "Ghostty") return undefined;
+  const executableRef = absolutePath(value.executableRef, MAX_CONFIG_HOME_LENGTH);
+  const executableVersion = value.executableVersion === undefined
+    ? undefined : bounded(value.executableVersion, 128);
+  const configRootRef = value.configRootRef === undefined
+    ? undefined : absolutePath(value.configRootRef, MAX_CONFIG_HOME_LENGTH);
+  const settingsFileRef = value.settingsFileRef === undefined
+    ? undefined : absolutePath(value.settingsFileRef, MAX_CONFIG_HOME_LENGTH);
+  const profileRef = value.profileRef === undefined ? undefined : profileName(value.profileRef);
+  const profileState = value.profileState === "present" || value.profileState === "verified_absent"
+    ? value.profileState : undefined;
+  const settingSources = normalizeSettingSources(value.settingSources);
+  const overrideNames = normalizeOverrideNames(value.overrideNames);
+  const provenanceObservedAt = iso(value.provenanceObservedAt);
+  if (!executableRef || !profileState || !provenanceObservedAt || !overrideNames
+    || (value.executableVersion !== undefined && !executableVersion)
+    || (value.configRootRef !== undefined && !configRootRef)
+    || (value.settingsFileRef !== undefined && !settingsFileRef)
+    || (value.profileRef !== undefined && !profileRef)
+    || (value.settingSources !== undefined && !settingSources)) return undefined;
+  return {
+    version: 1,
+    provider: "claude_code",
+    host: "Ghostty",
+    executableRef,
+    ...(executableVersion ? { executableVersion } : {}),
+    ...(configRootRef ? { configRootRef } : {}),
+    ...(settingsFileRef ? { settingsFileRef } : {}),
+    ...(settingSources?.length ? { settingSources } : {}),
+    ...(profileRef ? { profileRef } : {}),
+    profileState,
+    overrideNames,
+    provenanceObservedAt,
+  };
+}
+
+function normalizeSettingSources(value: unknown): Array<"user" | "project" | "local"> | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 3) return undefined;
+  const values = value.flatMap((candidate) => candidate === "user" || candidate === "project" || candidate === "local"
+    ? [candidate] : []);
+  return values.length === value.length ? [...new Set(values)] : undefined;
+}
+
+function normalizeOverrideNames(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length > 32) return undefined;
+  const values = value.flatMap((candidate) => {
+    const name = typeof candidate === "string" && /^[A-Z][A-Z0-9_]{0,127}$/.test(candidate)
+      ? candidate : undefined;
+    return name ? [name] : [];
+  });
+  return values.length === value.length ? [...new Set(values)] : undefined;
+}
+
+function profileName(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)
+    ? value : undefined;
+}
+
+function normalizeResumeUnavailableReason(value: unknown): RetainedHistoryResumeUnavailableReason | undefined {
+  return value === "missing_provenance" || value === "unsupported_profile"
+    || value === "unsupported_override" || value === "missing_transcript"
+    || value === "missing_executable" || value === "host_not_supported"
+    || value === "ambiguous_identity" ? value : undefined;
 }
 
 function iso(value: unknown): string | undefined {

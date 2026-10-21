@@ -1,5 +1,6 @@
 import os from "node:os";
 import type { ProviderAdapter } from "../sessions.js";
+import type { ProcessProvenanceReader } from "./process-provenance.js";
 import { AuggieProvider } from "./auggie.js";
 import { ClaudeProvider, type ClaudePresenceReport } from "./claude.js";
 import { CodexProvider } from "./codex.js";
@@ -19,8 +20,13 @@ export function liveProviders(
   ignoredCodexHomes: () => string[] = () => [],
   ghosttyTerminalViews?: (conversationTitles?: readonly string[]) => Promise<GhosttyTerminalView[]>,
   reportClaudePresence?: (report: ClaudePresenceReport) => void,
+  processProvenanceReader?: ProcessProvenanceReader,
 ): ProviderAdapter[] {
-  const environment = new LiveProviderEnvironment(home, { observedWindowMs, ghosttyTerminalViews });
+  const environment = new LiveProviderEnvironment(home, {
+    observedWindowMs,
+    ghosttyTerminalViews,
+    processProvenanceReader,
+  });
   return [
     new PaseoProvider(new PaseoClient(home)),
     new ClaudeProvider(environment, reportClaudePresence),

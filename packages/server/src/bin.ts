@@ -20,6 +20,7 @@ import { handleNotificationAction } from "./notification-actions.js";
 import { liveProviders } from "./providers/index.js";
 import { codexHomeStatuses } from "./providers/codex-instances.js";
 import { LiveProviderEnvironment } from "./providers/environment.js";
+import { NativeHelperProcessProvenanceReader } from "./providers/process-provenance.js";
 import { startServer } from "./server.js";
 import { SessionRepository } from "./sessions.js";
 import { NativeSessionControls } from "./session-controls.js";
@@ -115,6 +116,9 @@ await runDaemon(async (lifetime) => {
         return nativeHelper.ghosttyTerminalViews(titles);
       },
       report => claudePresenceDiagnostics.record(report),
+      new NativeHelperProcessProvenanceReader(os.homedir(), (target) => nativeHelper
+        ? nativeHelper.readProcessProvenance(target)
+        : Promise.resolve({ state: "unavailable" as const, reason: "argv_unreadable" as const })),
     ),
     {
       piRuntimeStatePath: path.join(dataRoot, "pi-runtime-links.json"),

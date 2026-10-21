@@ -360,6 +360,146 @@ public struct NativeHelperClaudeAttachTarget: Codable, Equatable {
     }
 }
 
+/// A typed, exact-ID Claude launch in a new Ghostty surface. The native side
+/// owns command construction; arbitrary shell text never crosses this wire.
+public struct NativeHelperGhosttyResumeTarget: Codable, Equatable {
+    public let attemptId: String
+    public let provider: String
+    public let sessionId: String
+    public let cwd: String
+    public let executable: String
+    public let configRoot: String?
+    public let settingsFile: String?
+    public let settingSources: [String]?
+    public let profileRef: String?
+    public let profileState: String
+    public let nonce: String
+
+    public init(
+        attemptId: String,
+        provider: String = "claude_code",
+        sessionId: String,
+        cwd: String,
+        executable: String,
+        configRoot: String? = nil,
+        settingsFile: String? = nil,
+        settingSources: [String]? = nil,
+        profileRef: String? = nil,
+        profileState: String,
+        nonce: String
+    ) {
+        self.attemptId = attemptId
+        self.provider = provider
+        self.sessionId = sessionId
+        self.cwd = cwd
+        self.executable = executable
+        self.configRoot = configRoot
+        self.settingsFile = settingsFile
+        self.settingSources = settingSources
+        self.profileRef = profileRef
+        self.profileState = profileState
+        self.nonce = nonce
+    }
+
+    public var isValid: Bool {
+        provider == "claude_code"
+            && validOpaque(attemptId, maximum: 128)
+            && sessionId.range(of: "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", options: .regularExpression) != nil
+            && absolutePath(cwd, maximum: 4_096)
+            && absolutePath(executable, maximum: 4_096)
+            && (configRoot.map { absolutePath($0, maximum: 4_096) } ?? true)
+            && (settingsFile.map { absolutePath($0, maximum: 4_096) } ?? true)
+            && (settingSources?.count ?? 0) <= 3
+            && (settingSources ?? []).allSatisfy { ["user", "project", "local"].contains($0) }
+            && (profileRef.map { $0.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", options: .regularExpression) != nil } ?? true)
+            && (profileState == "present" || profileState == "verified_absent")
+            && nonce.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil
+    }
+}
+
+public struct NativeHelperGhosttyResumeDispatch: Codable, Equatable {
+    public let attemptId: String
+    public let provider: String
+    public let sessionId: String
+    public let applicationPID: Int32
+    public let processStartToken: String
+    public let windowId: String
+    public let tabId: String
+    public let terminalId: String
+    public let nonce: String
+    public let dispatchedAt: String
+
+    public init(
+        attemptId: String,
+        provider: String = "claude_code",
+        sessionId: String,
+        applicationPID: Int32,
+        processStartToken: String,
+        windowId: String,
+        tabId: String,
+        terminalId: String,
+        nonce: String,
+        dispatchedAt: String
+    ) {
+        self.attemptId = attemptId
+        self.provider = provider
+        self.sessionId = sessionId
+        self.applicationPID = applicationPID
+        self.processStartToken = processStartToken
+        self.windowId = windowId
+        self.tabId = tabId
+        self.terminalId = terminalId
+        self.nonce = nonce
+        self.dispatchedAt = dispatchedAt
+    }
+
+    public var isValid: Bool {
+        provider == "claude_code"
+            && validOpaque(attemptId, maximum: 128)
+            && sessionId.range(of: "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", options: .regularExpression) != nil
+            && applicationPID > 0
+            && validOpaque(processStartToken, maximum: 256)
+            && validOpaque(windowId, maximum: 128)
+            && validOpaque(tabId, maximum: 128)
+            && validOpaque(terminalId, maximum: 128)
+            && nonce.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil
+            && NativeHelperTimestamp.parse(dispatchedAt) != nil
+    }
+}
+
+public struct NativeHelperProcessProvenanceTarget: Codable, Equatable {
+    public let pid: Int32
+    public let provider: NativeProcessProvenanceProvider
+    public let processStartToken: String
+    public let homeDirectory: String
+
+    public init(
+        pid: Int32,
+        provider: NativeProcessProvenanceProvider,
+        processStartToken: String,
+        homeDirectory: String
+    ) {
+        self.pid = pid
+        self.provider = provider
+        self.processStartToken = processStartToken
+        self.homeDirectory = homeDirectory
+    }
+
+    public var isValid: Bool {
+        pid > 0
+            && validOpaque(processStartToken, maximum: 256)
+            && absolutePath(homeDirectory, maximum: 4_096)
+    }
+}
+
+private func absolutePath(_ value: String, maximum: Int) -> Bool {
+    value.hasPrefix("/") && value.utf8.count <= maximum && !value.contains("\0")
+}
+
+private func validOpaque(_ value: String, maximum: Int) -> Bool {
+    !value.isEmpty && value.utf8.count <= maximum && !value.contains("\0")
+}
+
 public enum NativeHelperHotkeyTrigger: String, Codable, Equatable {
     case off
     case cmd
@@ -485,6 +625,8 @@ public enum NativeHelperRequest: Equatable {
     case focus(id: String, target: NativeHelperFocusTarget)
     case openCodexThread(id: String, target: NativeHelperCodexThreadTarget)
     case openClaudeAttach(id: String, target: NativeHelperClaudeAttachTarget)
+    case openGhosttyResume(id: String, target: NativeHelperGhosttyResumeTarget)
+    case readProcessProvenance(id: String, target: NativeHelperProcessProvenanceTarget)
     case focusTerminal(id: String, target: NativeHelperTerminalTarget, conversationOnly: Bool? = nil)
     case prepareTerminal(id: String, target: NativeHelperTerminalTarget, conversationOnly: Bool = true)
     case ghosttyTerminalViews(id: String, conversationTitles: [String] = [])
@@ -509,6 +651,8 @@ public enum NativeHelperRequest: Equatable {
              .openAccessibilitySettings(let id),
              .presentPills(let id, _, _, _, _, _, _, _, _), .focus(let id, _),
              .openCodexThread(let id, _), .openClaudeAttach(let id, _),
+             .openGhosttyResume(let id, _),
+             .readProcessProvenance(let id, _),
              .focusTerminal(let id, _, _), .sendTerminal(let id, _, _, _),
              .cancelTerminal(let id, _), .cyclePermissionMode(let id, _):
             id
@@ -524,7 +668,7 @@ public enum NativeHelperRequest: Equatable {
 
         let requiredKeys: Set<String> = [
             "present_pills", "reconcile_notifications", "reconcile_pi_restoration",
-                "focus", "open_codex_thread", "open_claude_attach", "focus_terminal", "send_terminal",
+                "focus", "open_codex_thread", "open_claude_attach", "open_ghostty_resume", "read_process_provenance", "focus_terminal", "send_terminal",
                 "cancel_terminal", "cycle_permission_mode", "focus_ghostty_terminal",
                 "resolve_ghostty_binding", "focus_ghostty_binding", "prepare_terminal", "prepare_ghostty_binding",
         ].contains(method) || (method == "ghostty_terminal_views" && object["params"] != nil)
@@ -700,6 +844,18 @@ public enum NativeHelperRequest: Equatable {
                   let target = params.claudeAttachTarget,
                   target.isValid else { throw NativeHelperWireError.invalidRequest }
             return .openClaudeAttach(id: wire.id, target: target)
+        case "open_ghostty_resume":
+            guard let params = wire.params,
+                  Set(params.keys) == ["target"],
+                  let target = params.ghosttyResumeTarget,
+                  target.isValid else { throw NativeHelperWireError.invalidRequest }
+            return .openGhosttyResume(id: wire.id, target: target)
+        case "read_process_provenance":
+            guard let params = wire.params,
+                  Set(params.keys) == ["target"],
+                  let target = params.processProvenanceTarget,
+                  target.isValid else { throw NativeHelperWireError.invalidRequest }
+            return .readProcessProvenance(id: wire.id, target: target)
         case "focus_terminal":
             guard let params = wire.params,
                   Set(params.keys).isSubset(of: ["target", "conversationOnly"]),
@@ -793,6 +949,8 @@ public enum NativeHelperErrorCode: String, Codable {
 
 public enum NativeHelperResponse {
     case ghosttyTerminalViews(id: String, views: [NativeHelperGhosttyTerminalView])
+    case ghosttyResumeDispatched(id: String, dispatch: NativeHelperGhosttyResumeDispatch)
+    case processProvenance(id: String, result: NativeProcessProvenanceResult)
     case ghosttyBindingStatus(id: String, available: Bool)
     case ghosttyBinding(id: String, binding: NativeHelperGhosttyBinding)
     case screenTopology(id: String, screens: [NativeHelperScreen])
@@ -808,6 +966,20 @@ public enum NativeHelperResponse {
             return try encoder.encode(SuccessEnvelope(
                 version: nativeHelperProtocolVersion, id: id, ok: true,
                 result: .ghosttyTerminalViews(views)
+            ))
+        case .ghosttyResumeDispatched(let id, let dispatch):
+            return try encoder.encode(SuccessEnvelope(
+                version: nativeHelperProtocolVersion,
+                id: id,
+                ok: true,
+                result: .ghosttyResumeDispatched(dispatch)
+            ))
+        case .processProvenance(let id, let result):
+            return try encoder.encode(SuccessEnvelope(
+                version: nativeHelperProtocolVersion,
+                id: id,
+                ok: true,
+                result: .processProvenance(result)
             ))
         case .ghosttyBindingStatus(let id, let available):
             return try encoder.encode(SuccessEnvelope(
@@ -1101,6 +1273,21 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
               Set(params.keys) == ["target"],
               let target = params["target"] as? [String: Any] else { return false }
         return Set(target.keys) == ["cwd", "executable", "jobId"]
+    case "open_ghostty_resume":
+        guard let params = object["params"] as? [String: Any],
+              Set(params.keys) == ["target"],
+              let target = params["target"] as? [String: Any] else { return false }
+        let required: Set<String> = [
+            "attemptId", "provider", "sessionId", "cwd", "executable", "profileState", "nonce",
+        ]
+        let allowed = required.union(["configRoot", "settingsFile", "settingSources", "profileRef"])
+        return Set(target.keys).isSuperset(of: required)
+            && Set(target.keys).isSubset(of: allowed)
+    case "read_process_provenance":
+        guard let params = object["params"] as? [String: Any],
+              Set(params.keys) == ["target"],
+              let target = params["target"] as? [String: Any] else { return false }
+        return Set(target.keys) == ["pid", "provider", "processStartToken", "homeDirectory"]
     case "focus_terminal", "prepare_terminal":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys).isSubset(of: ["target", "conversationOnly"]),
@@ -1165,6 +1352,8 @@ private struct WireParameters: Decodable {
     let target: NativeHelperFocusTarget?
     let codexThreadTarget: NativeHelperCodexThreadTarget?
     let claudeAttachTarget: NativeHelperClaudeAttachTarget?
+    let ghosttyResumeTarget: NativeHelperGhosttyResumeTarget?
+    let processProvenanceTarget: NativeHelperProcessProvenanceTarget?
     let terminalTarget: NativeHelperTerminalTarget?
     let conversationOnly: Bool?
     let ghosttyTerminalTarget: NativeHelperGhosttyTerminalView?
@@ -1235,6 +1424,12 @@ private struct WireParameters: Decodable {
         )
         claudeAttachTarget = try? container.decodeIfPresent(
             NativeHelperClaudeAttachTarget.self, forKey: .init("target")
+        )
+        ghosttyResumeTarget = try? container.decodeIfPresent(
+            NativeHelperGhosttyResumeTarget.self, forKey: .init("target")
+        )
+        processProvenanceTarget = try? container.decodeIfPresent(
+            NativeHelperProcessProvenanceTarget.self, forKey: .init("target")
         )
         terminalTarget = try? container.decodeIfPresent(
             NativeHelperTerminalTarget.self,
@@ -1441,6 +1636,8 @@ private struct SuccessEnvelope: Encodable {
 
 private enum ResultBody: Encodable {
     case ghosttyTerminalViews([NativeHelperGhosttyTerminalView])
+    case ghosttyResumeDispatched(NativeHelperGhosttyResumeDispatch)
+    case processProvenance(NativeProcessProvenanceResult)
     case ghosttyBindingStatus(Bool)
     case ghosttyBinding(NativeHelperGhosttyBinding)
     case screenTopology([NativeHelperScreen])
@@ -1454,6 +1651,19 @@ private enum ResultBody: Encodable {
         case .ghosttyTerminalViews(let views):
             try container.encode("ghostty_terminal_views", forKey: .init("type"))
             try container.encode(views, forKey: .init("views"))
+        case .ghosttyResumeDispatched(let dispatch):
+            try container.encode("ghostty_resume_dispatched", forKey: .init("type"))
+            try container.encode(dispatch, forKey: .init("dispatch"))
+        case .processProvenance(let result):
+            try container.encode("process_provenance", forKey: .init("type"))
+            switch result {
+            case .available(let value):
+                try container.encode("available", forKey: .init("state"))
+                try container.encode(value, forKey: .init("value"))
+            case .unavailable(let reason):
+                try container.encode("unavailable", forKey: .init("state"))
+                try container.encode(reason, forKey: .init("reason"))
+            }
         case .ghosttyBindingStatus(let available):
             try container.encode("ghostty_binding_status", forKey: .init("type"))
             try container.encode(available, forKey: .init("available"))

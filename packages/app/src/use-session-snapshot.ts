@@ -70,6 +70,42 @@ export async function focusSession(sessionId: string): Promise<{ ok: boolean; er
   });
 }
 
+export type ResumeActionState = "focused" | "matched" | "joined" | "reopening" | "unavailable" | "uncertain";
+
+export async function resumeSession(sessionId: string): Promise<{
+  ok: boolean;
+  state: ResumeActionState;
+  error?: string;
+}> {
+  return new Promise((resolve) => {
+    const socket = new WebSocket(daemonUrl());
+    const id = `resume-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const deadline = setTimeout(() => finish({ ok: false, state: "uncertain" }), 15_000);
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({ type: "resume_session", id, sessionId }));
+    });
+    socket.addEventListener("message", (event) => {
+      try {
+        const parsed = serverMessageSchema.safeParse(JSON.parse(String(event.data)));
+        if (parsed.success && parsed.data.type === "resume_action_result" && parsed.data.id === id) {
+          finish({
+            ok: parsed.data.ok,
+            state: parsed.data.state,
+            ...(parsed.data.error ? { error: parsed.data.error } : {}),
+          });
+        }
+      } catch { /* wait for a valid result */ }
+    });
+    socket.addEventListener("error", () => finish({ ok: false, state: "uncertain" }));
+
+    function finish(result: { ok: boolean; state: ResumeActionState; error?: string }): void {
+      clearTimeout(deadline);
+      socket.close();
+      resolve(result);
+    }
+  });
+}
+
 export function sessionSnapshotFromServerData(data: string): SessionSnapshot | undefined {
   try {
     const parsed = serverMessageSchema.safeParse(parseJSON(data));
