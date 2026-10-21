@@ -1,4 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import type { ProcessRecord, ProviderEnvironment, FileStamp, GhosttyTerminalView } from "./environment.js";
 import {
@@ -190,6 +192,40 @@ function cachedResumeFixture() {
 }
 
 describe("Claude agent-view integration", () => {
+  it("keeps retained History unknown when real Claude discovery returns empty during an inventory outage", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-claude-inventory-outage-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, {
+      sessionId: ccID,
+      cwd,
+      kind: "interactive",
+      status: "idle",
+    });
+    try {
+      const active = new SessionRepository([new ClaudeProvider(environment)], { retainedHistoryPath: historyPath });
+      expect((await active.refresh()).sessions).toContainEqual(expect.objectContaining({ id: ccID }));
+
+      environment.inventory = inventoryFailure(inventorySuccess([]));
+      const afterRestart = new SessionRepository([new ClaudeProvider(environment)], { retainedHistoryPath: historyPath });
+      expect((await afterRestart.refresh()).sessions).toContainEqual(expect.objectContaining({ id: ccID }));
+
+      environment.processRows = [];
+      expect((await afterRestart.refresh()).sessions).not.toContainEqual(expect.objectContaining({ id: ccID }));
+      expect(afterRestart.historyPage()).toMatchObject({
+        total: 1,
+        sessions: [expect.objectContaining({
+          id: ccID,
+          section: "history",
+          subtitle: "Terminal state unavailable",
+        })],
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps one resumed conversation across pending inventory refresh cycles", async () => {
     const f = cachedResumeFixture();
     expect(alfredResults(await f.source.refresh(), "ccx-thinking-block-sneha").items.map(item => item.uid)).toEqual([ccID]);

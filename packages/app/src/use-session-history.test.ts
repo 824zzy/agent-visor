@@ -44,6 +44,25 @@ function fakeConnection() {
 }
 
 describe("session history controller", () => {
+  it("keeps a durable storage warning alongside live History rows", () => {
+    const fake = fakeConnection();
+    const states: ReturnType<typeof page>[] = [];
+    const controller = createSessionHistoryController((state) => {
+      if (state.page) states.push(state.page as ReturnType<typeof page>);
+    }, fake.connect);
+    fake.open();
+    fake.message({
+      ...page(["live-row"]),
+      historyWarning: "Retained history storage is unavailable.",
+    });
+
+    expect(states.at(-1)).toMatchObject({
+      sessions: [expect.objectContaining({ id: "live-row" })],
+      historyWarning: "Retained history storage is unavailable.",
+    });
+    controller.close();
+  });
+
   it("searches at the History boundary and joins paginated rows", () => {
     const fake = fakeConnection();
     const states: ReturnType<typeof page>[] = [];

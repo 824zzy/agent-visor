@@ -30,9 +30,12 @@ import {
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
   statSync,
@@ -55,9 +58,24 @@ import { CompletionAttention } from "./completion-attention.js";
 import {
   RetainedHistoryStore,
   type RetainedHistoryObservation,
+  type RetainedHistoryHost,
+  type RetainedHistoryProvider,
 } from "./retained-history.js";
 
 export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie" | "paseo";
+export type ProviderDiscoveryAuthority = "authoritative" | "unavailable";
+export type RetainedHistoryOrigin = {
+  provider: RetainedHistoryProvider;
+  id: string;
+  canonicalId: string;
+  aliases?: string[];
+  host?: RetainedHistoryHost;
+  configHome?: string;
+};
+export type RetainedHistoryOriginLookup = (
+  provider: RetainedHistoryProvider,
+  sessionId: string,
+) => RetainedHistoryOrigin | undefined;
 
 export type SessionControlTarget =
   | { kind: "herdr_surface"; target: import("./providers/herdr.js").HerdrSurfaceTarget }
@@ -142,6 +160,16 @@ export type DiscoveredProviderSession = {
   resolutionUnavailable?: boolean;
   /** Identity-only row loaded from retained history; never a live control target. */
   retainedHistory?: boolean;
+  /** Verified provider identity/provenance used only for durable History. */
+  historyIdentity?: {
+    verified: boolean;
+    /** False when this is durable provenance without a current CLI observation. */
+    current?: boolean;
+    canonicalId?: string;
+    aliases?: string[];
+    host?: RetainedHistoryHost;
+    configHome?: string;
+  };
 };
 
 export type ChatDeliveryEvidence = {
@@ -272,6 +300,10 @@ export interface SessionSnapshotSource {
 export interface ProviderAdapter {
   readonly id: ProviderID;
   discover(): Promise<DiscoveredProviderSession[]>;
+  /** Whether this discovery can establish provider-scoped absence for History. */
+  discoveryAuthority?(): ProviderDiscoveryAuthority;
+  /** Supply durable origin facts without restoring any provider control route. */
+  setRetainedHistoryOriginLookup?(lookup: RetainedHistoryOriginLookup): void;
   /** Resolve one opened conversation without relying on recent-list membership. */
   resolve?(sessionId: string): Promise<DiscoveredProviderSession | undefined>;
   /** Resolve one user focus request with bounded fresh provider identity checks. */
@@ -463,8 +495,9 @@ export class SessionRepository {
     sessions: [],
   };
   private readonly lastByProvider = new Map<ProviderID, DiscoveredProviderSession[]>();
-  /** True only after a Claude inventory was attempted and unavailable before any good read. */
-  private claudeInventoryUnavailable = false;
+  /** Providers whose latest discovery cannot establish absence for History. */
+  private readonly providerInventoryUnavailable = new Set<ProviderID>();
+  private readonly providerDiscoveryAuthority = new Map<ProviderID, ProviderDiscoveryAuthority>();
   private refreshInFlight: Promise<SessionSnapshot> | undefined;
   private readonly latestHookAtBySession = new Map<string, string>();
   private readonly hookBySession = new Map<string, HookSessionEvent>();
@@ -592,6 +625,19 @@ export class SessionRepository {
     this.retainedHistory = options.retainedHistoryPath
       ? new RetainedHistoryStore({ path: options.retainedHistoryPath, now: this.now })
       : undefined;
+    const retainedOriginLookup: RetainedHistoryOriginLookup = (provider, sessionId) => {
+      const record = this.retainedHistory?.getForProvider(provider, sessionId);
+      if (!record) return undefined;
+      return {
+        provider: record.provider,
+        id: record.id,
+        canonicalId: record.canonicalId,
+        ...(record.aliases?.length ? { aliases: record.aliases } : {}),
+        ...(record.host ? { host: record.host } : {}),
+        ...(record.configHome ? { configHome: record.configHome } : {}),
+      };
+    };
+    for (const provider of this.providers) provider.setRetainedHistoryOriginLookup?.(retainedOriginLookup);
     this.chatPageReader = options.chatPageReader ?? readChatPage;
     this.chatUsageGlance = options.chatUsageGlance;
     const bootSessionUUID = canonicalBootSessionUUID(options.bootSessionUUID);
@@ -913,20 +959,28 @@ export class SessionRepository {
 
   /** Public, paginated retained-history seam used by Sessions and Alfred clients. */
   historyPage(query?: string, cursor?: string, limit?: number): SessionHistoryPage {
-    // If the first Claude inventory attempt failed before any successful read,
-    // open observations remain searchable as History with unknown liveness.
+    // If a provider inventory cannot establish absence, open observations
+    // remain searchable as History with unknown liveness.
     // They are never merged into the ambient snapshot or made launchable.
-    const includeOpen = this.claudeInventoryUnavailable && !this.lastByProvider.has("claude_code");
-    const page = this.retainedHistory?.page(query, cursor, limit, includeOpen) ?? {
+    const includeOpenProviders = new Set<RetainedHistoryProvider>(
+      [...this.providerInventoryUnavailable].filter((provider): provider is RetainedHistoryProvider =>
+        provider === "claude_code" || provider === "codex"),
+    );
+    const includeOpen = includeOpenProviders.size > 0;
+    const page = this.retainedHistory?.page(query, cursor, limit, false, includeOpenProviders) ?? {
       records: [],
       total: 0,
     };
-    const sessions = normalize(page.records.map((record) => retainedHistorySession(record, includeOpen && !record.closedAt)));
+    const sessions = normalize(page.records.map((record) => retainedHistorySession(
+      record,
+      includeOpen && !record.closedAt,
+    )));
     return {
       type: "session_history_page",
       sessions,
       total: page.total,
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      ...(page.historyWarning ? { historyWarning: page.historyWarning } : {}),
     };
   }
 
@@ -2658,16 +2712,18 @@ export class SessionRepository {
     const discovered = await Promise.all(this.providers.map(async (provider) => {
       try {
         const sessions = await provider.discover();
+        const authority = provider.discoveryAuthority?.() ?? "authoritative";
         const generation = (this.providerDiscoveryGeneration.get(provider.id) ?? 0) + 1;
         this.providerDiscoveryGeneration.set(provider.id, generation);
         this.lastByProvider.set(provider.id, structuredClone(sessions));
-        if (provider.id === "claude_code") this.claudeInventoryUnavailable = false;
+        this.providerDiscoveryAuthority.set(provider.id, authority);
+        if (authority === "unavailable") this.providerInventoryUnavailable.add(provider.id);
+        else this.providerInventoryUnavailable.delete(provider.id);
         if (provider.id === "pi") this.piDiscoveryGeneration += 1;
         return sessions;
       } catch {
-        if (provider.id === "claude_code" && !this.lastByProvider.has(provider.id)) {
-          this.claudeInventoryUnavailable = true;
-        }
+        this.providerDiscoveryAuthority.set(provider.id, "unavailable");
+        this.providerInventoryUnavailable.add(provider.id);
         return this.lastByProvider.get(provider.id) ?? [];
       }
     }));
@@ -2687,20 +2743,28 @@ export class SessionRepository {
 
   private updateRetainedHistory(discovered: DiscoveredProviderSession[]): void {
     if (!this.retainedHistory) return;
-    // An initial provider failure is not evidence that a terminal closed.
-    // Only reconcile absence after this process has seen a successful Claude
-    // inventory (including an authoritative empty inventory).
-    if (!this.lastByProvider.has("claude_code")) return;
-    const claude = discovered.filter((session) => session.provider === "claude_code");
     const observedAt = this.now().toISOString();
-    const observations = claude
-      .map((session) => retainedHistoryObservation(session, observedAt))
-      .filter((observation): observation is RetainedHistoryObservation => observation !== undefined);
-    this.retainedHistory.observeMany(observations);
-    // The provider result is either a successful current inventory or the
-    // previous inventory retained by refreshProviders after a read failure.
-    // Only IDs absent from that result become closed-history candidates.
-    this.retainedHistory.closeMissing(new Set(claude.map((session) => session.id)));
+    for (const provider of ["claude_code", "codex"] as const) {
+      // An initial provider failure is not evidence that a terminal closed.
+      // Only reconcile absence after a discovery that explicitly establishes
+      // provider-scoped authority, including an authoritative empty inventory.
+      if (!this.lastByProvider.has(provider)) continue;
+      const current = discovered.filter((session) => session.provider === provider);
+      const observations = current
+        .map((session) => retainedHistoryObservation(session, observedAt))
+        .filter((observation): observation is RetainedHistoryObservation => observation !== undefined);
+      this.retainedHistory.observeMany(observations);
+      // Reconcile only this provider. A failed or absent Codex inventory must
+      // never close a previously retained Claude row, and vice versa.
+      if (this.providerDiscoveryAuthority.get(provider) !== "unavailable") {
+        const activeIdentities = new Set(observations.flatMap((observation) => [
+          observation.id,
+          ...(observation.canonicalId ? [observation.canonicalId] : []),
+          ...(observation.aliases ?? []),
+        ]));
+        this.retainedHistory.closeMissing(activeIdentities, provider);
+      }
+    }
   }
 
   applyHook(event: HookSessionEvent): SessionSnapshot {
@@ -2900,14 +2964,18 @@ export class SessionRepository {
     const effectiveDiscovered = discovered.filter(session => !suppressedSource(session))
       .map((session) => this.projectAcknowledgedFailure(session));
     this.reconcileTerminalNextTurns(effectiveDiscovered);
+    const canonicalDiscovered = deduplicateSessions(effectiveDiscovered);
     const authoritative = new Map<string, DiscoveredProviderSession>();
-    for (const record of effectiveDiscovered) {
-      const existing = authoritative.get(record.id);
-      if (!existing || (record.authority ?? 1) > (existing.authority ?? 1)) {
-        authoritative.set(record.id, record);
+    for (const record of canonicalDiscovered) {
+      const identities = authoritativeIdentityKeys(record);
+      for (const identity of identities) {
+        const existing = authoritative.get(identity);
+        if (!existing || (record.authority ?? 1) > (existing.authority ?? 1)) {
+          authoritative.set(identity, record);
+        }
       }
     }
-    const ambientMerged = applyHooks(effectiveDiscovered, this.hookBySession)
+    const ambientMerged = applyHooks(canonicalDiscovered, this.hookBySession)
       .filter(session => !suppressedSource(session));
     const openedRecords = [...this.openedSessionBySession.entries()].map(([sessionId, session]) => {
       // Hook events can arrive between exact refreshes. Keep the opened
@@ -2919,7 +2987,7 @@ export class SessionRepository {
       return copy;
     });
     const openedIDs = new Set(openedRecords.map((session) => session.id));
-    const ambientIDs = new Set(effectiveDiscovered.map((session) => session.id));
+    const ambientIDs = new Set(canonicalDiscovered.map((session) => session.id));
     // Once a conversation is opened, its exact record is authoritative for
     // both Chat and its session summary. Ambient discovery may be stale or
     // bounded, and must not restore a writable route after exact lookup
@@ -2953,8 +3021,8 @@ export class SessionRepository {
     this.chatBySession.clear();
     for (const record of merged) {
       if (!record.chatPath) continue;
-      const authority = authoritative.get(record.id);
-      const owner = authority?.owner ?? record.owner;
+      const identityAuthority = authoritative.get(authoritativeIdentityKey(record));
+      const owner = identityAuthority?.owner ?? record.owner;
       const cachedSettings = this.chatSettingsCatalogBySession.get(record.id);
       if (cachedSettings && (
         record.provider !== "codex"
@@ -2970,7 +3038,7 @@ export class SessionRepository {
       this.chatBySession.set(record.id, structuredClone({
         ...record,
         owner,
-        ...(authority?.controlTarget ? { controlTarget: authority.controlTarget } : {}),
+        ...(identityAuthority?.controlTarget ? { controlTarget: identityAuthority.controlTarget } : {}),
         ...(owner === "Zed" ? { messageTransport: undefined } : {}),
       }));
     }
@@ -3251,6 +3319,25 @@ function isPersistedRegularFile(value: string): boolean {
     return statSync(value).isFile();
   } catch {
     return false;
+  }
+}
+
+function isReadableTranscript(value: string): boolean {
+  if (!isPersistedRegularFile(value)) return false;
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(value, "r");
+    // A bounded read establishes that the transcript is readable and has
+    // content without loading a potentially large session into memory.
+    const buffer = Buffer.allocUnsafe(16 * 1_024);
+    const bytes = readSync(descriptor, buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytes).toString("utf8").trim().length > 0;
+  } catch {
+    return false;
+  } finally {
+    if (descriptor !== undefined) {
+      try { closeSync(descriptor); } catch { /* File disappeared while checking readability. */ }
+    }
   }
 }
 
@@ -3660,10 +3747,14 @@ function responseIdentity(
 
 function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
   const byID = new Map<string, DiscoveredProviderSession>();
-  for (const session of discovered) {
-    const existing = byID.get(session.id);
+  for (const session of deduplicateSessions(discovered)) {
+    // Preserve the historical cross-provider authority rule for ordinary
+    // IDs, while verified canonical identities deduplicate within a provider.
+    const identity = session.historyIdentity?.verified === true
+      ? sessionIdentityKey(session) : session.id;
+    const existing = byID.get(identity);
     if (!existing || (session.authority ?? 1) > (existing.authority ?? 1)) {
-      byID.set(session.id, session);
+      byID.set(identity, session);
     }
   }
 
@@ -3697,27 +3788,88 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
       right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id));
 }
 
+function sessionIdentityKey(session: DiscoveredProviderSession): string {
+  if (session.historyIdentity?.verified !== true) return `${session.provider}\u0000${session.id}`;
+  const canonicalId = session.historyIdentity.canonicalId ?? session.id;
+  return `${session.provider}\u0000${canonicalId}`;
+}
+
+function authoritativeIdentityKey(session: DiscoveredProviderSession): string {
+  return authoritativeIdentityKeys(session)[0]!;
+}
+
+function authoritativeIdentityKeys(session: DiscoveredProviderSession): string[] {
+  if (session.historyIdentity?.verified !== true) return [session.id];
+  return sessionIdentityKeys(session);
+}
+
+function deduplicateSessions(
+  sessions: readonly DiscoveredProviderSession[],
+): DiscoveredProviderSession[] {
+  const byIdentity: Array<[string, DiscoveredProviderSession]> = [];
+  const unverified: DiscoveredProviderSession[] = [];
+  for (const session of sessions) {
+    if (session.historyIdentity?.verified !== true) {
+      // Ordinary IDs retain the existing cross-provider authority merge in
+      // normalize/control maps; dropping one here would erase a readable
+      // Chat record before that merge can apply its owner route.
+      unverified.push(session);
+      continue;
+    }
+    const identities = sessionIdentityKeys(session);
+    const existingIndex = byIdentity.findIndex(([, existing]) =>
+      identities.some((identity) => sessionIdentityKeys(existing).includes(identity)));
+    if (existingIndex < 0) {
+      byIdentity.push([sessionIdentityKey(session), session]);
+    } else if ((session.authority ?? 1) > (byIdentity[existingIndex]![1].authority ?? 1)) {
+      byIdentity[existingIndex] = [byIdentity[existingIndex]![0], session];
+    }
+  }
+  return [...unverified, ...byIdentity.map(([, session]) => session)];
+}
+
+function sessionIdentityValues(session: DiscoveredProviderSession): string[] {
+  const identity = session.historyIdentity;
+  if (identity?.verified !== true) return [];
+  return [identity.canonicalId ?? session.id, ...(identity.aliases ?? [])];
+}
+
+function sessionIdentityKeys(session: DiscoveredProviderSession): string[] {
+  return sessionIdentityValues(session).map((identity) => `${session.provider}\u0000${identity}`);
+}
+
 function retainedHistoryObservation(
   session: DiscoveredProviderSession,
   observedAt: string,
 ): RetainedHistoryObservation | undefined {
-  if (session.provider !== "claude_code"
-    || session.sessionClass !== "terminal"
-    || session.conversationState !== "open"
-    || (session.controlTarget?.kind !== "terminal")) return undefined;
-  const target = session.controlTarget.target;
+  if ((session.provider !== "claude_code" && session.provider !== "codex")
+    || session.conversationState !== "open") return undefined;
+  const history = session.historyIdentity;
+  const targetHost = history?.host ?? retainedHistoryHost(session);
+  const isCodexObserved = session.provider === "codex"
+    && history?.verified === true
+    && history.current !== false;
+  const isClaudeObserved = session.provider === "claude_code"
+    && targetHost !== undefined
+    && (session.controlTarget?.kind === "terminal"
+      || session.controlTarget?.kind === "herdr_surface"
+      || session.controlTarget?.kind === "cmux_surface");
+  if (!isClaudeObserved && !isCodexObserved) return undefined;
   const title = sessionDisplayTitle(session.title) || `${providerNames[session.provider]} session`;
   const project = session.project?.trim() || path.basename(session.cwd) || session.cwd;
   return {
     id: session.id,
-    provider: "claude_code",
+    provider: session.provider,
+    ...(history?.canonicalId ? { canonicalId: history.canonicalId } : {}),
+    ...(history?.aliases?.length ? { aliases: history.aliases } : {}),
     title,
     subtitle: session.subtitle ?? "",
     ...(session.sourceProfile ? { sourceProfile: session.sourceProfile } : {}),
     project,
     owner: session.owner,
-    host: target.application,
+    ...(targetHost ? { host: targetHost } : {}),
     cwd: session.cwd,
+    ...(history?.configHome ? { configHome: history.configHome } : {}),
     ...(session.chatPath ? { transcriptPath: session.chatPath } : {}),
     updatedAt: session.updatedAt,
     observedAt,
@@ -3730,7 +3882,7 @@ function retainedHistorySession(
 ): DiscoveredProviderSession {
   return {
     id: record.id,
-    provider: "claude_code",
+    provider: record.provider,
     title: record.title,
     subtitle: unknownLiveness ? "Terminal state unavailable" : "Closed terminal conversation",
     project: record.project,
@@ -3746,8 +3898,28 @@ function retainedHistorySession(
     canOpenOwner: false,
     // A retained path is only a hint. Do not advertise a readable transcript
     // until the file still exists as a regular file after restart.
-    canEnterChat: Boolean(record.transcriptPath && isPersistedRegularFile(record.transcriptPath)),
+    canEnterChat: Boolean(record.transcriptPath && isReadableTranscript(record.transcriptPath)),
     ...(record.transcriptPath ? { chatPath: record.transcriptPath } : {}),
+    ...(record.provider === "codex" ? { messageTransport: "terminal" as const } : {}),
+    ...(record.provider === "codex" ? {
+      historyIdentity: {
+        verified: true,
+        current: false,
+        canonicalId: record.canonicalId,
+        ...(record.aliases?.length ? { aliases: record.aliases } : {}),
+        ...(record.host ? { host: record.host } : {}),
+        ...(record.configHome ? { configHome: record.configHome } : {}),
+      },
+    } : {}),
     retainedHistory: true,
   };
+}
+
+function retainedHistoryHost(session: DiscoveredProviderSession): RetainedHistoryHost | undefined {
+  switch (session.controlTarget?.kind) {
+    case "terminal": return session.controlTarget.target.application;
+    case "cmux_surface": return "cmux";
+    case "herdr_surface": return "Herdr";
+    default: return undefined;
+  }
 }

@@ -135,6 +135,8 @@ export const sessionHistoryPageSchema = z.object({
   sessions: z.array(sessionSummarySchema),
   total: z.number().int().nonnegative(),
   nextCursor: z.string().min(1).max(64).optional(),
+  /** Durable History may remain searchable while its backing store is unavailable. */
+  historyWarning: z.string().min(1).max(256).optional(),
 }).strict();
 
 export const CHAT_IMAGE_MAX_BYTES = 10_000_000;

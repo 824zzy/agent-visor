@@ -1,6 +1,11 @@
 import { transcriptPhase, type NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import path from "node:path";
-import type { DiscoveredProviderSession, HookSessionEvent, ProviderAdapter } from "../sessions.js";
+import type {
+  DiscoveredProviderSession,
+  HookSessionEvent,
+  ProviderAdapter,
+  RetainedHistoryOriginLookup,
+} from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
 import { CodexTranscriptReader } from "./codex-lifecycle.js";
 import { type CodexCliObservation } from "./codex-cli-observer.js";
@@ -48,7 +53,7 @@ limit 1`;
 const codexSettingsCatalogTtlMs = 60_000;
 const maxSettingsCatalogCWDs = 64;
 type CliBinding = { cwd: string; owner: string; terminal?: NativeHelperTerminalTarget;
-  herdr?: HerdrSurfaceTarget; sessionFile?: string };
+  herdr?: HerdrSurfaceTarget; sessionFile?: string; observed?: boolean; proven?: boolean };
 
 export class CodexProvider implements ProviderAdapter {
   readonly id = "codex" as const;
@@ -62,6 +67,7 @@ export class CodexProvider implements ProviderAdapter {
   private readonly cliHookByPID = new Map<number, HookSessionEvent>();
   /** Explicit observer/host identity only; never a cached control capability. */
   private readonly cliOrigins = new Map<string, { cwd: string; sessionFile?: string }>();
+  private retainedHistoryOriginLookup?: RetainedHistoryOriginLookup;
 
   constructor(
     private readonly environment: ProviderEnvironment,
@@ -102,7 +108,7 @@ export class CodexProvider implements ProviderAdapter {
       if (!cwd) continue;
       const herdr = await this.environment.herdrCodexSurface?.(process.pid, cwd, instance.path);
       if (herdr?.provider === "codex" && herdr.pid === process.pid && herdr.cwd === cwd) {
-        add(herdr.sessionId, { cwd, owner: "Herdr", herdr }); continue;
+        add(herdr.sessionId, { cwd, owner: "Herdr", herdr, observed: true, proven: true }); continue;
       }
       const hook = this.cliHookByPID.get(process.pid);
       const observation = observations.get(process.pid);
@@ -117,13 +123,20 @@ export class CodexProvider implements ProviderAdapter {
       const owner = ownerForProcess(process.pid, processes);
       const exactHerdr = owner === "Herdr"
         ? await this.environment.herdrSurface?.(process.pid, identity.sessionId, cwd) : undefined;
-      add(identity.sessionId, { cwd, owner, sessionFile: identity.sessionFile, ...(exactHerdr ? { herdr: exactHerdr } : {}),
+      add(identity.sessionId, { cwd, owner, sessionFile: identity.sessionFile, observed: true, proven: true,
+        ...(exactHerdr ? { herdr: exactHerdr } : {}),
         terminal: terminalTargetForProcess(process, cwd, processes, processInstanceToken(process.pid, started)) });
     }
     // Remember explicit CLI provenance even when its process/host route is now
     // unavailable. An old Desktop transcript must not silently take it over.
     for (const observation of observations.values()) if (!bindings.has(observation.sessionId)) {
-      add(observation.sessionId, { cwd: observation.cwd, owner: "Codex CLI", sessionFile: observation.sessionFile });
+      add(observation.sessionId, {
+        cwd: observation.cwd,
+        owner: "Codex CLI",
+        sessionFile: observation.sessionFile,
+        observed: false,
+        proven: true,
+      });
     }
     for (const [id, candidates] of bindings) {
       if (!this.cliOrigins.has(id) && this.cliOrigins.size >= 512) this.cliOrigins.delete(this.cliOrigins.keys().next().value!);
@@ -132,9 +145,13 @@ export class CodexProvider implements ProviderAdapter {
     for (const [id, origin] of this.cliOrigins) if (!bindings.has(id)) {
       // A transient observer read failure may remove navigation authority,
       // but cannot turn a proven CLI conversation into a Desktop route.
-      add(id, { ...origin, owner: "Codex CLI" });
+      add(id, { ...origin, owner: "Codex CLI", observed: false, proven: true });
     }
     return bindings;
+  }
+
+  setRetainedHistoryOriginLookup(lookup: RetainedHistoryOriginLookup): void {
+    this.retainedHistoryOriginLookup = lookup;
   }
 
   private boundSession(instance: CodexInstance, thread: CodexRow, titles: Map<string, string>,
@@ -146,7 +163,8 @@ export class CodexProvider implements ProviderAdapter {
       !binding.sessionFile || path.resolve(binding.sessionFile) === path.resolve(thread.rolloutPath));
     const binding = matches.length === 1 ? matches[0] : undefined;
     return this.session(instance, thread, titles,
-      binding?.owner ?? (candidates.length ? "Codex CLI" : instance.label), modelCatalog, binding?.terminal, binding?.herdr);
+      binding?.owner ?? (candidates.length ? "Codex CLI" : instance.label), modelCatalog, binding?.terminal, binding?.herdr,
+      binding?.observed === true, binding?.proven === true, instance.path);
   }
 
   private async instances(): Promise<CodexInstance[]> {
@@ -263,8 +281,15 @@ export class CodexProvider implements ProviderAdapter {
     modelCatalog?: DiscoveredProviderSession["modelCatalog"],
     terminalTarget?: NativeHelperTerminalTarget,
     herdrTarget?: HerdrSurfaceTarget,
+    cliObserved = false,
+    cliProven = false,
+    configHome?: string,
   ): Promise<DiscoveredProviderSession> {
     const sessionID = codexSessionID(instance.id, thread.id);
+    const canonicalSessionID = `codex:${instance.id}:${thread.id}`;
+    const retainedOrigin = this.retainedHistoryOriginLookup?.("codex", sessionID);
+    const durableCliOrigin = retainedOrigin?.provider === "codex";
+    const provenCli = cliProven || durableCliOrigin;
     const storedTitle = indexTitles.get(thread.id) || thread.title;
     const title = storedTitle || await codexRolloutTitle(this.environment, thread.rolloutPath);
     const rolloutStamp = await this.environment.stamp(thread.rolloutPath);
@@ -282,7 +307,8 @@ export class CodexProvider implements ProviderAdapter {
     // forbid a wrong Desktop fallback, but never identifies a terminal by cwd.
     const cliWithoutBinding = !terminalTarget && !herdrTarget
       && ((thread.source === "cli" && !movedToDesktop) || owner === "Codex CLI"
-        || ["codex-tui", "codex_cli_rs"].includes(transcript?.originator ?? ""));
+        || ["codex-tui", "codex_cli_rs"].includes(transcript?.originator ?? "")
+        || durableCliOrigin);
     if (cliWithoutBinding) { owner = "Codex CLI"; unverifiedHost = true; }
     const sessionClass = thread.source === "exec"
       ? "automation" as const
@@ -358,6 +384,19 @@ export class CodexProvider implements ProviderAdapter {
         : {}),
       ...(modelCatalog ? { modelCatalog } : {}),
       ...(controlTarget ? { controlTarget } : {}),
+      ...(sessionClass === "terminal" && !controlTarget ? { ambientEligible: false } : {}),
+      ...(provenCli ? {
+        historyIdentity: {
+          verified: true,
+          current: cliObserved,
+          canonicalId: retainedOrigin?.canonicalId ?? canonicalSessionID,
+          ...(retainedOrigin?.aliases?.length ? { aliases: retainedOrigin.aliases } : {}),
+          ...(terminalTarget ? { host: terminalTarget.application } : {}),
+          ...(herdrTarget ? { host: "Herdr" as const } : {}),
+          ...(retainedOrigin?.host && !terminalTarget && !herdrTarget ? { host: retainedOrigin.host } : {}),
+          ...(retainedOrigin?.configHome ? { configHome: retainedOrigin.configHome } : configHome ? { configHome } : {}),
+        },
+      } : {}),
     };
   }
 

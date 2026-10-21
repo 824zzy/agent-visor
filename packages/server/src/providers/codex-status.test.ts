@@ -88,6 +88,7 @@ describe("Codex desktop lifecycle status", () => {
     expect(snapshot.sessions).toMatchObject([{
       id: sessionId, owner: "Codex CLI", canOpenOwner: false, sessionClass: "terminal", section: "ready",
     }]);
+    expect(repository.chatRecord(sessionId)?.historyIdentity).toBeUndefined();
     expect(repository.chatRecord(sessionId)?.controlTarget).toBeUndefined();
     expect(await repository.focusSession(sessionId)).toContain("Codex CLI terminal");
     expect(repository.current().sessions[0]?.completionUnseen).toBe(true);

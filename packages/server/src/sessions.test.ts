@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -209,6 +209,442 @@ describe("SessionRepository", () => {
         canOpenOwner: false,
       }));
       expect(unavailable.current().sessions).not.toContainEqual(expect.objectContaining({ id: record.id }));
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("retains an observed Codex CLI identity with its config home after the terminal closes", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-codex-history-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const id = "codex:fixture-home:44444444-4444-4444-8444-444444444444";
+    const observed = Object.assign({
+      id,
+      provider: "codex" as const,
+      title: undefined,
+      subtitle: "Codex CLI session",
+      cwd: "/Users/me/Codes/agent-visor",
+      owner: "Codex CLI",
+      section: "history" as const,
+      conversationState: "open" as const,
+      turnState: "ready" as const,
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: false,
+      canEnterChat: true,
+      sessionClass: "terminal" as const,
+      chatPath: "/Users/me/.codex/sessions/44444444-4444-4444-8444-444444444444.jsonl",
+    }, {
+      historyIdentity: {
+        verified: true,
+        canonicalId: id,
+        configHome: "/Users/me/.codex",
+      },
+    }) as DiscoveredProviderSession;
+    let sessions: DiscoveredProviderSession[] = [observed];
+    try {
+      const provider: ProviderAdapter = {
+        id: "codex",
+        discover: async () => structuredClone(sessions),
+      };
+      const repository = new SessionRepository([provider], { retainedHistoryPath: historyPath });
+
+      await repository.refresh();
+      sessions = [];
+      await repository.refresh();
+
+      expect(repository.current().sessions).toEqual([]);
+      expect(repository.historyPage("4444")).toMatchObject({
+        total: 1,
+        sessions: [expect.objectContaining({
+          id,
+          source: "Codex",
+          title: "Codex session",
+          owner: "Codex CLI",
+          section: "history",
+          ambientEligible: false,
+          canOpenOwner: false,
+        })],
+      });
+      const persisted = JSON.parse(readFileSync(historyPath, "utf8")) as {
+        records: Array<{ provider: string; configHome?: string; owner: string }>;
+      };
+      expect(persisted.records).toEqual([
+        expect.objectContaining({ provider: "codex", configHome: "/Users/me/.codex", owner: "Codex CLI" }),
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["cmux", "cmux"],
+    ["Herdr", "Herdr"],
+    ["iTerm2", "iTerm2"],
+    ["Terminal.app", "Terminal"],
+  ] as const)("retains a Claude conversation observed in %s even when its class is not terminal", async (_label, host) => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-host-history-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const id = `claude-host-${host}`;
+    const target = host === "cmux"
+      ? { kind: "cmux_surface" as const, target: {} }
+      : host === "Herdr"
+        ? { kind: "herdr_surface" as const, target: {} }
+        : { kind: "terminal" as const, target: {
+          application: host,
+          pid: 1234,
+          processStartToken: "start-1234",
+          tty: "ttys123",
+          cwd: "/Users/me/Codes/agent-visor",
+        } };
+    const observed = Object.assign({
+      id,
+      provider: "claude_code" as const,
+      cwd: "/Users/me/Codes/agent-visor",
+      owner: host,
+      section: "ready" as const,
+      sessionClass: "interactive" as const,
+      conversationState: "open" as const,
+      turnState: "ready" as const,
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: false,
+      controlTarget: target,
+    }, {
+      historyIdentity: { verified: true, host },
+    }) as DiscoveredProviderSession;
+    let sessions: DiscoveredProviderSession[] = [observed];
+    try {
+      const provider: ProviderAdapter = {
+        id: "claude_code",
+        discover: async () => structuredClone(sessions),
+      };
+      const repository = new SessionRepository([provider], { retainedHistoryPath: historyPath });
+
+      await repository.refresh();
+      expect(repository.current().sessions).toHaveLength(1);
+      sessions = [];
+      await repository.refresh();
+
+      expect(repository.current().sessions).toEqual([]);
+      expect(repository.historyPage(host).sessions).toContainEqual(expect.objectContaining({
+        id,
+        source: "Claude Code",
+        section: "history",
+        owner: host,
+        canOpenOwner: false,
+      }));
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("deduplicates retained and current rows only when a provider supplies the same canonical identity", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-history-alias-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const canonicalId = "codex:fixture-home:55555555-5555-4555-8555-555555555555";
+    const makeSession = (id: string, title: string): DiscoveredProviderSession => Object.assign({
+      id,
+      provider: "codex" as const,
+      title,
+      subtitle: "Codex CLI session",
+      project: "agent-visor",
+      cwd: "/Users/me/Codes/agent-visor",
+      owner: "Codex CLI",
+      section: "ready" as const,
+      sessionClass: "terminal" as const,
+      conversationState: "open" as const,
+      turnState: "ready" as const,
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: false,
+      canEnterChat: false,
+    }, {
+      historyIdentity: {
+        verified: true,
+        canonicalId,
+        aliases: [id],
+        configHome: "/Users/me/.codex",
+      },
+    }) as DiscoveredProviderSession;
+    let sessions = [
+      makeSession(canonicalId, "Same name"),
+      makeSession("codex-cli-alias-555", "Renamed copy"),
+      Object.assign(makeSession("codex-other-555", "Same name"), {
+        historyIdentity: {
+          verified: true,
+          canonicalId: "codex:fixture-home:66666666-6666-4666-8666-666666666666",
+          configHome: "/Users/me/.codex",
+        },
+      }),
+    ];
+    try {
+      const repository = new SessionRepository([{
+        id: "codex",
+        discover: async () => structuredClone(sessions),
+      }], { retainedHistoryPath: historyPath });
+      expect((await repository.refresh()).sessions.map(({ id }) => id)).toEqual([
+        "codex-other-555",
+        canonicalId,
+      ]);
+
+      sessions = [];
+      await repository.refresh();
+      expect(repository.historyPage().sessions.map(({ id }) => id)).toEqual([
+        "codex-other-555",
+        canonicalId,
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("deduplicates verified cross-source aliases even when canonical IDs differ", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-history-cross-alias-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const firstID = "codex:fixture-home:source-a";
+    const secondID = "codex:fixture-home:source-b";
+    const makeSession = (id: string, canonicalId: string, aliases: string[] = []): DiscoveredProviderSession => Object.assign({
+      id,
+      provider: "codex" as const,
+      title: "Shared conversation",
+      subtitle: "Codex CLI session",
+      cwd: "/Users/me/Codes/agent-visor",
+      owner: "Codex CLI",
+      section: "ready" as const,
+      sessionClass: "terminal" as const,
+      conversationState: "open" as const,
+      turnState: "ready" as const,
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: false,
+      canEnterChat: false,
+    }, {
+      historyIdentity: { verified: true, canonicalId, aliases, configHome: "/Users/me/.codex" },
+    }) as DiscoveredProviderSession;
+    try {
+      const repository = new SessionRepository([{
+        id: "codex",
+        discover: async () => [
+          makeSession(firstID, firstID),
+          makeSession(secondID, secondID, [firstID]),
+          makeSession("codex:fixture-home:other", "codex:fixture-home:other"),
+        ],
+      }], { retainedHistoryPath: historyPath });
+      expect((await repository.refresh()).sessions.map(({ id }) => id)).toEqual([
+        "codex:fixture-home:other",
+        firstID,
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("closes an observed Codex CLI record when only an unverified Desktop catalog copy remains", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-history-catalog-copy-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const id = "codex:native:catalog-copy";
+    const observed: DiscoveredProviderSession = {
+      id,
+      provider: "codex",
+      title: "CLI conversation",
+      cwd: "/Users/me/Codes/agent-visor",
+      owner: "Codex CLI",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: false,
+      canEnterChat: false,
+      historyIdentity: { verified: true, canonicalId: id, configHome: "/Users/me/.codex" },
+    };
+    const catalog: DiscoveredProviderSession = {
+      ...observed,
+      owner: "Codex",
+      section: "history",
+      sessionClass: "interactive",
+      canOpenOwner: true,
+      historyIdentity: undefined,
+      controlTarget: { kind: "url", url: `codex://threads/${id}` },
+    };
+    let sessions: DiscoveredProviderSession[] = [observed];
+    try {
+      const repository = new SessionRepository([{
+        id: "codex",
+        discover: async () => structuredClone(sessions),
+      }], { retainedHistoryPath: historyPath });
+      await repository.refresh();
+      sessions = [catalog];
+      await repository.refresh();
+
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id,
+        owner: "Codex CLI",
+        section: "history",
+      }));
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not advertise History Chat for an empty transcript file", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-history-empty-transcript-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const transcriptPath = path.join(directory, "empty.jsonl");
+    writeFileSync(transcriptPath, "");
+    const record = Object.assign({
+      id: "claude-empty-transcript",
+      provider: "claude_code" as const,
+      cwd: "/Users/me/Codes/agent-visor",
+      owner: "Ghostty",
+      section: "ready" as const,
+      sessionClass: "terminal" as const,
+      conversationState: "open" as const,
+      turnState: "ready" as const,
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: true,
+      chatPath: transcriptPath,
+      controlTarget: {
+        kind: "terminal" as const,
+        target: { application: "Ghostty" as const, pid: 1234, tty: "ttys123", cwd: "/Users/me/Codes/agent-visor" },
+      },
+    }, { historyIdentity: { verified: true, host: "Ghostty" as const } }) as DiscoveredProviderSession;
+    let sessions: DiscoveredProviderSession[] = [record];
+    try {
+      const repository = new SessionRepository([{
+        id: "claude_code",
+        discover: async () => structuredClone(sessions),
+      }], { retainedHistoryPath: historyPath });
+      await repository.refresh();
+      sessions = [];
+      await repository.refresh();
+
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id: record.id,
+        canEnterChat: false,
+      }));
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reports retained-history persistence failure through History while live snapshots continue", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-history-persist-warning-"));
+    const historyPath = path.join(directory, "history-directory");
+    mkdirSync(historyPath);
+    const observed: DiscoveredProviderSession = {
+      id: "claude-persist-warning",
+      provider: "claude_code",
+      title: "Persistence warning",
+      cwd: "/Users/me/Codes/agent-visor",
+      owner: "Ghostty",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: false,
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty",
+        pid: 1234,
+        tty: "ttys123",
+        cwd: "/Users/me/Codes/agent-visor",
+      } },
+      historyIdentity: { verified: true, host: "Ghostty" },
+    };
+    let sessions: DiscoveredProviderSession[] = [observed];
+    try {
+      const repository = new SessionRepository([{
+        id: "claude_code",
+        discover: async () => structuredClone(sessions),
+      }], { retainedHistoryPath: historyPath });
+
+      expect((await repository.refresh()).sessions).toContainEqual(expect.objectContaining({
+        id: observed.id,
+        section: "ready",
+      }));
+      sessions = [];
+      expect((await repository.refresh()).sessions).not.toContainEqual(expect.objectContaining({ id: observed.id }));
+      expect(repository.historyPage()).toMatchObject({
+        total: 1,
+        historyWarning: expect.stringContaining("unavailable"),
+        sessions: [expect.objectContaining({ id: observed.id, section: "history" })],
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reconciles provider absence independently without erasing another provider's retained row", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-history-provider-scope-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const claude: DiscoveredProviderSession = {
+      id: "claude-provider-scope",
+      provider: "claude_code",
+      title: "Claude provider row",
+      cwd: "/Users/me/Codes/agent-visor",
+      owner: "Ghostty",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: false,
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty",
+        pid: 1234,
+        tty: "ttys123",
+        cwd: "/Users/me/Codes/agent-visor",
+      } },
+      historyIdentity: { verified: true, host: "Ghostty" },
+    };
+    const codex: DiscoveredProviderSession = {
+      id: "codex:fixture-home:provider-scope",
+      provider: "codex",
+      title: "Codex provider row",
+      cwd: "/Users/me/Codes/agent-visor",
+      owner: "Codex CLI",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: false,
+      canEnterChat: false,
+      historyIdentity: {
+        verified: true,
+        canonicalId: "codex:fixture-home:provider-scope",
+        configHome: "/Users/me/.codex",
+      },
+    };
+    let claudeSessions: DiscoveredProviderSession[] = [claude];
+    let codexSessions: DiscoveredProviderSession[] = [codex];
+    let codexOutage = false;
+    try {
+      const repository = new SessionRepository([
+        { id: "claude_code", discover: async () => structuredClone(claudeSessions) },
+        { id: "codex", discover: async () => {
+          if (codexOutage) throw new Error("Codex inventory unavailable");
+          return structuredClone(codexSessions);
+        } },
+      ], { retainedHistoryPath: historyPath });
+
+      await repository.refresh();
+      claudeSessions = [];
+      await repository.refresh();
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id: claude.id,
+        section: "history",
+      }));
+
+      codexOutage = true;
+      await repository.refresh();
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id: codex.id,
+        subtitle: "Terminal state unavailable",
+      }));
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({ id: claude.id }));
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

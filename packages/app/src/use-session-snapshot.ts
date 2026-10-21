@@ -99,9 +99,33 @@ export function mergeSessionHistory(
 ): SessionSummary[] {
   const sessions = new Map(live.map((session) => [session.id, session]));
   for (const session of history?.sessions ?? []) {
-    if (!sessions.has(session.id)) sessions.set(session.id, session);
+    const current = sessions.get(session.id);
+    if (!current || shouldPreferRetainedHistory(session, current)) sessions.set(session.id, session);
   }
   return [...sessions.values()];
+}
+
+function shouldPreferRetainedHistory(history: SessionSummary, live: SessionSummary): boolean {
+  // The summary carries only provider/route facts. Never use a matching title,
+  // cwd, or recency to transfer a retained CLI origin to a catalog row.
+  if (history.source !== "Codex" || history.owner !== "Codex CLI"
+    || history.sessionClass !== "terminal" || history.ambientEligible !== false
+    || history.canOpenOwner) return false;
+  if (live.source !== "Codex" || hasExactLiveTerminalRoute(live)) return false;
+  // A Codex catalog row is a non-terminal, unowned projection even when a
+  // configured home gives it a presentation label such as "Codex · Copilot".
+  // Route ownership is the source fact; labels never transfer provenance.
+  const catalogOnly = (live.sessionClass !== "terminal" && live.canOpenOwner
+    && live.sessionState?.routeOwnership !== "owned")
+    || (live.owner === "Codex CLI" && !live.canOpenOwner);
+  if (!catalogOnly) return false;
+  return true;
+}
+
+function hasExactLiveTerminalRoute(session: SessionSummary): boolean {
+  return session.canOpenOwner
+    && session.sessionClass === "terminal"
+    && ["Ghostty", "Herdr", "cmux", "iTerm2", "Terminal", "Codex CLI"].includes(session.owner);
 }
 
 function parseJSON(data: string): unknown {
