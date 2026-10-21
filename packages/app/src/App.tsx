@@ -21,6 +21,7 @@ import {
   sessionShortcutEducation,
 } from "./browser-shortcuts";
 import { Chat } from "./Chat";
+import { chatSessionFor, reduceChatSelection, type ChatSelection } from "./chat-selection";
 import { CONTENT_RAIL_INSET, contentRailStyle } from "./content-rail";
 import { Settings } from "./Settings";
 import { SessionViewport } from "./SessionViewport";
@@ -68,20 +69,23 @@ const titleBarDragStyle = {
 export function App() {
   const connection = useSessionSnapshot();
   const nativeServices = useNativeServices();
-  const [chatSessionId, setChatSessionId] = useState<string>();
+  const [chatSelection, setChatSelection] = useState<ChatSelection>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [contentScale, setContentScale] = useState(1);
   const [query, setQuery] = useState("");
   const liveSessions = connection.status === "connected" ? connection.snapshot.sessions : [];
   const history = useSessionHistory(query, liveSessions.map(({ id }) => id));
-  const sessions = mergeSessionHistory(liveSessions, history.page);
-  const chatSession = sessions.find(({ id }) => id === chatSessionId);
+  const sessions = useMemo(
+    () => mergeSessionHistory(liveSessions, history.page),
+    [history.page, liveSessions],
+  );
+  const chatSession = chatSessionFor(chatSelection, sessions);
   const systemScheme = useColorScheme();
   const appearance = nativeServices.state?.settings.appearance ?? "system";
   const palette = palettes[
     appearance === "system" ? (systemScheme === "dark" ? "dark" : "light") : appearance
   ];
-  const browserHidden = Boolean(chatSessionId || settingsOpen);
+  const browserHidden = Boolean(chatSelection.sessionId || settingsOpen);
   const adjustContentScale = (delta: -0.1 | 0 | 0.1) => {
     setContentScale((scale) => {
       const next = changeContentScale(scale, delta);
@@ -95,26 +99,29 @@ export function App() {
   }, [nativeServices.state?.settings.contentScale]);
 
   useEffect(() => {
-    if (connection.status === "connected" && chatSessionId && !chatSession) {
-      setChatSessionId(undefined);
-    }
-  }, [chatSession, chatSessionId, connection.status]);
+    if (connection.status !== "connected" || !chatSelection.sessionId) return;
+    setChatSelection((selection) => reduceChatSelection(selection, { type: "refresh", sessions }));
+  }, [chatSelection.sessionId, chatSelection.lastKnownSession, connection.status, sessions]);
 
   useEffect(() => window.agentVisor?.onNavigate((action) => {
     if (action.page === "sessions") {
-      setChatSessionId(undefined);
+      setChatSelection((selection) => reduceChatSelection(selection, { type: "back" }));
       setSettingsOpen(false);
     } else if (action.page === "settings") {
-      setChatSessionId(undefined);
+      setChatSelection((selection) => reduceChatSelection(selection, { type: "back" }));
       setSettingsOpen(true);
       if (action.checkUpdates) nativeServices.act("check_updates");
     } else if (action.page === "chat") {
       setSettingsOpen(false);
-      setChatSessionId(action.sessionId);
+      setChatSelection((selection) => reduceChatSelection(selection, {
+        type: "navigate",
+        sessionId: action.sessionId,
+        sessions,
+      }));
     } else {
       adjustContentScale(action.delta);
     }
-  }), [nativeServices.act, nativeServices.update]);
+  }), [nativeServices.act, nativeServices.update, sessions]);
 
   if (connection.status === "failed") return <CenteredMessage text="Unable to connect to Agent Visor" palette={palette} />;
   if (connection.status === "connecting") return <CenteredMessage text="Connecting to Agent Visor…" palette={palette} />;
@@ -132,7 +139,7 @@ export function App() {
           active={!browserHidden}
           contentScale={contentScale}
           onContentScaleChange={adjustContentScale}
-          onOpenChat={({ id }) => setChatSessionId(id)}
+          onOpenChat={(session) => setChatSelection((selection) => reduceChatSelection(selection, { type: "open", session }))}
           onOpenSettings={() => setSettingsOpen(true)}
           onLoadMoreHistory={history.loadMore}
           onQueryChange={setQuery}
@@ -146,7 +153,7 @@ export function App() {
       {chatSession ? (
         <Chat
           contentScale={contentScale}
-          onBack={() => setChatSessionId(undefined)}
+          onBack={() => setChatSelection((selection) => reduceChatSelection(selection, { type: "back" }))}
           onContentScaleChange={adjustContentScale}
           onOpenOwner={() => openOwner(chatSession)}
           palette={palette}
