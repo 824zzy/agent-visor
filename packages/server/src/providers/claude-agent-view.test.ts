@@ -14,6 +14,7 @@ import { FakeNativeHelper } from "../native-helper.js";
 import { NativeSessionControls } from "../session-controls.js";
 import { SessionRepository } from "../sessions.js";
 import { PaseoProvider } from "./paseo.js";
+import { alfredResults } from "../alfred.js";
 
 const home = "/Users/me";
 const cwd = home + "/Codes/agent-visor";
@@ -170,6 +171,99 @@ function completedIdleFixture() {
 }
 
 describe("Claude agent-view integration", () => {
+  it("publishes only the verified conversation when a stopped job explicitly resumes it", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, { sessionId: ccID, cwd, kind: "interactive", status: "idle", name: "ccx-thinking-block-sneha" });
+    environment.inventory = inventorySuccess([backgroundRow("64b38993", blockedID, "stopped", { name: "ccx-thinking-block-sneha" })]);
+    environment.files.set(path.join(home, ".claude/jobs/64b38993/state.json"), JSON.stringify({
+      state: "stopped", sessionId: blockedID, resumeSessionId: ccID, interactiveLineage: true, cwd,
+    }));
+    const source = repository(environment);
+    const snapshot = await source.refresh();
+    expect(alfredResults(snapshot, "ccx-thinking-block-sneha").items.map(item => item.uid)).toEqual([ccID]);
+    expect(menuPresentation(snapshot, [], nowMs).pills.map(pill => pill.id)).toEqual([ccID]);
+  });
+
+  it("does not suppress the live conversation when a job's resume ID equals its own ID", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, { sessionId: ccID, cwd, kind: "interactive", status: "idle", name: "Current conversation" });
+    environment.inventory = inventorySuccess([backgroundRow("8e45ed2c", ccID, "stopped", { name: "Current conversation" })]);
+    environment.files.set(path.join(home, ".claude/jobs/8e45ed2c/state.json"), JSON.stringify({
+      state: "stopped", sessionId: ccID, resumeSessionId: ccID, interactiveLineage: true, cwd,
+    }));
+    const source = repository(environment);
+    const snapshot = await source.refresh();
+    expect(snapshot.sessions.map(session => session.id)).toEqual([ccID]);
+    expect(alfredResults(snapshot, "Current conversation").items[0]).toMatchObject({ uid: ccID, valid: true });
+    const waiting = source.applyHook({ sessionId: ccID, provider: "claude_code", cwd,
+      event: "PreToolUse", status: "waiting_for_approval", receivedAt: now.toISOString(),
+      tool: "AskUserQuestion", toolUseId: "current-question", expectsResponse: true,
+      toolInput: { questions: [{ question: "Continue?" }] } });
+    expect(waiting.sessions[0]?.section).toBe("needs_you");
+  });
+
+  it.each(["missing-lineage", "invalid-json", "other-job", "other-resume", "other-cwd", "no-interactive-lineage",
+    "saved-job-running", "inventory-job-running", "busy-inventory", "waiting-inventory", "stale-inventory", "stale-authoritative", "failed-inventory", "live-worker", "unverified-terminal",
+    "application-only", "parked-overview", "missing-process"])("retains the historical job without a verified distinct resume relationship (%s)", async reason => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    const metadata = { sessionId: ccID, cwd, kind: "interactive", status: "idle", name: "ccx-thinking-block-sneha",
+      ...(reason === "parked-overview" ? { parkedJobId: "64b38993" } : {}) };
+    addMetadata(environment, 900, metadata);
+    const row = backgroundRow("64b38993", blockedID, reason === "inventory-job-running" ? "working" : "stopped",
+      { name: "ccx-thinking-block-sneha", status: reason === "busy-inventory" ? "busy" : "idle",
+        ...(reason === "waiting-inventory" ? { waitingFor: "approval" } : {}) });
+    const inventory = inventorySuccess([row], reason !== "stale-inventory");
+    if (reason === "stale-authoritative") inventory.freshness = "stale";
+    environment.inventory = reason === "failed-inventory" ? inventoryFailure(inventory) : inventory;
+    const saved = { state: reason === "saved-job-running" ? "working" : "stopped",
+      sessionId: reason === "other-job" ? managerID : blockedID,
+      resumeSessionId: reason === "other-resume" ? managerID : ccID,
+      interactiveLineage: reason !== "no-interactive-lineage", cwd: reason === "other-cwd" ? home + "/Other" : cwd };
+    if (reason !== "missing-lineage") environment.files.set(path.join(home, ".claude/jobs/64b38993/state.json"),
+      reason === "invalid-json" ? "{broken" : JSON.stringify(saved));
+    if (reason === "live-worker") {
+      addProcess(environment, 901, executable);
+      addMetadata(environment, 901, { sessionId: blockedID, cwd, kind: "bg", jobId: "64b38993", status: "busy" });
+    }
+    if (reason === "unverified-terminal") environment.starts.delete(900);
+    if (reason === "application-only") Object.assign(environment.processRows.find(process => process.pid === 7)!, {
+      command: "/Applications/Claude.app/Contents/MacOS/Claude", arguments: "Claude" });
+    if (reason === "missing-process") environment.processRows = [];
+    const snapshot = await repository(environment).refresh();
+    expect(snapshot.sessions.map(session => session.id)).toContain(blockedID);
+    if (!["parked-overview", "missing-process"].includes(reason)) {
+      expect(alfredResults(snapshot, "ccx-thinking-block-sneha").items.map(item => item.uid).sort())
+        .toEqual([ccID, blockedID].sort());
+    }
+    if (reason === "parked-overview") expect(menuPresentation(snapshot, [], nowMs).pills).toEqual([]);
+  });
+
+  it("reconciles resume lineage across hooks, closed terminals, and provider restart", async () => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, { sessionId: ccID, cwd, kind: "interactive", status: "idle", name: "New title" });
+    environment.inventory = inventorySuccess([backgroundRow("64b38993", blockedID, "stopped", { name: "Old title" })]);
+    environment.files.set(path.join(home, ".claude/jobs/64b38993/state.json"), JSON.stringify({
+      state: "stopped", sessionId: blockedID, resumeSessionId: ccID, interactiveLineage: true, cwd,
+    }));
+    const source = repository(environment);
+    expect((await source.refresh()).sessions.map(session => session.id)).toEqual([ccID]);
+    expect(source.applyHook({ sessionId: blockedID, provider: "claude_code", cwd,
+      event: "Stop", status: "idle", receivedAt: now.toISOString() }).sessions.map(session => session.id)).toEqual([ccID]);
+    const waiting = source.applyHook({ sessionId: ccID, provider: "claude_code", cwd,
+      event: "PreToolUse", status: "waiting_for_approval", receivedAt: now.toISOString(),
+      tool: "AskUserQuestion", toolUseId: "resume-question", expectsResponse: true,
+      toolInput: { questions: [{ question: "Continue?" }] } });
+    expect(waiting.sessions).toMatchObject([{ id: ccID, section: "needs_you" }]);
+    environment.processRows = [];
+    expect((await source.refresh()).sessions.find(session => session.id === blockedID)?.section).toBe("history");
+    addProcess(environment, 900, executable);
+    expect((await repository(environment).refresh()).sessions.map(session => session.id)).toEqual([ccID]);
+  });
+
   it("opens a prepared interactive conversation while unrelated inventory reads are unavailable", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, executable);

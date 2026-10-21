@@ -13,6 +13,7 @@ import { activateMenuPill, menuPresentation } from "../menu.js";
 import { NativeSessionControls } from "../session-controls.js";
 import { FakeNativeHelper } from "../native-helper.js";
 import { NavigationDiagnostics } from "../navigation-diagnostics.js";
+import { alfredResults } from "../alfred.js";
 
 const now = new Date("2026-10-20T03:00:00Z");
 const sessionId = "5118cfe0-3f5b-418e-8bf1-5260f6747f39";
@@ -467,7 +468,9 @@ it.each([
   { fail: false, reparented: false, paneId: "w1:pC", title: "ccx-deployment-improvement" },
   { fail: true, reparented: true, paneId: "w1:pC", title: "ccx-deployment-improvement" },
   { fail: false, reparented: false, paneId: "w1:pC", title: "ccx-deployment-improvement", paseoStatus: "idle" },
-])("opens the $title pill in $paneId and acknowledges only successful navigation (native failure: $fail, reparented: $reparented, Paseo: $paseoStatus)", async ({ fail, reparented, paneId, title, paseoStatus }) => {
+  { fail: false, reparented: false, paneId: "w1:p7", title: "ccx-thinking-block-sneha", lineage: true },
+  { fail: true, reparented: false, paneId: "w1:p7", title: "ccx-thinking-block-sneha", lineage: true },
+])("opens the $title pill in $paneId and acknowledges only successful navigation (native failure: $fail, reparented: $reparented, Paseo: $paseoStatus, lineage: $lineage)", async ({ fail, reparented, paneId, title, paseoStatus, lineage }) => {
   const f = await fixture();
   f.context.paneId = paneId;
   f.target.pane_id = paneId;
@@ -486,7 +489,15 @@ it.each([
     stamp: async () => ({ modifiedAt: now, size: 512 }),
     read: async (value: string) => value.endsWith("/sessions/42.json") ? JSON.stringify({
       pid: 42, sessionId, cwd: "/fixture/Codes", kind: "interactive", status: "idle", name: title,
+    }) : lineage && value.endsWith("/jobs/9dd37798/state.json") ? JSON.stringify({
+      state: "stopped", sessionId: "9dd37798-3563-4b95-9cd6-6ea3400e780f",
+      resumeSessionId: sessionId, interactiveLineage: true, cwd: "/fixture/Codes",
     }) : undefined,
+    ...(lineage ? { claudeAgentInventory: async () => ({ kind: "success" as const, root: "/fixture/.claude",
+      startedAt: now.valueOf(), completedAt: now.valueOf(), freshness: "fresh" as const, authoritative: true,
+      rows: [{ id: "9dd37798", sessionId: "9dd37798-3563-4b95-9cd6-6ea3400e780f",
+        kind: "background", state: "stopped", name: title, cwd: "/fixture/Codes", startedAt: now.valueOf() }],
+    }) } : {}),
     readHeadTail: async () => ({ head: records, tail: records }),
     scanLinePrefixes: async () => 0, sqlite: async () => [],
     herdrSurface: f.herdr.resolve.bind(f.herdr),
@@ -512,6 +523,7 @@ it.each([
   await repository.refresh();
   expect(repository.current().sessions).toMatchObject([{ id: sessionId, owner: "Herdr", canOpenOwner: true, completionUnseen: true }]);
   expect(menuPresentation(repository.current(), [], now.valueOf()).pills).toMatchObject([{ id: sessionId, title }]);
+  if (lineage) expect(alfredResults(repository.current(), title).items.map(item => item.uid)).toEqual([sessionId]);
   const effects: unknown[] = [];
   await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId }, repository, effect => effects.push(effect));
   expect(focused).toEqual(fail ? [] : ["outer-client"]);

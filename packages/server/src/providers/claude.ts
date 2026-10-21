@@ -1,5 +1,6 @@
 import path from "node:path";
 import { navigationStep } from "../navigation-diagnostics.js";
+import { verifiedTerminalRoute } from "../session-state.js";
 import { TRANSCRIPT_STALE_CEILING_MS, type NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import type { ProviderAdapter, DiscoveredProviderSession } from "../sessions.js";
 import type { FileStamp, ProcessRecord, ProviderEnvironment } from "./environment.js";
@@ -41,6 +42,7 @@ const emptySummary: TranscriptSummary = { customTitle: "", firstUser: "", comple
 type InventorySnapshot = {
   rows: readonly ClaudeAgentInventoryRow[];
   authoritative: boolean;
+  fresh: boolean;
   observedAt: number;
 };
 type InventoryRead = {
@@ -97,6 +99,7 @@ export class ClaudeProvider implements ProviderAdapter {
     );
     const backgroundMetadata = new Map<string, BackgroundMetadata>();
     const hiddenInventoryJobs = new Set<string>();
+    const resumedJobSessionIds = new Set<string>();
     const claudeExecutable = inventoryMode && this.environment.claudeExecutable
       ? await this.environment.claudeExecutable()
       : undefined;
@@ -291,6 +294,33 @@ export class ClaudeProvider implements ProviderAdapter {
       }
     }
 
+    // A stopped interactive-lineage job can retain its worker UUID while
+    // its conversation continues under resumeSessionId. Keep the exact live
+    // frontend, never infer this relationship from a shared title or cwd.
+    if (inventory?.authoritative && inventory.fresh) {
+      for (const row of inventoryRows.values()) {
+        if (row.state !== "stopped" || row.status === "busy" || string(row.waitingFor)
+          || backgroundMetadata.get(row.id!)?.process
+          || processes.some(process => process.pid === row.pid && isClaudeCommand(process.command, this.environment.home))) continue;
+        try {
+          const raw = await this.environment.read(path.join(this.environment.home, ".claude", "jobs", row.id!, "state.json"), 256 * 1_024);
+          const saved: unknown = raw ? JSON.parse(raw) : undefined;
+          if (!isRecord(saved) || saved.state !== "stopped" || saved.interactiveLineage !== true
+            || fullSessionID(string(saved.sessionId)) !== fullSessionID(row.sessionId)
+            || saved.cwd !== row.cwd) continue;
+          const resumeID = fullSessionID(string(saved.resumeSessionId));
+          if (!resumeID || resumeID === fullSessionID(row.sessionId)) continue;
+          const live = results.find(session => session.id.toLowerCase() === resumeID && session.cwd === row.cwd
+            && session.conversationState === "open" && session.ambientEligible !== false && session.canOpenOwner
+            && (session.controlTarget?.kind === "herdr_surface" || session.controlTarget?.kind === "cmux_surface"
+              || verifiedTerminalRoute(session)));
+          if (!live || !row.sessionId) continue;
+          hiddenInventoryJobs.add(row.id!.toLowerCase());
+          resumedJobSessionIds.add(row.sessionId.toLowerCase());
+        } catch { /* Missing or malformed lineage must preserve the standalone job. */ }
+      }
+    }
+
     const { jobs: presenceByJob, report: presence } = await resolveClaudePresence(
       [...inventoryRows.values()].filter((row) => !hiddenInventoryJobs.has(row.id!.toLowerCase())),
       inventory?.authoritative === true, parkedGhosttyApplications,
@@ -396,6 +426,7 @@ export class ClaudeProvider implements ProviderAdapter {
     }
     this.hiddenSessionIdsForPublication = new Set([
       ...spares,
+      ...resumedJobSessionIds,
       ...[...parkedSessionIds].filter((id) => !interactiveSessionIds.has(id.toLowerCase())),
       ...this.removedConversationIds.keys(),
     ]);
@@ -459,6 +490,7 @@ export class ClaudeProvider implements ProviderAdapter {
       snapshot: {
         rows: snapshot.rows,
         authoritative: snapshot.authoritative,
+        fresh: result.kind === "success" && snapshot.freshness === "fresh",
         observedAt: snapshot.startedAt,
       },
     };
