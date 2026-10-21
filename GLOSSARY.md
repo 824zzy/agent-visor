@@ -15,3 +15,15 @@ _Avoid_: Needs you, unread
 **Unopened completion**:
 A finished turn whose result has not yet been reviewed by the user.
 _Avoid_: Unread message, pending question
+
+**Closed terminal conversation**:
+A conversation whose terminal frontend has closed, while its saved conversation remains available to continue. A completed turn alone does not make a conversation closed.
+_Avoid_: Finished session, deleted conversation
+
+**Retained history record**:
+A searchable record of a previously observed conversation that remains available after its terminal closes and Agent Visor restarts. Retaining the record does not mean the conversation is running.
+_Avoid_: Live session, active pill
+
+**Resume in original terminal**:
+Continue the same saved conversation in its previous terminal application, working directory and provider profile. If that conversation is already open, return to its existing instance.
+_Avoid_: New conversation, open source app
