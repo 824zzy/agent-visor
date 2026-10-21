@@ -2757,8 +2757,15 @@ export class SessionRepository {
     this.updateRetainedHistory(allDiscovered);
     await this.reconcileRetainedHistoryLifetimes();
     const visibleDiscovered = this.filteredDiscoveredSessions(allDiscovered);
-    for (const provider of this.providers) {
-      this.lastByProvider.set(provider.id, visibleDiscovered.filter((session) => session.provider === provider.id));
+    for (const [index, provider] of this.providers.entries()) {
+      // Keep the adapter-owned bucket keyed by the adapter, not by the
+      // row's normalized provider field. Some adapters intentionally surface
+      // another provider's records (for example a Codex row discovered by a
+      // Pi/automation observer). Preserve that contract and the clone
+      // isolation established above while filtering durable tombstones.
+      this.lastByProvider.set(provider.id, structuredClone(
+        this.filteredDiscoveredSessions(discovered[index] ?? []),
+      ));
     }
     // Exact opened chats are refreshed independently of the provider's
     // bounded ambient catalog. This preserves their generation and delivery
