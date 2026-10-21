@@ -71,6 +71,103 @@ describe("sessionSnapshotFromServerData", () => {
       .toEqual([["shared", "Live conversation"], ["closed-1", "Closed Claude conversation"]]);
   });
 
+  it("preserves retained Codex CLI provenance over a Desktop catalog copy with the same id", () => {
+    const id = "codex:native:shared-cli-desktop";
+    const live = {
+      ...historyPage.sessions[0],
+      id,
+      title: "Desktop catalog copy",
+      source: "Codex",
+      owner: "Codex",
+      sessionClass: "interactive" as const,
+      section: "history" as const,
+      canOpenOwner: true,
+      canEnterChat: true,
+      ambientEligible: undefined,
+    };
+    const history = {
+      ...historyPage,
+      sessions: [{
+        ...historyPage.sessions[0],
+        id,
+        title: "CLI conversation",
+        source: "Codex",
+        owner: "Codex CLI",
+        sessionClass: "terminal" as const,
+        ambientEligible: false,
+        canOpenOwner: false,
+        canEnterChat: true,
+      }],
+    };
+
+    expect(mergeSessionHistory([live], history)[0]).toMatchObject({
+      id,
+      title: "CLI conversation",
+      owner: "Codex CLI",
+    });
+  });
+
+  it("keeps an exact live terminal route ahead of retained Codex CLI provenance", () => {
+    const id = "codex:native:shared-cli-live";
+    const retained = {
+      ...historyPage.sessions[0],
+      id,
+      source: "Codex",
+      owner: "Codex CLI",
+      sessionClass: "terminal" as const,
+      ambientEligible: false,
+      canOpenOwner: false,
+      canEnterChat: true,
+    };
+    const live = {
+      ...retained,
+      title: "Exact Ghostty route",
+      owner: "Ghostty",
+      section: "ready" as const,
+      ambientEligible: true,
+      canOpenOwner: true,
+    };
+
+    expect(mergeSessionHistory([live], { ...historyPage, sessions: [retained] })[0]).toMatchObject({
+      id,
+      title: "Exact Ghostty route",
+      owner: "Ghostty",
+    });
+  });
+
+  it("preserves retained CLI provenance for a configured Codex home label", () => {
+    const id = "codex:copilot:shared-cli-custom-home";
+    const live = {
+      ...historyPage.sessions[0],
+      id,
+      title: "Custom home catalog copy",
+      source: "Codex",
+      sourceProfile: "Copilot",
+      owner: "Codex · Copilot",
+      sessionClass: "interactive" as const,
+      canOpenOwner: true,
+      canEnterChat: true,
+      ambientEligible: undefined,
+    };
+    const retained = {
+      ...historyPage.sessions[0],
+      id,
+      title: "CLI conversation",
+      source: "Codex",
+      owner: "Codex CLI",
+      sessionClass: "terminal" as const,
+      ambientEligible: false,
+      canOpenOwner: false,
+      canEnterChat: true,
+    };
+
+    expect(mergeSessionHistory([live], { ...historyPage, sessions: [retained] })[0]).toMatchObject({
+      id,
+      owner: "Codex CLI",
+      title: "CLI conversation",
+    });
+  });
+
   it("stops presenting the cached snapshot as live while the daemon reconnects", () => {
     const states: ConnectionState[] = [];
     const sent: string[] = [];

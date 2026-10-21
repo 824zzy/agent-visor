@@ -346,6 +346,11 @@ function SessionBrowser({
         orderKey={selection.groups.map(group => `${group.id}:${group.sessions.map(({ id }) => id).join("\0")}`).join("\n")}
       >
         <View style={browserStyles.rail}>
+          {historyState.page?.historyWarning ? (
+            <View accessibilityLabel="History storage warning" style={browserStyles.historyWarning}>
+              <Text style={browserStyles.historyWarningText}>{historyState.page.historyWarning}</Text>
+            </View>
+          ) : null}
           {selection.groups.flatMap((group) => [
               <View key={`header:${group.id}`} style={browserStyles.sectionHeader}>
                 <Text style={browserStyles.sectionTitle}>{group.title}</Text>
@@ -597,6 +602,8 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
     searchTrailing: { alignItems: "center", justifyContent: "center", width: 34 },
     searchHint: { color: palette.tertiary, fontSize: font(10), fontWeight: "600" },
     resultCount: { color: palette.tertiary, fontSize: font(11) },
+    historyWarning: { backgroundColor: palette.card, borderColor: palette.attention, borderRadius: 8, borderWidth: 1, marginHorizontal: 10, marginTop: 8, paddingHorizontal: 10, paddingVertical: 8 },
+    historyWarningText: { color: palette.attention, fontSize: font(11) },
     settings: { alignItems: "center", backgroundColor: palette.card, borderRadius: 8, height: 34, justifyContent: "center", width: 34 },
     settingsText: { color: palette.muted, fontSize: font(18) },
     scroller: { flex: 1 },

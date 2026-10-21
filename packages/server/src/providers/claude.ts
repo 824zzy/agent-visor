@@ -2,7 +2,11 @@ import path from "node:path";
 import { navigationStep } from "../navigation-diagnostics.js";
 import { verifiedTerminalRoute } from "../session-state.js";
 import { TRANSCRIPT_STALE_CEILING_MS, type NativeHelperTerminalTarget } from "@agent-visor/protocol";
-import type { ProviderAdapter, DiscoveredProviderSession } from "../sessions.js";
+import type {
+  ProviderAdapter,
+  DiscoveredProviderSession,
+  ProviderDiscoveryAuthority,
+} from "../sessions.js";
 import type { FileStamp, ProcessRecord, ProviderEnvironment } from "./environment.js";
 import type {
   ClaudeAgentInventoryRow,
@@ -74,6 +78,7 @@ export class ClaudeProvider implements ProviderAdapter {
   /** Tombstones suppress late hooks until a fresh row or interactive record proves reuse. */
   private removedConversationIds: ReadonlyMap<string, number> = new Map();
   private interactiveFocus = new Map<string, { session: DiscoveredProviderSession; metadataPath: string }>();
+  private lastDiscoveryAuthority: ProviderDiscoveryAuthority = "authoritative";
 
   constructor(
     private readonly environment: ProviderEnvironment,
@@ -90,6 +95,9 @@ export class ClaudeProvider implements ProviderAdapter {
     const byPID = new Map(processes.map((process) => [process.pid, process]));
     const inventoryRead = await this.readInventory(forceInventory);
     const inventory = inventoryRead.snapshot;
+    this.lastDiscoveryAuthority = inventoryRead.outage
+      || (inventory !== undefined && !inventory.authoritative)
+      ? "unavailable" : "authoritative";
     const inventoryMode = inventoryRead.mode === "canonical" || inventoryRead.mode === "blocked";
     const inventoryRows = new Map(
       (inventory?.rows ?? []).flatMap((row) =>
@@ -446,6 +454,10 @@ export class ClaudeProvider implements ProviderAdapter {
 
   hiddenSessionIds(): ReadonlySet<string> {
     return this.hiddenSessionIdsForPublication;
+  }
+
+  discoveryAuthority(): ProviderDiscoveryAuthority {
+    return this.lastDiscoveryAuthority;
   }
 
   acknowledgeFailure(sessionId: string): void {

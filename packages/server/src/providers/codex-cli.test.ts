@@ -1,8 +1,11 @@
 import { expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { CodexProvider } from "./codex.js";
 import { LiveProviderEnvironment, type ProcessRecord } from "./environment.js";
 import { SessionRepository } from "../sessions.js";
-import { activateMenuPill } from "../menu.js";
+import { activateMenuPill, nativeActionFor, menuPresentation } from "../menu.js";
 import { NativeSessionControls } from "../session-controls.js";
 import { FakeNativeHelper } from "../native-helper.js";
 import { isCodexCliObservation } from "./codex-cli-observer.js";
@@ -102,6 +105,82 @@ it("keeps unanswered CLI questions yellow even when their exact terminal is unav
   expect(repository.current().sessions.find(session => session.id === first)).toMatchObject({ section: "needs_you", canOpenOwner: false });
 });
 
+it("closes observed CLI history when the process exits while its catalog row remains", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-codex-history-close-"));
+  try {
+    const environment = new Environment();
+    const provider = new CodexProvider(environment);
+    provider.noteHook({ provider: "codex", sessionId: first, cwd, pid: 42, tty: "/dev/ttys001",
+      event: "SessionStart", status: "idle", receivedAt: now.toISOString() });
+    const repository = new SessionRepository([provider], {
+      now: () => now,
+      retainedHistoryPath: path.join(directory, "retained-history.json"),
+    });
+
+    await repository.refresh();
+    expect(repository.historyPage().total).toBe(0);
+
+    environment.running = environment.running.filter((process) => process.pid !== 42);
+    const snapshot = await repository.refresh();
+
+    expect(repository.chatRecord(first)).toMatchObject({
+      owner: "Codex CLI",
+      canOpenOwner: false,
+      historyIdentity: { verified: true, current: false },
+    });
+    expect(snapshot.sessions).toContainEqual(expect.objectContaining({
+      id: first,
+      owner: "Codex CLI",
+      canOpenOwner: false,
+      sessionClass: "terminal",
+    }));
+    expect(repository.historyPage()).toMatchObject({
+      total: 1,
+      sessions: [expect.objectContaining({ id: first, source: "Codex", owner: "Ghostty" })],
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("reconstructs durable CLI provenance without restoring a Desktop route", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-codex-history-restart-"));
+  try {
+    const historyPath = path.join(directory, "retained-history.json");
+    const environment = new Environment();
+    const firstProvider = new CodexProvider(environment);
+    firstProvider.noteHook({ provider: "codex", sessionId: first, cwd, pid: 42, tty: "/dev/ttys001",
+      event: "SessionStart", status: "idle", receivedAt: now.toISOString() });
+    const firstRepository = new SessionRepository([firstProvider], { now: () => now, retainedHistoryPath: historyPath });
+    await firstRepository.refresh();
+
+    environment.running = [];
+    const repository = new SessionRepository([new CodexProvider(environment)], {
+      now: () => now,
+      retainedHistoryPath: historyPath,
+    });
+    const snapshot = await repository.refresh();
+    const session = snapshot.sessions.find(({ id }) => id === first);
+    expect(session).toMatchObject({
+      owner: "Codex CLI",
+      canOpenOwner: false,
+      sessionClass: "terminal",
+      canEnterChat: true,
+    });
+    expect(repository.chatRecord(first)).toMatchObject({
+      owner: "Codex CLI",
+      canOpenOwner: false,
+      historyIdentity: { verified: true, current: false },
+    });
+    expect(repository.chatRecord(first)?.controlTarget).toBeUndefined();
+    expect(menuPresentation(snapshot, [], now.valueOf()).pills).not.toContainEqual(expect.objectContaining({ id: first }));
+    expect(nativeActionFor({ version: 1, type: "event", event: "activate_pill", sessionId: first }, snapshot))
+      .toEqual({ type: "native_action", action: "open_chat", sessionId: first });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 it("revalidates CLI identity when the same terminal switches conversations before a click", async () => {
   const environment = new Environment();
   const provider = new CodexProvider(environment);
@@ -139,6 +218,11 @@ it("recovers a resumed CLI from its observer record after restart without routin
     for (let refresh = 0; refresh < 2; refresh++) await repository.refresh();
     expect(repository.chatRecord(first)?.controlTarget).toMatchObject({ kind: "terminal", target: { pid: 42, cwd } });
     expect(repository.chatRecord(first)?.sessionClass).toBe("terminal");
+    expect(repository.chatRecord(first)?.historyIdentity).toMatchObject({
+      verified: true,
+      canonicalId: `codex:native:${first}`,
+      configHome: "/fixture/.codex",
+    });
     await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: first }, repository, () => {});
     expect(helper.terminalFocusRequests.map(target => target.pid)).toEqual([42]);
     expect(helper.codexThreadRequests).toEqual([]);
