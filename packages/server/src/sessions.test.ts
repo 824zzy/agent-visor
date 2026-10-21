@@ -65,6 +65,155 @@ class FakeProvider implements ProviderAdapter {
 }
 
 describe("SessionRepository", () => {
+  it("retains an observed Claude terminal conversation after close and reconstruction", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-session-history-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const transcriptPath = path.join(directory, "claude-closed-1.jsonl");
+    writeFileSync(transcriptPath, `${JSON.stringify({
+      type: "user",
+      uuid: "user-closed-1",
+      timestamp: "2026-10-21T18:00:00.000Z",
+      message: { role: "user", content: "Review the release" },
+    })}\n`);
+    try {
+      const id = "claude-closed-1";
+      const record: DiscoveredProviderSession = {
+        id,
+        provider: "claude_code",
+        title: "Review the release",
+        subtitle: "Ready to continue",
+        project: "agent-visor",
+        cwd: "/Users/me/Codes/agent-visor",
+        owner: "Ghostty",
+        section: "ready",
+        sessionClass: "terminal",
+        conversationState: "open",
+        turnState: "ready",
+        updatedAt: "2026-10-21T18:00:00.000Z",
+        canOpenOwner: true,
+        canEnterChat: true,
+        chatPath: transcriptPath,
+        controlTarget: {
+          kind: "terminal",
+          target: {
+            application: "Ghostty",
+            pid: 1234,
+            processStartToken: "start-1234",
+            tty: "ttys123",
+            cwd: "/Users/me/Codes/agent-visor",
+          },
+        },
+      };
+      let available = true;
+      const provider: ProviderAdapter = {
+        id: "claude_code",
+        discover: async () => available ? [structuredClone(record)] : [],
+      };
+      const first = new SessionRepository([provider], { retainedHistoryPath: historyPath });
+
+      expect((await first.refresh()).sessions[0]).toMatchObject({
+        id,
+        section: "ready",
+        canOpenOwner: true,
+      });
+      expect(first.historyPage("release").total).toBe(0);
+
+      // A restart before fresh provider evidence keeps the open observation
+      // durable, but does not expose it as closed history yet.
+      const restartedBeforeClose = new SessionRepository([provider], { retainedHistoryPath: historyPath });
+      expect(restartedBeforeClose.historyPage("release").total).toBe(0);
+
+      available = false;
+      const closed = await restartedBeforeClose.refresh();
+      expect(closed.sessions).not.toContainEqual(expect.objectContaining({ id }));
+      expect(restartedBeforeClose.historyPage("release")).toMatchObject({
+        total: 1,
+        sessions: [expect.objectContaining({
+          id,
+          title: "Review the release",
+          section: "history",
+          ambientEligible: false,
+          canOpenOwner: false,
+          canEnterChat: true,
+        })],
+      });
+
+      const restarted = new SessionRepository([provider], { retainedHistoryPath: historyPath });
+      await restarted.refresh();
+      expect(restarted.historyPage("release").sessions).toContainEqual(expect.objectContaining({
+        id,
+        title: "Review the release",
+        section: "history",
+        ambientEligible: false,
+        canOpenOwner: false,
+      }));
+      await expect(restarted.chatOpened(id, "history-reader")).resolves.toBeUndefined();
+      const retainedChat = await restarted.chatPage(id);
+      expect(retainedChat.items).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "user" })]));
+      expect(retainedChat.capabilities.canSendText).toBe(false);
+      restarted.chatClosed(id, "history-reader");
+      rmSync(transcriptPath);
+      expect(restarted.historyPage("release").sessions).toContainEqual(expect.objectContaining({
+        id,
+        canEnterChat: false,
+      }));
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an observed conversation searchable when the first restart inventory is unavailable", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-session-history-outage-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const record: DiscoveredProviderSession = {
+      id: "claude-outage-1",
+      provider: "claude_code",
+      subtitle: "Ready to continue",
+      cwd: "/Users/me/Codes/agent-visor",
+      owner: "Ghostty",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: false,
+      controlTarget: {
+        kind: "terminal",
+        target: {
+          application: "Ghostty",
+          pid: 1235,
+          processStartToken: "start-1235",
+          tty: "ttys124",
+          cwd: "/Users/me/Codes/agent-visor",
+        },
+      },
+    };
+    try {
+      const active = new SessionRepository([{
+        id: "claude_code",
+        discover: async () => [structuredClone(record)],
+      }], { retainedHistoryPath: historyPath });
+      await active.refresh();
+
+      const unavailable = new SessionRepository([{
+        id: "claude_code",
+        discover: async () => { throw new Error("Claude inventory unavailable"); },
+      }], { retainedHistoryPath: historyPath });
+      await unavailable.refresh();
+
+      expect(unavailable.historyPage("outage").sessions).toContainEqual(expect.objectContaining({
+        id: record.id,
+        title: "Claude Code session",
+        section: "history",
+        canOpenOwner: false,
+      }));
+      expect(unavailable.current().sessions).not.toContainEqual(expect.objectContaining({ id: record.id }));
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it.each(["\n", "\r\n", "\r", "\v", "\f", "\u0085", "\u2028", "\u2029"])(
     "uses one display-title line without changing the provider title (%j)", async (separator) => {
       const provider = new FakeProvider();

@@ -129,6 +129,14 @@ export const sessionSnapshotSchema = z.object({
   sessions: z.array(sessionSummarySchema),
 });
 
+/** A bounded page of identity-only retained records from Sessions History. */
+export const sessionHistoryPageSchema = z.object({
+  type: z.literal("session_history_page"),
+  sessions: z.array(sessionSummarySchema),
+  total: z.number().int().nonnegative(),
+  nextCursor: z.string().min(1).max(64).optional(),
+}).strict();
+
 export const CHAT_IMAGE_MAX_BYTES = 10_000_000;
 // ponytail: if the image transport limit changes, update this policy and the
 // renderer's visible validation copy together; do not expose arbitrary files.
@@ -760,6 +768,13 @@ const requestEnvelope = { id: z.string().min(1).max(128) };
 export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("health") }).strict(),
   z.object({ type: z.literal("subscribe_sessions") }).strict(),
+  z.object({
+    ...requestEnvelope,
+    type: z.literal("get_session_history"),
+    query: z.string().max(512).optional(),
+    cursor: z.string().regex(/^\d+$/).max(32).optional(),
+    limit: z.number().int().min(1).max(1_000).optional(),
+  }).strict(),
   z.object({ type: z.literal("get_native_services") }).strict(),
   z.object({
     ...requestEnvelope,
@@ -871,6 +886,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   daemonErrorSchema,
   z.object({ type: z.literal("health"), status: z.literal("ok") }),
   sessionSnapshotSchema,
+  sessionHistoryPageSchema,
   chatPageSchema,
   chatSettingsUpdateSchema,
   chatCommandsSchema,
@@ -1327,6 +1343,7 @@ export type NativeHelperScreen = z.infer<typeof nativeHelperScreenSchema>;
 export type ServerMessage = z.infer<typeof serverMessageSchema>;
 export type SessionSection = z.infer<typeof sessionSectionSchema>;
 export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
+export type SessionHistoryPage = z.infer<typeof sessionHistoryPageSchema>;
 export type SessionSummary = z.infer<typeof sessionSummarySchema>;
 export type SessionAttentionTier = z.infer<typeof sessionAttentionTierSchema>;
 export type SessionClass = z.infer<typeof sessionClassSchema>;

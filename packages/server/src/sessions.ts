@@ -23,6 +23,7 @@ import {
   type SessionTurnState,
   type SessionUnavailableReason,
   type SessionSnapshot,
+  type SessionHistoryPage,
   type SessionSummary,
   TRANSCRIPT_STALE_CEILING_MS,
 } from "@agent-visor/protocol";
@@ -51,6 +52,10 @@ import {
 } from "./session-state.js";
 import type { CodexRouteEvent } from "./codex-turn.js";
 import { CompletionAttention } from "./completion-attention.js";
+import {
+  RetainedHistoryStore,
+  type RetainedHistoryObservation,
+} from "./retained-history.js";
 
 export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie" | "paseo";
 
@@ -135,6 +140,8 @@ export type DiscoveredProviderSession = {
   stateRevision?: number;
   /** Exact provider resolution failed; retain the transcript but remove write authority. */
   resolutionUnavailable?: boolean;
+  /** Identity-only row loaded from retained history; never a live control target. */
+  retainedHistory?: boolean;
 };
 
 export type ChatDeliveryEvidence = {
@@ -259,6 +266,7 @@ export interface SessionSnapshotSource {
   chatClosed?(sessionId: string, leaseId: string): void;
   /** Refresh exact read facts after an owner-focus transition. */
   chatRetry?(sessionId: string): Promise<string | undefined>;
+  historyPage?(query?: string, cursor?: string, limit?: number): SessionHistoryPage;
 }
 
 export interface ProviderAdapter {
@@ -331,6 +339,7 @@ const maxOpenedSessionRecords = 128;
 
 type SessionRepositoryOptions = {
   completionAttentionPath?: string;
+  retainedHistoryPath?: string;
   piRuntimeStatePath?: string;
   bootSessionUUID?: string;
   now?: () => Date;
@@ -454,12 +463,15 @@ export class SessionRepository {
     sessions: [],
   };
   private readonly lastByProvider = new Map<ProviderID, DiscoveredProviderSession[]>();
+  /** True only after a Claude inventory was attempted and unavailable before any good read. */
+  private claudeInventoryUnavailable = false;
   private refreshInFlight: Promise<SessionSnapshot> | undefined;
   private readonly latestHookAtBySession = new Map<string, string>();
   private readonly hookBySession = new Map<string, HookSessionEvent>();
   private readonly piRuntimeBySession = new Map<string, HookSessionEvent>();
   private readonly acknowledgedReadyBySession = new Map<string, string>();
   private readonly completionAttention: CompletionAttention;
+  private readonly retainedHistory: RetainedHistoryStore | undefined;
   private readonly acknowledgedFailureIDs = new Set<string>();
   private readonly stateRevisionBySession = new Map<string, number>();
   private readonly stateFingerprintBySession = new Map<string, string>();
@@ -577,6 +589,9 @@ export class SessionRepository {
   ) {
     this.now = options.now ?? (() => new Date());
     this.completionAttention = new CompletionAttention(options.completionAttentionPath, this.now);
+    this.retainedHistory = options.retainedHistoryPath
+      ? new RetainedHistoryStore({ path: options.retainedHistoryPath, now: this.now })
+      : undefined;
     this.chatPageReader = options.chatPageReader ?? readChatPage;
     this.chatUsageGlance = options.chatUsageGlance;
     const bootSessionUUID = canonicalBootSessionUUID(options.bootSessionUUID);
@@ -894,6 +909,25 @@ export class SessionRepository {
 
   current(): SessionSnapshot {
     return structuredClone(this.snapshotValue);
+  }
+
+  /** Public, paginated retained-history seam used by Sessions and Alfred clients. */
+  historyPage(query?: string, cursor?: string, limit?: number): SessionHistoryPage {
+    // If the first Claude inventory attempt failed before any successful read,
+    // open observations remain searchable as History with unknown liveness.
+    // They are never merged into the ambient snapshot or made launchable.
+    const includeOpen = this.claudeInventoryUnavailable && !this.lastByProvider.has("claude_code");
+    const page = this.retainedHistory?.page(query, cursor, limit, includeOpen) ?? {
+      records: [],
+      total: 0,
+    };
+    const sessions = normalize(page.records.map((record) => retainedHistorySession(record, includeOpen && !record.closedAt)));
+    return {
+      type: "session_history_page",
+      sessions,
+      total: page.total,
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    };
   }
 
   subscribe(listener: (snapshot: SessionSnapshot) => void): () => void {
@@ -2467,9 +2501,11 @@ export class SessionRepository {
     freshFocus = false,
   ): Promise<DiscoveredProviderSession | undefined> {
     const hook = this.hookBySession.get(sessionId);
+    const retained = this.retainedHistory?.get(sessionId);
     const fallback = this.openedSessionBySession.get(sessionId)
       ?? this.chatBySession.get(sessionId)
-      ?? (hook ? hookSession(hook) : undefined);
+      ?? (hook ? hookSession(hook) : undefined)
+      ?? (retained ? retainedHistorySession(retained) : undefined);
     const fallbackProvider = fallback
       ? this.providers.find((provider) => provider.id === fallback.provider)
       : undefined;
@@ -2625,12 +2661,17 @@ export class SessionRepository {
         const generation = (this.providerDiscoveryGeneration.get(provider.id) ?? 0) + 1;
         this.providerDiscoveryGeneration.set(provider.id, generation);
         this.lastByProvider.set(provider.id, structuredClone(sessions));
+        if (provider.id === "claude_code") this.claudeInventoryUnavailable = false;
         if (provider.id === "pi") this.piDiscoveryGeneration += 1;
         return sessions;
       } catch {
+        if (provider.id === "claude_code" && !this.lastByProvider.has(provider.id)) {
+          this.claudeInventoryUnavailable = true;
+        }
         return this.lastByProvider.get(provider.id) ?? [];
       }
     }));
+    this.updateRetainedHistory(discovered.flat());
     // Exact opened chats are refreshed independently of the provider's
     // bounded ambient catalog. This preserves their generation and delivery
     // ledgers while still allowing a recovered provider to restore authority.
@@ -2642,6 +2683,24 @@ export class SessionRepository {
     this.publish(discovered.flat());
     this.publishPiRestoration();
     return this.current();
+  }
+
+  private updateRetainedHistory(discovered: DiscoveredProviderSession[]): void {
+    if (!this.retainedHistory) return;
+    // An initial provider failure is not evidence that a terminal closed.
+    // Only reconcile absence after this process has seen a successful Claude
+    // inventory (including an authoritative empty inventory).
+    if (!this.lastByProvider.has("claude_code")) return;
+    const claude = discovered.filter((session) => session.provider === "claude_code");
+    const observedAt = this.now().toISOString();
+    const observations = claude
+      .map((session) => retainedHistoryObservation(session, observedAt))
+      .filter((observation): observation is RetainedHistoryObservation => observation !== undefined);
+    this.retainedHistory.observeMany(observations);
+    // The provider result is either a successful current inventory or the
+    // previous inventory retained by refreshProviders after a read failure.
+    // Only IDs absent from that result become closed-history candidates.
+    this.retainedHistory.closeMissing(new Set(claude.map((session) => session.id)));
   }
 
   applyHook(event: HookSessionEvent): SessionSnapshot {
@@ -3636,4 +3695,59 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
     }))
     .sort((left, right) =>
       right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id));
+}
+
+function retainedHistoryObservation(
+  session: DiscoveredProviderSession,
+  observedAt: string,
+): RetainedHistoryObservation | undefined {
+  if (session.provider !== "claude_code"
+    || session.sessionClass !== "terminal"
+    || session.conversationState !== "open"
+    || (session.controlTarget?.kind !== "terminal")) return undefined;
+  const target = session.controlTarget.target;
+  const title = sessionDisplayTitle(session.title) || `${providerNames[session.provider]} session`;
+  const project = session.project?.trim() || path.basename(session.cwd) || session.cwd;
+  return {
+    id: session.id,
+    provider: "claude_code",
+    title,
+    subtitle: session.subtitle ?? "",
+    ...(session.sourceProfile ? { sourceProfile: session.sourceProfile } : {}),
+    project,
+    owner: session.owner,
+    host: target.application,
+    cwd: session.cwd,
+    ...(session.chatPath ? { transcriptPath: session.chatPath } : {}),
+    updatedAt: session.updatedAt,
+    observedAt,
+  };
+}
+
+function retainedHistorySession(
+  record: import("./retained-history.js").RetainedHistoryRecord,
+  unknownLiveness = false,
+): DiscoveredProviderSession {
+  return {
+    id: record.id,
+    provider: "claude_code",
+    title: record.title,
+    subtitle: unknownLiveness ? "Terminal state unavailable" : "Closed terminal conversation",
+    project: record.project,
+    cwd: record.cwd,
+    owner: record.owner,
+    sourceProfile: record.sourceProfile,
+    section: "history",
+    sessionClass: "terminal",
+    ambientEligible: false,
+    conversationState: "open",
+    turnState: "unknown",
+    updatedAt: record.updatedAt,
+    canOpenOwner: false,
+    // A retained path is only a hint. Do not advertise a readable transcript
+    // until the file still exists as a regular file after restart.
+    canEnterChat: Boolean(record.transcriptPath && isPersistedRegularFile(record.transcriptPath)),
+    ...(record.transcriptPath ? { chatPath: record.transcriptPath } : {}),
+    retainedHistory: true,
+  };
 }

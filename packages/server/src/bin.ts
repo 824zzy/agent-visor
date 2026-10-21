@@ -119,6 +119,7 @@ await runDaemon(async (lifetime) => {
     {
       piRuntimeStatePath: path.join(dataRoot, "pi-runtime-links.json"),
       completionAttentionPath: path.join(dataRoot, "completion-attention.json"),
+      retainedHistoryPath: path.join(dataRoot, "retained-history.json"),
       bootSessionUUID: await macBootSessionUUID(),
       chatUsageGlance: async (session) => {
         // Claude usage remains absent until a provider-authoritative source is
