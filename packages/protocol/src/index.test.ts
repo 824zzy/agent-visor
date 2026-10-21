@@ -31,6 +31,7 @@ import {
   nativeHelperResponseSchema,
   nativeHelperRequestSchema,
   serverMessageSchema,
+  sessionHistoryPageSchema,
   sessionSnapshotSchema,
 } from "./index.js";
 
@@ -115,6 +116,36 @@ describe("session snapshot protocol", () => {
     };
 
     expect(sessionSnapshotSchema.parse(snapshot)).toEqual(snapshot);
+  });
+
+  it("validates retained History pages without making them snapshots", () => {
+    const page = {
+      type: "session_history_page" as const,
+      sessions: [{
+        id: "closed-claude",
+        title: "Closed Claude conversation",
+        subtitle: "Closed terminal conversation",
+        source: "Claude Code",
+        project: "agent-visor",
+        owner: "Ghostty",
+        cwd: "/Users/me/Codes/agent-visor",
+        section: "history" as const,
+        sessionClass: "terminal" as const,
+        ambientEligible: false,
+        updatedAt: "2026-10-21T18:00:00.000Z",
+        canOpenOwner: false,
+        canEnterChat: false,
+      }],
+      total: 1,
+    };
+    expect(sessionHistoryPageSchema.parse(page)).toEqual(page);
+    expect(serverMessageSchema.parse(page)).toEqual(page);
+    expect(clientMessageSchema.safeParse({
+      type: "get_session_history", id: "history-1", query: "Claude", cursor: "20", limit: 50,
+    }).success).toBe(true);
+    expect(clientMessageSchema.safeParse({
+      type: "get_session_history", id: "history-1", cursor: "not-a-cursor",
+    }).success).toBe(false);
   });
 
   it("rejects unknown sections instead of inventing UI state", () => {

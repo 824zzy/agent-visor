@@ -1,0 +1,80 @@
+import { describe, expect, it } from "vitest";
+import type { DaemonConnection, DaemonConnectionHandlers } from "./daemon-connection.js";
+import { createSessionHistoryController } from "./use-session-history.js";
+
+const page = (ids: string[], nextCursor?: string) => ({
+  type: "session_history_page" as const,
+  sessions: ids.map((id) => ({
+    id,
+    title: id,
+    subtitle: "Closed terminal conversation",
+    source: "Claude Code",
+    project: "agent-visor",
+    owner: "Ghostty",
+    cwd: "/Users/me/Codes/agent-visor",
+    section: "history" as const,
+    sessionClass: "terminal" as const,
+    ambientEligible: false,
+    updatedAt: "2026-10-21T18:00:00.000Z",
+    canOpenOwner: false,
+    canEnterChat: false,
+  })),
+  total: ids.length,
+  ...(nextCursor ? { nextCursor } : {}),
+});
+
+function fakeConnection() {
+  let handlers!: DaemonConnectionHandlers;
+  const sent: string[] = [];
+  const connection: DaemonConnection = {
+    close: () => undefined,
+    send: (data) => { sent.push(data); return true; },
+  };
+  return {
+    sent,
+    connection,
+    connect: (next: DaemonConnectionHandlers) => {
+      handlers = next;
+      return connection;
+    },
+    open: () => handlers.onOpen?.(connection),
+    message: (value: unknown) => handlers.onMessage?.(JSON.stringify(value)),
+    disconnect: () => handlers.onDisconnect?.(),
+  };
+}
+
+describe("session history controller", () => {
+  it("searches at the History boundary and joins paginated rows", () => {
+    const fake = fakeConnection();
+    const states: ReturnType<typeof page>[] = [];
+    const controller = createSessionHistoryController((state) => {
+      if (state.page) states.push(state.page as ReturnType<typeof page>);
+    }, fake.connect);
+    fake.open();
+    expect(JSON.parse(fake.sent[0]!)).toMatchObject({ type: "get_session_history", limit: 100 });
+
+    fake.message(page(["first"], "1"));
+    controller.loadMore();
+    expect(JSON.parse(fake.sent[1]!)).toMatchObject({ type: "get_session_history", cursor: "1", limit: 100 });
+    fake.message(page(["needle"], undefined));
+    expect(states.at(-1)?.sessions.map(({ id }) => id)).toEqual(["first", "needle"]);
+
+    controller.setQuery("needle");
+    expect(JSON.parse(fake.sent[2]!)).toMatchObject({ type: "get_session_history", query: "needle", limit: 100 });
+    fake.message(page(["needle"], undefined));
+    expect(states.at(-1)?.sessions.map(({ id }) => id)).toEqual(["needle"]);
+    controller.close();
+  });
+
+  it("refreshes the current query when a live conversation closes", () => {
+    const fake = fakeConnection();
+    const controller = createSessionHistoryController(() => undefined, fake.connect);
+    fake.open();
+    fake.message(page(["closed"], undefined));
+    controller.observeLiveSessionIDs(["live"]);
+    controller.observeLiveSessionIDs([]);
+    expect(fake.sent).toHaveLength(2);
+    expect(JSON.parse(fake.sent[1]!)).toMatchObject({ type: "get_session_history", limit: 100 });
+    controller.close();
+  });
+});

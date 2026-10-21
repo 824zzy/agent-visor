@@ -67,6 +67,52 @@ describe("Agent Visor daemon", () => {
     socket.close();
   });
 
+  it("serves retained History separately from the ambient snapshot", async () => {
+    const calls: Array<{ query?: string; cursor?: string; limit?: number }> = [];
+    const historyPage = {
+      type: "session_history_page" as const,
+      sessions: [{
+        ...fixtureSnapshot.sessions[4]!,
+        id: "closed-claude",
+        source: "Claude Code",
+        title: "Closed Claude conversation",
+        section: "history" as const,
+        ambientEligible: false,
+        canOpenOwner: false,
+        canEnterChat: false,
+      }],
+      total: 1,
+    };
+    const source = {
+      current: () => ({ ...fixtureSnapshot, sessions: [] }),
+      subscribe: () => () => undefined,
+      historyPage: (query?: string, cursor?: string, limit?: number) => {
+        calls.push({ query, cursor, limit });
+        return historyPage;
+      },
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+
+    socket.send(JSON.stringify({
+      type: "get_session_history",
+      id: "history-1",
+      query: "closed",
+      cursor: "20",
+      limit: 10,
+    }));
+    await expect.poll(() => messages.length).toBe(2);
+    expect(messages[1]).toEqual(historyPage);
+    expect(calls).toEqual([{ query: "closed", cursor: "20", limit: 10 }]);
+    socket.close();
+  });
+
   it("rejects clients without the ephemeral desktop token", async () => {
     running = await startServer({ port: 0, snapshot: fixtureSnapshot, token });
     const socket = new WebSocket(running.url.replace(/\?.*$/, ""));

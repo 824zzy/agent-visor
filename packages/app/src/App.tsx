@@ -34,7 +34,8 @@ import {
 } from "./session-groups";
 import { palettes, type Palette } from "./theme";
 import { useNativeServices } from "./use-native-services";
-import { focusSession, useSessionSnapshot } from "./use-session-snapshot";
+import { useSessionHistory, type SessionHistoryState } from "./use-session-history";
+import { focusSession, mergeSessionHistory, useSessionSnapshot } from "./use-session-snapshot";
 
 const agentImages: Record<string, number> = {
   auggie: require("../assets/agents/auggie.png"),
@@ -70,7 +71,10 @@ export function App() {
   const [chatSessionId, setChatSessionId] = useState<string>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [contentScale, setContentScale] = useState(1);
-  const sessions = connection.status === "connected" ? connection.snapshot.sessions : [];
+  const [query, setQuery] = useState("");
+  const liveSessions = connection.status === "connected" ? connection.snapshot.sessions : [];
+  const history = useSessionHistory(query, liveSessions.map(({ id }) => id));
+  const sessions = mergeSessionHistory(liveSessions, history.page);
   const chatSession = sessions.find(({ id }) => id === chatSessionId);
   const systemScheme = useColorScheme();
   const appearance = nativeServices.state?.settings.appearance ?? "system";
@@ -130,7 +134,11 @@ export function App() {
           onContentScaleChange={adjustContentScale}
           onOpenChat={({ id }) => setChatSessionId(id)}
           onOpenSettings={() => setSettingsOpen(true)}
+          onLoadMoreHistory={history.loadMore}
+          onQueryChange={setQuery}
           palette={palette}
+          historyState={history}
+          query={query}
           sessions={sessions}
           shortcutModifierFamily={nativeServices.state?.settings.sessionShortcutModifierFamily ?? "off"}
         />
@@ -164,23 +172,30 @@ export function App() {
 function SessionBrowser({
   active,
   contentScale,
+  historyState,
   onContentScaleChange,
+  onLoadMoreHistory,
   onOpenChat,
   onOpenSettings,
+  onQueryChange,
   palette,
+  query,
   sessions,
   shortcutModifierFamily,
 }: {
   active: boolean;
   contentScale: number;
+  historyState: SessionHistoryState;
   onContentScaleChange(delta: -0.1 | 0 | 0.1): void;
+  onLoadMoreHistory(): void;
   onOpenChat(session: SessionSummary): void;
   onOpenSettings(): void;
+  onQueryChange(query: string): void;
   palette: Palette;
+  query: string;
   sessions: SessionSummary[];
   shortcutModifierFamily: AppSettings["sessionShortcutModifierFamily"];
 }) {
-  const [query, setQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
   const [cursorId, setCursorId] = useState<string>();
   const [revealRequest, setRevealRequest] = useState<{ id: string; serial: number }>();
@@ -250,7 +265,7 @@ function SessionBrowser({
       event.preventDefault();
       if (command.type === "focus_search") searchRef.current?.focus();
       if (command.type === "open_settings") onOpenSettings();
-      if (command.type === "clear_search") setQuery("");
+      if (command.type === "clear_search") onQueryChange("");
       if (command.type === "scale") onContentScaleChange(command.delta);
       if (command.type === "move") {
         const decision = moveSessionCursor(cursorId, visibleIds, command.offset);
@@ -278,7 +293,7 @@ function SessionBrowser({
       window.removeEventListener("keydown", keyDown);
       window.removeEventListener("keyup", keyUp);
     };
-  }, [active, cursorId, onContentScaleChange, onOpenChat, onOpenSettings, query, visibleKey]);
+  }, [active, cursorId, onContentScaleChange, onOpenChat, onOpenSettings, onQueryChange, query, visibleKey]);
 
   return (
     <View nativeID="sessions-canvas" style={browserStyles.app}>
@@ -289,7 +304,7 @@ function SessionBrowser({
             <TextInput
               accessibilityLabel="Search sessions"
               onBlur={() => setSearchFocused(false)}
-              onChangeText={setQuery}
+              onChangeText={onQueryChange}
               onFocus={() => setSearchFocused(true)}
               placeholder="Search all sessions"
               placeholderTextColor={palette.tertiary}
@@ -299,12 +314,13 @@ function SessionBrowser({
             />
             <View style={browserStyles.searchTrailing}>
               {query ? (
-                <Pressable accessibilityLabel="Clear search" onPress={() => setQuery("")}>
+                <Pressable accessibilityLabel="Clear search" onPress={() => onQueryChange("")}>
                   <Text style={browserStyles.searchHint}>×</Text>
                 </Pressable>
               ) : <Text style={browserStyles.searchHint}>⌘F</Text>}
             </View>
           </View>
+          {historyState.loadingMore ? <Text style={browserStyles.resultCount}>Loading…</Text> : null}
           {query ? (
             <Text accessibilityLabel={`${visibleIds.length} search results`} style={browserStyles.resultCount}>
               {visibleIds.length} {visibleIds.length === 1 ? "result" : "results"}
@@ -346,6 +362,16 @@ function SessionBrowser({
               )),
           ])}
           {!visibleIds.length ? <EmptyState query={query} styles={browserStyles} /> : null}
+          {historyState.page?.nextCursor ? (
+            <Pressable
+              accessibilityLabel="Load more History"
+              accessibilityRole="button"
+              onPress={onLoadMoreHistory}
+              style={browserStyles.loadMore}
+            >
+              <Text style={browserStyles.loadMoreText}>Load more History</Text>
+            </Pressable>
+          ) : null}
         </View>
       </SessionViewport>
 
@@ -596,6 +622,8 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
     chatAction: { borderRadius: 8, minHeight: 32, paddingHorizontal: 6, paddingVertical: 8, width: "100%" },
     chatHovered: { backgroundColor: palette.accentWash },
     chatText: { color: palette.tertiary, fontSize: font(11), fontWeight: "600" },
+    loadMore: { alignItems: "center", alignSelf: "stretch", backgroundColor: palette.card, borderRadius: 8, marginHorizontal: 12, marginTop: 8, paddingVertical: 10 },
+    loadMoreText: { color: palette.accent, fontSize: font(11), fontWeight: "600" },
     empty: { alignItems: "center", justifyContent: "center", minHeight: 330, padding: 24 },
     emptyIcon: { color: palette.tertiary, fontSize: 30 },
     emptyTitle: { color: palette.foreground, fontSize: font(16), fontWeight: "600", marginTop: 12 },

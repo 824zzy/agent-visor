@@ -11,6 +11,7 @@ import {
   type NativeServicesState,
   type SessionSnapshot,
   type ChatSettingsUpdate,
+  type SessionHistoryPage,
 } from "@agent-visor/protocol";
 import type { SessionSnapshotSource } from "./sessions.js";
 import { sendDaemonMessage } from "./outbound.js";
@@ -118,6 +119,14 @@ export async function startServer(options: {
       } else if (parsed.data.type === "subscribe_sessions") {
         subscribers.add(socket);
         sendDaemonMessage(socket, source.current(), { requestType: parsed.data.type });
+      } else if (parsed.data.type === "get_session_history") {
+        const page: SessionHistoryPage = source.historyPage
+          ? source.historyPage(parsed.data.query, parsed.data.cursor, parsed.data.limit)
+          : { type: "session_history_page", sessions: [], total: 0 };
+        sendDaemonMessage(socket, page, {
+          requestType: parsed.data.type,
+          requestId: parsed.data.id,
+        });
       } else if (parsed.data.type === "get_native_services") {
         if (options.nativeServices) {
           nativeSubscribers.add(socket);

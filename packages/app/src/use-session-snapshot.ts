@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import {
   serverMessageSchema,
+  type SessionHistoryPage,
   type SessionSnapshot,
+  type SessionSummary,
 } from "@agent-visor/protocol";
 import {
   connectDaemon,
@@ -70,10 +72,41 @@ export async function focusSession(sessionId: string): Promise<{ ok: boolean; er
 
 export function sessionSnapshotFromServerData(data: string): SessionSnapshot | undefined {
   try {
-    const parsed = serverMessageSchema.safeParse(JSON.parse(data));
+    const parsed = serverMessageSchema.safeParse(parseJSON(data));
     return parsed.success && parsed.data.type === "session_snapshot"
       ? parsed.data
       : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function sessionHistoryPageFromServerData(data: string): SessionHistoryPage | undefined {
+  try {
+    const parsed = serverMessageSchema.safeParse(parseJSON(data));
+    return parsed.success && parsed.data.type === "session_history_page"
+      ? parsed.data
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Merge fetched History into the browser only; live snapshots stay untouched. */
+export function mergeSessionHistory(
+  live: SessionSummary[],
+  history: SessionHistoryPage | undefined,
+): SessionSummary[] {
+  const sessions = new Map(live.map((session) => [session.id, session]));
+  for (const session of history?.sessions ?? []) {
+    if (!sessions.has(session.id)) sessions.set(session.id, session);
+  }
+  return [...sessions.values()];
+}
+
+function parseJSON(data: string): unknown {
+  try {
+    return JSON.parse(data);
   } catch {
     return undefined;
   }
