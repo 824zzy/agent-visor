@@ -21,13 +21,13 @@ public enum NativeProcessProvenanceProbe {
     ) -> NativeProcessProvenanceResult {
         guard pid > 0 else { return .unavailable(.processMissing) }
         guard !processStartToken.isEmpty else { return .unavailable(.argvAmbiguous) }
-        guard identityMatches(pid: pid, expectedToken: processStartToken) else {
+        guard let before = ownedIdentity(pid: pid, expectedToken: processStartToken) else {
             return .unavailable(.processMissing)
         }
 
         var raw = readKernelProcargs2(pid: pid)
         guard raw != nil else {
-            return identityMatches(pid: pid, expectedToken: processStartToken)
+            return ownedIdentity(pid: pid, expectedToken: processStartToken) != nil
                 ? .unavailable(.argvUnreadable)
                 : .unavailable(.processMissing)
         }
@@ -46,7 +46,8 @@ public enum NativeProcessProvenanceProbe {
             homeDirectory: homeDirectory,
             observedAt: observedAt
         )
-        guard identityMatches(pid: pid, expectedToken: processStartToken) else {
+        guard let after = ownedIdentity(pid: pid, expectedToken: processStartToken),
+              before.preciseStartMicros == after.preciseStartMicros else {
             return .unavailable(.processMissing)
         }
         return result
@@ -124,6 +125,7 @@ public enum NativeProcessProvenanceProbe {
             settingsFileRef: selectors.settingsFileRef,
             settingSources: selectors.settingSources,
             overrideNames: environment.overrideNames(for: expected),
+            resumeNonce: environment.resumeNonce,
             argvState: .complete,
             observedAt: observedAt
         ))
@@ -140,6 +142,10 @@ public enum NativeProcessProvenanceProbe {
         var values: [String: [String]] = [:]
         var overrideNamesInOrder: [String] = []
         var namesWithoutValues: Set<String> = []
+        /// The launch nonce is safe correlation evidence, but duplicate or
+        /// malformed entries must fail closed rather than selecting one.
+        var resumeNonce: String?
+        var resumeNonceAmbiguous = false
 
         func values(for name: String) -> [String] {
             values[name] ?? []
@@ -236,6 +242,17 @@ public enum NativeProcessProvenanceProbe {
                     value = nil
                 }
                 guard Self.isEnvironmentName(name) else { continue }
+                if name == "AGENT_VISOR_RESUME_NONCE" {
+                    if capture.resumeNonce != nil || capture.resumeNonceAmbiguous {
+                        capture.resumeNonceAmbiguous = true
+                        capture.resumeNonce = nil
+                    } else if let value, Self.isResumeNonce(value) {
+                        capture.resumeNonce = value
+                    } else {
+                        capture.resumeNonceAmbiguous = true
+                    }
+                    continue
+                }
                 if Self.isPathReferenceName(name) {
                     if let value {
                         capture.values[name, default: []].append(value)
@@ -255,20 +272,31 @@ public enum NativeProcessProvenanceProbe {
             }
         }
 
+        private static func isResumeNonce(_ value: String) -> Bool {
+            guard value.utf8.count == 32 else { return false }
+            return value.utf8.allSatisfy { byte in
+                (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102)
+            }
+        }
+
         private static func isPathReferenceName(_ name: String) -> Bool {
             name == "HOME" || name == "CLAUDE_CONFIG_DIR" || name == "CODEX_HOME"
         }
     }
 
-    private static func identityMatches(pid: Int32, expectedToken: String) -> Bool {
+    private static func ownedIdentity(
+        pid: Int32,
+        expectedToken: String,
+    ) -> NativeProcessIdentityProbe.Snapshot? {
         guard let identity = NativeProcessIdentityProbe.read(pid: pid),
               identity.pid == pid,
-              identity.token == expectedToken else { return false }
+              identity.token == expectedToken else { return nil }
         var bsd = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, size) == size,
-              bsd.pbi_pid == UInt32(pid) else { return false }
-        return bsd.pbi_uid == getuid()
+              bsd.pbi_pid == UInt32(pid),
+              bsd.pbi_uid == getuid() else { return nil }
+        return identity
     }
 
     private static func readKernelProcargs2(pid: Int32) -> Data? {

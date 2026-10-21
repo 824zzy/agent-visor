@@ -16,6 +16,9 @@ import {
   type NativeHelperCodexThreadTarget,
   type NativeHelperPiRestorationUpdate,
   type NativeHelperTerminalTarget,
+  type NativeHelperGhosttyResumeTarget,
+  type NativeHelperGhosttyResumeDispatch,
+  type NativeHelperGhosttyTerminalView,
   type SessionClass,
   type SessionConversationState,
   type SessionRouteOwnership,
@@ -60,7 +63,14 @@ import {
   type RetainedHistoryObservation,
   type RetainedHistoryHost,
   type RetainedHistoryProvider,
+  type RetainedHistoryResumeCapability,
 } from "./retained-history.js";
+import {
+  ResumeAttemptStore,
+  ResumeCoordinator,
+  type ResumeProviderAdapter,
+  type ResumeResult,
+} from "./resume.js";
 
 export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie" | "paseo";
 export type ProviderDiscoveryAuthority = "authoritative" | "unavailable";
@@ -173,7 +183,12 @@ export type DiscoveredProviderSession = {
     aliases?: string[];
     host?: RetainedHistoryHost;
     configHome?: string;
+    resume?: RetainedHistoryResumeCapability;
+    resumeUnavailableReason?: import("./retained-history.js").RetainedHistoryResumeUnavailableReason;
   };
+  /** Explicit cold-resume capability state; never inferred from section. */
+  resumeState?: SessionSummary["resumeState"];
+  resumeReason?: string;
 };
 
 export type ChatDeliveryEvidence = {
@@ -249,6 +264,9 @@ export interface SessionControls {
   /** Return true only when Claude's verified terminal can receive Shift+Tab. */
   canCyclePermissionMode?(session: DiscoveredProviderSession): boolean;
   cyclePermissionMode?(session: DiscoveredProviderSession): Promise<void>;
+  /** Cold Ghostty resume boundary; kept outside the live focus queue. */
+  openGhosttyResume?(target: NativeHelperGhosttyResumeTarget): Promise<NativeHelperGhosttyResumeDispatch>;
+  focusGhosttyTerminal?(target: NativeHelperGhosttyTerminalView): Promise<void>;
   /** Reconcile provider lifecycle and exact native target identity. */
   reconcile?(session: DiscoveredProviderSession): void;
   /** Reconcile a terminal delivery against authoritative canonical transcript rows. */
@@ -292,6 +310,7 @@ export interface SessionSnapshotSource {
     type: "send_chat" | "cancel_chat" | "respond_chat" | "cycle_permission_mode";
   }>): Promise<string | undefined>;
   focusSession?(sessionId: string): Promise<string | undefined>;
+  resumeSession?(sessionId: string): Promise<ResumeResult>;
   /** A websocket opened a read lease; this never acquires a native writer. */
   chatOpened?(sessionId: string, leaseId: string): Promise<string | undefined>;
   /** A websocket stopped observing the chat view. */
@@ -380,6 +399,7 @@ const maxOpenedSessionRecords = 128;
 type SessionRepositoryOptions = {
   completionAttentionPath?: string;
   retainedHistoryPath?: string;
+  resumeAttemptsPath?: string;
   piRuntimeStatePath?: string;
   bootSessionUUID?: string;
   now?: () => Date;
@@ -514,6 +534,9 @@ export class SessionRepository {
   private readonly acknowledgedReadyBySession = new Map<string, string>();
   private readonly completionAttention: CompletionAttention;
   private readonly retainedHistory: RetainedHistoryStore | undefined;
+  private readonly resumeAttempts: ResumeAttemptStore | undefined;
+  private resumeCoordinator: ResumeCoordinator | undefined;
+  private readonly resumeCompletionByCanonical = new Map<string, string>();
   /** Offset of the next bounded background History lifetime batch. */
   private retainedHistoryLifetimeCursor = 0;
   private readonly acknowledgedFailureIDs = new Set<string>();
@@ -636,6 +659,11 @@ export class SessionRepository {
     this.retainedHistory = options.retainedHistoryPath
       ? new RetainedHistoryStore({ path: options.retainedHistoryPath, now: this.now })
       : undefined;
+    const resumeAttemptsPath = options.resumeAttemptsPath
+      ?? (options.retainedHistoryPath ? `${options.retainedHistoryPath}.resume-attempts.json` : undefined);
+    this.resumeAttempts = resumeAttemptsPath
+      ? new ResumeAttemptStore(resumeAttemptsPath, this.now)
+      : undefined;
     const retainedOriginLookup: RetainedHistoryOriginLookup = (provider, sessionId) => {
       return this.retainedHistory?.getOriginForProvider(provider, sessionId);
     };
@@ -660,6 +688,28 @@ export class SessionRepository {
   setControls(controls: SessionControls): void {
     this.codexRouteEventUnsubscribe?.();
     this.controls = controls;
+    this.resumeCoordinator = undefined;
+    const provider = this.providers.find((candidate) => candidate.id === "claude_code"
+      && typeof (candidate as Partial<ResumeProviderAdapter>).resumeLiveness === "function"
+      && typeof (candidate as Partial<ResumeProviderAdapter>).resumeTarget === "function"
+      && typeof (candidate as Partial<ResumeProviderAdapter>).reconcileResume === "function") as
+      | (ProviderAdapter & ResumeProviderAdapter) | undefined;
+    if (provider && this.retainedHistory && this.resumeAttempts
+      && controls.openGhosttyResume && controls.focusGhosttyTerminal) {
+      this.resumeCoordinator = new ResumeCoordinator({
+        history: this.retainedHistory,
+        provider,
+        helper: {
+          openGhosttyResume: controls.openGhosttyResume.bind(controls),
+          focusGhosttyTerminal: controls.focusGhosttyTerminal.bind(controls),
+        },
+        attempts: this.resumeAttempts,
+        focusLive: (session) => this.focusSession(session.id).then((error) => {
+          if (error) throw new Error(error);
+        }),
+        onMatched: (record) => this.acknowledgeRetainedResume(record),
+      });
+    }
     this.codexRouteEventUnsubscribe = controls.subscribeCodexRouteEvents?.((event) => {
       this.handleCodexRouteEvent(event);
     });
@@ -1656,6 +1706,37 @@ export class SessionRepository {
     } finally {
       this.releaseChatStateOperation(sessionId, reservation);
     }
+  }
+
+  async resumeSession(sessionId: string): Promise<ResumeResult> {
+    if (this.isHistorySuppressedID(sessionId)) {
+      return { state: "unavailable", sessionId, reason: "This session was removed from Agent Visor History." };
+    }
+    const record = this.retainedHistory?.get(sessionId);
+    if (record?.completionIdentity) {
+      const key = `${record.provider}:${record.id}`;
+      const attention = this.completionAttention.get(key, record.completionIdentity)
+        ?? this.completionAttention.get(`${record.provider}:${record.canonicalId}`, record.completionIdentity);
+      if (attention && !attention.seen) {
+        this.resumeCompletionByCanonical.set(record.canonicalId, record.completionIdentity);
+      }
+    }
+    if (!this.resumeCoordinator) {
+      return { state: "unavailable", sessionId, reason: "Closed terminal resume is unavailable." };
+    }
+    return this.resumeCoordinator.resumeSession(sessionId);
+  }
+
+  private acknowledgeRetainedResume(record: import("./retained-history.js").RetainedHistoryRecord): void {
+    const completion = this.resumeCompletionByCanonical.get(record.canonicalId);
+    if (!completion || record.completionIdentity !== completion) return;
+    const key = `${record.provider}:${record.id}`;
+    const attention = this.completionAttention.get(key, completion)
+      ?? this.completionAttention.get(`${record.provider}:${record.canonicalId}`, completion);
+    if (!attention || attention.seen) return;
+    this.completionAttention.acknowledge(key, completion, record.updatedAt);
+    this.resumeCompletionByCanonical.delete(record.canonicalId);
+    this.completionAttention.save();
   }
 
   acknowledgeReady(sessionId: string): void {
@@ -3281,6 +3362,25 @@ function completionIdentity(session: { turnId?: string; updatedAt: string }): st
   return session.turnId ? `turn:${session.turnId}` : `activity:${session.updatedAt}`;
 }
 
+function retainedCompletionIdentity(session: { completionAt?: string; turnId?: string }): string {
+  return session.turnId ? `turn:${session.turnId}` : `completion:${session.completionAt}`;
+}
+
+function resumeReasonText(
+  reason: import("./retained-history.js").RetainedHistoryResumeUnavailableReason | undefined,
+): string | undefined {
+  switch (reason) {
+    case "missing_provenance": return "Resume unavailable: launch provenance was not verified.";
+    case "unsupported_profile": return "Resume unavailable: the Claude profile is unsupported.";
+    case "unsupported_override": return "Resume unavailable: provider runtime overrides cannot be reconstructed.";
+    case "missing_transcript": return "Resume unavailable: the Claude transcript is missing.";
+    case "missing_executable": return "Resume unavailable: the recorded Claude executable is unavailable.";
+    case "host_not_supported": return "Resume unavailable: this session was not observed in Ghostty.";
+    case "ambiguous_identity": return "Resume unavailable: the Claude launch identity is ambiguous.";
+    default: return undefined;
+  }
+}
+
 function canonicalBootSessionUUID(value: unknown): string | undefined {
   if (typeof value !== "string"
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
@@ -3899,6 +3999,8 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
       ...(session.claudePresence ? { claudePresence: session.claudePresence } : {}),
       ...(session.managedBy ? { managedBy: session.managedBy } : {}),
       ...(session.failureAlert !== undefined ? { failureAlert: session.failureAlert } : {}),
+      ...(session.resumeState ? { resumeState: session.resumeState } : {}),
+      ...(session.resumeReason ? { resumeReason: session.resumeReason } : {}),
       ...(session.conversationState || session.turnState
         ? { sessionState: resolveSessionState(session) } : {}),
       ...(session.stateRevision !== undefined ? { stateRevision: session.stateRevision } : {}),
@@ -3990,6 +4092,11 @@ function retainedHistoryObservation(
     cwd: session.cwd,
     ...(history?.configHome ? { configHome: history.configHome } : {}),
     ...(session.chatPath ? { transcriptPath: session.chatPath } : {}),
+    ...(history?.resume ? { resume: history.resume } : {}),
+    ...(history?.resumeUnavailableReason
+      ? { resumeUnavailableReason: history.resumeUnavailableReason } : {}),
+    ...(session.completionAt || session.turnId
+      ? { completionIdentity: retainedCompletionIdentity(session) } : {}),
     updatedAt: session.updatedAt,
     observedAt,
     current: true,
@@ -4000,6 +4107,14 @@ function retainedHistorySession(
   record: import("./retained-history.js").RetainedHistoryRecord,
   unknownLiveness = false,
 ): DiscoveredProviderSession {
+  const resumeUnavailableReason = record.resumeUnavailableReason
+    ?? (!record.resume && record.provider === "claude_code" ? "missing_provenance" : undefined);
+  const resumable = record.provider === "claude_code"
+    && Boolean(record.closedAt)
+    && Boolean(record.resume)
+    && !resumeUnavailableReason;
+  const resumeReason = resumable ? undefined : record.provider === "claude_code"
+    ? resumeReasonText(resumeUnavailableReason) : undefined;
   return {
     id: record.id,
     provider: record.provider,
@@ -4020,6 +4135,10 @@ function retainedHistorySession(
     // until the file still exists as a regular file after restart.
     canEnterChat: Boolean(record.transcriptPath && isReadableTranscript(record.transcriptPath)),
     canRemoveHistory: Boolean(record.closedAt),
+    ...(record.provider === "claude_code" ? {
+      resumeState: resumable ? "eligible" as const : "unavailable" as const,
+      ...(resumeReason ? { resumeReason } : {}),
+    } : {}),
     ...(record.transcriptPath ? { chatPath: record.transcriptPath } : {}),
     ...(record.provider === "codex" ? { messageTransport: "terminal" as const } : {}),
     ...(record.provider === "codex" ? {
@@ -4030,6 +4149,9 @@ function retainedHistorySession(
         ...(record.aliases?.length ? { aliases: record.aliases } : {}),
         ...(record.host ? { host: record.host } : {}),
         ...(record.configHome ? { configHome: record.configHome } : {}),
+        ...(record.resume ? { resume: record.resume } : {}),
+        ...(record.resumeUnavailableReason
+          ? { resumeUnavailableReason: record.resumeUnavailableReason } : {}),
       },
     } : {}),
     retainedHistory: true,

@@ -36,7 +36,13 @@ import {
 import { palettes, type Palette } from "./theme";
 import { useNativeServices } from "./use-native-services";
 import { useSessionHistory, type SessionHistoryState } from "./use-session-history";
-import { focusSession, mergeSessionHistory, useSessionSnapshot } from "./use-session-snapshot";
+import {
+  focusSession,
+  mergeSessionHistory,
+  resumeSession as requestResumeSession,
+  useSessionSnapshot,
+  type ResumeActionState,
+} from "./use-session-snapshot";
 
 const agentImages: Record<string, number> = {
   auggie: require("../assets/agents/auggie.png"),
@@ -141,6 +147,11 @@ export function App() {
           onContentScaleChange={adjustContentScale}
           onOpenChat={(session) => setChatSelection((selection) => reduceChatSelection(selection, { type: "open", session }))}
           onRemoveHistory={history.remove}
+          onResume={async (session) => {
+            const result = await requestResumeSession(session.id);
+            if (!result.ok && result.error) window.alert(result.error);
+            return result;
+          }}
           onOpenSettings={() => setSettingsOpen(true)}
           onLoadMoreHistory={history.loadMore}
           onQueryChange={setQuery}
@@ -185,6 +196,7 @@ function SessionBrowser({
   onLoadMoreHistory,
   onOpenChat,
   onRemoveHistory,
+  onResume,
   onOpenSettings,
   onQueryChange,
   palette,
@@ -199,6 +211,7 @@ function SessionBrowser({
   onLoadMoreHistory(): void;
   onOpenChat(session: SessionSummary): void;
   onRemoveHistory(sessionId: string): void;
+  onResume(session: SessionSummary): Promise<{ ok: boolean; state: ResumeActionState; error?: string }>;
   onOpenSettings(): void;
   onQueryChange(query: string): void;
   palette: Palette;
@@ -209,6 +222,7 @@ function SessionBrowser({
   const [searchFocused, setSearchFocused] = useState(false);
   const [cursorId, setCursorId] = useState<string>();
   const [revealRequest, setRevealRequest] = useState<{ id: string; serial: number }>();
+  const [resumeStates, setResumeStates] = useState<Record<string, "reopening" | "uncertain">>({});
   const [commandHeld, setCommandHeld] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const searchRef = useRef<TextInput>(null);
@@ -375,6 +389,26 @@ function SessionBrowser({
                   now={now}
                   onActivate={(alternate) => activateSession(session, alternate, onOpenChat)}
                   onOpenChat={() => onOpenChat(session)}
+                  resumeState={resumeStates[session.id] ?? session.resumeState}
+                  onResume={session.resumeState === "eligible" || session.resumeState === "uncertain"
+                    || resumeStates[session.id] !== undefined
+                    ? async () => {
+                      setResumeStates((current) => ({ ...current, [session.id]: "reopening" }));
+                      const result = await onResume(session);
+                      if (result.ok) {
+                        setResumeStates((current) => {
+                          const next = { ...current };
+                          delete next[session.id];
+                          return next;
+                        });
+                      } else {
+                        setResumeStates((current) => ({
+                          ...current,
+                          [session.id]: result.state === "joined" ? "reopening" : "uncertain",
+                        }));
+                      }
+                    }
+                    : undefined}
                   onRemoveHistory={session.canRemoveHistory === true
                     ? () => onRemoveHistory(session.id)
                     : undefined}
@@ -433,6 +467,8 @@ function SessionRow({
   now,
   onActivate,
   onOpenChat,
+  onResume,
+  resumeState: resumeStateOverride,
   onRemoveHistory,
   palette,
   removing,
@@ -447,6 +483,8 @@ function SessionRow({
   now: Date;
   onActivate(alternate: boolean): void;
   onOpenChat(): void;
+  onResume?: () => Promise<void>;
+  resumeState?: SessionSummary["resumeState"];
   onRemoveHistory?: () => void;
   palette: Palette;
   removing: boolean;
@@ -466,6 +504,10 @@ function SessionRow({
   const primary = sessionAction(session);
   const hasSeparateChat = session.canOpenOwner && session.canEnterChat;
   const actionLabel = primary === "owner" ? `Open in ${session.owner}` : "Open Chat";
+  const resumeState = resumeStateOverride === "eligible"
+    || resumeStateOverride === "uncertain" || resumeStateOverride === "reopening"
+    ? resumeStateOverride : undefined;
+  const canResume = onResume !== undefined;
   const presentation = sessionPresentation(session, now);
   const logo = agentImage(session.source);
   const sourceLabel = session.source === "Codex" && session.owner.startsWith("Codex ·")
@@ -516,6 +558,33 @@ function SessionRow({
         </View>
       </Pressable>
       <View style={rowStyles.chatColumn}>
+        {canResume ? (
+          <Pressable
+            accessibilityLabel={resumeState === "uncertain"
+              ? `Retry resume for ${session.title}`
+              : resumeState === "eligible" ? `Resume ${session.title} in Ghostty` : `Reopening ${session.title} in Ghostty`}
+            accessibilityRole="button"
+            disabled={resumeState === "reopening"}
+            onPress={() => void onResume?.()}
+            style={({ pressed }) => [
+              rowStyles.chatAction,
+              resumeState !== "reopening" && rowStyles.chatHovered,
+              pressed && rowStyles.pressed,
+            ]}
+          >
+            <Text style={[rowStyles.chatText, rowStyles.linkText]}>
+              {resumeState === "uncertain" ? "Retry resume" : resumeState === "reopening" ? "Reopening…" : "Resume in Ghostty"}
+            </Text>
+          </Pressable>
+        ) : session.resumeState === "unavailable" && session.resumeReason ? (
+          <Text
+            accessibilityLabel={`Resume unavailable for ${session.title}: ${session.resumeReason}`}
+            numberOfLines={2}
+            style={rowStyles.chatText}
+          >
+            {`Resume unavailable · ${session.resumeReason}`}
+          </Text>
+        ) : null}
         {hasSeparateChat ? (
           <Pressable
             accessibilityLabel={`Open Chat for ${session.title}`}
@@ -536,7 +605,9 @@ function SessionRow({
         ) : null}
         {onRemoveHistory ? (
           <Pressable
-            accessibilityLabel={removing ? `Removing ${session.title} from History` : `Remove ${session.title} from History`}
+            accessibilityLabel={removing
+              ? `Removing ${session.title} from Agent Visor`
+              : `Remove ${session.title} from Agent Visor`}
             accessibilityRole="button"
             disabled={removing}
             onHoverIn={() => setRemoveHovered(true)}
@@ -549,7 +620,7 @@ function SessionRow({
             ]}
           >
             <Text style={[rowStyles.chatText, removeHovered && rowStyles.linkText]}>
-              {removing ? "Removing…" : "Remove"}
+              {removing ? "Removing from Agent Visor…" : "Remove from Agent Visor"}
             </Text>
           </Pressable>
         ) : null}
@@ -669,7 +740,7 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
     ownerColumn: { alignItems: "flex-start", justifyContent: "center", minHeight: 32, width: 120 },
     actionText: { color: palette.muted, fontSize: font(11), fontWeight: "600" },
     linkText: { color: palette.accent },
-    chatColumn: { alignItems: "flex-start", justifyContent: "center", paddingRight: 8, width: 138 },
+    chatColumn: { alignItems: "flex-start", justifyContent: "center", paddingRight: 8, width: 190 },
     chatAction: { borderRadius: 8, minHeight: 32, paddingHorizontal: 6, paddingVertical: 8, width: "100%" },
     chatHovered: { backgroundColor: palette.accentWash },
     chatText: { color: palette.tertiary, fontSize: font(11), fontWeight: "600" },

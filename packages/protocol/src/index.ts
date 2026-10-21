@@ -89,6 +89,14 @@ export const sessionClassSchema = z.enum([
   "automation",
 ]);
 
+/** Explicit closed-conversation resume capability; never inferred from age. */
+export const sessionResumeStateSchema = z.enum([
+  "eligible",
+  "reopening",
+  "uncertain",
+  "unavailable",
+]);
+
 export const sessionSummarySchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -123,6 +131,9 @@ export const sessionSummarySchema = z.object({
   canEnterChat: z.boolean(),
   /** True only for a closed retained row removable from Agent Visor History. */
   canRemoveHistory: z.boolean().optional(),
+  /** Resume is a separate action from opening the read-only transcript. */
+  resumeState: sessionResumeStateSchema.optional(),
+  resumeReason: z.string().min(1).max(256).optional(),
 });
 
 export const sessionSnapshotSchema = z.object({
@@ -792,6 +803,11 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
   }).strict(),
   z.object({
     ...requestEnvelope,
+    type: z.literal("resume_session"),
+    sessionId: z.string().min(1).max(512),
+  }).strict(),
+  z.object({
+    ...requestEnvelope,
     type: z.literal("update_settings"),
     patch: appSettingsPatchSchema,
   }).strict(),
@@ -907,6 +923,15 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     error: z.string().min(1).max(1_024).optional(),
   }).strict(),
   z.object({
+    type: z.literal("resume_action_result"),
+    id: z.string().min(1).max(128),
+    action: z.literal("resume"),
+    sessionId: z.string().min(1).max(512),
+    state: z.enum(["focused", "matched", "joined", "reopening", "unavailable", "uncertain"]),
+    ok: z.boolean(),
+    error: z.string().min(1).max(1_024).optional(),
+  }).strict(),
+  z.object({
     type: z.literal("history_action_result"),
     id: z.string().min(1).max(128),
     action: z.literal("remove"),
@@ -1014,6 +1039,75 @@ export const nativeHelperClaudeAttachTargetSchema = z.object({
   executable: z.string().startsWith("/").max(1_024),
   jobId: z.string().regex(/^[0-9a-f]{8}$/i),
 }).strict();
+
+const resumeSessionIDSchema = z.string().regex(
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+);
+const resumeNonceSchema = z.string().regex(/^[0-9a-f]{32}$/);
+const resumeProfileNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+const resumeAbsolutePathSchema = z.string().startsWith("/").max(4_096).regex(/^[^\0]+$/);
+const resumeSettingSourcesSchema = z.array(z.enum(["user", "project", "local"])).max(3);
+
+/** Structured provider launch authority; arbitrary command text is forbidden. */
+export const nativeHelperGhosttyResumeTargetSchema = z.object({
+  attemptId: z.string().min(1).max(128).regex(/^[^\0]+$/),
+  provider: z.literal("claude_code"),
+  sessionId: resumeSessionIDSchema,
+  cwd: resumeAbsolutePathSchema,
+  executable: resumeAbsolutePathSchema,
+  configRoot: resumeAbsolutePathSchema.optional(),
+  settingsFile: resumeAbsolutePathSchema.optional(),
+  settingSources: resumeSettingSourcesSchema.optional(),
+  profileRef: resumeProfileNameSchema.optional(),
+  profileState: z.enum(["present", "verified_absent"]),
+  nonce: resumeNonceSchema,
+}).strict();
+
+export const nativeHelperGhosttyResumeDispatchSchema = z.object({
+  attemptId: z.string().min(1).max(128).regex(/^[^\0]+$/),
+  provider: z.literal("claude_code"),
+  sessionId: resumeSessionIDSchema,
+  applicationPID: z.number().int().positive().max(2_147_483_647),
+  processStartToken: z.string().min(1).max(256).regex(/^[^\0]+$/),
+  windowId: z.string().min(1).max(128).regex(/^[^\0]+$/),
+  tabId: z.string().min(1).max(128).regex(/^[^\0]+$/),
+  terminalId: z.string().min(1).max(128).regex(/^[^\0]+$/),
+  nonce: resumeNonceSchema,
+  dispatchedAt: z.iso.datetime(),
+}).strict();
+
+export const nativeHelperProcessProvenanceTargetSchema = z.object({
+  pid: z.number().int().positive().max(2_147_483_647),
+  provider: z.enum(["claude_code", "codex_cli"]),
+  processStartToken: z.string().min(1).max(256).regex(/^[^\0]+$/),
+  homeDirectory: resumeAbsolutePathSchema,
+}).strict();
+
+export const nativeHelperProcessProvenanceSchema = z.object({
+  version: z.literal(1),
+  pid: z.number().int().positive().max(2_147_483_647),
+  processStartToken: z.string().min(1).max(256).regex(/^[^\0]+$/),
+  executableRef: resumeAbsolutePathSchema,
+  executableVersion: z.string().min(1).max(256).regex(/^[^\0]+$/).optional(),
+  configRootRef: resumeAbsolutePathSchema.optional(),
+  profileRef: resumeProfileNameSchema.optional(),
+  profileState: z.enum(["present", "verified_absent", "unknown"]),
+  settingsFileRef: resumeAbsolutePathSchema.optional(),
+  settingSources: resumeSettingSourcesSchema.optional(),
+  overrideNames: z.array(z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/)).max(64),
+  /** One-shot launch correlation evidence; never retained in history. */
+  resumeNonce: resumeNonceSchema.optional(),
+  argvState: z.enum(["complete", "unknown"]),
+  observedAt: z.iso.datetime(),
+}).strict();
+
+export const nativeHelperProcessProvenanceResultSchema = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("available"), value: nativeHelperProcessProvenanceSchema }).strict(),
+  z.object({
+    state: z.literal("unavailable"),
+    reason: z.enum(["process_missing", "argv_unreadable", "argv_ambiguous", "executable_untrusted", "config_untrusted"]),
+  }).strict(),
+]);
 
 export const nativeHelperTerminalTargetSchema = z.object({
   application: z.enum(["Ghostty", "iTerm2", "Terminal"]),
@@ -1175,6 +1269,16 @@ export const nativeHelperRequestSchema = z.discriminatedUnion("method", [
   }).strict(),
   z.object({
     ...helperEnvelope,
+    method: z.literal("open_ghostty_resume"),
+    params: z.object({ target: nativeHelperGhosttyResumeTargetSchema }).strict(),
+  }).strict(),
+  z.object({
+    ...helperEnvelope,
+    method: z.literal("read_process_provenance"),
+    params: z.object({ target: nativeHelperProcessProvenanceTargetSchema }).strict(),
+  }).strict(),
+  z.object({
+    ...helperEnvelope,
     method: z.literal("focus_terminal"),
     params: z.object({ target: nativeHelperTerminalTargetSchema, conversationOnly: z.boolean().optional() }).strict()
       .refine(value => value.conversationOnly === undefined || value.target.application === "Ghostty"),
@@ -1220,7 +1324,9 @@ export const nativeHelperScreenSchema = z.object({
   isMain: z.boolean(),
 }).strict();
 
-const nativeHelperResultSchema = z.discriminatedUnion("type", [
+// The process-provenance result has two states under one result type. A plain
+// union keeps both state variants valid without duplicating a discriminant.
+const nativeHelperResultSchema = z.union([
   z.object({
     type: z.literal("ghostty_terminal_views"),
     views: z.array(nativeHelperGhosttyTerminalViewSchema).max(64),
@@ -1248,12 +1354,26 @@ const nativeHelperResultSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("accepted"),
   }).strict(),
+  z.object({
+    type: z.literal("ghostty_resume_dispatched"),
+    dispatch: nativeHelperGhosttyResumeDispatchSchema,
+  }).strict(),
+  z.object({
+    type: z.literal("process_provenance"),
+    state: z.literal("available"),
+    value: nativeHelperProcessProvenanceSchema,
+  }).strict(),
+  z.object({
+    type: z.literal("process_provenance"),
+    state: z.literal("unavailable"),
+    reason: z.enum(["process_missing", "argv_unreadable", "argv_ambiguous", "executable_untrusted", "config_untrusted"]),
+  }).strict(),
 ]);
 
 export const nativeHelperFocusFailureReasonSchema = z.enum([
   "invalid_target", "process_missing", "process_terminated", "bundle_mismatch",
   "profile_unavailable", "executable_mismatch", "profile_ambiguous", "profile_mismatch",
-  "deep_link_rejected", "activation_failed",
+  "deep_link_rejected", "activation_failed", "native_creation_uncertain", "surface_unavailable",
 ]);
 
 const nativeHelperResponseEnvelopeSchema = z.discriminatedUnion("ok", [
@@ -1337,6 +1457,11 @@ export type HookEvent = z.infer<typeof hookEventSchema>;
 export type NativeHelperFocusTarget = z.infer<typeof nativeHelperFocusTargetSchema>;
 export type NativeHelperCodexThreadTarget = z.infer<typeof nativeHelperCodexThreadTargetSchema>;
 export type NativeHelperClaudeAttachTarget = z.infer<typeof nativeHelperClaudeAttachTargetSchema>;
+export type NativeHelperGhosttyResumeTarget = z.infer<typeof nativeHelperGhosttyResumeTargetSchema>;
+export type NativeHelperGhosttyResumeDispatch = z.infer<typeof nativeHelperGhosttyResumeDispatchSchema>;
+export type NativeHelperProcessProvenanceTarget = z.infer<typeof nativeHelperProcessProvenanceTargetSchema>;
+export type NativeHelperProcessProvenance = z.infer<typeof nativeHelperProcessProvenanceSchema>;
+export type NativeHelperProcessProvenanceResult = z.infer<typeof nativeHelperProcessProvenanceResultSchema>;
 export type NativeHelperNotificationPermission = z.infer<
   typeof nativeHelperNotificationPermissionSchema
 >;
@@ -1364,6 +1489,7 @@ export type SessionHistoryPage = z.infer<typeof sessionHistoryPageSchema>;
 export type SessionSummary = z.infer<typeof sessionSummarySchema>;
 export type SessionAttentionTier = z.infer<typeof sessionAttentionTierSchema>;
 export type SessionClass = z.infer<typeof sessionClassSchema>;
+export type SessionResumeState = z.infer<typeof sessionResumeStateSchema>;
 export type SessionConversationState = z.infer<typeof sessionConversationStateSchema>;
 export type SessionTurnState = z.infer<typeof sessionTurnStateSchema>;
 export type SessionRouteState = z.infer<typeof sessionRouteStateSchema>;
