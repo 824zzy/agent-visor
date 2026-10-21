@@ -536,6 +536,7 @@ export class SessionRepository {
   private readonly retainedHistory: RetainedHistoryStore | undefined;
   private readonly resumeAttempts: ResumeAttemptStore | undefined;
   private resumeCoordinator: ResumeCoordinator | undefined;
+  /** Provider-qualified so equal Codex/Claude UUIDs cannot cross-acknowledge. */
   private readonly resumeCompletionByCanonical = new Map<string, string>();
   /** Offset of the next bounded background History lifetime batch. */
   private retainedHistoryLifetimeCursor = 0;
@@ -689,16 +690,19 @@ export class SessionRepository {
     this.codexRouteEventUnsubscribe?.();
     this.controls = controls;
     this.resumeCoordinator = undefined;
-    const provider = this.providers.find((candidate) => candidate.id === "claude_code"
+    const resumeProviders = this.providers.filter((candidate) =>
+      (candidate.id === "claude_code" || candidate.id === "codex")
       && typeof (candidate as Partial<ResumeProviderAdapter>).resumeLiveness === "function"
       && typeof (candidate as Partial<ResumeProviderAdapter>).resumeTarget === "function"
       && typeof (candidate as Partial<ResumeProviderAdapter>).reconcileResume === "function") as
-      | (ProviderAdapter & ResumeProviderAdapter) | undefined;
-    if (provider && this.retainedHistory && this.resumeAttempts
+      (ProviderAdapter & ResumeProviderAdapter)[];
+    const providers = Object.fromEntries(resumeProviders.map((provider) => [provider.id, provider])) as
+      Partial<Record<"claude_code" | "codex", ProviderAdapter & ResumeProviderAdapter>>;
+    if (resumeProviders.length && this.retainedHistory && this.resumeAttempts
       && controls.openGhosttyResume && controls.focusGhosttyTerminal) {
       this.resumeCoordinator = new ResumeCoordinator({
         history: this.retainedHistory,
-        provider,
+        providers,
         helper: {
           openGhosttyResume: controls.openGhosttyResume.bind(controls),
           focusGhosttyTerminal: controls.focusGhosttyTerminal.bind(controls),
@@ -1718,7 +1722,7 @@ export class SessionRepository {
       const attention = this.completionAttention.get(key, record.completionIdentity)
         ?? this.completionAttention.get(`${record.provider}:${record.canonicalId}`, record.completionIdentity);
       if (attention && !attention.seen) {
-        this.resumeCompletionByCanonical.set(record.canonicalId, record.completionIdentity);
+        this.resumeCompletionByCanonical.set(resumeCompletionKey(record.provider, record.canonicalId), record.completionIdentity);
       }
     }
     if (!this.resumeCoordinator) {
@@ -1728,14 +1732,14 @@ export class SessionRepository {
   }
 
   private acknowledgeRetainedResume(record: import("./retained-history.js").RetainedHistoryRecord): void {
-    const completion = this.resumeCompletionByCanonical.get(record.canonicalId);
+    const completion = this.resumeCompletionByCanonical.get(resumeCompletionKey(record.provider, record.canonicalId));
     if (!completion || record.completionIdentity !== completion) return;
     const key = `${record.provider}:${record.id}`;
     const attention = this.completionAttention.get(key, completion)
       ?? this.completionAttention.get(`${record.provider}:${record.canonicalId}`, completion);
     if (!attention || attention.seen) return;
     this.completionAttention.acknowledge(key, completion, record.updatedAt);
-    this.resumeCompletionByCanonical.delete(record.canonicalId);
+    this.resumeCompletionByCanonical.delete(resumeCompletionKey(record.provider, record.canonicalId));
     this.completionAttention.save();
   }
 
@@ -3366,15 +3370,21 @@ function retainedCompletionIdentity(session: { completionAt?: string; turnId?: s
   return session.turnId ? `turn:${session.turnId}` : `completion:${session.completionAt}`;
 }
 
+function resumeCompletionKey(provider: RetainedHistoryProvider, canonicalId: string): string {
+  return `${provider}\u0000${canonicalId}`;
+}
+
 function resumeReasonText(
   reason: import("./retained-history.js").RetainedHistoryResumeUnavailableReason | undefined,
+  provider: "claude_code" | "codex" = "claude_code",
 ): string | undefined {
+  const name = provider === "codex" ? "Codex" : "Claude";
   switch (reason) {
     case "missing_provenance": return "Resume unavailable: launch provenance was not verified.";
-    case "unsupported_profile": return "Resume unavailable: the Claude profile is unsupported.";
+    case "unsupported_profile": return `Resume unavailable: the ${name} profile is unsupported.`;
     case "unsupported_override": return "Resume unavailable: provider runtime overrides cannot be reconstructed.";
-    case "missing_transcript": return "Resume unavailable: the Claude transcript is missing.";
-    case "missing_executable": return "Resume unavailable: the recorded Claude executable is unavailable.";
+    case "missing_transcript": return `Resume unavailable: the ${name} transcript is missing.`;
+    case "missing_executable": return `Resume unavailable: the recorded ${name} executable is unavailable.`;
     case "host_not_supported": return "Resume unavailable: this session was not observed in Ghostty.";
     case "ambiguous_identity": return "Resume unavailable: the Claude launch identity is ambiguous.";
     default: return undefined;
@@ -4108,13 +4118,12 @@ function retainedHistorySession(
   unknownLiveness = false,
 ): DiscoveredProviderSession {
   const resumeUnavailableReason = record.resumeUnavailableReason
-    ?? (!record.resume && record.provider === "claude_code" ? "missing_provenance" : undefined);
-  const resumable = record.provider === "claude_code"
+    ?? (!record.resume ? "missing_provenance" : undefined);
+  const resumable = (record.provider === "claude_code" || record.provider === "codex")
     && Boolean(record.closedAt)
     && Boolean(record.resume)
     && !resumeUnavailableReason;
-  const resumeReason = resumable ? undefined : record.provider === "claude_code"
-    ? resumeReasonText(resumeUnavailableReason) : undefined;
+  const resumeReason = resumable ? undefined : resumeReasonText(resumeUnavailableReason, record.provider);
   return {
     id: record.id,
     provider: record.provider,
@@ -4135,10 +4144,8 @@ function retainedHistorySession(
     // until the file still exists as a regular file after restart.
     canEnterChat: Boolean(record.transcriptPath && isReadableTranscript(record.transcriptPath)),
     canRemoveHistory: Boolean(record.closedAt),
-    ...(record.provider === "claude_code" ? {
-      resumeState: resumable ? "eligible" as const : "unavailable" as const,
-      ...(resumeReason ? { resumeReason } : {}),
-    } : {}),
+    resumeState: resumable ? "eligible" as const : "unavailable" as const,
+    ...(resumeReason ? { resumeReason } : {}),
     ...(record.transcriptPath ? { chatPath: record.transcriptPath } : {}),
     ...(record.provider === "codex" ? { messageTransport: "terminal" as const } : {}),
     ...(record.provider === "codex" ? {

@@ -1049,23 +1049,32 @@ const resumeAbsolutePathSchema = z.string().startsWith("/").max(4_096).regex(/^[
 const resumeSettingSourcesSchema = z.array(z.enum(["user", "project", "local"])).max(3);
 
 /** Structured provider launch authority; arbitrary command text is forbidden. */
-export const nativeHelperGhosttyResumeTargetSchema = z.object({
+const nativeHelperGhosttyResumeTargetBaseSchema = z.object({
   attemptId: z.string().min(1).max(128).regex(/^[^\0]+$/),
-  provider: z.literal("claude_code"),
   sessionId: resumeSessionIDSchema,
   cwd: resumeAbsolutePathSchema,
   executable: resumeAbsolutePathSchema,
-  configRoot: resumeAbsolutePathSchema.optional(),
-  settingsFile: resumeAbsolutePathSchema.optional(),
-  settingSources: resumeSettingSourcesSchema.optional(),
   profileRef: resumeProfileNameSchema.optional(),
   profileState: z.enum(["present", "verified_absent"]),
   nonce: resumeNonceSchema,
 }).strict();
 
+export const nativeHelperGhosttyResumeTargetSchema = z.discriminatedUnion("provider", [
+  nativeHelperGhosttyResumeTargetBaseSchema.extend({
+    provider: z.literal("claude_code"),
+    configRoot: resumeAbsolutePathSchema.optional(),
+    settingsFile: resumeAbsolutePathSchema.optional(),
+    settingSources: resumeSettingSourcesSchema.optional(),
+  }).strict(),
+  nativeHelperGhosttyResumeTargetBaseSchema.extend({
+    provider: z.literal("codex_cli"),
+    configRoot: resumeAbsolutePathSchema,
+  }).strict(),
+]);
+
 export const nativeHelperGhosttyResumeDispatchSchema = z.object({
   attemptId: z.string().min(1).max(128).regex(/^[^\0]+$/),
-  provider: z.literal("claude_code"),
+  provider: z.enum(["claude_code", "codex_cli"]),
   sessionId: resumeSessionIDSchema,
   applicationPID: z.number().int().positive().max(2_147_483_647),
   processStartToken: z.string().min(1).max(256).regex(/^[^\0]+$/),

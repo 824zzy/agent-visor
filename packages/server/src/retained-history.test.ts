@@ -131,4 +131,60 @@ describe("RetainedHistoryStore", () => {
 
     expect(store.page()).toMatchObject({ records: [], total: 0 });
   });
+
+  it("fails closed when a bare public identity is shared by Claude and Codex", () => {
+    const store = new RetainedHistoryStore({ path: storePath() });
+    const id = "019f3931-ec11-7f31-8400-1c8624aa9e4d";
+    store.observe(fixture(id));
+    store.observe(fixture(id, {
+      provider: "codex",
+      owner: "Codex CLI",
+      cwd: "/Users/me/.codex/project",
+      transcriptPath: "/Users/me/.codex/sessions/019f3931-ec11-7f31-8400-1c8624aa9e4d.jsonl",
+    }));
+
+    expect(store.get(id)).toBeUndefined();
+    expect(store.getForProvider("claude_code", id)?.provider).toBe("claude_code");
+    expect(store.getForProvider("codex", id)?.provider).toBe("codex");
+  });
+
+  it("clears stale Ghostty launch authority after a newer current context", () => {
+    const store = new RetainedHistoryStore({ path: storePath() });
+    const resume = {
+      version: 1 as const,
+      provider: "claude_code" as const,
+      host: "Ghostty" as const,
+      executableRef: "/usr/local/bin/claude",
+      profileState: "verified_absent" as const,
+      overrideNames: [],
+      provenanceObservedAt: "2026-10-21T18:00:00.000Z",
+    };
+    store.observe(fixture("claude-context", { resume, current: true }));
+    store.closeMissing(new Set());
+
+    store.observe(fixture("claude-context", {
+      host: "cmux",
+      resume,
+      observedAt: "2026-10-21T18:01:00.000Z",
+      current: true,
+    }));
+
+    const record = store.get("claude-context");
+    expect(record).toMatchObject({
+      host: "cmux",
+      resumeUnavailableReason: "host_not_supported",
+    });
+    expect(record?.resume).toBeUndefined();
+
+    store.observe(fixture("claude-context", {
+      resume,
+      observedAt: "2026-10-21T18:02:00.000Z",
+      current: true,
+    }));
+    expect(store.get("claude-context")).toMatchObject({
+      host: "Ghostty",
+      resume,
+    });
+    expect(store.get("claude-context")?.resumeUnavailableReason).toBeUndefined();
+  });
 });

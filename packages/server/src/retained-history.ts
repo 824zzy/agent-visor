@@ -34,8 +34,8 @@ export type RetainedHistoryResumeUnavailableReason =
   | "host_not_supported"
   | "ambiguous_identity";
 
-/** Safe launch references retained from a verified live observation. */
-export type RetainedHistoryResumeCapability = {
+/** Safe launch references retained from a verified live Claude observation. */
+export type RetainedHistoryClaudeResumeCapability = {
   version: 1;
   provider: "claude_code";
   host: "Ghostty";
@@ -50,6 +50,26 @@ export type RetainedHistoryResumeCapability = {
   overrideNames: string[];
   provenanceObservedAt: string;
 };
+
+/** Safe launch references retained from a verified live Codex CLI observation. */
+export type RetainedHistoryCodexResumeCapability = {
+  version: 1;
+  /** Native helper provider, intentionally distinct from the catalog provider. */
+  provider: "codex_cli";
+  host: "Ghostty";
+  executableRef: string;
+  executableVersion?: string;
+  configRootRef: string;
+  profileRef?: string;
+  profileState: "present" | "verified_absent";
+  /** Names only; values, tokens, URLs, and the environment are discarded. */
+  overrideNames: string[];
+  provenanceObservedAt: string;
+};
+
+export type RetainedHistoryResumeCapability =
+  | RetainedHistoryClaudeResumeCapability
+  | RetainedHistoryCodexResumeCapability;
 
 export type RetainedHistoryObservation = {
   id: string;
@@ -194,9 +214,19 @@ export class RetainedHistoryStore {
       const previous = previousEntry?.[1];
       const canonicalId = previous?.canonicalId ?? normalized.canonicalId;
       const publicId = normalized.id;
+      // A fresh current observation is the newest launch context. Replace the
+      // prior resume status in full: a lost modern transport clears stale
+      // Ghostty authority, while newly verified provenance clears an older
+      // unavailable reason.
+      const currentResumeUpdate = current === true ? {
+        resume: normalized.resume,
+        resumeUnavailableReason: normalized.resumeUnavailableReason
+          ?? (normalized.resume ? undefined : "missing_provenance" as const),
+      } : {};
       const next: RetainedHistoryRecord = {
         ...(previous ?? {}),
         ...normalized,
+        ...currentResumeUpdate,
         // A verified current observation is the public identity users see.
         // Preserve the prior public ID as an exact alias so an already-open
         // Chat lookup can continue to read the same canonical conversation.
@@ -309,11 +339,17 @@ export class RetainedHistoryStore {
   get(id: string): RetainedHistoryRecord | undefined {
     const providers: RetainedHistoryProvider[] = id.startsWith("codex:")
       ? ["codex"] : ["claude_code", "codex"];
+    let found: RetainedHistoryRecord | undefined;
     for (const provider of providers) {
       const record = this.getForProvider(provider, id);
-      if (record) return record;
+      if (!record) continue;
+      // A bare UUID is a valid public projection for both providers. Choosing
+      // the first catalog entry would let a stale provider claim another
+      // provider's launch authority, so ambiguity fails closed.
+      if (found) return undefined;
+      found = record;
     }
-    return undefined;
+    return found;
   }
 
   /** Provider-qualified lookup used by adapters during exact reconstruction. */
@@ -503,10 +539,21 @@ function normalizeObservation(value: RetainedHistoryObservation): NormalizedHist
     ? undefined : absolutePath(value.transcriptPath, MAX_TEXT_LENGTH);
   if (value.transcriptPath !== undefined && !transcriptPath) return undefined;
   const resume = value.resume === undefined ? undefined : normalizeResumeCapability(value.resume);
-  if (value.resume !== undefined && !resume) return undefined;
-  const resumeUnavailableReason = value.resumeUnavailableReason === undefined
+  const resumeContextInvalid = resume !== undefined
+    && (host !== "Ghostty" || resume.host !== host
+      || (configHome !== undefined && "configRootRef" in resume
+        && resume.configRootRef !== undefined && resume.configRootRef !== configHome));
+  const resumeDetailsInvalid = value.resume !== undefined
+    && (!resume || (value.provider === "claude_code"
+      ? resume.provider !== "claude_code" : resume.provider !== "codex_cli") || resumeContextInvalid);
+  const parsedResumeUnavailableReason = value.resumeUnavailableReason === undefined
     ? undefined : normalizeResumeUnavailableReason(value.resumeUnavailableReason);
-  if (value.resumeUnavailableReason !== undefined && !resumeUnavailableReason) return undefined;
+  const resumeUnavailableReason = (resumeContextInvalid && host !== "Ghostty")
+    ? "host_not_supported" as const
+    : (resumeDetailsInvalid
+      || (value.resumeUnavailableReason !== undefined && !parsedResumeUnavailableReason)
+      ? "missing_provenance" as const
+      : parsedResumeUnavailableReason);
   const completionIdentity = value.completionIdentity === undefined
     ? undefined : bounded(value.completionIdentity, MAX_ID_LENGTH);
   if (value.completionIdentity !== undefined && !completionIdentity) return undefined;
@@ -524,7 +571,7 @@ function normalizeObservation(value: RetainedHistoryObservation): NormalizedHist
     cwd,
     ...(configHome ? { configHome } : {}),
     ...(transcriptPath ? { transcriptPath } : {}),
-    ...(resume ? { resume } : {}),
+    ...(!resumeDetailsInvalid && resume ? { resume } : {}),
     ...(resumeUnavailableReason ? { resumeUnavailableReason } : {}),
     ...(completionIdentity ? { completionIdentity } : {}),
     updatedAt,
@@ -653,8 +700,8 @@ function absolutePath(value: unknown, max: number): string | undefined {
 }
 
 function normalizeResumeCapability(value: unknown): RetainedHistoryResumeCapability | undefined {
-  if (!isRecord(value) || value.version !== 1 || value.provider !== "claude_code"
-    || value.host !== "Ghostty") return undefined;
+  if (!isRecord(value) || value.version !== 1 || value.host !== "Ghostty"
+    || (value.provider !== "claude_code" && value.provider !== "codex_cli")) return undefined;
   const executableRef = absolutePath(value.executableRef, MAX_CONFIG_HOME_LENGTH);
   const executableVersion = value.executableVersion === undefined
     ? undefined : bounded(value.executableVersion, 128);
@@ -665,14 +712,30 @@ function normalizeResumeCapability(value: unknown): RetainedHistoryResumeCapabil
   const profileRef = value.profileRef === undefined ? undefined : profileName(value.profileRef);
   const profileState = value.profileState === "present" || value.profileState === "verified_absent"
     ? value.profileState : undefined;
-  const settingSources = normalizeSettingSources(value.settingSources);
   const overrideNames = normalizeOverrideNames(value.overrideNames);
   const provenanceObservedAt = iso(value.provenanceObservedAt);
   if (!executableRef || !profileState || !provenanceObservedAt || !overrideNames
     || (value.executableVersion !== undefined && !executableVersion)
-    || (value.configRootRef !== undefined && !configRootRef)
+    || (value.profileRef !== undefined && !profileRef)) return undefined;
+  if (value.provider === "codex_cli") {
+    const configRoot = absolutePath(value.configRootRef, MAX_CONFIG_HOME_LENGTH);
+    if (!configRoot || value.settingsFileRef !== undefined || value.settingSources !== undefined) return undefined;
+    return {
+      version: 1,
+      provider: "codex_cli",
+      host: "Ghostty",
+      executableRef,
+      ...(executableVersion ? { executableVersion } : {}),
+      configRootRef: configRoot,
+      ...(profileRef ? { profileRef } : {}),
+      profileState,
+      overrideNames,
+      provenanceObservedAt,
+    };
+  }
+  const settingSources = normalizeSettingSources(value.settingSources);
+  if ((value.configRootRef !== undefined && !configRootRef)
     || (value.settingsFileRef !== undefined && !settingsFileRef)
-    || (value.profileRef !== undefined && !profileRef)
     || (value.settingSources !== undefined && !settingSources)) return undefined;
   return {
     version: 1,

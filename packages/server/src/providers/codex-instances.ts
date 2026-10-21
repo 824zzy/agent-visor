@@ -10,7 +10,7 @@ export type CodexInstance = CodexHome & { id: string; pid?: number; allowDefault
 export type CodexHomeStatus = { path: string; status: "running" | "saved" | "missing" | "unreadable" };
 
 const appExecutable = /(?:^|\/)(?:Codex\.app\/Contents\/MacOS\/Codex|ChatGPT\.app\/Contents\/MacOS\/ChatGPT)$/;
-const threadKey = /^codex:([0-9a-f]{64}):([0-9a-f-]{36})$/;
+const threadKey = /^codex:(native|[0-9a-f]{64}):([0-9a-f-]{36})$/i;
 
 export async function canonicalCodexHome(value: string): Promise<string> {
   const expanded = value === "~" ? os.homedir()
@@ -31,7 +31,7 @@ export function codexSessionID(instanceID: string, threadID: string): string {
 export function codexThreadReference(sessionID: string): { instanceID: string; threadID: string } | undefined {
   if (!sessionID.startsWith("codex:")) return sessionID ? { instanceID: "native", threadID: sessionID } : undefined;
   const match = threadKey.exec(sessionID);
-  return match?.[1] && match[2] ? { instanceID: match[1], threadID: match[2] } : undefined;
+  return match?.[1] && match[2] ? { instanceID: match[1].toLowerCase(), threadID: match[2] } : undefined;
 }
 
 export async function codexDesktopBindings(

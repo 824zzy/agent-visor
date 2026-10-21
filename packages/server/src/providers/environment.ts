@@ -6,6 +6,7 @@ import type { NativeHelperGhosttyTerminalView } from "@agent-visor/protocol";
 import { machineWork, runProcess, summaryWork } from "../machine.js";
 import { readCodexSettingsCatalog, type CodexSettingsCatalog } from "../codex-turn.js";
 import { readCodexCliObservation, type CodexCliObservation } from "./codex-cli-observer.js";
+import type { CodexTuiBinding } from "./codex-tui-client.js";
 import { CmuxClient, type CmuxSurfaceTarget } from "./cmux.js";
 import { HerdrClient, type HerdrSurfaceTarget } from "./herdr.js";
 import {
@@ -54,6 +55,8 @@ export interface ProviderEnvironment {
   codexProcessHome?(pid: number): Promise<string | undefined>;
   /** Owned, bounded observer record; generic JSON is not navigation authority. */
   codexCliObservation?(pid: number, home: string): Promise<CodexCliObservation | undefined>;
+  /** Host-independent read-only identity for a modern Codex TUI server. */
+  readCodexTuiBinding?(pid: number, home: string): Promise<CodexTuiBinding | undefined>;
   directory(path: string): Promise<string[]>;
   isDirectory(path: string): Promise<boolean>;
   stamp(path: string): Promise<FileStamp | undefined>;
@@ -97,18 +100,21 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
   private readonly cmux = new CmuxClient();
   private readonly herdr = new HerdrClient();
   readonly ghosttyTerminalViews?: (conversationTitles?: readonly string[]) => Promise<GhosttyTerminalView[]>;
+  readonly readCodexTuiBinding?: (pid: number, home: string) => Promise<CodexTuiBinding | undefined>;
 
   constructor(
     readonly home: string,
     options: {
       observedWindowMs?: number | (() => number); now?: () => Date;
       ghosttyTerminalViews?: (conversationTitles?: readonly string[]) => Promise<GhosttyTerminalView[]>;
+      readCodexTuiBinding?: (pid: number, home: string) => Promise<CodexTuiBinding | undefined>;
       processProvenanceReader?: ProcessProvenanceReader;
     } = {},
   ) {
     this.observedWindow = options.observedWindowMs ?? 42 * 60 * 60 * 1_000;
     this.clock = options.now ?? (() => new Date());
     this.ghosttyTerminalViews = options.ghosttyTerminalViews;
+    this.readCodexTuiBinding = options.readCodexTuiBinding;
     this.claudeInventory = new ClaudeAgentInventory({
       home,
       now: () => this.now(),
@@ -122,6 +128,7 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
   codexCliObservation(pid: number, home: string): Promise<CodexCliObservation | undefined> {
     return readCodexCliObservation(pid, home);
   }
+
 
   herdrSurface(pid: number, sessionId: string, cwd: string): Promise<HerdrSurfaceTarget | undefined> {
     return this.herdr.resolve(pid, sessionId, cwd);

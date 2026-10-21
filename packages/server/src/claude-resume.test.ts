@@ -61,6 +61,10 @@ describe("ClaudeResumeAdapter", () => {
       expect(adapter.resumeTarget(record, "attempt-1", "0123456789abcdef0123456789abcdef")).toMatchObject({
         state: "unavailable",
       });
+      expect(adapter.resumeTarget({ ...record, host: "cmux" }, "attempt-1", "0123456789abcdef0123456789abcdef")).toMatchObject({
+        state: "unavailable",
+        reason: "This Claude session was not observed in a supported Ghostty host.",
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

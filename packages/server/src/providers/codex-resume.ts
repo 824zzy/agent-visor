@@ -1,0 +1,281 @@
+import { realpathSync, statSync } from "node:fs";
+import path from "node:path";
+import type {
+  NativeHelperGhosttyResumeDispatch,
+  NativeHelperGhosttyResumeTarget,
+} from "@agent-visor/protocol";
+import type {
+  RetainedHistoryCodexResumeCapability,
+  RetainedHistoryRecord,
+} from "../retained-history.js";
+import type { DiscoveredProviderSession, ProviderDiscoveryAuthority } from "../sessions.js";
+import type {
+  ResumeLiveness,
+  ResumeProviderAdapter,
+  ResumeReconciliation,
+  ResumeTargetResult,
+} from "../resume.js";
+import type { FreshProcessInventory, ProcessRecord, ProviderEnvironment } from "./environment.js";
+import type { ProcessProvenance } from "./process-provenance.js";
+import { codexThreadReference } from "./codex-instances.js";
+
+const fullThreadID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const pathLimit = 4_096;
+const knownCodexOverrideNames = new Set([
+  "CODEX_HOME", "CODEX_PROFILE", "CODEX_MODEL_PROVIDER", "CODEX_API_KEY", "CODEX_BASE_URL",
+  "CODEX_BACKEND", "CODEX_MODEL", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID",
+  "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION",
+]);
+
+/** Exact stopped-row strategy for the Codex CLI Ghostty route. */
+export class CodexResumeAdapter implements ResumeProviderAdapter {
+  readonly id = "codex" as const;
+  readonly nativeProvider = "codex_cli" as const;
+
+  constructor(
+    private readonly environment: ProviderEnvironment,
+    private readonly discoverFresh: () => Promise<DiscoveredProviderSession[] | undefined>,
+    private readonly discoveryAuthority: () => ProviderDiscoveryAuthority,
+  ) {}
+
+  async resumeLiveness(record: RetainedHistoryRecord): Promise<ResumeLiveness> {
+    if (record.provider !== "codex") return { state: "stopped" };
+    const inventory = await this.freshInventory();
+    if (inventory.state !== "authoritative") {
+      return { state: "unknown", reason: `Fresh Codex process inventory is ${inventory.reason}.` };
+    }
+    const discovered = await this.discoverFresh().catch(() => undefined);
+    if (!discovered || this.discoveryAuthority() !== "authoritative") {
+      return { state: "unknown", reason: "Fresh Codex conversation discovery is unavailable." };
+    }
+    const live = discovered.find((session) => this.isExactLiveSession(record, session));
+    if (live) return { state: "live", session: live };
+    if (await hasPossibleCodexOwner(record, inventory.processes, this.environment)) {
+      return { state: "unknown", reason: "A Codex process may still own this conversation." };
+    }
+    return { state: "stopped" };
+  }
+
+  resumeTarget(record: RetainedHistoryRecord, attemptId: string, nonce: string): ResumeTargetResult {
+    if (record.provider !== "codex") {
+      return { state: "unavailable", reason: "This provider is not supported for Ghostty resume." };
+    }
+    const capability = record.resume;
+    if (!capability || capability.provider !== "codex_cli") {
+      return { state: "unavailable", reason: "Codex launch provenance is unavailable for this row." };
+    }
+    const reason = validateCapability(record, capability);
+    if (reason) return { state: "unavailable", reason };
+    const reference = codexThreadReference(record.canonicalId);
+    if (!reference || !fullThreadID.test(reference.threadID)) {
+      return { state: "unavailable", reason: "The full Codex conversation ID is unavailable." };
+    }
+    const transcriptReason = validateTranscriptPath(record, capability);
+    if (transcriptReason) return { state: "unavailable", reason: transcriptReason };
+    const target: NativeHelperGhosttyResumeTarget = {
+      attemptId,
+      provider: "codex_cli",
+      sessionId: reference.threadID,
+      cwd: record.cwd,
+      executable: capability.executableRef,
+      configRoot: capability.configRootRef,
+      ...(capability.profileRef ? { profileRef: capability.profileRef } : {}),
+      profileState: capability.profileState,
+      nonce,
+    };
+    return { state: "eligible", target };
+  }
+
+  async reconcileResume(
+    record: RetainedHistoryRecord,
+    dispatch: NativeHelperGhosttyResumeDispatch,
+  ): Promise<ResumeReconciliation> {
+    if (record.provider !== "codex" || dispatch.provider !== "codex_cli") {
+      return { state: "unknown", reason: "The native resume receipt does not identify a Codex CLI conversation." };
+    }
+    const reference = codexThreadReference(record.canonicalId);
+    if (!reference || dispatch.sessionId !== reference.threadID) {
+      return { state: "unknown", reason: "The native resume receipt does not identify the retained conversation." };
+    }
+    const discovered = await this.discoverFresh().catch(() => undefined);
+    if (!discovered || this.discoveryAuthority() !== "authoritative") {
+      return { state: "unknown", retryable: true, reason: "Fresh Codex rediscovery is unavailable." };
+    }
+    const session = discovered.find((candidate) => this.isExactLiveSession(record, candidate)
+      && candidate.cwd === record.cwd);
+    if (!session) return { state: "pending", reason: "The launched Codex conversation identity is not visible yet." };
+    const target = session.controlTarget?.kind === "terminal" ? session.controlTarget.target : undefined;
+    if (!target || target.application !== "Ghostty" || target.pid === undefined || !target.processStartToken) {
+      return { state: "unknown", reason: "The resumed Codex process has no exact Ghostty terminal identity." };
+    }
+    const capability = record.resume;
+    if (!capability || capability.provider !== "codex_cli") {
+      return { state: "unknown", reason: "The resumed Codex process has no retained launch provenance." };
+    }
+    const processProof = this.environment.processProvenance
+      ? await this.environment.processProvenance(target.pid, "codex_cli", target.processStartToken).catch(() => undefined)
+      : undefined;
+    if (!processProof || processProof.state !== "available"
+      || !sameProcessProvenance(capability, processProof.value)
+      || processProof.value.pid !== target.pid
+      || processProof.value.processStartToken !== target.processStartToken
+      || processProof.value.resumeNonce !== dispatch.nonce) {
+      return { state: "unknown", reason: "The launched Codex process did not prove the dispatch nonce." };
+    }
+    const views = this.environment.ghosttyTerminalViews
+      ? await this.environment.ghosttyTerminalViews().catch(() => undefined)
+      : undefined;
+    const terminals = views?.filter((view) => view.applicationPID === dispatch.applicationPID
+      && view.processStartToken === dispatch.processStartToken
+      && view.terminalId === dispatch.terminalId
+      && view.cwd === record.cwd
+      && view.viewMode !== "overview");
+    if (!terminals || terminals.length !== 1 || !terminals[0]) {
+      return { state: "unknown", reason: "The resumed Codex surface could not be linked exactly." };
+    }
+    return { state: "matched", sessionId: record.canonicalId, terminal: terminals[0] };
+  }
+
+  private isExactLiveSession(record: RetainedHistoryRecord, session: DiscoveredProviderSession): boolean {
+    if (session.provider !== "codex" || session.conversationState !== "open") return false;
+    const identity = session.historyIdentity;
+    const canonicalId = identity?.canonicalId ?? session.id;
+    if (canonicalId !== record.canonicalId || !identity?.resume || identity.resume.provider !== "codex_cli") return false;
+    if (!sameResumeProvenance(record.resume, session)
+      || (record.host !== undefined && identity.host !== record.host)
+      || (record.configHome !== undefined && identity.configHome !== record.configHome)) return false;
+    return session.controlTarget?.kind === "terminal" || session.controlTarget?.kind === "herdr_surface";
+  }
+
+  private async freshInventory(): Promise<FreshProcessInventory> {
+    if (this.environment.processesFreshInventory) return this.environment.processesFreshInventory();
+    return { state: "unknown", observedAt: this.environment.now().toISOString(), reason: "scan_failed" };
+  }
+}
+
+function validateCapability(
+  record: RetainedHistoryRecord,
+  capability: RetainedHistoryCodexResumeCapability,
+): string | undefined {
+  if (record.host !== "Ghostty" || capability.host !== "Ghostty") {
+    return "This Codex session was not observed in a supported Ghostty host.";
+  }
+  if (!record.configHome || !path.isAbsolute(record.configHome)
+    || record.configHome !== capability.configRootRef || !isDirectory(record.configHome)) {
+    return "The recorded Codex configuration home is unavailable.";
+  }
+  if (!path.isAbsolute(record.cwd) || !isDirectory(record.cwd)) return "The original working directory is unavailable.";
+  if (!path.isAbsolute(capability.executableRef) || capability.executableRef.length > pathLimit
+    || !isExecutableFile(capability.executableRef)) return "The recorded Codex executable is unavailable.";
+  try {
+    if (realpathSync(capability.executableRef) !== capability.executableRef) {
+      return "The recorded Codex executable identity changed.";
+    }
+    if (realpathSync(record.configHome) !== capability.configRootRef) {
+      return "The recorded Codex configuration home identity changed.";
+    }
+  } catch {
+    return "The recorded Codex launch references are unavailable.";
+  }
+  if (capability.profileState === "present") {
+    if (!capability.profileRef) return "The recorded Codex profile is ambiguous.";
+    if (!isFile(path.join(capability.configRootRef, `${capability.profileRef}.config.toml`))) {
+      return "The recorded Codex profile is unavailable.";
+    }
+  } else if (capability.profileRef) {
+    return "The recorded Codex profile state is inconsistent.";
+  }
+  if (capability.overrideNames.some((name) => !isKnownCodexOverride(name))) {
+    return "This Codex session used an unsupported provider override.";
+  }
+  return undefined;
+}
+
+function isKnownCodexOverride(name: string): boolean {
+  return knownCodexOverrideNames.has(name)
+    || name.startsWith("OPENAI_")
+    || name.startsWith("AZURE_OPENAI_");
+}
+
+function validateTranscriptPath(
+  record: RetainedHistoryRecord,
+  capability: RetainedHistoryCodexResumeCapability,
+): string | undefined {
+  if (!record.transcriptPath || !isFile(record.transcriptPath)) return "The saved Codex transcript is unavailable.";
+  let actual: string;
+  try { actual = realpathSync(record.transcriptPath); } catch { return "The saved Codex transcript is unavailable."; }
+  const relative = path.relative(capability.configRootRef, actual);
+  const reference = codexThreadReference(record.canonicalId);
+  if (!reference || relative.startsWith("..") || path.isAbsolute(relative)
+    || path.basename(actual, path.extname(actual)) !== reference.threadID) {
+    return "The saved Codex transcript does not match the retained conversation identity.";
+  }
+  return undefined;
+}
+
+function sameResumeProvenance(
+  expected: RetainedHistoryRecord["resume"],
+  session: DiscoveredProviderSession,
+): boolean {
+  if (!expected || expected.provider !== "codex_cli") return false;
+  const observed = session.historyIdentity?.resume;
+  return observed?.provider === "codex_cli"
+    && observed.executableRef === expected.executableRef
+    && observed.executableVersion === expected.executableVersion
+    && observed.configRootRef === expected.configRootRef
+    && observed.profileRef === expected.profileRef
+    && observed.profileState === expected.profileState
+    && JSON.stringify(observed.overrideNames) === JSON.stringify(expected.overrideNames);
+}
+
+function sameProcessProvenance(
+  expected: RetainedHistoryCodexResumeCapability,
+  observed: ProcessProvenance,
+): boolean {
+  return observed.argvState === "complete"
+    && observed.executableRef === expected.executableRef
+    && observed.executableVersion === expected.executableVersion
+    && observed.configRootRef === expected.configRootRef
+    && observed.profileRef === expected.profileRef
+    && observed.profileState === expected.profileState
+    && JSON.stringify(observed.overrideNames) === JSON.stringify(expected.overrideNames);
+}
+
+async function hasPossibleCodexOwner(
+  record: RetainedHistoryRecord,
+  processes: readonly ProcessRecord[],
+  environment: ProviderEnvironment,
+): Promise<boolean> {
+  for (const process of processes) {
+    if (path.basename(process.command) !== "codex") continue;
+    const modernServer = /\b(?:app|mcp|exec)-server\b/i.test(process.arguments);
+    if (environment.codexProcessHome) {
+      const home = await environment.codexProcessHome(process.pid).catch(() => undefined);
+      if (home && record.configHome && home !== record.configHome) continue;
+      if (home && record.configHome && home === record.configHome) return true;
+    }
+    // A background server can own a frontend without sharing its cwd. Once
+    // its selected home is not disproven, an unavailable or ambiguous client
+    // inventory is unknown rather than evidence that the row is stopped.
+    if (modernServer) return true;
+    const cwd = await environment.cwd(process.pid).catch(() => undefined);
+    if (cwd && cwd === record.cwd) return true;
+    if (!cwd && record.configHome) return true;
+  }
+  return false;
+}
+
+function isFile(value: string): boolean {
+  try { return statSync(value).isFile(); } catch { return false; }
+}
+
+function isExecutableFile(value: string): boolean {
+  try {
+    const stat = statSync(value);
+    return stat.isFile() && (stat.mode & 0o111) !== 0;
+  } catch { return false; }
+}
+
+function isDirectory(value: string): boolean {
+  try { return statSync(value).isDirectory(); } catch { return false; }
+}

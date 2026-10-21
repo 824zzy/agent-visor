@@ -34,8 +34,13 @@ export type ResumeReconciliation =
   | { state: "unknown"; reason: string; retryable?: boolean };
 
 /** Provider-specific evidence and launch strategy used only by explicit Resume. */
+export type ResumeProviderID = "claude_code" | "codex";
+export type ResumeNativeProvider = "claude_code" | "codex_cli";
+
 export interface ResumeProviderAdapter {
-  readonly id: "claude_code";
+  readonly id: ResumeProviderID;
+  /** Native helper discriminator; catalog and wire providers are different for Codex. */
+  readonly nativeProvider?: ResumeNativeProvider;
   resumeLiveness(record: RetainedHistoryRecord): Promise<ResumeLiveness>;
   resumeTarget(record: RetainedHistoryRecord, attemptId: string, nonce: string): ResumeTargetResult;
   reconcileResume(
@@ -54,7 +59,7 @@ export type ResumeAttemptState = "claimed" | "dispatched" | "matched" | "unknown
 export type ResumeAttempt = {
   version: 1;
   attemptId: string;
-  provider: "claude_code";
+  provider: ResumeProviderID;
   sessionId: string;
   canonicalId: string;
   state: ResumeAttemptState;
@@ -83,15 +88,24 @@ export class ResumeAttemptStore {
     this.load();
   }
 
-  get(canonicalId: string): ResumeAttempt | undefined {
-    const attempt = this.attempts.get(canonicalId);
+  get(canonicalId: string): ResumeAttempt | undefined;
+  get(provider: ResumeProviderID, canonicalId: string): ResumeAttempt | undefined;
+  get(providerOrCanonicalId: ResumeProviderID | string, canonicalID?: string): ResumeAttempt | undefined {
+    const provider = canonicalID === undefined ? "claude_code" : providerOrCanonicalId as ResumeProviderID;
+    const canonicalId = canonicalID ?? providerOrCanonicalId;
+    const attempt = this.attempts.get(attemptKey(provider, canonicalId));
     return attempt ? structuredClone(attempt) : undefined;
   }
 
-  claim(sessionId: string, canonicalId: string): ResumeClaim | { state: "unavailable"; reason: string } {
+  claim(
+    sessionId: string,
+    canonicalId: string,
+    provider: ResumeProviderID = "claude_code",
+  ): ResumeClaim | { state: "unavailable"; reason: string } {
     if (!this.file) return { state: "unavailable", reason: "Resume state has no durable store." };
     if (this.loadFailure) return { state: "unavailable", reason: this.loadFailure };
-    const existing = this.attempts.get(canonicalId);
+    const key = attemptKey(provider, canonicalId);
+    const existing = this.attempts.get(key);
     if (existing) {
       // The in-memory coordinator joins concurrent calls before reaching the
       // journal. A claimed row loaded after restart has no live owner and
@@ -102,16 +116,16 @@ export class ResumeAttemptStore {
     const attempt: ResumeAttempt = {
       version: 1,
       attemptId: randomUUID(),
-      provider: "claude_code",
+      provider,
       sessionId,
       canonicalId,
       state: "claimed",
       claimedAt: now,
       updatedAt: now,
     };
-    this.attempts.set(canonicalId, attempt);
+    this.attempts.set(key, attempt);
     if (!this.persist()) {
-      this.attempts.delete(canonicalId);
+      this.attempts.delete(key);
       return { state: "unavailable", reason: "Resume state could not be saved." };
     }
     return { state: "created", attempt: structuredClone(attempt) };
@@ -121,8 +135,10 @@ export class ResumeAttemptStore {
     canonicalId: string,
     state: ResumeAttemptState,
     patch: { dispatch?: NativeHelperGhosttyResumeDispatch; reason?: string } = {},
+    provider: ResumeProviderID = "claude_code",
   ): ResumeAttempt | undefined {
-    const current = this.attempts.get(canonicalId);
+    const key = attemptKey(provider, canonicalId);
+    const current = this.attempts.get(key);
     if (!current) return undefined;
     const next: ResumeAttempt = {
       ...current,
@@ -131,9 +147,9 @@ export class ResumeAttemptStore {
       ...(patch.dispatch ? { dispatch: structuredClone(patch.dispatch) } : {}),
       ...(patch.reason ? { reason: patch.reason } : {}),
     };
-    this.attempts.set(canonicalId, next);
+    this.attempts.set(key, next);
     if (this.persist()) return structuredClone(next);
-    this.attempts.set(canonicalId, current);
+    this.attempts.set(key, current);
     return undefined;
   }
 
@@ -164,12 +180,13 @@ export class ResumeAttemptStore {
           this.loadFailure = "Resume state is invalid.";
           return;
         }
-        if (this.attempts.has(normalized.canonicalId)) {
+        const key = attemptKey(normalized.provider, normalized.canonicalId);
+        if (this.attempts.has(key)) {
           this.attempts.clear();
           this.loadFailure = "Resume state contains duplicate identities.";
           return;
         }
-        this.attempts.set(normalized.canonicalId, normalized);
+        this.attempts.set(key, normalized);
       }
       this.fingerprint = this.serialize();
     } catch {
@@ -199,7 +216,8 @@ export class ResumeAttemptStore {
   private serialize(): string {
     const payload: PersistedAttempts = {
       version: 1,
-      attempts: [...this.attempts.values()].sort((left, right) => left.canonicalId.localeCompare(right.canonicalId)),
+      attempts: [...this.attempts.values()].sort((left, right) =>
+        attemptKey(left.provider, left.canonicalId).localeCompare(attemptKey(right.provider, right.canonicalId))),
     };
     return JSON.stringify(payload);
   }
@@ -215,9 +233,12 @@ export type ResumeResult =
 type ResumeCoordinatorOptions = {
   history: {
     get(id: string): RetainedHistoryRecord | undefined;
-    isSuppressed(provider: "claude_code", ids: readonly string[] | string): boolean;
+    getForProvider?(provider: ResumeProviderID, id: string): RetainedHistoryRecord | undefined;
+    isSuppressed(provider: "claude_code" | "codex", ids: readonly string[] | string): boolean;
   };
-  provider: ResumeProviderAdapter;
+  /** Legacy single-provider injection retained for Claude tests/callers. */
+  provider?: ResumeProviderAdapter;
+  providers?: Partial<Record<ResumeProviderID, ResumeProviderAdapter>>;
   helper: ResumeNativeController;
   attempts: ResumeAttemptStore;
   focusLive(session: DiscoveredProviderSession): Promise<void>;
@@ -238,34 +259,36 @@ export class ResumeCoordinator {
     if (!record || !record.closedAt) {
       return Promise.resolve({ state: "unavailable", sessionId, reason: "This conversation is not closed History." });
     }
-    if (record.provider !== "claude_code") {
+    const provider = this.providerFor(record.provider);
+    if (!provider) {
       return Promise.resolve({ state: "unavailable", sessionId, reason: "This provider is not supported for Ghostty resume." });
     }
-    if (this.options.history.isSuppressed("claude_code", [record.id, record.canonicalId, ...(record.aliases ?? [])])) {
+    if (this.options.history.isSuppressed(record.provider, [record.id, record.canonicalId, ...(record.aliases ?? [])])) {
       return Promise.resolve({ state: "unavailable", sessionId, reason: "This session was removed from Agent Visor History." });
     }
     const canonicalId = record.canonicalId;
-    const existing = this.inFlight.get(canonicalId);
+    const key = attemptKey(record.provider, canonicalId);
+    const existing = this.inFlight.get(key);
     if (existing) {
-      const attempt = this.options.attempts.get(canonicalId);
+      const attempt = this.options.attempts.get(record.provider, canonicalId);
       return Promise.resolve({
         state: "joined",
         sessionId,
         attemptId: attempt?.attemptId ?? "unknown",
       });
     }
-    const operation = this.perform(record);
-    this.inFlight.set(canonicalId, operation);
+    const operation = this.perform(record, provider);
+    this.inFlight.set(key, operation);
     void operation.then(() => undefined, () => undefined).finally(() => {
-      if (this.inFlight.get(canonicalId) === operation) this.inFlight.delete(canonicalId);
+      if (this.inFlight.get(key) === operation) this.inFlight.delete(key);
     });
     return operation;
   }
 
-  private async perform(record: RetainedHistoryRecord): Promise<ResumeResult> {
-    const liveness = await this.options.provider.resumeLiveness(record).catch(() => ({
+  private async perform(record: RetainedHistoryRecord, provider: ResumeProviderAdapter): Promise<ResumeResult> {
+    const liveness = await provider.resumeLiveness(record).catch(() => ({
       state: "unknown" as const,
-      reason: "Fresh Claude liveness is unavailable.",
+      reason: `Fresh ${record.provider} liveness is unavailable.`,
     }));
     if (liveness.state === "live") {
       try {
@@ -280,11 +303,11 @@ export class ResumeCoordinator {
     }
     const attemptID = randomUUID();
     const nonce = randomNonce();
-    const preflightTarget = this.options.provider.resumeTarget(record, attemptID, nonce);
+    const preflightTarget = provider.resumeTarget(record, attemptID, nonce);
     if (preflightTarget.state !== "eligible") {
       return { state: "unavailable", sessionId: record.id, reason: preflightTarget.reason };
     }
-    const claim = this.options.attempts.claim(record.id, record.canonicalId);
+    const claim = this.options.attempts.claim(record.id, record.canonicalId, record.provider);
     if (claim.state === "unavailable") {
       return { state: "unavailable", sessionId: record.id, reason: claim.reason };
     }
@@ -297,16 +320,16 @@ export class ResumeCoordinator {
     const attempt = claim.attempt;
     if (!this.historyStillAuthorizes(record)) {
       const reason = "This session was removed from Agent Visor History before dispatch.";
-      this.options.attempts.update(record.canonicalId, "unavailable", { reason });
+      this.options.attempts.update(record.canonicalId, "unavailable", { reason }, record.provider);
       return { state: "unavailable", sessionId: record.id, reason };
     }
     // Bind the native request to the durable claim identity. The preflight
     // above only validates the provider references; dispatch must never use a
     // correlation ID that was not written to the journal first.
-    const targetResult = this.options.provider.resumeTarget(record, attempt.attemptId, nonce);
+    const targetResult = provider.resumeTarget(record, attempt.attemptId, nonce);
     if (targetResult.state !== "eligible") {
       const reason = targetResult.reason;
-      this.options.attempts.update(record.canonicalId, "unavailable", { reason });
+      this.options.attempts.update(record.canonicalId, "unavailable", { reason }, record.provider);
       return { state: "unavailable", sessionId: record.id, reason };
     }
     let dispatch: NativeHelperGhosttyResumeDispatch;
@@ -314,49 +337,49 @@ export class ResumeCoordinator {
       dispatch = await this.options.helper.openGhosttyResume(targetResult.target);
     } catch (error) {
       const reason = errorMessage(error, "Ghostty resume dispatch is uncertain.");
-      this.options.attempts.update(record.canonicalId, "unknown", { reason });
+      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider);
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
-    if (dispatch.attemptId !== attempt.attemptId || dispatch.sessionId !== record.canonicalId
-      || dispatch.provider !== "claude_code" || dispatch.nonce !== targetResult.target.nonce) {
+    if (dispatch.attemptId !== attempt.attemptId || dispatch.sessionId !== targetResult.target.sessionId
+      || dispatch.provider !== nativeProviderFor(provider) || dispatch.nonce !== targetResult.target.nonce) {
       const reason = "Ghostty returned an invalid resume receipt.";
-      this.options.attempts.update(record.canonicalId, "unknown", { reason });
+      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider);
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
-    if (!this.options.attempts.update(record.canonicalId, "dispatched", { dispatch })) {
+    if (!this.options.attempts.update(record.canonicalId, "dispatched", { dispatch }, record.provider)) {
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId,
         reason: "Resume dispatch state could not be saved." };
     }
     let reconciliation: ResumeReconciliation;
     try {
-      reconciliation = await this.reconcileAfterDispatch(record, dispatch);
+      reconciliation = await this.reconcileAfterDispatch(record, dispatch, provider);
     } catch (error) {
-      const reason = errorMessage(error, "Claude resume identity is still unavailable.");
-      this.options.attempts.update(record.canonicalId, "unknown", { reason });
+      const reason = errorMessage(error, `${resumeProviderName(record.provider)} resume identity is still unavailable.`);
+      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider);
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
     if (reconciliation.state !== "matched" || reconciliation.sessionId !== record.canonicalId) {
       const reason = reconciliation.state === "matched"
-        ? "The resumed Claude conversation identity did not match the retained row."
-        : reconciliation.reason ?? "The resumed Claude conversation could not be matched.";
-      this.options.attempts.update(record.canonicalId, reconciliation.state === "unavailable" ? "unavailable" : "unknown", { reason });
+        ? `The resumed ${resumeProviderName(record.provider)} conversation identity did not match the retained row.`
+        : reconciliation.reason ?? `The resumed ${resumeProviderName(record.provider)} conversation could not be matched.`;
+      this.options.attempts.update(record.canonicalId, reconciliation.state === "unavailable" ? "unavailable" : "unknown", { reason }, record.provider);
       return { state: reconciliation.state === "unavailable" ? "unavailable" : "uncertain",
         sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
     const terminal = reconciliation.terminal;
     if (!terminal) {
-      const reason = "The resumed Claude surface could not be linked exactly.";
-      this.options.attempts.update(record.canonicalId, "unknown", { reason });
+      const reason = `The resumed ${resumeProviderName(record.provider)} surface could not be linked exactly.`;
+      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider);
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
     try {
       await this.options.helper.focusGhosttyTerminal(terminal);
     } catch (error) {
-      const reason = errorMessage(error, "The resumed Claude surface could not be focused.");
-      this.options.attempts.update(record.canonicalId, "unknown", { reason });
+      const reason = errorMessage(error, `The resumed ${resumeProviderName(record.provider)} surface could not be focused.`);
+      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider);
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
-    if (!this.options.attempts.update(record.canonicalId, "matched")) {
+    if (!this.options.attempts.update(record.canonicalId, "matched", {}, record.provider)) {
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId,
         reason: "Resume completion state could not be saved." };
     }
@@ -373,28 +396,38 @@ export class ResumeCoordinator {
   private async reconcileAfterDispatch(
     record: RetainedHistoryRecord,
     dispatch: NativeHelperGhosttyResumeDispatch,
+    provider: ResumeProviderAdapter,
   ): Promise<ResumeReconciliation> {
-    let reconciliation = await this.options.provider.reconcileResume(record, dispatch);
+    let reconciliation = await provider.reconcileResume(record, dispatch);
     for (const delayMs of resumeReconciliationPollDelaysMs) {
       if (!isStartupReconciliationPending(reconciliation)) return reconciliation;
       await delay(delayMs);
-      reconciliation = await this.options.provider.reconcileResume(record, dispatch);
+      reconciliation = await provider.reconcileResume(record, dispatch);
     }
     return reconciliation;
   }
 
   private historyStillAuthorizes(record: RetainedHistoryRecord): boolean {
     const ids = [record.id, record.canonicalId, ...(record.aliases ?? [])];
-    if (this.options.history.isSuppressed("claude_code", ids)) return false;
-    const current = this.options.history.get(record.id) ?? this.options.history.get(record.canonicalId);
+    if (this.options.history.isSuppressed(record.provider, ids)) return false;
+    const getCurrent = this.options.history.getForProvider
+      ? (id: string) => this.options.history.getForProvider!(record.provider, id)
+      : (id: string) => this.options.history.get(id);
+    const current = getCurrent(record.id) ?? getCurrent(record.canonicalId);
     return current?.provider === record.provider
       && current.canonicalId === record.canonicalId
       && current.closedAt !== undefined;
   }
+
+  private providerFor(provider: ResumeProviderID): ResumeProviderAdapter | undefined {
+    return this.options.providers?.[provider]
+      ?? (this.options.provider?.id === provider ? this.options.provider : undefined);
+  }
 }
 
 function normalizeAttempt(value: unknown): ResumeAttempt | undefined {
-  if (!isRecord(value) || value.version !== 1 || value.provider !== "claude_code"
+  if (!isRecord(value) || value.version !== 1
+    || (value.provider !== "claude_code" && value.provider !== "codex")
     || typeof value.attemptId !== "string" || !value.attemptId
     || typeof value.sessionId !== "string" || !value.sessionId
     || typeof value.canonicalId !== "string" || !value.canonicalId
@@ -408,9 +441,12 @@ function normalizeAttempt(value: unknown): ResumeAttempt | undefined {
     ? nativeHelperGhosttyResumeDispatchSchema.safeParse(value.dispatch)
     : undefined;
   if (value.dispatch !== undefined && (!dispatch || !dispatch.success)) return undefined;
+  const provider = value.provider as ResumeProviderID;
+  const expectedNativeProvider = provider === "codex" ? "codex_cli" : "claude_code";
+  if (dispatch?.success && dispatch.data.provider !== expectedNativeProvider) return undefined;
   return {
     version: 1,
-    provider: "claude_code",
+    provider,
     attemptId: value.attemptId,
     sessionId: value.sessionId,
     canonicalId: value.canonicalId,
@@ -420,6 +456,18 @@ function normalizeAttempt(value: unknown): ResumeAttempt | undefined {
     ...(dispatch?.success ? { dispatch: dispatch.data } : {}),
     ...(typeof value.reason === "string" && value.reason.length <= 1_024 ? { reason: value.reason } : {}),
   };
+}
+
+function attemptKey(provider: ResumeProviderID, canonicalId: string): string {
+  return `${provider}\u0000${canonicalId}`;
+}
+
+function nativeProviderFor(provider: ResumeProviderAdapter): ResumeNativeProvider {
+  return provider.nativeProvider ?? (provider.id === "codex" ? "codex_cli" : "claude_code");
+}
+
+function resumeProviderName(provider: ResumeProviderID): string {
+  return provider === "codex" ? "Codex" : "Claude";
 }
 
 function isMissingFile(error: unknown): boolean {
