@@ -121,6 +121,8 @@ export const sessionSummarySchema = z.object({
   updatedAt: z.iso.datetime(),
   canOpenOwner: z.boolean(),
   canEnterChat: z.boolean(),
+  /** True only for a closed retained row removable from Agent Visor History. */
+  canRemoveHistory: z.boolean().optional(),
 });
 
 export const sessionSnapshotSchema = z.object({
@@ -777,6 +779,11 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     cursor: z.string().regex(/^\d+$/).max(32).optional(),
     limit: z.number().int().min(1).max(1_000).optional(),
   }).strict(),
+  z.object({
+    ...requestEnvelope,
+    type: z.literal("remove_history_session"),
+    sessionId: z.string().min(1).max(512),
+  }).strict(),
   z.object({ type: z.literal("get_native_services") }).strict(),
   z.object({
     ...requestEnvelope,
@@ -896,6 +903,14 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("native_action_result"),
     id: z.string().min(1).max(128),
+    ok: z.boolean(),
+    error: z.string().min(1).max(1_024).optional(),
+  }).strict(),
+  z.object({
+    type: z.literal("history_action_result"),
+    id: z.string().min(1).max(128),
+    action: z.literal("remove"),
+    sessionId: z.string().min(1).max(512),
     ok: z.boolean(),
     error: z.string().min(1).max(1_024).optional(),
   }).strict(),

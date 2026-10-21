@@ -113,6 +113,42 @@ describe("Agent Visor daemon", () => {
     socket.close();
   });
 
+  it("routes retained-history removal through the source and returns an action result", async () => {
+    const removed: string[] = [];
+    const source = {
+      current: () => ({ ...fixtureSnapshot, sessions: [] }),
+      subscribe: () => () => undefined,
+      removeHistorySession: async (sessionId: string) => {
+        removed.push(sessionId);
+        return undefined;
+      },
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+
+    socket.send(JSON.stringify({
+      type: "remove_history_session",
+      id: "remove-1",
+      sessionId: "closed-claude",
+    }));
+    await expect.poll(() => messages.length).toBe(2);
+    expect(removed).toEqual(["closed-claude"]);
+    expect(messages[1]).toEqual({
+      type: "history_action_result",
+      id: "remove-1",
+      action: "remove",
+      sessionId: "closed-claude",
+      ok: true,
+    });
+    socket.close();
+  });
+
   it("rejects clients without the ephemeral desktop token", async () => {
     running = await startServer({ port: 0, snapshot: fixtureSnapshot, token });
     const socket = new WebSocket(running.url.replace(/\?.*$/, ""));

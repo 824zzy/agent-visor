@@ -127,6 +127,22 @@ export async function startServer(options: {
           requestType: parsed.data.type,
           requestId: parsed.data.id,
         });
+      } else if (parsed.data.type === "remove_history_session") {
+        const error = source.removeHistorySession
+          ? await source.removeHistorySession(parsed.data.sessionId)
+          : "History removal is unavailable.";
+        sendDaemonMessage(socket, {
+          type: "history_action_result",
+          id: parsed.data.id,
+          action: "remove",
+          sessionId: parsed.data.sessionId,
+          ok: !error,
+          ...(error ? { error } : {}),
+        }, {
+          requestType: parsed.data.type,
+          requestId: parsed.data.id,
+          sessionId: parsed.data.sessionId,
+        });
       } else if (parsed.data.type === "get_native_services") {
         if (options.nativeServices) {
           nativeSubscribers.add(socket);

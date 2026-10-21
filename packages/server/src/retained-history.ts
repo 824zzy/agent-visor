@@ -23,6 +23,8 @@ const HISTORY_STORAGE_WARNING = "Retained history storage is unavailable.";
 
 export type RetainedHistoryProvider = "claude_code" | "codex";
 export type RetainedHistoryHost = "Ghostty" | "cmux" | "Herdr" | "iTerm2" | "Terminal";
+export type RetainedHistoryRemovalReason = "agent_visor" | "provider_archived";
+export type RetainedHistoryRemovalResult = "removed" | "not_found" | "storage_unavailable";
 
 export type RetainedHistoryObservation = {
   id: string;
@@ -43,6 +45,8 @@ export type RetainedHistoryObservation = {
   transcriptPath?: string;
   updatedAt: string;
   observedAt: string;
+  /** Explicit current frontend/process observation; never inferred by the store. */
+  current?: boolean;
 };
 
 export type RetainedHistoryRecord = NormalizedHistoryObservation & {
@@ -67,9 +71,21 @@ type NormalizedHistoryObservation = RetainedHistoryObservation & {
   aliases?: string[];
 };
 
+type RetainedHistoryTombstone = {
+  provider: RetainedHistoryProvider;
+  id: string;
+  canonicalId: string;
+  aliases?: string[];
+  host?: RetainedHistoryHost;
+  configHome?: string;
+  removedAt: string;
+  reason: RetainedHistoryRemovalReason;
+};
+
 type PersistedHistory = {
   schemaVersion: typeof SCHEMA_VERSION;
   records: RetainedHistoryRecord[];
+  tombstones?: RetainedHistoryTombstone[];
 };
 
 type RetainedHistoryStoreOptions = {
@@ -89,6 +105,9 @@ export class RetainedHistoryStore {
   private readonly recordsByKey = new Map<string, RetainedHistoryRecord>();
   /** Provider-qualified identity index keeps exact reconstruction bounded. */
   private readonly keyByIdentity = new Map<string, string>();
+  /** Durable removal intent survives provider catalogs and process restarts. */
+  private readonly tombstonesByKey = new Map<string, RetainedHistoryTombstone>();
+  private readonly tombstoneKeyByIdentity = new Map<string, string>();
   private readonly now: () => Date;
   private historyWarningMessage: string | undefined;
 
@@ -103,22 +122,64 @@ export class RetainedHistoryStore {
 
   observeMany(observations: readonly RetainedHistoryObservation[]): void {
     let changed = false;
+    // A provider can expose the canonical ID and one or more verified public
+    // projections in the same inventory. Keep that inventory's first public
+    // projection stable, while retaining the later projections as aliases;
+    // a later refresh with a single new public ID may still promote it.
+    const normalizedByIdentity = new Map<string, {
+      normalized: NormalizedHistoryObservation;
+      current?: boolean;
+    }>();
     for (const observation of observations) {
       const normalized = normalizeObservation(observation);
       if (!normalized) continue;
+      const identity = historyKey(normalized.provider, normalized.canonicalId);
+      const existing = normalizedByIdentity.get(identity);
+      if (!existing) {
+        normalizedByIdentity.set(identity, { normalized, current: observation.current });
+      } else {
+        normalizedByIdentity.set(identity, {
+          current: existing.current === true || observation.current === true,
+          normalized: {
+            ...existing.normalized,
+            ...mergeAliases(
+              existing.normalized.aliases,
+              [normalized.id, ...(normalized.aliases ?? [])],
+              existing.normalized.canonicalId,
+              existing.normalized.id,
+            ),
+          },
+        });
+      }
+    }
+    for (const { normalized, current } of normalizedByIdentity.values()) {
+      const tombstoneKey = this.findTombstoneKey(normalized);
+      if (tombstoneKey) {
+        if (current !== true) continue;
+        this.removeTombstone(tombstoneKey);
+        changed = true;
+      }
       const previousEntry = this.findEntry(normalized);
       const previous = previousEntry?.[1];
       const canonicalId = previous?.canonicalId ?? normalized.canonicalId;
+      const publicId = normalized.id;
       const next: RetainedHistoryRecord = {
         ...(previous ?? {}),
         ...normalized,
-        id: previous?.id ?? normalized.id,
+        // A verified current observation is the public identity users see.
+        // Preserve the prior public ID as an exact alias so an already-open
+        // Chat lookup can continue to read the same canonical conversation.
+        id: publicId,
         canonicalId,
         ...mergeAliases(
           previous?.aliases,
-          [...(normalized.aliases ?? []), ...(normalized.canonicalId !== canonicalId ? [normalized.canonicalId] : [])],
+          [
+            ...(previous && previous.id !== publicId ? [previous.id] : []),
+            ...(normalized.aliases ?? []),
+            ...(normalized.canonicalId !== canonicalId ? [normalized.canonicalId] : []),
+          ],
           canonicalId,
-          previous?.id ?? normalized.id,
+          publicId,
         ),
         schemaVersion: SCHEMA_VERSION,
         // A fresh verified observation means the conversation is open again.
@@ -137,6 +198,38 @@ export class RetainedHistoryStore {
       }
     }
     if (changed) this.persist();
+  }
+
+  /** Remove one exact retained identity while preserving durable origin facts. */
+  remove(id: string, reason: RetainedHistoryRemovalReason): RetainedHistoryRemovalResult {
+    const providers: RetainedHistoryProvider[] = id.startsWith("codex:")
+      ? ["codex"] : ["claude_code", "codex"];
+    for (const provider of providers) {
+      const key = this.keyByIdentity.get(historyKey(provider, id));
+      const record = key ? this.recordsByKey.get(key) : undefined;
+      if (!key || !record) continue;
+      const tombstoneKey = historyKey(record.provider, record.canonicalId);
+      const tombstone: RetainedHistoryTombstone = {
+        provider: record.provider,
+        id: record.id,
+        canonicalId: record.canonicalId,
+        ...(record.aliases?.length ? { aliases: [...record.aliases] } : {}),
+        ...(record.host ? { host: record.host } : {}),
+        ...(record.configHome ? { configHome: record.configHome } : {}),
+        removedAt: this.now().toISOString(),
+        reason,
+      };
+      this.recordsByKey.delete(key);
+      this.removeIdentityIndex(record);
+      this.tombstonesByKey.set(tombstoneKey, tombstone);
+      this.indexTombstone(tombstoneKey, tombstone);
+      if (this.persist()) return "removed";
+      this.removeTombstone(tombstoneKey);
+      this.recordsByKey.set(key, record);
+      this.indexRecord(key, record);
+      return "storage_unavailable";
+    }
+    return "not_found";
   }
 
   /** Mark only previously observed conversations absent from a successful discovery as closed. */
@@ -199,6 +292,36 @@ export class RetainedHistoryStore {
     return record ? structuredClone(record) : undefined;
   }
 
+  /** Return provider-qualified origin even after AV removal suppressed the row. */
+  getOriginForProvider(provider: RetainedHistoryProvider, id: string): {
+    provider: RetainedHistoryProvider;
+    id: string;
+    canonicalId: string;
+    aliases?: string[];
+    host?: RetainedHistoryHost;
+    configHome?: string;
+  } | undefined {
+    const record = this.getForProvider(provider, id);
+    if (record) return originFromRecord(record);
+    const key = this.tombstoneKeyByIdentity.get(historyKey(provider, id));
+    const tombstone = key ? this.tombstonesByKey.get(key) : undefined;
+    if (!tombstone) return undefined;
+    return {
+      provider: tombstone.provider,
+      id: tombstone.id,
+      canonicalId: tombstone.canonicalId,
+      ...(tombstone.aliases?.length ? { aliases: [...tombstone.aliases] } : {}),
+      ...(tombstone.host ? { host: tombstone.host } : {}),
+      ...(tombstone.configHome ? { configHome: tombstone.configHome } : {}),
+    };
+  }
+
+  /** Exact provider-qualified suppression check for stale catalog projections. */
+  isSuppressed(provider: RetainedHistoryProvider, ids: readonly string[] | string): boolean {
+    const values = typeof ids === "string" ? [ids] : ids;
+    return values.some((id) => this.tombstoneKeyByIdentity.has(historyKey(provider, id)));
+  }
+
   private findEntry(
     observation: NormalizedHistoryObservation,
   ): [string, RetainedHistoryRecord] | undefined {
@@ -235,7 +358,24 @@ export class RetainedHistoryStore {
         }
         else invalidRecord = true;
       }
-      if (invalidRecord) this.historyWarningMessage = HISTORY_STORAGE_WARNING;
+      let invalidTombstone = false;
+      if (value.tombstones !== undefined) {
+        if (!Array.isArray(value.tombstones)) {
+          invalidTombstone = true;
+        } else {
+          for (const candidate of value.tombstones) {
+            const tombstone = normalizeTombstone(candidate);
+            if (tombstone) {
+              const key = historyKey(tombstone.provider, tombstone.canonicalId);
+              this.tombstonesByKey.set(key, tombstone);
+              this.indexTombstone(key, tombstone);
+            } else {
+              invalidTombstone = true;
+            }
+          }
+        }
+      }
+      if (invalidRecord || invalidTombstone) this.historyWarningMessage = HISTORY_STORAGE_WARNING;
     } catch {
       // A malformed or incompatible store is unavailable history, never launch authority.
       try {
@@ -256,7 +396,30 @@ export class RetainedHistoryStore {
     }
   }
 
-  private persist(): void {
+  private indexTombstone(key: string, tombstone: RetainedHistoryTombstone): void {
+    for (const identity of [tombstone.id, tombstone.canonicalId, ...(tombstone.aliases ?? [])]) {
+      this.tombstoneKeyByIdentity.set(historyKey(tombstone.provider, identity), key);
+    }
+  }
+
+  private removeTombstone(key: string): void {
+    const tombstone = this.tombstonesByKey.get(key);
+    if (!tombstone) return;
+    this.tombstonesByKey.delete(key);
+    for (const identity of [tombstone.id, tombstone.canonicalId, ...(tombstone.aliases ?? [])]) {
+      this.tombstoneKeyByIdentity.delete(historyKey(tombstone.provider, identity));
+    }
+  }
+
+  private findTombstoneKey(observation: NormalizedHistoryObservation): string | undefined {
+    for (const identity of [observation.canonicalId, observation.id, ...(observation.aliases ?? [])]) {
+      const key = this.tombstoneKeyByIdentity.get(historyKey(observation.provider, identity));
+      if (key) return key;
+    }
+    return undefined;
+  }
+
+  private persist(): boolean {
     const directory = path.dirname(this.options.path);
     const temporary = `${this.options.path}.${process.pid}.tmp`;
     try {
@@ -266,14 +429,19 @@ export class RetainedHistoryStore {
         records: [...this.recordsByKey.values()]
           .sort((left, right) => historyKey(left.provider, left.canonicalId)
             .localeCompare(historyKey(right.provider, right.canonicalId))),
+        tombstones: [...this.tombstonesByKey.values()]
+          .sort((left, right) => historyKey(left.provider, left.canonicalId)
+            .localeCompare(historyKey(right.provider, right.canonicalId))),
       };
       writeFileSync(temporary, JSON.stringify(payload), { encoding: "utf8", mode: 0o600 });
       chmodSync(temporary, 0o600);
       renameSync(temporary, this.options.path);
       this.historyWarningMessage = undefined;
+      return true;
     } catch {
       this.historyWarningMessage = HISTORY_STORAGE_WARNING;
       try { writeFileSync(temporary, "", { encoding: "utf8" }); } catch { /* best effort cleanup */ }
+      return false;
     }
   }
 }
@@ -288,7 +456,9 @@ function normalizeObservation(value: RetainedHistoryObservation): NormalizedHist
   const cwd = absolutePath(value.cwd, MAX_TEXT_LENGTH);
   const fallbackProject = cwd ? path.basename(cwd) || cwd : undefined;
   const owner = bounded(value.owner, 128) ?? (value.provider === "codex" ? "Codex" : "Claude");
-  const host = value.host === undefined ? undefined : HOSTS.has(value.host) ? value.host : undefined;
+  const hostValue = value.host;
+  const host = typeof hostValue === "string" && HOSTS.has(hostValue as RetainedHistoryHost)
+    ? hostValue as RetainedHistoryHost : undefined;
   const updatedAt = iso(value.updatedAt);
   const observedAt = iso(value.observedAt);
   if (!id || !canonicalId || !title || !(project || fallbackProject) || !owner || !cwd || !updatedAt || !observedAt) return undefined;
@@ -328,6 +498,50 @@ function normalizeRecord(value: unknown): RetainedHistoryRecord | undefined {
   const closedAt = iso(value.closedAt);
   if (!closedAt) return undefined;
   return { ...observation, schemaVersion: SCHEMA_VERSION, closedAt };
+}
+
+function normalizeTombstone(value: unknown): RetainedHistoryTombstone | undefined {
+  if (!isRecord(value) || (value.provider !== "claude_code" && value.provider !== "codex")) return undefined;
+  const id = bounded(value.id, MAX_ID_LENGTH);
+  const canonicalId = bounded(value.canonicalId, MAX_CANONICAL_ID_LENGTH);
+  const removedAt = iso(value.removedAt);
+  const reason = value.reason === "agent_visor" || value.reason === "provider_archived"
+    ? value.reason : undefined;
+  const aliases = normalizeAliases(value.aliases, canonicalId ?? "", id ?? "");
+  const hostValue = value.host;
+  const host = typeof hostValue === "string" && HOSTS.has(hostValue as RetainedHistoryHost)
+    ? hostValue as RetainedHistoryHost : undefined;
+  const configHome = value.configHome === undefined ? undefined : absolutePath(value.configHome, MAX_CONFIG_HOME_LENGTH);
+  if (!id || !canonicalId || !removedAt || !reason || (value.aliases !== undefined && !aliases)
+    || (value.host !== undefined && !host) || (value.configHome !== undefined && !configHome)) return undefined;
+  return {
+    provider: value.provider,
+    id,
+    canonicalId,
+    ...(aliases?.length ? { aliases } : {}),
+    ...(host ? { host } : {}),
+    ...(configHome ? { configHome } : {}),
+    removedAt,
+    reason,
+  };
+}
+
+function originFromRecord(record: RetainedHistoryRecord): {
+  provider: RetainedHistoryProvider;
+  id: string;
+  canonicalId: string;
+  aliases?: string[];
+  host?: RetainedHistoryHost;
+  configHome?: string;
+} {
+  return {
+    provider: record.provider,
+    id: record.id,
+    canonicalId: record.canonicalId,
+    ...(record.aliases?.length ? { aliases: [...record.aliases] } : {}),
+    ...(record.host ? { host: record.host } : {}),
+    ...(record.configHome ? { configHome: record.configHome } : {}),
+  };
 }
 
 function sameRecord(left: RetainedHistoryRecord, right: RetainedHistoryRecord): boolean {

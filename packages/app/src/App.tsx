@@ -140,6 +140,7 @@ export function App() {
           contentScale={contentScale}
           onContentScaleChange={adjustContentScale}
           onOpenChat={(session) => setChatSelection((selection) => reduceChatSelection(selection, { type: "open", session }))}
+          onRemoveHistory={history.remove}
           onOpenSettings={() => setSettingsOpen(true)}
           onLoadMoreHistory={history.loadMore}
           onQueryChange={setQuery}
@@ -183,6 +184,7 @@ function SessionBrowser({
   onContentScaleChange,
   onLoadMoreHistory,
   onOpenChat,
+  onRemoveHistory,
   onOpenSettings,
   onQueryChange,
   palette,
@@ -196,6 +198,7 @@ function SessionBrowser({
   onContentScaleChange(delta: -0.1 | 0 | 0.1): void;
   onLoadMoreHistory(): void;
   onOpenChat(session: SessionSummary): void;
+  onRemoveHistory(sessionId: string): void;
   onOpenSettings(): void;
   onQueryChange(query: string): void;
   palette: Palette;
@@ -351,6 +354,11 @@ function SessionBrowser({
               <Text style={browserStyles.historyWarningText}>{historyState.page.historyWarning}</Text>
             </View>
           ) : null}
+          {historyState.removeError ? (
+            <View accessibilityLabel="History removal error" style={browserStyles.historyWarning}>
+              <Text style={browserStyles.historyWarningText}>{historyState.removeError}</Text>
+            </View>
+          ) : null}
           {selection.groups.flatMap((group) => [
               <View key={`header:${group.id}`} style={browserStyles.sectionHeader}>
                 <Text style={browserStyles.sectionTitle}>{group.title}</Text>
@@ -367,6 +375,10 @@ function SessionBrowser({
                   now={now}
                   onActivate={(alternate) => activateSession(session, alternate, onOpenChat)}
                   onOpenChat={() => onOpenChat(session)}
+                  onRemoveHistory={session.canRemoveHistory === true
+                    ? () => onRemoveHistory(session.id)
+                    : undefined}
+                  removing={historyState.removingSessionID === session.id}
                   palette={palette}
                   session={session}
                   styles={browserStyles}
@@ -421,7 +433,9 @@ function SessionRow({
   now,
   onActivate,
   onOpenChat,
+  onRemoveHistory,
   palette,
+  removing,
   session,
   styles: rowStyles,
 }: {
@@ -433,16 +447,20 @@ function SessionRow({
   now: Date;
   onActivate(alternate: boolean): void;
   onOpenChat(): void;
+  onRemoveHistory?: () => void;
   palette: Palette;
+  removing: boolean;
   session: SessionSummary;
   styles: BrowserStyles;
 }) {
   const [primaryHovered, setPrimaryHovered] = useState(false);
   const [chatHovered, setChatHovered] = useState(false);
+  const [removeHovered, setRemoveHovered] = useState(false);
   useEffect(() => {
     if (!active) {
       setPrimaryHovered(false);
       setChatHovered(false);
+      setRemoveHovered(false);
     }
   }, [active]);
   const primary = sessionAction(session);
@@ -513,6 +531,25 @@ function SessionRow({
           >
             <Text style={[rowStyles.chatText, chatHovered && rowStyles.linkText]}>
               ▢ {compact ? "Chat" : "Open Chat"}
+            </Text>
+          </Pressable>
+        ) : null}
+        {onRemoveHistory ? (
+          <Pressable
+            accessibilityLabel={removing ? `Removing ${session.title} from History` : `Remove ${session.title} from History`}
+            accessibilityRole="button"
+            disabled={removing}
+            onHoverIn={() => setRemoveHovered(true)}
+            onHoverOut={() => setRemoveHovered(false)}
+            onPress={onRemoveHistory}
+            style={({ pressed }) => [
+              rowStyles.chatAction,
+              removeHovered && rowStyles.chatHovered,
+              pressed && rowStyles.pressed,
+            ]}
+          >
+            <Text style={[rowStyles.chatText, removeHovered && rowStyles.linkText]}>
+              {removing ? "Removing…" : "Remove"}
             </Text>
           </Pressable>
         ) : null}

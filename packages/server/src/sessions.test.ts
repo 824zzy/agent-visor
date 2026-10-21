@@ -162,6 +162,267 @@ describe("SessionRepository", () => {
     }
   });
 
+  it("removes a retained row durably without mutating the provider", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-session-history-remove-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const id = "claude-remove-1";
+    const record: DiscoveredProviderSession = {
+      id,
+      provider: "claude_code",
+      title: "Remove this retained row",
+      subtitle: "Ready to continue",
+      project: "agent-visor",
+      cwd: "/Users/me/Codes/agent-visor",
+      owner: "Ghostty",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: false,
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty",
+        pid: 1234,
+        processStartToken: "start-remove-1",
+        tty: "ttys123",
+        cwd: "/Users/me/Codes/agent-visor",
+      } },
+      historyIdentity: { verified: true, host: "Ghostty" },
+    };
+    let sessions: DiscoveredProviderSession[] = [record];
+    let providerArchiveCalls = 0;
+    let providerStopCalls = 0;
+    const provider: ProviderAdapter = {
+      id: "claude_code",
+      discover: async () => structuredClone(sessions),
+      acknowledgeFailure: () => { providerArchiveCalls += 1; },
+    };
+    try {
+      const first = new SessionRepository([provider], { retainedHistoryPath: historyPath });
+      await first.refresh();
+      sessions = [];
+      await first.refresh();
+
+      expect(first.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id,
+        section: "history",
+      }));
+      await expect(first.removeHistorySession(id)).resolves.toBeUndefined();
+      expect(first.historyPage().sessions).not.toContainEqual(expect.objectContaining({ id }));
+      expect(providerArchiveCalls).toBe(0);
+      expect(providerStopCalls).toBe(0);
+
+      const restarted = new SessionRepository([provider], { retainedHistoryPath: historyPath });
+      await restarted.refresh();
+      expect(restarted.historyPage().sessions).not.toContainEqual(expect.objectContaining({ id }));
+      expect(providerArchiveCalls).toBe(0);
+      expect(providerStopCalls).toBe(0);
+
+      sessions = [record];
+      expect((await restarted.refresh()).sessions).toContainEqual(expect.objectContaining({
+        id,
+        section: "ready",
+      }));
+      expect(restarted.historyPage().sessions).not.toContainEqual(expect.objectContaining({ id }));
+
+      sessions = [];
+      await restarted.refresh();
+      expect(restarted.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id,
+        section: "history",
+      }));
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("eventually reconciles a retained row beyond the first history page", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-session-history-lifetime-page-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const cwd = "/Users/me/Codes/agent-visor";
+    const records: DiscoveredProviderSession[] = Array.from({ length: 101 }, (_, index) => ({
+      id: `claude-history-${String(index).padStart(3, "0")}`,
+      provider: "claude_code",
+      title: `History ${index}`,
+      subtitle: "Ready to continue",
+      cwd,
+      owner: "Ghostty",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: false,
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty",
+        pid: 2000 + index,
+        processStartToken: `history-${index}`,
+        tty: `ttys-history-${index}`,
+        cwd,
+      } },
+      historyIdentity: { verified: true, host: "Ghostty" },
+    }));
+    const archivedID = records[100].id;
+    let discovered = records;
+    try {
+      const provider: ProviderAdapter = {
+        id: "claude_code",
+        discover: async () => structuredClone(discovered),
+        historyLifetime: async (sessionID) => sessionID === archivedID ? "archived" : "unknown",
+      };
+      const repository = new SessionRepository([provider], { retainedHistoryPath: historyPath });
+
+      await repository.refresh();
+      discovered = [];
+      for (let refresh = 0; refresh < 8; refresh += 1) await repository.refresh();
+
+      expect(repository.historyPage().sessions).not.toContainEqual(expect.objectContaining({ id: archivedID }));
+      expect(repository.historyPage().total).toBe(100);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves History and publishes live data when a lifetime probe rejects", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-session-history-lifetime-outage-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const id = "claude-history-probe-outage";
+    const cwd = "/Users/me/Codes/agent-visor";
+    const record: DiscoveredProviderSession = {
+      id,
+      provider: "claude_code",
+      title: "Probe outage",
+      subtitle: "Ready to continue",
+      cwd,
+      owner: "Ghostty",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: false,
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty",
+        pid: 2301,
+        processStartToken: "history-probe-outage",
+        tty: "ttys-history-probe-outage",
+        cwd,
+      } },
+      historyIdentity: { verified: true, host: "Ghostty" },
+    };
+    let discovered: DiscoveredProviderSession[] = [record];
+    try {
+      const provider: ProviderAdapter = {
+        id: "claude_code",
+        discover: async () => structuredClone(discovered),
+        historyLifetime: async () => { throw new Error("provider history unavailable"); },
+      };
+      const repository = new SessionRepository([provider], { retainedHistoryPath: historyPath });
+
+      await repository.refresh();
+      discovered = [];
+      const snapshot = await repository.refresh();
+
+      expect(snapshot.sessions).toEqual([]);
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id,
+        section: "history",
+      }));
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("removes a retained row only when the provider reports deleted", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-session-history-deleted-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const id = "claude-history-provider-deleted";
+    const cwd = "/Users/me/Codes/agent-visor";
+    const record: DiscoveredProviderSession = {
+      id,
+      provider: "claude_code",
+      title: "Provider deleted",
+      subtitle: "Ready to continue",
+      cwd,
+      owner: "Ghostty",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: false,
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty",
+        pid: 2302,
+        processStartToken: "history-provider-deleted",
+        tty: "ttys-history-provider-deleted",
+        cwd,
+      } },
+      historyIdentity: { verified: true, host: "Ghostty" },
+    };
+    let discovered: DiscoveredProviderSession[] = [record];
+    try {
+      const provider: ProviderAdapter = {
+        id: "claude_code",
+        discover: async () => structuredClone(discovered),
+        historyLifetime: async () => "deleted",
+      };
+      const repository = new SessionRepository([provider], { retainedHistoryPath: historyPath });
+
+      await repository.refresh();
+      discovered = [];
+      await repository.refresh();
+
+      expect(repository.historyPage().sessions).not.toContainEqual(expect.objectContaining({ id }));
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects focus for a removed retained identity even if a provider resolver still returns it", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-session-history-focus-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const id = "claude-removed-focus-1";
+    const record: DiscoveredProviderSession = {
+      ...readyLive,
+      id,
+      provider: "claude_code",
+      owner: "Ghostty",
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty",
+        pid: 1234,
+        processStartToken: "removed-focus-1",
+        tty: "ttys123",
+        cwd: "/Users/me/Codes/agent-visor",
+      } },
+      historyIdentity: { verified: true, host: "Ghostty" },
+    };
+    let present = true;
+    const focus = vi.fn(async () => undefined);
+    const provider: ProviderAdapter = {
+      id: "claude_code",
+      discover: async () => present ? [structuredClone(record)] : [],
+      resolve: async () => structuredClone(record),
+    };
+    const repository = new SessionRepository([provider], { retainedHistoryPath: historyPath });
+    repository.setControls({ focus } as never);
+    try {
+      await repository.refresh();
+      present = false;
+      await repository.refresh();
+      await expect(repository.removeHistorySession(id)).resolves.toBeUndefined();
+
+      expect(await repository.focusSession(id)).toBe("This session was removed from Agent Visor History.");
+      expect(focus).not.toHaveBeenCalled();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps an observed conversation searchable when the first restart inventory is unavailable", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-session-history-outage-"));
     const historyPath = path.join(directory, "retained-history.json");
@@ -432,6 +693,81 @@ describe("SessionRepository", () => {
         "codex:fixture-home:other",
         firstID,
       ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps one current/history row when a verified public ID changes during an unavailable inventory", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-history-public-id-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const transcriptPath = path.join(directory, "conversation.jsonl");
+    writeFileSync(transcriptPath, `${JSON.stringify({
+      type: "user",
+      uuid: "history-alias-user",
+      timestamp: "2026-10-21T18:00:00.000Z",
+      message: { role: "user", content: "Read this retained conversation" },
+    })}\n`);
+    const firstID = "codex:fixture-home:public-a";
+    const secondID = "codex:fixture-home:public-b";
+    const canonicalId = "codex:fixture-home:canonical";
+    const makeSession = (id: string): DiscoveredProviderSession => ({
+      id,
+      provider: "codex",
+      title: "Alias conversation",
+      subtitle: "Codex CLI session",
+      project: "agent-visor",
+      cwd: "/Users/me/Codes/agent-visor",
+      owner: "Codex CLI",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: false,
+      canEnterChat: true,
+      chatPath: transcriptPath,
+      historyIdentity: {
+        verified: true,
+        canonicalId,
+        aliases: [id],
+        configHome: "/Users/me/.codex",
+      },
+    });
+    let current = makeSession(firstID);
+    let authority: "authoritative" | "unavailable" = "authoritative";
+    const provider: ProviderAdapter = {
+      id: "codex",
+      discover: async () => [structuredClone(current)],
+      discoveryAuthority: () => authority,
+    };
+    const repository = new SessionRepository([provider], {
+      retainedHistoryPath: historyPath,
+      chatPageReader: async () => ({
+        type: "chat_page" as const,
+        sessionId: firstID,
+        items: [{ id: "history-alias-user", kind: "user" as const, text: "Read this retained conversation", images: [] }],
+        hasMoreBefore: false,
+        capabilities: {
+          canSendText: false, canSendImages: false, canCancel: false,
+          canApprove: false, canAnswer: false,
+        },
+        pendingAction: null,
+      }),
+    });
+    try {
+      await repository.refresh();
+      await repository.chatOpened(firstID, "history-alias-reader");
+
+      current = makeSession(secondID);
+      authority = "unavailable";
+      const snapshot = await repository.refresh();
+
+      expect(snapshot.sessions.map(({ id }) => id)).toEqual([secondID]);
+      expect(repository.historyPage().sessions.map(({ id }) => id)).toEqual([secondID]);
+      expect((await repository.chatPage(firstID)).items).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: "user", text: "Read this retained conversation" })]),
+      );
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

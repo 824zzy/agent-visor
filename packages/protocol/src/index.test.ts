@@ -148,6 +148,30 @@ describe("session snapshot protocol", () => {
     }).success).toBe(false);
   });
 
+  it("accepts the additive retained-history removal action", () => {
+    expect(clientMessageSchema.parse({
+      type: "remove_history_session",
+      id: "remove-1",
+      sessionId: "closed-1",
+    })).toEqual({
+      type: "remove_history_session",
+      id: "remove-1",
+      sessionId: "closed-1",
+    });
+    expect(serverMessageSchema.parse({
+      type: "history_action_result",
+      id: "remove-1",
+      action: "remove",
+      sessionId: "closed-1",
+      ok: true,
+    })).toMatchObject({
+      type: "history_action_result",
+      action: "remove",
+      sessionId: "closed-1",
+      ok: true,
+    });
+  });
+
   it("rejects unknown sections instead of inventing UI state", () => {
     expect(() =>
       sessionSnapshotSchema.parse({
