@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ProcessRecord, ProviderEnvironment, FileStamp, GhosttyTerminalView } from "./environment.js";
 import {
+  ClaudeAgentInventory,
   type ClaudeAgentInventoryFailure,
   type ClaudeAgentInventoryResult,
   type ClaudeAgentInventoryRow,
@@ -15,6 +16,7 @@ import { NativeSessionControls } from "../session-controls.js";
 import { SessionRepository } from "../sessions.js";
 import { PaseoProvider } from "./paseo.js";
 import { alfredResults } from "../alfred.js";
+import type { ProcessResult } from "../machine.js";
 
 const home = "/Users/me";
 const cwd = home + "/Codes/agent-visor";
@@ -170,7 +172,92 @@ function completedIdleFixture() {
   return { environment, row, transcript, tail, completedAt };
 }
 
+function cachedResumeFixture() {
+  const environment = new FixtureEnvironment();
+  addProcess(environment, 900, executable);
+  addMetadata(environment, 900, { sessionId: ccID, cwd, kind: "interactive", status: "idle", name: "ccx-thinking-block-sneha" });
+  const row = backgroundRow("64b38993", blockedID, "stopped", { name: "ccx-thinking-block-sneha" });
+  const lineagePath = path.join(home, ".claude/jobs/64b38993/state.json");
+  const lineage = { state: "stopped", sessionId: blockedID, resumeSessionId: ccID, interactiveLineage: true, cwd };
+  environment.files.set(lineagePath, JSON.stringify(lineage));
+  const success: ProcessResult = { status: "success", stdout: JSON.stringify([row]), stderr: "", exitCode: 0 };
+  let command: ProcessResult | Promise<ProcessResult> = success;
+  const cache = new ClaudeAgentInventory({ home, configDir: "", now: () => environment.now(),
+    resolveExecutable: async () => executable, run: async () => command });
+  environment.claudeAgentInventory = () => cache.read();
+  return { environment, cache, success, source: repository(environment), lineagePath, lineage,
+    setCommand(value: ProcessResult | Promise<ProcessResult>) { command = value; } };
+}
+
 describe("Claude agent-view integration", () => {
+  it("keeps one resumed conversation across pending inventory refresh cycles", async () => {
+    const f = cachedResumeFixture();
+    expect(alfredResults(await f.source.refresh(), "ccx-thinking-block-sneha").items.map(item => item.uid)).toEqual([ccID]);
+    let complete!: (result: ProcessResult) => void;
+    f.setCommand(new Promise(resolve => { complete = resolve; }));
+    for (let cycle = 0; cycle < 2; cycle++) {
+      f.environment.clock = new Date(f.environment.clock.valueOf() + 3_100);
+      const snapshot = await f.source.refresh();
+      expect(alfredResults(snapshot, "ccx-thinking-block-sneha").items.map(item => item.uid)).toEqual([ccID]);
+      expect(menuPresentation(snapshot, [], f.environment.clock.valueOf()).pills.map(pill => pill.id)).toEqual([ccID]);
+    }
+    expect(f.source.applyHook({ sessionId: blockedID, provider: "claude_code", cwd,
+      event: "Stop", status: "idle", receivedAt: f.environment.clock.toISOString() }).sessions.map(session => session.id)).toEqual([ccID]);
+    const waiting = f.source.applyHook({ sessionId: ccID, provider: "claude_code", cwd,
+      event: "PreToolUse", status: "waiting_for_approval", receivedAt: f.environment.clock.toISOString(),
+      tool: "AskUserQuestion", toolUseId: "cached-question", expectsResponse: true,
+      toolInput: { questions: [{ question: "Continue?" }] } });
+    expect(waiting.sessions).toMatchObject([{ id: ccID, section: "needs_you" }]);
+    const refreshed = f.cache.refreshNow();
+    complete(f.success);
+    await refreshed;
+    expect(alfredResults(await f.source.refresh(), "ccx-thinking-block-sneha").items.map(item => item.uid)).toEqual([ccID]);
+  });
+
+  it.each(["failed-read", "unsupported-read", "expired-authority", "changed-lineage", "missing-lineage",
+    "restarted-job", "missing-route", "parked-overview", "unverified-process"])("rechecks resume identity during a cached refresh (%s)", async reason => {
+    const f = cachedResumeFixture();
+    expect((await f.source.refresh()).sessions.map(session => session.id)).toEqual([ccID]);
+    let complete!: (result: ProcessResult) => void;
+    f.setCommand(new Promise(resolve => { complete = resolve; }));
+    f.environment.clock = new Date(nowMs + 3_100);
+    expect((await f.source.refresh()).sessions.map(session => session.id)).toEqual([ccID]);
+    const pending = f.cache.refreshNow();
+    try {
+      if (reason === "failed-read" || reason === "unsupported-read") {
+        complete({ status: "failed", stdout: "", stderr: reason === "unsupported-read" ? "unknown command 'agents'" : "failed", exitCode: 1 });
+        await pending;
+      }
+      if (reason === "expired-authority") f.environment.clock = new Date(nowMs + 31_000);
+      if (reason === "changed-lineage") f.environment.files.set(f.lineagePath,
+        JSON.stringify({ ...f.lineage, resumeSessionId: managerID }));
+      if (reason === "missing-lineage") f.environment.files.delete(f.lineagePath);
+      if (reason === "restarted-job") f.environment.files.set(f.lineagePath,
+        JSON.stringify({ ...f.lineage, state: "working" }));
+      if (reason === "missing-route") f.environment.processRows = [];
+      if (reason === "parked-overview") f.environment.files.set(path.join(home, ".claude/sessions/900.json"),
+        JSON.stringify({ sessionId: ccID, cwd, kind: "interactive", status: "idle", parkedJobId: "64b38993" }));
+      if (reason === "unverified-process") f.environment.starts.delete(900);
+      const snapshot = await f.source.refresh();
+      expect(alfredResults(snapshot, "ccx-thinking-block-sneha").items.map(item => item.uid)).toContain(blockedID);
+      if (reason === "parked-overview") expect(menuPresentation(snapshot, [], f.environment.clock.valueOf()).pills).toEqual([]);
+    } finally {
+      complete(f.success);
+      await pending;
+    }
+  });
+
+  it("recovers canonical resume identity after a failed cache refresh succeeds", async () => {
+    const f = cachedResumeFixture();
+    expect((await f.source.refresh()).sessions.map(session => session.id)).toEqual([ccID]);
+    f.setCommand({ status: "failed", stdout: "", stderr: "failed", exitCode: 1 });
+    await f.cache.refreshNow();
+    expect((await f.source.refresh()).sessions.map(session => session.id).sort()).toEqual([ccID, blockedID].sort());
+    f.setCommand(f.success);
+    await f.cache.refreshNow();
+    expect((await f.source.refresh()).sessions.map(session => session.id)).toEqual([ccID]);
+  });
+
   it("publishes only the verified conversation when a stopped job explicitly resumes it", async () => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, executable);
@@ -205,7 +292,7 @@ describe("Claude agent-view integration", () => {
   });
 
   it.each(["missing-lineage", "invalid-json", "other-job", "other-resume", "other-cwd", "no-interactive-lineage",
-    "saved-job-running", "inventory-job-running", "busy-inventory", "waiting-inventory", "stale-inventory", "stale-authoritative", "failed-inventory", "live-worker", "unverified-terminal",
+    "saved-job-running", "inventory-job-running", "busy-inventory", "waiting-inventory", "stale-inventory", "failed-inventory", "live-worker", "unverified-terminal",
     "application-only", "parked-overview", "missing-process"])("retains the historical job without a verified distinct resume relationship (%s)", async reason => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, executable);
@@ -216,7 +303,6 @@ describe("Claude agent-view integration", () => {
       { name: "ccx-thinking-block-sneha", status: reason === "busy-inventory" ? "busy" : "idle",
         ...(reason === "waiting-inventory" ? { waitingFor: "approval" } : {}) });
     const inventory = inventorySuccess([row], reason !== "stale-inventory");
-    if (reason === "stale-authoritative") inventory.freshness = "stale";
     environment.inventory = reason === "failed-inventory" ? inventoryFailure(inventory) : inventory;
     const saved = { state: reason === "saved-job-running" ? "working" : "stopped",
       sessionId: reason === "other-job" ? managerID : blockedID,

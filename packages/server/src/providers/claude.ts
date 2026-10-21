@@ -42,7 +42,6 @@ const emptySummary: TranscriptSummary = { customTitle: "", firstUser: "", comple
 type InventorySnapshot = {
   rows: readonly ClaudeAgentInventoryRow[];
   authoritative: boolean;
-  fresh: boolean;
   observedAt: number;
 };
 type InventoryRead = {
@@ -297,7 +296,9 @@ export class ClaudeProvider implements ProviderAdapter {
     // A stopped interactive-lineage job can retain its worker UUID while
     // its conversation continues under resumeSessionId. Keep the exact live
     // frontend, never infer this relationship from a shared title or cwd.
-    if (inventory?.authoritative && inventory.fresh) {
+    // A successful cached inventory retains identity while refreshing. Its
+    // turn-state freshness is separate; failed/expired reads cannot hide jobs.
+    if (inventory?.authoritative && !inventoryRead.outage) {
       for (const row of inventoryRows.values()) {
         if (row.state !== "stopped" || row.status === "busy" || string(row.waitingFor)
           || backgroundMetadata.get(row.id!)?.process
@@ -490,7 +491,6 @@ export class ClaudeProvider implements ProviderAdapter {
       snapshot: {
         rows: snapshot.rows,
         authoritative: snapshot.authoritative,
-        fresh: result.kind === "success" && snapshot.freshness === "fresh",
         observedAt: snapshot.startedAt,
       },
     };
