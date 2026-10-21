@@ -1,4 +1,4 @@
-import { readCodexTuiBinding, type CodexTuiBinding } from "./codex-tui-client.js";
+import { readCodexTuiBinding, verifyCodexTuiBinding, type CodexTuiBinding } from "./codex-tui-client.js";
 import type { NativeHelperGhosttyBinding } from "@agent-visor/protocol";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readCodexCliObservation, type CodexCliObservation } from "./codex-cli-observer.js";
@@ -180,8 +180,18 @@ export class HerdrClient {
       } catch {
         this.prepared.delete(expected.sessionId);
         if (!isCurrent()) throw unavailable();
+        if (expected.codexTuiBinding?.inventory) {
+          // Rebuild in the background, never turn a rejected fast check into
+          // a click-time transcript scan or a weaker navigation capability.
+          void this.prepare(expected, native).catch(() => {});
+          throw unavailable();
+        }
         // A helper restart or changed route gets one fully guarded recovery.
       }
+    }
+    if (expected.codexTuiBinding?.inventory) {
+      void this.prepare(expected, native).catch(() => {});
+      throw unavailable();
     }
     navigationStep("route_recovery", { targetKind: "herdr_surface" });
     if (!native.ghosttyBindingStatus || !native.resolveGhosttyBinding || !native.focusGhosttyBinding
@@ -331,7 +341,13 @@ export class HerdrClient {
     navigationStep("process_validated", { targetKind: "herdr_surface" });
     // Socket/boot/client/target state stays authoritative. Kernel process
     // guards captured by the native capability replace repeated machine scans.
-    const resolver = new HerdrClient(async () => structuredClone(expected), this.deadlineMs, this.system);
+    const proof = expected.codexTuiBinding;
+    const system = proof?.inventory && this.system.verifyCodexTuiBinding ? {
+      ...this.system,
+      readCodexTuiBinding: async (pid: number, home: string) =>
+        await this.system.verifyCodexTuiBinding!(pid, home, proof) ? structuredClone(proof) : undefined,
+    } : this.system;
+    const resolver = new HerdrClient(async () => structuredClone(expected), this.deadlineMs, system);
     const fresh = await resolver.resolve(expected.pid, expected.sessionId, expected.cwd);
     if (!fresh || !sameRoute(fresh, expected) || !isCurrent()) throw unavailable();
     const request = (method: string, params: object) => this.rpc(fresh.socketPath, fresh.socketIdentity, method, params);
@@ -431,12 +447,14 @@ export type HerdrSystem = {
   run: typeof runProcess;
   readClaudeMetadata(pid: number, configRoot?: string): Promise<string | undefined>;
   readCodexTuiBinding?(pid: number, home: string): Promise<CodexTuiBinding | undefined>;
+  verifyCodexTuiBinding?(pid: number, home: string, expected: CodexTuiBinding): Promise<boolean>;
   readCodexObservation?(pid: number, home: string): Promise<CodexCliObservation | undefined>;
 };
 const liveSystem: HerdrSystem = {
   run: runProcess,
   readCodexObservation: readCodexCliObservation,
   readCodexTuiBinding,
+  verifyCodexTuiBinding,
   async readClaudeMetadata(pid, configRoot) {
     const filePath = path.join(configRoot ?? path.join(os.homedir(), ".claude"), "sessions", `${pid}.json`);
     const info = await lstat(filePath);

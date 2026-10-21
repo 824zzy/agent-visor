@@ -191,6 +191,8 @@ export interface SessionControls {
   isAvailable?(): boolean;
   /** Superseded navigation did not open the session and must not mark it seen. */
   focus(session: DiscoveredProviderSession): Promise<void | "superseded">;
+  /** Exact control-side checks can replace expensive provider rediscovery for navigation only. */
+  revalidatesFocus?(session: DiscoveredProviderSession): boolean;
   send(
     session: DiscoveredProviderSession,
     text: string,
@@ -1505,13 +1507,13 @@ export class SessionRepository {
     // Claude terminals can enter Agent View or another conversation without
     // changing their PID. Revalidate both interactive and background targets
     // so a click cannot reuse a cached route to the wrong screen.
-    if (session.provider === "paseo" || (session.provider === "codex"
+    if (!this.controls.revalidatesFocus?.(session) && (session.provider === "paseo" || (session.provider === "codex"
       && (session.controlTarget?.kind === "terminal" || session.controlTarget?.kind === "herdr_surface"))
       || (session.provider === "claude_code"
       && (session.controlTarget?.kind === "claude_background"
         || session.controlTarget?.kind === "cmux_surface"
         || session.controlTarget?.kind === "herdr_surface"
-        || session.controlTarget?.kind === "terminal"))) {
+        || session.controlTarget?.kind === "terminal")))) {
       const resolved = await this.resolveExactSession(sessionId, false, true);
       if (!resolved || resolved.resolutionUnavailable || !resolved.controlTarget) {
         return "Exact session focus is unavailable.";

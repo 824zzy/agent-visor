@@ -4,6 +4,36 @@ import Foundation
 import XCTest
 
 final class NativeGhosttyAppleEventsTests: XCTestCase {
+    func testPreparedFocusReadsTheExactSelectionWithoutWalkingWindowProperties() {
+        var selected = false
+        var events = 0
+        let sdk = NativeGhosttyAppleEvents(pid: 42, transmit: { event in
+            events += 1
+            let direct = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))!
+            if event.attributeDescriptor(forKeyword: AEKeyword(keyEventIDAttr))?.typeCodeValue == NativeGhosttyAppleEvents.code("Fcus") {
+                selected = true; return .null()
+            }
+            switch direct.forKeyword(AEKeyword(keyAEKeyData))!.typeCodeValue {
+            case NativeGhosttyAppleEvents.code("ID  "):
+                let container = direct.forKeyword(AEKeyword(keyAEContainer))!
+                if container.forKeyword(AEKeyword(keyAEDesiredClass))?.typeCodeValue == NativeGhosttyAppleEvents.code("Gtrm") {
+                    return .init(string: "exact")
+                }
+                let focused = container.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue
+                let tab = container.forKeyword(AEKeyword(keyAEContainer))
+                let window = tab?.forKeyword(AEKeyword(keyAEContainer))
+                guard focused == NativeGhosttyAppleEvents.code("GTfT"),
+                      tab?.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue == NativeGhosttyAppleEvents.code("GWsT"),
+                      window?.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue == NativeGhosttyAppleEvents.code("GFWn") else { return nil }
+                return .init(string: selected ? "exact" : "other")
+            case NativeGhosttyAppleEvents.code("pisf"): return .init(boolean: selected)
+            default: return nil
+            }
+        }, activate: { true })
+        XCTAssertTrue(sdk.focus(terminalID: "exact", expectedTitle: nil, expectedCWD: nil))
+        XCTAssertLessThanOrEqual(events, 5)
+    }
+
     func testFocusesExactTerminalUsingTheSupportedScriptingDictionary() {
         var selected: String?
         var active = false

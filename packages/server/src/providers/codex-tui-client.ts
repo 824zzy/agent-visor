@@ -5,13 +5,30 @@ import { machineWork, runProcess } from "../machine.js";
 import { isRecord } from "./shared.js";
 
 /** Live client transport identity; never historical thread origin or a cached capability. */
-export type CodexTuiBinding = { sessionIds: string[]; origin: string; socketPath: string; socketIdentity: string };
+type ThreadInventory = { loaded: string[]; roots: Array<{ id: string; path: string | null }> };
+export type CodexTuiBinding = { sessionIds: string[]; origin: string; socketPath: string; socketIdentity: string;
+  inventory?: ThreadInventory };
 const uuid = (value: unknown): value is string => typeof value === "string"
   && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 
 /** Read only the existing server. Never resumes, subscribes to, or starts a thread. */
 export async function readCodexTuiBinding(pid: number, home: string,
   run: typeof runProcess = runProcess): Promise<CodexTuiBinding | undefined> {
+  return readBinding(pid, home, run);
+}
+
+/** Revalidate transport ownership, never repeat transcript discovery on navigation. */
+export async function verifyCodexTuiBinding(pid: number, home: string, expected: CodexTuiBinding,
+  run: typeof runProcess = runProcess): Promise<boolean> {
+  if (!expected.inventory || expected.sessionIds.length !== 1) return false;
+  const current = await readBinding(pid, home, run, expected);
+  return current?.socketPath === expected.socketPath && current.socketIdentity === expected.socketIdentity
+    && current.origin === expected.origin && current.sessionIds.length === 1
+    && current.sessionIds[0] === expected.sessionIds[0];
+}
+
+async function readBinding(pid: number, home: string, run: typeof runProcess,
+  expected?: CodexTuiBinding): Promise<CodexTuiBinding | undefined> {
   let binding: CodexTuiBinding | undefined;
   try {
     if (!Number.isSafeInteger(pid) || pid <= 0 || !path.isAbsolute(home)) return undefined;
@@ -33,16 +50,19 @@ export async function readCodexTuiBinding(pid: number, home: string,
       || parent.uid !== info.uid || (parent.mode & 0o077) !== 0) return undefined;
     const socketIdentity = `${info.dev}:${info.ino}:${info.uid}`;
     binding = { sessionIds: [], origin, socketPath, socketIdentity };
-    const sessionIds = await query(socketPath, origin, await realpath(home));
+    if (expected && (expected.socketPath !== socketPath || expected.socketIdentity !== socketIdentity
+      || expected.origin !== origin)) return binding;
+    const result = await query(socketPath, origin, await realpath(home), expected?.inventory);
     const after = await lstat(socketPath);
     const current = await listeners();
     if (`${after.dev}:${after.ino}:${after.uid}` !== socketIdentity
       || current.status !== "success" || current.stdout !== listening.stdout) return binding;
-    return { ...binding, sessionIds };
+    return { ...binding, ...result };
   } catch { return binding; }
 }
 
-async function query(socketPath: string, origin: string, home: string): Promise<string[]> {
+async function query(socketPath: string, origin: string, home: string,
+  known?: ThreadInventory): Promise<{ sessionIds: string[]; inventory: ThreadInventory }> {
   const socket = new WebSocket(`ws+unix://${socketPath}:/rpc`, { maxPayload: 1_048_576, handshakeTimeout: 1_000 });
   let id = 0;
   const pending = new Map<number, { resolve(value: unknown): void; reject(): void }>();
@@ -73,24 +93,34 @@ async function query(socketPath: string, origin: string, home: string): Promise<
     if (!isRecord(loaded) || !Array.isArray(loaded.data) || loaded.data.length > 128
       || loaded.nextCursor != null || !loaded.data.every(uuid)
       || new Set(loaded.data).size !== loaded.data.length) throw new Error("Incomplete thread inventory");
-    const matches: string[] = [];
-    for (const threadId of loaded.data) {
+    const ids = [...loaded.data].sort();
+    if (known && JSON.stringify(ids) !== JSON.stringify(known.loaded)) throw new Error("Thread inventory changed");
+    const inventory: ThreadInventory = known ?? { loaded: ids, roots: [] };
+    if (!known) for (const threadId of ids) {
       const read = await request("thread/read", { threadId, includeTurns: false });
       const thread = isRecord(read) ? read.thread : undefined;
-      if (!isRecord(thread) || thread.id !== threadId || thread.parentThreadId !== null
-        || thread.ephemeral !== false || !["cli", "vscode"].includes(String(thread.source))
-        || typeof thread.path !== "string" || !path.isAbsolute(thread.path)) continue;
-      // Startup drafts may already have a transport but no persisted conversation.
-      const file = await realpath(thread.path).catch(() => undefined);
-      if (!file || !file.startsWith(path.join(home, "sessions") + path.sep)
-        || !(await stat(file)).isFile()) continue;
-      const result = await request("mcpServerStatus/list", { threadId, serverName: "codex_tui", detail: "toolsAndAuthOnly", limit: 100 });
+      // UUID ancestry and transcript locations are captured off the click path.
+      // Retain unmaterialized roots too: they can become ambiguous without a new UUID.
+      if (!isRecord(thread) || thread.id !== threadId) throw new Error("Incomplete thread metadata");
+      if (uuid(thread.parentThreadId)) continue;
+      inventory.roots.push({ id: threadId, path: thread.parentThreadId === null
+        && thread.ephemeral === false && ["cli", "vscode"].includes(String(thread.source))
+        && typeof thread.path === "string" && path.isAbsolute(thread.path) ? thread.path : null });
+    }
+    const matches = await Promise.all(inventory.roots.map(async root => {
+      if (root.path !== null) {
+        const file = await realpath(root.path).catch(() => undefined);
+        if (!file || !file.startsWith(path.join(home, "sessions") + path.sep)
+          || !(await stat(file)).isFile()) return undefined;
+      } else if (!known) return undefined;
+      const result = await request("mcpServerStatus/list", { threadId: root.id, serverName: "codex_tui", detail: "toolsAndAuthOnly", limit: 100 });
       if (!isRecord(result) || !Array.isArray(result.data) || result.nextCursor != null) throw new Error("Incomplete client inventory");
       const clients = result.data.filter(value => isRecord(value) && value.name === "codex_tui"
         && value.runtimeStatus === "connected" && value.httpOrigin === origin);
       if (clients.length > 1) throw new Error("Ambiguous client inventory");
-      if (clients.length === 1) matches.push(threadId.toLowerCase());
-    }
-    return matches.sort();
+      if (root.path === null && clients.length) throw new Error("Root metadata needs discovery");
+      return clients.length === 1 ? root.id.toLowerCase() : undefined;
+    }));
+    return { sessionIds: matches.filter((id): id is string => id !== undefined).sort(), inventory };
   } finally { clearTimeout(timer); fail(); socket.terminate(); }
 }

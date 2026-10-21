@@ -82,6 +82,7 @@ const terminalEvidenceTTL = 5 * 60_000;
 export class NativeSessionControls implements SessionControls {
   private readonly preparedTerminalBySession = new Map<string, string>();
   private readonly preparedHerdrBySession = new Map<string, string>();
+  private readonly pendingHerdrPreparationBySession = new Map<string, Promise<void>>();
   private focusSerial = 0;
   // Provider actions are serialized per session. A queued terminal send must
   // register its delivery immediately before its helper write; otherwise a
@@ -147,6 +148,12 @@ export class NativeSessionControls implements SessionControls {
     return this.helper.isAvailable?.() !== false;
   }
 
+  revalidatesFocus(session: DiscoveredProviderSession): boolean {
+    // Herdr validates the exact live pane, session and native process on focus.
+    // This does not grant send/cancel authority or bypass Claude's view checks.
+    return session.provider === "codex" && session.controlTarget?.kind === "herdr_surface";
+  }
+
   private async relinquishIdleCodexRoute(sessionId: string): Promise<CodexRouteRelinquishResult> {
     const relinquished = await providerRelinquishIdleCodexRoute(sessionId);
     if (relinquished === "released") {
@@ -193,6 +200,11 @@ export class NativeSessionControls implements SessionControls {
   }
 
   focus(session: DiscoveredProviderSession): Promise<void | "superseded"> {
+    if (session.provider === "codex" && session.controlTarget?.kind === "herdr_surface"
+      && session.controlTarget.target.codexTuiBinding?.inventory
+      && this.pendingHerdrPreparationBySession.has(session.id)) {
+      return Promise.reject(new Error("Exact session focus is unavailable."));
+    }
     const claudeTarget = session.provider === "claude_code"
       && session.controlTarget?.kind === "claude_background"
       ? session.controlTarget.target : undefined;
@@ -384,8 +396,14 @@ export class NativeSessionControls implements SessionControls {
       if (this.preparedHerdrBySession.get(session.id) !== fingerprint) {
         if (this.preparedHerdrBySession.size >= 512) this.preparedHerdrBySession.clear();
         this.preparedHerdrBySession.set(session.id, fingerprint);
-        void this.queueAction(session.id, () => this.prepareHerdr(herdr)).catch(() => {
+        const preparation = this.queueAction(session.id, () => this.prepareHerdr(herdr));
+        this.pendingHerdrPreparationBySession.set(session.id, preparation);
+        void preparation.catch(() => {
           if (this.preparedHerdrBySession.get(session.id) === fingerprint) this.preparedHerdrBySession.delete(session.id);
+        }).finally(() => {
+          if (this.pendingHerdrPreparationBySession.get(session.id) === preparation) {
+            this.pendingHerdrPreparationBySession.delete(session.id);
+          }
         });
       }
     } else this.preparedHerdrBySession.delete(session.id);
@@ -665,6 +683,7 @@ export class NativeSessionControls implements SessionControls {
   forget(sessionId: string): void {
     this.preparedTerminalBySession.delete(sessionId);
     this.preparedHerdrBySession.delete(sessionId);
+    this.pendingHerdrPreparationBySession.delete(sessionId);
     const nextEpoch = (this.actionEpochBySession.get(sessionId) ?? 0) + 1;
     this.actionEpochBySession.set(sessionId, nextEpoch);
     // ponytail: retain at most 512 removed-session epochs. The epoch is only

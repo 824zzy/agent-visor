@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { WebSocketServer } from "ws";
 import { afterEach, expect, it } from "vitest";
-import { readCodexTuiBinding } from "./codex-tui-client.js";
+import { readCodexTuiBinding, verifyCodexTuiBinding } from "./codex-tui-client.js";
 import type { runProcess } from "../machine.js";
 
 const cli = "01a15c34-b525-7c00-a316-ca593fd2a167";
@@ -22,10 +22,14 @@ async function fixture() {
   const server = createServer(); const ws = new WebSocketServer({ server });
   const methods: string[] = [];
   const state = { listening: "p42\nn127.0.0.1:60119\n", loaded: [cli, desktop], nextCursor: null as string | null,
+    rejectThreadReads: false,
     statuses: new Map<string, unknown[]>([[cli, [{ name: "codex_tui", httpOrigin: "http://127.0.0.1:60119", runtimeStatus: "connected" }]], [desktop, []]]) };
   ws.on("connection", peer => peer.on("message", bytes => {
     const m = JSON.parse(bytes.toString()); methods.push(m.method);
     if (m.id === undefined) return;
+    if (m.method === "thread/read" && state.rejectThreadReads) {
+      peer.send(JSON.stringify({ id: m.id, error: { message: "Thread discovery unavailable" } })); return;
+    }
     const result = m.method === "initialize" ? { userAgent: "fixture" }
       : m.method === "thread/loaded/list" ? { data: state.loaded, nextCursor: state.nextCursor }
       : m.method === "thread/read" ? { thread: metadata.get(m.params.threadId) }
@@ -44,6 +48,49 @@ it("links a detached CLI thread to its listening frontend while keeping its same
   expect(await readCodexTuiBinding(42, f.home, f.run)).toMatchObject({ sessionIds: [cli], origin: "http://127.0.0.1:60119" });
   expect(f.methods.every(method => ["initialize", "initialized", "thread/loaded/list", "thread/read", "mcpServerStatus/list"].includes(method))).toBe(true);
 });
+
+it("verifies a discovered CLI transport while transcript discovery is unavailable", async () => {
+  const f = await fixture();
+  const binding = (await readCodexTuiBinding(42, f.home, f.run))!;
+  f.state.rejectThreadReads = true;
+  expect(await verifyCodexTuiBinding(42, f.home, binding, f.run)).toBe(true);
+});
+
+it("rejects a newly attached root whose transcript location was unresolved during discovery", async () => {
+  const f = await fixture();
+  const other = "22222222-2222-4222-8222-222222222222";
+  f.state.loaded.push(other);
+  f.metadata.set(other, { id: other, parentThreadId: null, ephemeral: false, source: "cli", path: null });
+  const binding = (await readCodexTuiBinding(42, f.home, f.run))!;
+  f.metadata.set(other, { id: other, parentThreadId: null, ephemeral: false, source: "cli",
+    path: path.join(f.home, "sessions/other.jsonl") });
+  await writeFile(path.join(f.home, "sessions/other.jsonl"), "new root");
+  f.state.statuses.set(other, f.state.statuses.get(cli)!);
+  expect(await verifyCodexTuiBinding(42, f.home, binding, f.run)).toBe(false);
+});
+
+it.each(["switched", "ambiguous", "disconnected", "listener", "inventory", "materialized-draft", "socket"])(
+  "rejects a prepared transport when its live identity changes (%s)", async change => {
+    const f = await fixture();
+    const draft = "22222222-2222-4222-8222-222222222222";
+    if (change === "materialized-draft") {
+      f.state.loaded.push(draft);
+      f.metadata.set(draft, { id: draft, parentThreadId: null, ephemeral: false, source: "cli",
+        path: path.join(f.home, "sessions/draft.jsonl") });
+      f.state.statuses.set(draft, f.state.statuses.get(cli)!);
+    }
+    const binding = (await readCodexTuiBinding(42, f.home, f.run))!;
+    expect(binding.sessionIds).toEqual([cli]);
+    if (change === "switched") { f.state.statuses.set(desktop, f.state.statuses.get(cli)!); f.state.statuses.set(cli, []); }
+    if (change === "ambiguous") f.state.statuses.set(desktop, f.state.statuses.get(cli)!);
+    if (change === "disconnected") f.state.statuses.set(cli, []);
+    if (change === "listener") f.state.listening = "p42\nn127.0.0.1:60120\n";
+    if (change === "inventory") f.state.loaded.push(draft);
+    if (change === "materialized-draft") await writeFile(path.join(f.home, "sessions/draft.jsonl"), "new root");
+    if (change === "socket") await rename(path.join(f.home, "app-server-control/app-server-control.sock"), path.join(f.home, "old.sock"));
+    expect(await verifyCodexTuiBinding(42, f.home, binding, f.run)).toBe(false);
+  },
+);
 
 it.each(["disconnected", "missing-origin", "remote-origin", "different-port", "incomplete"])("does not grant a route from %s client metadata", async reason => {
   const f = await fixture();

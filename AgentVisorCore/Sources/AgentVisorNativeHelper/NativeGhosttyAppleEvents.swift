@@ -55,9 +55,19 @@ public final class NativeGhosttyAppleEvents {
     }
 
     private func property(_ name: String, of container: NSAppleEventDescriptor = .null()) -> NSAppleEventDescriptor? {
-        guard let specifier = Self.object("prop", form: UInt32(formPropertyID),
-            value: .init(typeCode: Self.code(name)), container: container) else { return nil }
+        guard let specifier = propertySpecifier(name, of: container) else { return nil }
         return request("core", "getd", direct: specifier)
+    }
+
+    private func propertySpecifier(_ name: String, of container: NSAppleEventDescriptor = .null()) -> NSAppleEventDescriptor? {
+        Self.object("prop", form: UInt32(formPropertyID), value: .init(typeCode: Self.code(name)), container: container)
+    }
+
+    private func focusedTerminalID() -> String? {
+        guard let window = propertySpecifier("GFWn"), let tab = propertySpecifier("GWsT", of: window),
+              let terminal = propertySpecifier("GTfT", of: tab) else { return nil }
+        // Ask the app to resolve the property chain in one round trip.
+        return property("ID  ", of: terminal)?.stringValue
     }
 
     private func terminal(_ id: String) -> NSAppleEventDescriptor? {
@@ -87,19 +97,22 @@ public final class NativeGhosttyAppleEvents {
     }
 
     public func focus(terminalID: String, expectedTitle: String?, expectedCWD: String?) -> Bool {
-        func matches(_ surface: Surface?) -> Bool {
-            guard let surface else { return false }
+        func matches() -> Bool {
+            if expectedTitle == nil && expectedCWD == nil {
+                guard let target = terminal(terminalID) else { return false }
+                return property("ID  ", of: target)?.stringValue == terminalID
+            }
+            guard let surface = surface(id: terminalID) else { return false }
             let normalized: (String) -> String = { value in
                 value.range(of: #"^[✳◐◑] "#, options: .regularExpression) == nil ? value : String(value.dropFirst(2))
             }
             return (expectedTitle.map { normalized($0) == normalized(surface.title) } ?? true)
                 && (expectedCWD.map { $0 == surface.cwd } ?? true)
         }
-        guard let target = terminal(terminalID), matches(surface(id: terminalID)),
+        guard let target = terminal(terminalID), matches(),
               request("Ghst", "Fcus", direct: target) != nil, activate(),
-              let window = property("GFWn"), let tab = property("GWsT", of: window),
-              let terminal = property("GTfT", of: tab), property("ID  ", of: terminal)?.stringValue == terminalID,
-              property("pisf")?.booleanValue == true, matches(surface(id: terminalID)) else { return false }
+              focusedTerminalID() == terminalID,
+              property("pisf")?.booleanValue == true, matches() else { return false }
         return true
     }
 }
