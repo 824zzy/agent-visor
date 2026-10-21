@@ -18,6 +18,7 @@ const page = (ids: string[], nextCursor?: string) => ({
     updatedAt: "2026-10-21T18:00:00.000Z",
     canOpenOwner: false,
     canEnterChat: false,
+    canRemoveHistory: true,
   })),
   total: ids.length,
   ...(nextCursor ? { nextCursor } : {}),
@@ -94,6 +95,59 @@ describe("session history controller", () => {
     controller.observeLiveSessionIDs([]);
     expect(fake.sent).toHaveLength(2);
     expect(JSON.parse(fake.sent[1]!)).toMatchObject({ type: "get_session_history", limit: 100 });
+    controller.close();
+  });
+
+  it("removes a retained row and refreshes only after the daemon confirms success", () => {
+    const fake = fakeConnection();
+    const states: Array<{ removingSessionID?: string; removeError?: string }> = [];
+    const controller = createSessionHistoryController((state) => {
+      states.push({ removingSessionID: state.removingSessionID, removeError: state.removeError });
+    }, fake.connect);
+    fake.open();
+    fake.message(page(["closed"]));
+    controller.remove("closed");
+
+    expect(JSON.parse(fake.sent[1]!)).toMatchObject({
+      type: "remove_history_session",
+      sessionId: "closed",
+    });
+    expect(states.at(-1)).toMatchObject({ removingSessionID: "closed" });
+    fake.message({
+      type: "history_action_result",
+      id: JSON.parse(fake.sent[1]!).id,
+      action: "remove",
+      sessionId: "closed",
+      ok: true,
+    });
+    expect(JSON.parse(fake.sent[2]!)).toMatchObject({ type: "get_session_history", limit: 100 });
+    expect(states.at(-1)).toMatchObject({ removingSessionID: undefined, removeError: undefined });
+    controller.close();
+  });
+
+  it("keeps the retained row and exposes a daemon removal error", () => {
+    const fake = fakeConnection();
+    const states: Array<{ removingSessionID?: string; removeError?: string }> = [];
+    const controller = createSessionHistoryController((state) => {
+      states.push({ removingSessionID: state.removingSessionID, removeError: state.removeError });
+    }, fake.connect);
+    fake.open();
+    fake.message(page(["closed"]));
+    controller.remove("closed");
+    fake.message({
+      type: "history_action_result",
+      id: JSON.parse(fake.sent[1]!).id,
+      action: "remove",
+      sessionId: "closed",
+      ok: false,
+      error: "Retained history storage is unavailable.",
+    });
+
+    expect(fake.sent).toHaveLength(2);
+    expect(states.at(-1)).toEqual({
+      removingSessionID: undefined,
+      removeError: "Retained history storage is unavailable.",
+    });
     controller.close();
   });
 });

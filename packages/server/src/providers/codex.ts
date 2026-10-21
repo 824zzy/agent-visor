@@ -4,6 +4,7 @@ import type {
   DiscoveredProviderSession,
   HookSessionEvent,
   ProviderAdapter,
+  RetainedHistoryLifetime,
   RetainedHistoryOriginLookup,
 } from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
@@ -271,6 +272,28 @@ export class CodexProvider implements ProviderAdapter {
     const modelCatalog = await codexModelCatalog(this.environment, instance.path, cache);
     const processes = await (this.environment.processesFresh?.() ?? this.environment.processes());
     return this.boundSession(instance, thread, indexTitles, modelCatalog, await this.cliBindings(instance, processes));
+  }
+
+  /**
+   * Read only the exact SQLite lifetime bit for retained History. This seam
+   * deliberately does not stamp or read the rollout: an archived thread may
+   * have a missing transcript, while a missing row/read failure remains
+   * unknown rather than proving deletion.
+   */
+  async historyLifetime(sessionId: string): Promise<RetainedHistoryLifetime> {
+    const reference = codexThreadReference(sessionId);
+    if (!reference) return "unknown";
+    try {
+      const instance = (await this.instances()).find((item) => item.id === reference.instanceID);
+      if (!instance) return "unknown";
+      const database = await codexDatabase(this.environment, instance.path);
+      if (!database) return "unknown";
+      const thread = rows(await this.environment.sqlite(database, threadByIDSQL(reference.threadID)))[0];
+      if (!thread || thread.id !== reference.threadID) return "unknown";
+      return thread.archived ? "archived" : "open";
+    } catch {
+      return "unknown";
+    }
   }
 
   private async session(

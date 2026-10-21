@@ -64,6 +64,8 @@ import {
 
 export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie" | "paseo";
 export type ProviderDiscoveryAuthority = "authoritative" | "unavailable";
+/** Provider evidence for a retained row; absence and read failures are unknown. */
+export type RetainedHistoryLifetime = "open" | "archived" | "deleted" | "unknown";
 export type RetainedHistoryOrigin = {
   provider: RetainedHistoryProvider;
   id: string;
@@ -160,6 +162,8 @@ export type DiscoveredProviderSession = {
   resolutionUnavailable?: boolean;
   /** Identity-only row loaded from retained history; never a live control target. */
   retainedHistory?: boolean;
+  /** True only for a closed retained row removable from Agent Visor History. */
+  canRemoveHistory?: boolean;
   /** Verified provider identity/provenance used only for durable History. */
   historyIdentity?: {
     verified: boolean;
@@ -295,6 +299,8 @@ export interface SessionSnapshotSource {
   /** Refresh exact read facts after an owner-focus transition. */
   chatRetry?(sessionId: string): Promise<string | undefined>;
   historyPage?(query?: string, cursor?: string, limit?: number): SessionHistoryPage;
+  /** Remove one closed retained row from Agent Visor's History only. */
+  removeHistorySession?(sessionId: string): Promise<string | undefined>;
 }
 
 export interface ProviderAdapter {
@@ -308,6 +314,8 @@ export interface ProviderAdapter {
   resolve?(sessionId: string): Promise<DiscoveredProviderSession | undefined>;
   /** Resolve one user focus request with bounded fresh provider identity checks. */
   resolveForFocus?(sessionId: string): Promise<DiscoveredProviderSession | undefined>;
+  /** Exact provider lifetime for a bounded retained-history reconciliation. */
+  historyLifetime?(sessionId: string): Promise<RetainedHistoryLifetime>;
   /** Load provider controls lazily for an opened chat, never during discovery. */
   chatSettings?(session: DiscoveredProviderSession): Promise<
     DiscoveredProviderSession["chatSettingsCatalog"]
@@ -474,6 +482,7 @@ type ExternalApprovalRecord = {
 export const MAX_EXTERNAL_APPROVAL_RECORDS = 64;
 export const EXTERNAL_APPROVAL_TTL_MS = 5 * 60_000;
 export const EXTERNAL_APPROVAL_RESPONSE_TIMEOUT_MS = 30_000;
+const RETAINED_HISTORY_LIFETIME_BATCH_SIZE = 16;
 const automationChatReadOnlyReason = "Automation sessions are read only.";
 
 const providerNames: Record<ProviderID, string> = {
@@ -505,6 +514,8 @@ export class SessionRepository {
   private readonly acknowledgedReadyBySession = new Map<string, string>();
   private readonly completionAttention: CompletionAttention;
   private readonly retainedHistory: RetainedHistoryStore | undefined;
+  /** Offset of the next bounded background History lifetime batch. */
+  private retainedHistoryLifetimeCursor = 0;
   private readonly acknowledgedFailureIDs = new Set<string>();
   private readonly stateRevisionBySession = new Map<string, number>();
   private readonly stateFingerprintBySession = new Map<string, string>();
@@ -626,16 +637,7 @@ export class SessionRepository {
       ? new RetainedHistoryStore({ path: options.retainedHistoryPath, now: this.now })
       : undefined;
     const retainedOriginLookup: RetainedHistoryOriginLookup = (provider, sessionId) => {
-      const record = this.retainedHistory?.getForProvider(provider, sessionId);
-      if (!record) return undefined;
-      return {
-        provider: record.provider,
-        id: record.id,
-        canonicalId: record.canonicalId,
-        ...(record.aliases?.length ? { aliases: record.aliases } : {}),
-        ...(record.host ? { host: record.host } : {}),
-        ...(record.configHome ? { configHome: record.configHome } : {}),
-      };
+      return this.retainedHistory?.getOriginForProvider(provider, sessionId);
     };
     for (const provider of this.providers) provider.setRetainedHistoryOriginLookup?.(retainedOriginLookup);
     this.chatPageReader = options.chatPageReader ?? readChatPage;
@@ -843,6 +845,9 @@ export class SessionRepository {
   }
 
   async chatRetry(sessionId: string): Promise<string | undefined> {
+    if (this.isHistorySuppressedID(sessionId)) {
+      return "This session was removed from Agent Visor History.";
+    }
     if ((this.chatOpenReferencesBySession.get(sessionId) ?? 0) <= 0) {
       return undefined;
     }
@@ -982,6 +987,21 @@ export class SessionRepository {
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
       ...(page.historyWarning ? { historyWarning: page.historyWarning } : {}),
     };
+  }
+
+  async removeHistorySession(_sessionId: string): Promise<string | undefined> {
+    if (!this.retainedHistory) return "Retained history is unavailable.";
+    const record = this.retainedHistory.get(_sessionId);
+    if (!record || !record.closedAt) return "Only closed retained sessions can be removed.";
+    const result = this.retainedHistory.remove(_sessionId, "agent_visor");
+    if (result === "removed") {
+      this.controlBySession.delete(_sessionId);
+      this.openedSessionBySession.delete(_sessionId);
+      this.publish(this.filteredDiscoveredSessions([...this.lastByProvider.values()].flat()));
+      return undefined;
+    }
+    if (result === "storage_unavailable") return "Retained history storage is unavailable.";
+    return "The retained session is no longer available.";
   }
 
   subscribe(listener: (snapshot: SessionSnapshot) => void): () => void {
@@ -1583,6 +1603,9 @@ export class SessionRepository {
   }
 
   async focusSession(sessionId: string): Promise<string | undefined> {
+    if (this.isHistorySuppressedID(sessionId)) {
+      return "This session was removed from Agent Visor History.";
+    }
     let session = this.controlBySession.get(sessionId);
     if (session?.owner === "Codex CLI" && !session.controlTarget) {
       return "Agent Visor couldn’t identify this conversation’s Codex CLI terminal. Open it directly in your terminal.";
@@ -1666,6 +1689,9 @@ export class SessionRepository {
       type: "send_chat" | "cancel_chat" | "respond_chat" | "cycle_permission_mode";
     }>,
   ): Promise<string | undefined> {
+    if (this.isHistorySuppressedID(message.sessionId)) {
+      return "This session was removed from Agent Visor History.";
+    }
     if (message.type === "cycle_permission_mode") {
       const stateEpoch = this.chatStateEpoch(message.sessionId);
       const generationError = this.acceptChatGeneration(message.sessionId, message.generation);
@@ -2727,7 +2753,13 @@ export class SessionRepository {
         return this.lastByProvider.get(provider.id) ?? [];
       }
     }));
-    this.updateRetainedHistory(discovered.flat());
+    const allDiscovered = discovered.flat();
+    this.updateRetainedHistory(allDiscovered);
+    await this.reconcileRetainedHistoryLifetimes();
+    const visibleDiscovered = this.filteredDiscoveredSessions(allDiscovered);
+    for (const provider of this.providers) {
+      this.lastByProvider.set(provider.id, visibleDiscovered.filter((session) => session.provider === provider.id));
+    }
     // Exact opened chats are refreshed independently of the provider's
     // bounded ambient catalog. This preserves their generation and delivery
     // ledgers while still allowing a recovered provider to restore authority.
@@ -2736,7 +2768,7 @@ export class SessionRepository {
     this.removeConcludedPiRuntimes();
     this.expireStalePiReadyHooks();
     this.dropHiddenSessionHooks();
-    this.publish(discovered.flat());
+    this.publish(visibleDiscovered);
     this.publishPiRestoration();
     return this.current();
   }
@@ -2765,6 +2797,83 @@ export class SessionRepository {
         this.retainedHistory.closeMissing(activeIdentities, provider);
       }
     }
+  }
+
+  /** Hide only provider identities with durable AV removal intent. */
+  private isHistorySuppressedID(sessionId: string): boolean {
+    const store = this.retainedHistory;
+    if (!store) return false;
+    return store.isSuppressed("claude_code", [sessionId])
+      || store.isSuppressed("codex", [sessionId]);
+  }
+
+  private isHistorySuppressedSession(session: DiscoveredProviderSession): boolean {
+    const store = this.retainedHistory;
+    if (!store
+      || (session.provider !== "claude_code" && session.provider !== "codex")) return false;
+    const history = session.historyIdentity;
+    return store.isSuppressed(session.provider, [
+      session.id,
+      ...(history?.canonicalId ? [history.canonicalId] : []),
+      ...(history?.aliases ?? []),
+    ]);
+  }
+
+  private filteredDiscoveredSessions(discovered: DiscoveredProviderSession[]): DiscoveredProviderSession[] {
+    const store = this.retainedHistory;
+    if (!store) return discovered;
+    return discovered.filter((session) => {
+      if (session.provider !== "claude_code" && session.provider !== "codex") return true;
+      const history = session.historyIdentity;
+      const identities = [
+        session.id,
+        ...(history?.canonicalId ? [history.canonicalId] : []),
+        ...(history?.aliases ?? []),
+      ];
+      return !store.isSuppressed(session.provider, identities);
+    });
+  }
+
+  /**
+   * Reconcile only a bounded History page. This is background maintenance;
+   * live focus and pill clicks never perform provider lifetime reads.
+   */
+  private async reconcileRetainedHistoryLifetimes(): Promise<void> {
+    const store = this.retainedHistory;
+    if (!store) return;
+    const page = store.page(
+      undefined,
+      String(this.retainedHistoryLifetimeCursor),
+      RETAINED_HISTORY_LIFETIME_BATCH_SIZE,
+    );
+    if (page.records.length === 0) {
+      this.retainedHistoryLifetimeCursor = 0;
+      return;
+    }
+    let removed = false;
+    for (const record of page.records) {
+      const provider = this.providers.find((candidate) => candidate.id === record.provider);
+      let lifetime: RetainedHistoryLifetime = "unknown";
+      try {
+        lifetime = await provider?.historyLifetime?.(record.id) ?? "unknown";
+      } catch {
+        // An unavailable provider probe is unknown evidence. Preserve this row
+        // and keep the rest of the live snapshot publishable.
+        continue;
+      }
+      if (lifetime !== "archived" && lifetime !== "deleted") continue;
+      const result = store.remove(record.id, "provider_archived");
+      if (result === "removed") {
+        this.controlBySession.delete(record.id);
+        removed = true;
+      }
+    }
+    // A removal shifts later offsets left. Restarting from zero avoids skipping
+    // the row that moved into the batch; otherwise rotate through the bounded
+    // pages so records beyond the first page are eventually checked.
+    this.retainedHistoryLifetimeCursor = removed
+      ? 0
+      : (page.nextCursor ? Number(page.nextCursor) : 0);
   }
 
   applyHook(event: HookSessionEvent): SessionSnapshot {
@@ -2977,15 +3086,17 @@ export class SessionRepository {
     }
     const ambientMerged = applyHooks(canonicalDiscovered, this.hookBySession)
       .filter(session => !suppressedSource(session));
-    const openedRecords = [...this.openedSessionBySession.entries()].map(([sessionId, session]) => {
-      // Hook events can arrive between exact refreshes. Keep the opened
-      // record's provider identity while applying the same current hook facts
-      // that drive the ambient view.
-      const hooked = applyHooks([session], this.hookBySession)[0] ?? session;
-      const copy = structuredClone(this.projectAcknowledgedFailure(hooked));
-      this.openedSessionBySession.set(sessionId, copy);
-      return copy;
-    });
+    const openedRecords = [...this.openedSessionBySession.entries()]
+      .filter(([, session]) => !this.isHistorySuppressedSession(session))
+      .map(([sessionId, session]) => {
+        // Hook events can arrive between exact refreshes. Keep the opened
+        // record's provider identity while applying the same current hook facts
+        // that drive the ambient view.
+        const hooked = applyHooks([session], this.hookBySession)[0] ?? session;
+        const copy = structuredClone(this.projectAcknowledgedFailure(hooked));
+        this.openedSessionBySession.set(sessionId, copy);
+        return copy;
+      });
     const openedIDs = new Set(openedRecords.map((session) => session.id));
     const ambientIDs = new Set(canonicalDiscovered.map((session) => session.id));
     // Once a conversation is opened, its exact record is authoritative for
@@ -3775,6 +3886,7 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
       updatedAt: session.updatedAt,
       canOpenOwner: session.canOpenOwner,
       canEnterChat: session.canEnterChat,
+      ...(session.canRemoveHistory !== undefined ? { canRemoveHistory: session.canRemoveHistory } : {}),
       ...(session.sessionClass ? { sessionClass: session.sessionClass } : {}),
       ...(session.ambientEligible !== undefined ? { ambientEligible: session.ambientEligible } : {}),
       ...(session.claudePresence ? { claudePresence: session.claudePresence } : {}),
@@ -3873,6 +3985,7 @@ function retainedHistoryObservation(
     ...(session.chatPath ? { transcriptPath: session.chatPath } : {}),
     updatedAt: session.updatedAt,
     observedAt,
+    current: true,
   };
 }
 
@@ -3899,6 +4012,7 @@ function retainedHistorySession(
     // A retained path is only a hint. Do not advertise a readable transcript
     // until the file still exists as a regular file after restart.
     canEnterChat: Boolean(record.transcriptPath && isReadableTranscript(record.transcriptPath)),
+    canRemoveHistory: Boolean(record.closedAt),
     ...(record.transcriptPath ? { chatPath: record.transcriptPath } : {}),
     ...(record.provider === "codex" ? { messageTransport: "terminal" as const } : {}),
     ...(record.provider === "codex" ? {

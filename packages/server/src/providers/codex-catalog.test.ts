@@ -79,4 +79,188 @@ describe("Codex unarchived catalog", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it("suppresses a removed CLI identity when the Codex Desktop catalog retains it after restart", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "visor-codex-remove-restart-"));
+    const database = path.join(home, ".codex/state_5.sqlite");
+    const historyPath = path.join(home, "retained-history.json");
+    mkdirSync(path.dirname(database), { recursive: true });
+    const sql = (statement: string) => execFileSync("/usr/bin/sqlite3", [database, statement]);
+    const target = "removed-cli";
+    const targetCanonical = "codex:native:removed-cli";
+    const other = "other-desktop";
+    const targetThread = "removed-cli";
+    const otherThread = "other-desktop";
+    try {
+      sql("create table threads (id text primary key, rollout_path text, cwd text, title text, updated_at integer, archived integer, source text)");
+      const updated = Date.parse("2026-10-21T18:00:00Z") / 1_000;
+      for (const [threadID, title] of [[targetThread, "Removed CLI"], [otherThread, "Other Desktop"]]) {
+        const rollout = path.join(home, `${threadID}.jsonl`);
+        writeFileSync(rollout, JSON.stringify({ type: "event_msg", timestamp: "2026-10-21T18:00:00Z",
+          payload: { type: "task_complete", turn_id: "done" } }) + "\n");
+        sql(`insert into threads values ('${threadID}', '${rollout}', '/project', '${title}', ${updated}, 0, 'vscode')`);
+      }
+
+      let seedSessions = [{
+        id: target,
+        provider: "codex" as const,
+        title: "Removed CLI",
+        subtitle: "Codex CLI session",
+        cwd: "/project",
+        owner: "Codex CLI",
+        section: "ready" as const,
+        sessionClass: "terminal" as const,
+        conversationState: "open" as const,
+        turnState: "ready" as const,
+        updatedAt: "2026-10-21T18:00:00.000Z",
+        canOpenOwner: false,
+        canEnterChat: false,
+        historyIdentity: {
+          verified: true,
+          current: true,
+          canonicalId: targetCanonical,
+          configHome: path.join(home, ".codex"),
+        },
+      }];
+      const seed = new SessionRepository([{
+        id: "codex",
+        discover: async () => structuredClone(seedSessions),
+      }], { retainedHistoryPath: historyPath });
+      await seed.refresh();
+      seedSessions = [];
+      await seed.refresh();
+      expect(seed.historyPage().sessions).toContainEqual(expect.objectContaining({ id: target }));
+      await expect(seed.removeHistorySession(target)).resolves.toBeUndefined();
+
+      const repository = new SessionRepository([new CodexProvider(new LiveProviderEnvironment(home))], {
+        retainedHistoryPath: historyPath,
+      });
+      const snapshot = await repository.refresh();
+      expect(snapshot.sessions.map(({ id }) => id)).toContain(other);
+      expect(snapshot.sessions.map(({ id }) => id)).not.toContain(target);
+      expect(repository.historyPage().sessions.map(({ id }) => id)).not.toContain(target);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the exact archived bit even when the retained Codex transcript is missing", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "visor-codex-archived-lifetime-"));
+    const database = path.join(home, ".codex/state_5.sqlite");
+    const historyPath = path.join(home, "retained-history.json");
+    mkdirSync(path.dirname(database), { recursive: true });
+    const sql = (statement: string) => execFileSync("/usr/bin/sqlite3", [database, statement]);
+    const threadID = "archived-without-transcript";
+    try {
+      sql("create table threads (id text primary key, rollout_path text, cwd text, title text, updated_at integer, archived integer, source text)");
+      const updated = Date.parse("2026-10-21T18:00:00Z") / 1_000;
+      sql(`insert into threads values ('${threadID}', '${path.join(home, "missing.jsonl")}', '/project', 'Archived', ${updated}, 1, 'cli')`);
+
+      let sessions = [{
+        id: threadID,
+        provider: "codex" as const,
+        title: "Archived",
+        subtitle: "Codex CLI session",
+        cwd: "/project",
+        owner: "Codex CLI",
+        section: "ready" as const,
+        sessionClass: "terminal" as const,
+        conversationState: "open" as const,
+        turnState: "ready" as const,
+        updatedAt: "2026-10-21T18:00:00.000Z",
+        canOpenOwner: false,
+        canEnterChat: false,
+        historyIdentity: {
+          verified: true,
+          current: true,
+          canonicalId: `codex:native:${threadID}`,
+          configHome: path.join(home, ".codex"),
+        },
+      }];
+      const seed = new SessionRepository([{
+        id: "codex",
+        discover: async () => structuredClone(sessions),
+      }], { retainedHistoryPath: historyPath });
+      await seed.refresh();
+      sessions = [];
+      await seed.refresh();
+      expect(seed.historyPage().sessions).toContainEqual(expect.objectContaining({ id: threadID }));
+
+      const repository = new SessionRepository([new CodexProvider(new LiveProviderEnvironment(home))], {
+        retainedHistoryPath: historyPath,
+      });
+      await repository.refresh();
+      expect(repository.historyPage().sessions).not.toContainEqual(expect.objectContaining({ id: threadID }));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves retained History when Codex lifetime evidence is unknown", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "visor-codex-unknown-lifetime-"));
+    const database = path.join(home, ".codex/state_5.sqlite");
+    const historyPath = path.join(home, "retained-history.json");
+    mkdirSync(path.dirname(database), { recursive: true });
+    const sql = (statement: string) => execFileSync("/usr/bin/sqlite3", [database, statement]);
+    const threadID = "unknown-lifetime";
+    class Environment extends LiveProviderEnvironment {
+      fail = false;
+
+      override async sqlite(file: string, query: string) {
+        if (this.fail) throw new Error("temporary database failure");
+        return super.sqlite(file, query);
+      }
+    }
+    try {
+      sql("create table threads (id text primary key, rollout_path text, cwd text, title text, updated_at integer, archived integer, source text)");
+      const updated = Date.parse("2026-10-21T18:00:00Z") / 1_000;
+      sql(`insert into threads values ('${threadID}', '${path.join(home, "missing.jsonl")}', '/project', 'Unknown lifetime', ${updated}, 0, 'cli')`);
+      let sessions = [{
+        id: threadID,
+        provider: "codex" as const,
+        title: "Unknown lifetime",
+        subtitle: "Codex CLI session",
+        cwd: "/project",
+        owner: "Codex CLI",
+        section: "ready" as const,
+        sessionClass: "terminal" as const,
+        conversationState: "open" as const,
+        turnState: "ready" as const,
+        updatedAt: "2026-10-21T18:00:00.000Z",
+        canOpenOwner: false,
+        canEnterChat: false,
+        historyIdentity: {
+          verified: true,
+          current: true,
+          canonicalId: `codex:native:${threadID}`,
+          configHome: path.join(home, ".codex"),
+        },
+      }];
+      const seed = new SessionRepository([{
+        id: "codex",
+        discover: async () => structuredClone(sessions),
+      }], { retainedHistoryPath: historyPath });
+      await seed.refresh();
+      sessions = [];
+      await seed.refresh();
+
+      const environment = new Environment(home);
+      const repository = new SessionRepository([new CodexProvider(environment)], {
+        retainedHistoryPath: historyPath,
+      });
+      await repository.refresh();
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({ id: threadID }));
+
+      environment.fail = true;
+      await repository.refresh();
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({ id: threadID }));
+
+      environment.fail = false;
+      sql("delete from threads");
+      await repository.refresh();
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({ id: threadID }));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
