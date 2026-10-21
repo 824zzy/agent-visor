@@ -47,6 +47,7 @@ import {
   resolveSessionState,
   sessionTurnState,
   unavailableMessage,
+  verifiedTerminalRoute,
 } from "./session-state.js";
 import type { CodexRouteEvent } from "./codex-turn.js";
 import { CompletionAttention } from "./completion-attention.js";
@@ -2821,11 +2822,21 @@ export class SessionRepository {
       if (!freshFailureIDs.has(sessionId)) this.acknowledgedFailureIDs.delete(sessionId);
     }
     const paseoOwners = discovered.filter(session => session.provider === "paseo" && session.nativeSessionAlias);
-    const ownedByPaseo = (session: DiscoveredProviderSession) => paseoOwners.some(owner =>
+    const matchesPaseoAlias = (owner: DiscoveredProviderSession, session: DiscoveredProviderSession) =>
       owner.nativeSessionAlias?.provider === session.provider
       && owner.nativeSessionAlias.id.toLowerCase() === session.id.toLowerCase()
-      && owner.cwd === session.cwd);
-    const effectiveDiscovered = discovered.filter(session => !ownedByPaseo(session))
+      && owner.cwd === session.cwd;
+    // An idle catalog copy is provenance, not ownership of another live frontend.
+    const historicalPaseoIDs = new Set(paseoOwners.filter(owner => owner.section === "history"
+      && discovered.some(session => matchesPaseoAlias(owner, session)
+        && session.conversationState === "open"
+        && session.ambientEligible !== false && session.canOpenOwner
+        && (session.controlTarget?.kind === "herdr_surface"
+          || session.controlTarget?.kind === "cmux_surface"
+          || verifiedTerminalRoute(session)))).map(owner => owner.id));
+    const suppressedSource = (session: DiscoveredProviderSession) => historicalPaseoIDs.has(session.id)
+      || paseoOwners.some(owner => !historicalPaseoIDs.has(owner.id) && matchesPaseoAlias(owner, session));
+    const effectiveDiscovered = discovered.filter(session => !suppressedSource(session))
       .map((session) => this.projectAcknowledgedFailure(session));
     this.reconcileTerminalNextTurns(effectiveDiscovered);
     const authoritative = new Map<string, DiscoveredProviderSession>();
@@ -2836,7 +2847,7 @@ export class SessionRepository {
       }
     }
     const ambientMerged = applyHooks(effectiveDiscovered, this.hookBySession)
-      .filter(session => !ownedByPaseo(session));
+      .filter(session => !suppressedSource(session));
     const openedRecords = [...this.openedSessionBySession.entries()].map(([sessionId, session]) => {
       // Hook events can arrive between exact refreshes. Keep the opened
       // record's provider identity while applying the same current hook facts

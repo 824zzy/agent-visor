@@ -6,6 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { HerdrClient, type HerdrProcessContext } from "./herdr.js";
 import { processInstanceToken } from "./shared.js";
 import { ClaudeProvider } from "./claude.js";
+import { PaseoProvider } from "./paseo.js";
 import { CodexProvider } from "./codex.js";
 import { SessionRepository } from "../sessions.js";
 import { activateMenuPill, menuPresentation } from "../menu.js";
@@ -465,7 +466,8 @@ it.each([
   { fail: true, reparented: true, paneId: "w1:p7", title: "codes-6e" },
   { fail: false, reparented: false, paneId: "w1:pC", title: "ccx-deployment-improvement" },
   { fail: true, reparented: true, paneId: "w1:pC", title: "ccx-deployment-improvement" },
-])("opens the $title pill in $paneId and acknowledges only successful navigation (native failure: $fail, reparented: $reparented)", async ({ fail, reparented, paneId, title }) => {
+  { fail: false, reparented: false, paneId: "w1:pC", title: "ccx-deployment-improvement", paseoStatus: "idle" },
+])("opens the $title pill in $paneId and acknowledges only successful navigation (native failure: $fail, reparented: $reparented, Paseo: $paseoStatus)", async ({ fail, reparented, paneId, title, paseoStatus }) => {
   const f = await fixture();
   f.context.paneId = paneId;
   f.target.pane_id = paneId;
@@ -497,7 +499,14 @@ it.each([
     focusGhosttyBinding: async (binding: { terminalId: string }) => {
       if (fail) throw new Error("Fixture native focus failed"); focused.push(binding.terminalId);
     } });
-  const repository = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
+  const paseo = new PaseoProvider({ read: async () => ({ serverId: "srv_local",
+    providers: { "claude-copilot": "claude" }, agents: paseoStatus ? [{
+      id: "28a801ab-3b50-46ca-829c-783c202b79c4", provider: "claude-copilot", title: "Old Paseo copy",
+      cwd: "/fixture/Codes", status: paseoStatus, updatedAt: now.toISOString(),
+      requiresAttention: false, pendingPermissions: [], persistence: { sessionId },
+    }] : [],
+  }) });
+  const repository = new SessionRepository([paseo, new ClaudeProvider(environment)], { now: () => now });
   repository.setControls(new NativeSessionControls(helper, undefined, undefined, undefined, undefined,
     undefined, undefined, undefined, undefined, (target, isCurrent) => f.herdr.focus(target, helper, isCurrent)));
   await repository.refresh();

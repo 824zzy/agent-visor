@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { PaseoProvider } from "./paseo.js";
+import { PaseoProvider, type PaseoAgent } from "./paseo.js";
+import { ClaudeProvider } from "./claude.js";
+import type { ProviderEnvironment, ProcessRecord } from "./environment.js";
 import { SessionRepository } from "../sessions.js";
 import { menuPresentation } from "../menu.js";
 import { FakeNativeHelper } from "../native-helper.js";
@@ -15,7 +17,128 @@ const agent = () => ({
   runtimeInfo: { sessionId },
 });
 
+class TerminalClaudeEnvironment implements ProviderEnvironment {
+  readonly home = "/Users/me";
+  readonly observedWindowMs = 42 * 60 * 60 * 1000;
+  startedAt: Date | undefined = now;
+  metadata = { pid: 42, sessionId, cwd: "/Users/me/Codes", kind: "interactive", status: "idle",
+    name: "Terminal conversation", parkedJobId: undefined as string | undefined };
+  processRows: ProcessRecord[] = [
+    { pid: 42, parentPID: 10, tty: "ttys023", command: "/usr/local/bin/claude", arguments: "claude" },
+    { pid: 10, parentPID: 1, command: "/Applications/Ghostty.app/Contents/MacOS/ghostty", arguments: "ghostty" },
+  ];
+  now() { return now; }
+  async processes() { return this.processRows; }
+  async processStartedAt() { return this.startedAt; }
+  async cwd() { return this.metadata.cwd; }
+  async directory(value: string) { return value.endsWith("/.claude/sessions") ? ["42.json"] : []; }
+  async isDirectory() { return true; }
+  async stamp() { return { modifiedAt: now, size: 512 }; }
+  async read(value: string) { return value.endsWith("/sessions/42.json") ? JSON.stringify(this.metadata) : undefined; }
+  async readHeadTail() { return { head: "", tail: "" }; }
+  async scanLinePrefixes() { return 0; }
+  async sqlite() { return []; }
+}
+
+function mixedSources(reverse = false) {
+  const environment = new TerminalClaudeEnvironment();
+  const row: PaseoAgent = { ...agent(), status: "idle" };
+  const providers = [new PaseoProvider({ read: async () => ({
+    serverId: "srv_local", providers: { "claude-copilot": "claude" }, agents: [row],
+  }) }), new ClaudeProvider(environment)];
+  const repository = new SessionRepository(reverse ? providers.reverse() : providers, { now: () => now });
+  return { environment, row, repository };
+}
+
 describe("Paseo session pills", () => {
+  it.each([false, true])("keeps a verified live Ghostty conversation instead of its historical Paseo alias (reverse discovery: %s)", async (reverse) => {
+    const { repository } = mixedSources(reverse);
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions).toMatchObject([{ id: sessionId, title: "Terminal conversation", owner: "Ghostty" }]);
+    expect(menuPresentation(snapshot, [], now.valueOf()).pills).toMatchObject([
+      { id: sessionId, title: "Terminal conversation", owner: "Ghostty" },
+    ]);
+  });
+
+  it.each(["closed", "overview", "missing-process", "application-only", "unverified-process"])("keeps Paseo history when native ownership is not verified (%s)", async (reason) => {
+    const { environment, repository } = mixedSources();
+    if (reason === "closed") environment.metadata.status = "closed";
+    if (reason === "overview") environment.metadata.parkedJobId = "old-job";
+    if (reason === "missing-process") environment.processRows = [];
+    if (reason === "application-only") Object.assign(environment.processRows[1]!, {
+      command: "/Applications/Claude.app/Contents/MacOS/Claude", arguments: "Claude",
+    });
+    if (reason === "unverified-process") environment.startedAt = undefined;
+    expect((await repository.refresh()).sessions).toMatchObject([
+      { id: `paseo:srv_local:${agentId}`, owner: "Paseo", section: "history" },
+    ]);
+  });
+
+  it.each(["running", "initializing", "permission", "finished", "failure"])("preserves active Paseo ownership and its profile (%s)", async (state) => {
+    const { environment, row, repository } = mixedSources();
+    environment.metadata.status = "busy";
+    row.status = state === "running" || state === "initializing" ? state : state === "failure" ? "error" : "idle";
+    if (state === "permission") row.pendingPermissions = [{ toolName: "AskUserQuestion" }];
+    if (state === "finished") {
+      row.requiresAttention = true; row.attentionReason = "finished"; row.attentionTimestamp = now.toISOString();
+    }
+    if (state === "failure") row.requiresAttention = true;
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions).toMatchObject([
+      { id: `paseo:srv_local:${agentId}`, owner: "Paseo", sourceProfile: "claude-copilot" },
+    ]);
+    expect(menuPresentation(snapshot, [], now.valueOf()).pills).toMatchObject([
+      { id: `paseo:srv_local:${agentId}`, phase: state === "permission" || state === "failure" ? "needs_you"
+        : state === "finished" ? "ready" : "working" },
+    ]);
+    const hooked = repository.applyHook({ sessionId, provider: "claude_code", cwd: environment.metadata.cwd,
+      event: "Stop", status: "idle", receivedAt: now.toISOString(), tty: "ttys023" });
+    expect(hooked.sessions.map(session => session.id)).toEqual([`paseo:srv_local:${agentId}`]);
+  });
+
+  it("reconciles ownership on refresh without reviving a parked overview from hooks", async () => {
+    const { environment, row, repository } = mixedSources();
+    row.status = "running";
+    expect((await repository.refresh()).sessions.map(session => session.id)).toEqual([`paseo:srv_local:${agentId}`]);
+    row.status = "idle";
+    expect((await repository.refresh()).sessions.map(session => session.id)).toEqual([sessionId]);
+    repository.applyHook({ sessionId, provider: "claude_code", cwd: environment.metadata.cwd,
+      event: "Stop", status: "idle", receivedAt: now.toISOString(), tty: "ttys023" });
+    environment.metadata.parkedJobId = "old-job";
+    const overview = await repository.refresh();
+    expect(overview.sessions.map(session => session.id)).toEqual([`paseo:srv_local:${agentId}`]);
+    expect(menuPresentation(overview, [], now.valueOf()).pills.some(pill => pill.id === sessionId)).toBe(false);
+    environment.metadata.parkedJobId = undefined;
+    expect((await repository.refresh()).sessions.map(session => session.id)).toEqual([sessionId]);
+    row.status = "running";
+    expect((await repository.refresh()).sessions.map(session => session.id)).toEqual([`paseo:srv_local:${agentId}`]);
+  });
+
+  it.each(["different-id", "different-cwd", "uppercase-id"])("matches ownership by provider identity and cwd, not title (%s)", async (identity) => {
+    const { environment, row, repository } = mixedSources();
+    row.title = environment.metadata.name;
+    if (identity === "different-id") row.runtimeInfo!.sessionId = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
+    if (identity === "different-cwd") row.cwd = "/Users/me/Other";
+    if (identity === "uppercase-id") row.runtimeInfo!.sessionId = sessionId.toUpperCase();
+    const ids = (await repository.refresh()).sessions.map(session => session.id).sort();
+    expect(ids).toEqual(identity === "uppercase-id" ? [sessionId] : [sessionId, `paseo:srv_local:${agentId}`].sort());
+  });
+
+  it.each(["idle", "waiting_for_approval"])("keeps a real unanswered Claude question yellow after selecting its live frontend (%s)", async (status) => {
+    const { environment, repository } = mixedSources();
+    environment.metadata.status = status;
+    await repository.refresh();
+    const snapshot = repository.applyHook({ sessionId, provider: "claude_code", cwd: environment.metadata.cwd,
+      event: "PreToolUse", status: "waiting_for_approval", receivedAt: now.toISOString(), tty: "ttys023",
+      tool: "AskUserQuestion", toolUseId: "question-1", expectsResponse: true,
+      toolInput: { questions: [{ question: "Which strategy?", options: [{ label: "Minimal" }] }] },
+    });
+    expect(snapshot.sessions).toMatchObject([{ id: sessionId, owner: "Ghostty", section: "needs_you" }]);
+    expect(menuPresentation(snapshot, [], now.valueOf()).pills).toMatchObject([
+      { id: sessionId, phase: "needs_you", attentionTier: "needs_you" },
+    ]);
+  });
+
   it("keeps physical pills identical when only the confirmed source profile changes", async () => {
     const row = { ...agent(), provider: "claude" };
     const repository = new SessionRepository([new PaseoProvider({ read: async () => ({

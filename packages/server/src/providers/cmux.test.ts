@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { ClaudeProvider } from "./claude.js";
+import { PaseoProvider } from "./paseo.js";
 import type { ProviderEnvironment, ProcessRecord } from "./environment.js";
 import { SessionRepository } from "../sessions.js";
 import { activateMenuPill, menuPresentation } from "../menu.js";
@@ -175,11 +176,18 @@ describe("cmux Claude source integration", () => {
     expect(helper.claudeAttachRequests).toEqual([]);
   });
 
-  it("accepts exact focus after cmux's workspace selection settles without repeating the focus request", async () => {
+  it.each([false, true])("accepts exact focus after cmux's workspace selection settles (historical Paseo alias: %s)", async (historicalPaseo) => {
     const { client, requests } = await socketFixture({ settlingReads: 2 });
     const environment = new CmuxEnvironment(); environment.cmuxSurface = client.resolve.bind(client);
     const helper = new FakeNativeHelper();
-    const source = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
+    const paseo = new PaseoProvider({ read: async () => ({ serverId: "srv_local",
+      providers: { "claude-copilot": "claude" }, agents: historicalPaseo ? [{
+        id: "28a801ab-3b50-46ca-829c-783c202b79c4", provider: "claude-copilot", title: "Old Paseo copy",
+        cwd, status: "idle", updatedAt: now.toISOString(), requiresAttention: false,
+        pendingPermissions: [], persistence: { sessionId: sessionID },
+      }] : [],
+    }) });
+    const source = new SessionRepository([paseo, new ClaudeProvider(environment)], { now: () => now });
     source.setControls(new NativeSessionControls(helper, undefined, undefined, undefined,
       undefined, undefined, undefined, undefined, client.focus.bind(client)));
     expect(menuPresentation(await source.refresh(), [], now.valueOf()).pills)
