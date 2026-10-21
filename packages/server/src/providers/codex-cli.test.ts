@@ -5,6 +5,8 @@ import { SessionRepository } from "../sessions.js";
 import { activateMenuPill } from "../menu.js";
 import { NativeSessionControls } from "../session-controls.js";
 import { FakeNativeHelper } from "../native-helper.js";
+import { isCodexCliObservation } from "./codex-cli-observer.js";
+import { processInstanceToken } from "./shared.js";
 
 const now = new Date("2026-10-20T06:00:00Z");
 const cwd = "/fixture/project";
@@ -26,8 +28,8 @@ class Environment extends LiveProviderEnvironment {
   override async processes() { return this.running; }
   override async cwd() { return cwd; }
   override async processStartedAt() { return new Date(now.valueOf() - 1000); }
-  override async read() { return undefined; }
-  override async directory() { return []; }
+  override async read(_file: string, _maxBytes?: number) { return undefined; }
+  override async directory(_directory: string) { return []; }
   override async stamp() { return { modifiedAt: now, size: 100 }; }
   override async sqlite(_database: string, query: string) {
     const id = /where id = '([^']+)'/.exec(query)?.[1];
@@ -35,6 +37,11 @@ class Environment extends LiveProviderEnvironment {
   }
   override async herdrCodexSurface() { return undefined; }
   override async codexProcessHome() { return "/fixture/.codex"; }
+  override async codexCliObservation(pid: number, home: string) {
+    const raw = await this.read(`${home}/agent-visor/cli/${pid}.json`);
+    const value: unknown = raw && JSON.parse(raw);
+    return isCodexCliObservation(value) ? value : undefined;
+  }
   override async scanLinePrefixes(file: string, _bytes: number, visit: (line: string) => void) {
     const id = file.split("/").at(-1)!.replace(".jsonl", "");
     visit(JSON.stringify({ type: "session_meta", payload: { id,
@@ -108,4 +115,96 @@ it("revalidates CLI identity when the same terminal switches conversations befor
   provider.noteHook({ ...hook, sessionId: second });
   expect(await repository.focusSession(first)).toBeTypeOf("string");
   expect(helper.terminalFocusRequests).toEqual([]);
+});
+
+
+it("recovers a resumed CLI from its observer record after restart without routing its same-name Desktop peer", async () => {
+  const environment = new Environment();
+  environment.scanLinePrefixes = async (file, _bytes, visit) => {
+    const id = file.split("/").at(-1)!.replace(".jsonl", "");
+    visit(JSON.stringify({ type: "session_meta", payload: { id, originator: "Codex Desktop" } }));
+    visit(JSON.stringify({ type: "event_msg", timestamp: now.toISOString(), payload: { type: "task_complete" } }));
+    return 100;
+  };
+  environment.rows.forEach(row => { row.title = "AR"; row.cwd = "/fixture/Agent Room"; });
+  const observation = { version: 1, sessionId: first, pid: 42, tty: "ttys001", cwd: "/fixture/Agent Room",
+    home: "/fixture/.codex", observedAt: now.toISOString(),
+    processStartToken: processInstanceToken(42, new Date(now.valueOf() - 1000)),
+    sessionFile: `/fixture/.codex/sessions/${first}.jsonl`, ended: false };
+  environment.directory = async directory => directory === "/fixture/.codex/agent-visor/cli" ? ["42.json"] : [];
+  environment.read = async file => file === "/fixture/.codex/agent-visor/cli/42.json" ? JSON.stringify(observation) : undefined;
+  for (let boot = 0; boot < 2; boot++) {
+    const repository = new SessionRepository([new CodexProvider(environment)], { now: () => now });
+    const helper = new FakeNativeHelper(); repository.setControls(new NativeSessionControls(helper));
+    for (let refresh = 0; refresh < 2; refresh++) await repository.refresh();
+    expect(repository.chatRecord(first)?.controlTarget).toMatchObject({ kind: "terminal", target: { pid: 42, cwd } });
+    expect(repository.chatRecord(first)?.sessionClass).toBe("terminal");
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: first }, repository, () => {});
+    expect(helper.terminalFocusRequests.map(target => target.pid)).toEqual([42]);
+    expect(helper.codexThreadRequests).toEqual([]);
+    expect(repository.chatRecord(desktop)?.controlTarget).toEqual({ kind: "url", url: `codex://threads/${desktop}` });
+  }
+});
+
+
+it.each(["host-lost", "pid-reused", "ended", "observer-lost", "wrong-transcript"])("keeps a known Desktop-origin CLI unavailable instead of stealing its route (%s)", async change => {
+  const environment = new Environment();
+  environment.scanLinePrefixes = async (file, _bytes, visit) => {
+    const id = file.split("/").at(-1)!.replace(".jsonl", "");
+    visit(JSON.stringify({ type: "session_meta", payload: { id, originator: "Codex Desktop" } }));
+    return 100;
+  };
+  const observation = { version: 1, sessionId: first, pid: 42, tty: "ttys001", cwd, home: "/fixture/.codex",
+    processStartToken: processInstanceToken(42, new Date(now.valueOf() - 1000)), observedAt: now.toISOString(), ended: false, sessionFile: `/fixture/.codex/sessions/${first}.jsonl` };
+  environment.directory = async directory => directory === "/fixture/.codex/agent-visor/cli" ? ["42.json"] : [];
+  environment.read = async file => file.endsWith("/cli/42.json") ? JSON.stringify(observation) : undefined;
+  const repository = new SessionRepository([new CodexProvider(environment)], { now: () => now });
+  const helper = new FakeNativeHelper(); repository.setControls(new NativeSessionControls(helper));
+  await repository.refresh();
+  expect(repository.chatRecord(first)?.controlTarget?.kind).toBe("terminal");
+  if (change === "host-lost") environment.running = environment.running.filter(process => process.pid !== 42);
+  if (change === "pid-reused") environment.processStartedAt = async () => new Date(now.valueOf() + 1000);
+  if (change === "ended") observation.ended = true;
+  if (change === "observer-lost") environment.read = async () => undefined;
+  if (change === "wrong-transcript") observation.sessionFile = `/fixture/.codex/sessions/${second}.jsonl`;
+  await repository.refresh();
+  expect(repository.chatRecord(first)?.controlTarget).toBeUndefined();
+  expect(await repository.focusSession(first)).toContain("Codex CLI terminal");
+  expect(helper.codexThreadRequests).toEqual([]);
+  expect(helper.terminalFocusRequests).toEqual([]);
+  expect(repository.chatRecord(desktop)?.controlTarget?.kind).toBe("url");
+});
+
+
+it.each(["working", "question", "async-question"])("restores a CLI's %s attention from its transcript after daemon restart", async state => {
+  const environment = new Environment();
+  environment.extraRecords = [
+    { type: "event_msg", timestamp: now.toISOString(), payload: { type: "task_started", turn_id: "cli-turn" } },
+    ...(state === "working" ? [] : [{ type: "response_item", timestamp: now.toISOString(), payload: {
+      type: "function_call", name: state === "question" ? "request_user_input" : "request_user_input_async",
+      call_id: "question", arguments: JSON.stringify({ questions: [{ title: "Proceed?" }] }) } }]),
+  ];
+  environment.rows[0]!.source = "cli";
+  const observation = { version: 1, sessionId: first, pid: 42, tty: "ttys001", cwd, home: "/fixture/.codex",
+    processStartToken: processInstanceToken(42, new Date(now.valueOf() - 1000)), observedAt: now.toISOString(), ended: false };
+  environment.directory = async directory => directory === "/fixture/.codex/agent-visor/cli" ? ["42.json"] : [];
+  environment.read = async file => file.endsWith("/cli/42.json") ? JSON.stringify(observation) : undefined;
+  const repository = new SessionRepository([new CodexProvider(environment)], { now: () => now });
+  await repository.refresh();
+  expect(repository.current().sessions.find(session => session.id === first)).toMatchObject({
+    section: state === "working" ? "working" : "needs_you", canOpenOwner: true,
+  });
+});
+
+
+it("does not authorize a CLI route from generic JSON after the secure observer reader rejected it", async () => {
+  const environment = new Environment();
+  const observation = { version: 1, sessionId: first, pid: 42, tty: "ttys001", cwd, home: "/fixture/.codex",
+    processStartToken: processInstanceToken(42, new Date(now.valueOf() - 1000)), observedAt: now.toISOString(), ended: false };
+  environment.directory = async directory => directory === "/fixture/.codex/agent-visor/cli" ? ["42.json"] : [];
+  environment.read = async file => file.endsWith("/cli/42.json") ? JSON.stringify(observation) : undefined;
+  environment.codexCliObservation = async () => undefined;
+  const repository = new SessionRepository([new CodexProvider(environment)], { now: () => now });
+  await repository.refresh();
+  expect(repository.chatRecord(first)?.controlTarget).toBeUndefined();
 });

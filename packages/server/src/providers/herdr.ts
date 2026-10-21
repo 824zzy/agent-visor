@@ -1,5 +1,7 @@
+import { readCodexTuiBinding, type CodexTuiBinding } from "./codex-tui-client.js";
 import type { NativeHelperGhosttyBinding } from "@agent-visor/protocol";
 import { randomBytes, randomUUID } from "node:crypto";
+import { readCodexCliObservation, type CodexCliObservation } from "./codex-cli-observer.js";
 import { navigationStep } from "../navigation-diagnostics.js";
 import { createConnection } from "node:net";
 import { lstat, open, realpath } from "node:fs/promises";
@@ -25,6 +27,7 @@ type NavigationTarget = { boot_id: string; pane_id: string; terminal_id: string;
   process: ProcessInstance; session: unknown };
 export type HerdrSurfaceTarget = HerdrProcessContext & {
   socketIdentity: string; target: NavigationTarget; client: ClientReference;
+  codexTuiBinding?: CodexTuiBinding;
   clientProcess: ProcessInstance; viewRevision: number; projectionRevision: number;
 };
 const unavailable = () => new Error("Exact Herdr navigation is unavailable. The Herdr server and client may need the navigation update.");
@@ -82,9 +85,17 @@ export class HerdrClient {
       const identity = await this.socketIdentity(context.socketPath);
       const response = await this.rpc(context.socketPath, identity, "client.target", { pane_id: context.paneId });
       const target = response.target;
-      if (!isRecord(target) || !isRecord(target.session) || target.session.agent !== "codex"
-        || target.session.kind !== "id" || typeof target.session.value !== "string" || !uuid(target.session.value)) return undefined;
-      const sessionId = target.session.value;
+      if (!isRecord(target)) return undefined;
+      let sessionId: string;
+      if (target.session === null) {
+        const identity = await this.codexIdentity(context);
+        if (!identity) return undefined;
+        sessionId = identity.sessionId;
+      } else {
+        if (!isRecord(target.session) || target.session.agent !== "codex"
+          || target.session.kind !== "id" || typeof target.session.value !== "string" || !uuid(target.session.value)) return undefined;
+        sessionId = target.session.value;
+      }
       return new HerdrClient(async () => ({ ...context, sessionId }), this.deadlineMs, this.system).resolve(pid, sessionId, cwd);
     } catch { return undefined; }
   }
@@ -98,14 +109,23 @@ export class HerdrClient {
       const target = result.target;
       if (!isRecord(target) || !bounded(target.boot_id) || target.pane_id !== context.paneId
         || !bounded(target.terminal_id) || !processInstance(target.process)) return undefined;
-      if (target.process.pid !== context.pid) {
+      if (target.process.pid === context.pid) {
+        if (Math.floor(target.process.start / 1_000_000) !== Number(context.processStartToken.split(":")[2]) / 1000) return undefined;
+      } else {
         const wrapper = context.codexWrapper;
         if (context.provider !== "codex" || !wrapper || target.process.pid !== wrapper.pid
           || Math.floor(target.process.start / 1_000_000) !== Number(wrapper.processStartToken.split(":")[2]) / 1000) return undefined;
       }
+      let codexTuiBinding: CodexTuiBinding | undefined;
       // Claude's current per-PID session metadata proves its UUID. Codex
-      // additionally needs the runtime's native session reference, not cwd.
-      if ((context.provider === "codex" || target.session != null) && !sameSession(target.session, context)) return undefined;
+      // additionally needs a native session reference or process-bound observer.
+      if (context.provider === "codex" && target.session === null) {
+        // A current observer can supply the missing UUID, but cannot override
+        // a host identity. Re-read it even on prepared clicks and readback.
+        const identity = await this.codexIdentity(context);
+        if (identity?.sessionId !== context.sessionId) return undefined;
+        codexTuiBinding = identity.binding;
+      } else if ((context.provider === "codex" || target.session != null) && !sameSession(target.session, context)) return undefined;
       const listed = await this.rpc(context.socketPath, identity, "client.list", {});
       if (listed.boot_id !== target.boot_id || listed.unclassified_connections !== 0
         || !revision(listed.view_revision) || !Array.isArray(listed.clients) || listed.clients.length !== 1) return undefined;
@@ -121,10 +141,33 @@ export class HerdrClient {
           && !(ownLeaseNonce && client.binding.nonce === ownLeaseNonce && client.binding.state === "applied")
           && !(localNonce && client.binding.nonce === localNonce
             && ["pending", "applied"].includes(String(client.binding.state)))))) return undefined;
-      return { ...context, socketIdentity: identity, target: target as NavigationTarget,
+      return { ...context, ...(codexTuiBinding ? { codexTuiBinding } : {}),
+        socketIdentity: identity, target: target as NavigationTarget,
         client: client.client, clientProcess: client.local_process,
         viewRevision: listed.view_revision, projectionRevision: client.projection_revision };
     } catch { return undefined; }
+  }
+
+  private async codexIdentity(context: HerdrProcessContext): Promise<{ sessionId: string; binding?: CodexTuiBinding } | undefined> {
+    if (context.codexHome && this.system.readCodexTuiBinding) {
+      const binding = await this.system.readCodexTuiBinding(context.pid, context.codexHome);
+      // A modern transport reader is authoritative even when unavailable.
+      // Never downgrade a failed/ambiguous probe to an older observer record.
+      return binding?.sessionIds.length === 1 ? { sessionId: binding.sessionIds[0]!, binding } : undefined;
+    }
+    // Explicit legacy environments without transport discovery retain direct hooks.
+    const observation = await this.observation(context);
+    return observation ? { sessionId: observation.sessionId } : undefined;
+  }
+
+  private async observation(context: HerdrProcessContext): Promise<CodexCliObservation | undefined> {
+    if (context.provider !== "codex" || !context.codexHome || !this.system.readCodexObservation) return undefined;
+    const value = await this.system.readCodexObservation(context.pid, context.codexHome);
+    return value && !value.ended && value.pid === context.pid && value.home === context.codexHome
+      && value.processStartToken === context.processStartToken
+      && Date.parse(value.observedAt) >= Number(context.processStartToken.split(":")[2])
+      && Date.parse(value.observedAt) <= Date.now()
+      ? value : undefined;
   }
 
   async focus(expected: HerdrSurfaceTarget, native: NativeBindingHost, isCurrent = () => true): Promise<void> {
@@ -358,6 +401,7 @@ function sameRoute(a: HerdrSurfaceTarget, b: HerdrSurfaceTarget): boolean {
     && a.cwd === b.cwd && a.paneId === b.paneId && a.socketPath === b.socketPath && a.socketIdentity === b.socketIdentity
     && a.serverPID === b.serverPID && a.serverProcessStartToken === b.serverProcessStartToken
     && a.codexHome === b.codexHome
+    && same(a.codexTuiBinding, b.codexTuiBinding)
     && same(a.codexWrapper, b.codexWrapper)
     && same(a.target, b.target) && same(a.client, b.client) && same(a.clientProcess, b.clientProcess);
 }
@@ -386,9 +430,13 @@ function sameSession(value: unknown, context: HerdrProcessContext): boolean {
 export type HerdrSystem = {
   run: typeof runProcess;
   readClaudeMetadata(pid: number, configRoot?: string): Promise<string | undefined>;
+  readCodexTuiBinding?(pid: number, home: string): Promise<CodexTuiBinding | undefined>;
+  readCodexObservation?(pid: number, home: string): Promise<CodexCliObservation | undefined>;
 };
 const liveSystem: HerdrSystem = {
   run: runProcess,
+  readCodexObservation: readCodexCliObservation,
+  readCodexTuiBinding,
   async readClaudeMetadata(pid, configRoot) {
     const filePath = path.join(configRoot ?? path.join(os.homedir(), ".claude"), "sessions", `${pid}.json`);
     const info = await lstat(filePath);

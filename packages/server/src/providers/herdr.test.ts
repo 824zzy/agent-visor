@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { afterEach, expect, it } from "vitest";
-import { HerdrClient, type HerdrProcessContext } from "./herdr.js";
+import { HerdrClient, type HerdrProcessContext, type HerdrSystem } from "./herdr.js";
 import { processInstanceToken } from "./shared.js";
 import { ClaudeProvider } from "./claude.js";
 import { PaseoProvider } from "./paseo.js";
@@ -173,12 +173,20 @@ it("bounds queued background preparation while native metadata is unavailable", 
   } finally { release(); await Promise.allSettled([...pending, overflow]); }
 });
 
-it("opens a verified Codex CLI in Herdr even when Desktop catalogs it as vscode", async () => {
+
+it.each(["native", "observer", "tui"])("opens a resumed CLI in its exact Herdr pane despite a different catalog cwd and Desktop history (%s identity)", async identity => {
   const f = await fixture();
-  f.context.provider = "codex";
-  f.target.session = { agent: "codex", kind: "id", value: sessionId };
+  Object.assign(f.context, { provider: "codex", codexHome: "/fixture/.codex" });
+  f.target.session = identity === "native" ? { agent: "codex", kind: "id", value: sessionId } : null;
+  const observation = { version: 1 as const, sessionId, pid: 42, tty: "ttys023", cwd: "/fixture/Agent Room",
+    home: "/fixture/.codex", processStartToken: f.context.processStartToken, observedAt: now.toISOString(), ended: false };
+  const herdr = new HerdrClient(async () => structuredClone(f.context), 400,
+    { readCodexObservation: async () => identity === "observer" ? observation : undefined,
+      ...(identity === "tui" ? { readCodexTuiBinding: async () => ({ sessionIds: [sessionId],
+        origin: "http://127.0.0.1:60119", socketPath: "/fixture/codex.sock", socketIdentity: "fixture" }) } : {}),
+    } as unknown as HerdrSystem);
   const records = [
-    { type: "session_meta", payload: { id: sessionId, originator: "codex-tui", source: "vscode" } },
+    { type: "session_meta", payload: { id: sessionId, originator: "Codex Desktop", source: "vscode" } },
     { type: "event_msg", timestamp: now.toISOString(), payload: { type: "task_complete", turn_id: "done" } },
   ].map(record => JSON.stringify(record)).join("\n") + "\n";
   const environment = {
@@ -194,16 +202,18 @@ it("opens a verified Codex CLI in Herdr even when Desktop catalogs it as vscode"
     scanLinePrefixes: async (_file: string, _bytes: number, visit: (line: string) => void) => {
       records.trim().split("\n").forEach(visit); return Buffer.byteLength(records);
     },
-    sqlite: async () => [{ id: sessionId, cwd: "/fixture/Codes", rollout_path: "/fixture/rollout.jsonl",
-      title: "Compare Codex CLI and desktop UX", updated_at: now.valueOf() / 1000, archived: 0, source: "vscode" }],
-    herdrCodexSurface: async (pid: number, cwd: string) => f.herdr.resolve(pid, sessionId, cwd),
+    sqlite: async () => [{ id: sessionId, cwd: "/fixture/Agent Room", rollout_path: "/fixture/rollout.jsonl",
+      title: "AR", updated_at: now.valueOf() / 1000, archived: 0, source: "vscode" },
+      ...(identity === "tui" ? [{ id: "11111111-1111-4111-8111-111111111111", cwd: "/fixture/Agent Room",
+        rollout_path: "/fixture/parent.jsonl", title: "AR", updated_at: now.valueOf() / 1000, archived: 0, source: "vscode" }] : [])],
+    herdrCodexSurface: async (pid: number, cwd: string) => herdr.resolveCodex(pid, cwd, "/fixture/.codex"),
   };
   const helper = new FakeNativeHelper();
   const native = nativeHost(); Object.assign(helper, native);
   const repository = new SessionRepository([new CodexProvider(environment)], { now: () => now });
   repository.setControls(new NativeSessionControls(helper, undefined, undefined, undefined, undefined,
-    undefined, undefined, undefined, undefined, (target, isCurrent) => f.herdr.focus(target, helper, isCurrent),
-    target => f.herdr.prepare(target, helper)));
+    undefined, undefined, undefined, undefined, (target, isCurrent) => herdr.focus(target, helper, isCurrent),
+    target => herdr.prepare(target, helper)));
   await repository.refresh();
   repository.applyHook({ sessionId, provider: "codex", cwd: "/fixture/Codes", event: "Stop",
     status: "waiting_for_input", receivedAt: now.toISOString() });
@@ -217,7 +227,14 @@ it("opens a verified Codex CLI in Herdr even when Desktop catalogs it as vscode"
   expect(trace.split("\n").filter(Boolean).map(line => JSON.parse(line))).toContainEqual(expect.objectContaining({
     stage: "target", targetKind: "herdr_surface",
   }));
-  expect(repository.current().sessions).toMatchObject([{ id: sessionId, owner: "Herdr", canOpenOwner: true }]);
+  expect(repository.current().sessions.find(row => row.id === sessionId)).toMatchObject({ owner: "Herdr", canOpenOwner: true });
+  if (identity === "tui") {
+    expect(repository.current().sessions.filter(row => row.title === "AR")).toHaveLength(2);
+    expect(repository.current().sessions.find(row => row.id !== sessionId)?.owner).not.toBe("Herdr");
+    const restarted = new SessionRepository([new CodexProvider(environment)], { now: () => now });
+    await restarted.refresh();
+    expect(restarted.current().sessions.find(row => row.id === sessionId)).toMatchObject({ owner: "Herdr", canOpenOwner: true });
+  }
   expect(native.focused).toHaveLength(1);
   expect(helper.codexThreadRequests).toEqual([]);
   expect(helper.terminalFocusRequests).toEqual([]);
@@ -539,4 +556,85 @@ it.each([
   expect(f.client.binding?.state).toBe("released");
   expect(helper.terminalFocusRequests).toEqual([]);
   expect(helper.claudeAttachRequests).toEqual([]);
+});
+
+
+it("recovers exact Herdr navigation from a process-bound observer when the host omits its Codex session", async () => {
+  const f = await fixture();
+  Object.assign(f.context, { provider: "codex", codexHome: "/fixture/.codex" });
+  let observation = { version: 1 as const, sessionId, pid: 42, tty: "ttys023", cwd: "/fixture/Agent Room",
+    home: "/fixture/.codex", processStartToken: f.context.processStartToken, observedAt: now.toISOString(), ended: false };
+  const system = { readCodexObservation: async () => observation } as unknown as HerdrSystem;
+  const herdr = new HerdrClient(async () => structuredClone(f.context), 400, system);
+  const route = await herdr.resolveCodex(42, "/fixture/Codes", "/fixture/.codex");
+  expect(route).toMatchObject({ sessionId, pid: 42, paneId: "w1:p7" });
+  const host = { ...nativeHost(), prepareGhosttyBinding: async () => {} };
+  await herdr.prepare(route!, host);
+  await herdr.focus(route!, host);
+  expect(host.focused).toHaveLength(1);
+  observation = { ...observation, sessionId: "22222222-2222-4222-8222-222222222222" };
+  const before = f.requests.filter(request => request.method === "client.focus_exclusive").length;
+  await expect(herdr.focus(route!, host)).rejects.toThrow();
+  expect(f.requests.filter(request => request.method === "client.focus_exclusive")).toHaveLength(before);
+});
+
+
+it.each(["missing", "wrong-start", "ended", "wrong-home", "future", "pre-launch", "native-start-mismatch"])("refuses an unsafe observer route when Herdr has no native session (%s)", async change => {
+  const f = await fixture();
+  Object.assign(f.context, { provider: "codex", codexHome: "/fixture/.codex" });
+  const observation = { version: 1 as const, sessionId, pid: 42, tty: "ttys023", cwd: "/fixture/Agent Room",
+    home: "/fixture/.codex", processStartToken: f.context.processStartToken, observedAt: now.toISOString(), ended: false };
+  if (change === "wrong-start") observation.processStartToken = processInstanceToken(42, new Date(now.valueOf() - 1000))!;
+  if (change === "ended") observation.ended = true;
+  if (change === "wrong-home") observation.home = "/fixture/copilot";
+  if (change === "future") observation.observedAt = "2100-01-01T00:00:00Z";
+  if (change === "pre-launch") observation.observedAt = new Date(now.valueOf() - 1000).toISOString();
+  if (change === "native-start-mismatch") f.target.process.start += 1_000_000;
+  const herdr = new HerdrClient(async () => structuredClone(f.context), 400,
+    { readCodexObservation: async () => change === "missing" ? undefined : observation } as unknown as HerdrSystem);
+  expect(await herdr.resolveCodex(42, "/fixture/Codes", "/fixture/.codex")).toBeUndefined();
+  expect(f.requests.some(request => request.method.startsWith("client.bind") || request.method === "client.focus_exclusive")).toBe(false);
+});
+
+it("never replaces a conflicting host identity with an observer identity", async () => {
+  const f = await fixture();
+  Object.assign(f.context, { provider: "codex", codexHome: "/fixture/.codex" });
+  f.target.session = { agent: "claude", kind: "id", value: sessionId };
+  const herdr = new HerdrClient(async () => structuredClone(f.context), 400,
+    { readCodexObservation: async () => ({ sessionId, pid: 42, home: "/fixture/.codex",
+      processStartToken: f.context.processStartToken, observedAt: now.toISOString(), ended: false }) } as unknown as HerdrSystem);
+  expect(await herdr.resolveCodex(42, "/fixture/Codes", "/fixture/.codex")).toBeUndefined();
+});
+
+
+it("rejects a missing Herdr session field even when an observer record exists", async () => {
+  const f = await fixture();
+  Object.assign(f.context, { provider: "codex", codexHome: "/fixture/.codex" });
+  f.target.session = undefined;
+  const observation = { version: 1 as const, sessionId, pid: 42, tty: "ttys023", cwd: "/fixture/Codes",
+    home: "/fixture/.codex", processStartToken: f.context.processStartToken, observedAt: now.toISOString(), ended: false };
+  const herdr = new HerdrClient(async () => structuredClone(f.context), 400,
+    { readCodexObservation: async () => observation } as unknown as HerdrSystem);
+  expect(await herdr.resolveCodex(42, "/fixture/Codes", "/fixture/.codex")).toBeUndefined();
+});
+
+it.each(["switched", "ambiguous", "disconnected", "unavailable"])("rejects prepared CLI focus when its detached client is %s", async change => {
+  const f = await fixture(); Object.assign(f.context, { provider: "codex", codexHome: "/fixture/.codex" });
+  const binding = { sessionIds: [sessionId], origin: "http://127.0.0.1:60119", socketPath: "/fixture/codex.sock", socketIdentity: "fixture" };
+  let unavailable = false;
+  const herdr = new HerdrClient(async () => structuredClone(f.context), 400,
+    { readCodexTuiBinding: async () => unavailable ? undefined : structuredClone(binding),
+      readCodexObservation: async () => ({ version: 1, sessionId, pid: 42, tty: "ttys023", cwd: f.context.cwd,
+        home: f.context.codexHome, processStartToken: f.context.processStartToken, observedAt: now.toISOString(), ended: false }),
+    } as unknown as HerdrSystem);
+  const target = (await herdr.resolveCodex(42, "/fixture/Codes", "/fixture/.codex"))!;
+  const native = { ...nativeHost(), prepareGhosttyBinding: async () => {} };
+  await herdr.prepare(target, native);
+  unavailable = change === "unavailable";
+  binding.sessionIds = change === "switched" ? ["11111111-1111-4111-8111-111111111111"]
+    : change === "ambiguous" ? [sessionId, "11111111-1111-4111-8111-111111111111"] : [];
+  const before = f.requests.length;
+  await expect(herdr.focus(target, native)).rejects.toThrow("Exact Herdr navigation is unavailable");
+  expect(native.focused).toEqual([]);
+  expect(f.requests.slice(before).some(request => request.method === "client.focus_exclusive")).toBe(false);
 });

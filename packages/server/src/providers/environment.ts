@@ -5,6 +5,7 @@ import path from "node:path";
 import type { NativeHelperGhosttyTerminalView } from "@agent-visor/protocol";
 import { machineWork, runProcess, summaryWork } from "../machine.js";
 import { readCodexSettingsCatalog, type CodexSettingsCatalog } from "../codex-turn.js";
+import { readCodexCliObservation, type CodexCliObservation } from "./codex-cli-observer.js";
 import { CmuxClient, type CmuxSurfaceTarget } from "./cmux.js";
 import { HerdrClient, type HerdrSurfaceTarget } from "./herdr.js";
 import {
@@ -39,6 +40,8 @@ export interface ProviderEnvironment {
   processStartedAt(pid: number): Promise<Date | undefined>;
   codexDesktopCommand?(pid: number): Promise<string | undefined>;
   codexProcessHome?(pid: number): Promise<string | undefined>;
+  /** Owned, bounded observer record; generic JSON is not navigation authority. */
+  codexCliObservation?(pid: number, home: string): Promise<CodexCliObservation | undefined>;
   directory(path: string): Promise<string[]>;
   isDirectory(path: string): Promise<boolean>;
   stamp(path: string): Promise<FileStamp | undefined>;
@@ -99,6 +102,10 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
   }
 
   private readonly clock: () => Date;
+
+  codexCliObservation(pid: number, home: string): Promise<CodexCliObservation | undefined> {
+    return readCodexCliObservation(pid, home);
+  }
 
   herdrSurface(pid: number, sessionId: string, cwd: string): Promise<HerdrSurfaceTarget | undefined> {
     return this.herdr.resolve(pid, sessionId, cwd);

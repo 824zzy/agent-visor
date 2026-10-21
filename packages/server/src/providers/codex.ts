@@ -3,6 +3,7 @@ import path from "node:path";
 import type { DiscoveredProviderSession, HookSessionEvent, ProviderAdapter } from "../sessions.js";
 import type { ProcessRecord, ProviderEnvironment } from "./environment.js";
 import { CodexTranscriptReader } from "./codex-lifecycle.js";
+import { type CodexCliObservation } from "./codex-cli-observer.js";
 import type { HerdrSurfaceTarget } from "./herdr.js";
 import {
   canonicalCodexHome, codexDesktopBindings, codexInstanceID, codexSessionID,
@@ -59,6 +60,8 @@ export class CodexProvider implements ProviderAdapter {
   private readonly transcriptReader = new CodexTranscriptReader();
   private readonly lastSessionsByInstance = new Map<string, DiscoveredProviderSession[]>();
   private readonly cliHookByPID = new Map<number, HookSessionEvent>();
+  /** Explicit observer/host identity only; never a cached control capability. */
+  private readonly cliOrigins = new Map<string, { cwd: string; sessionFile?: string }>();
 
   constructor(
     private readonly environment: ProviderEnvironment,
@@ -81,6 +84,15 @@ export class CodexProvider implements ProviderAdapter {
   private async cliBindings(instance: CodexInstance, processes: ProcessRecord[]): Promise<Map<string, CliBinding[]>> {
     const bindings = new Map<string, CliBinding[]>();
     if (instance.id !== "native") return bindings;
+    const observations = new Map<number, CodexCliObservation>();
+    const directory = path.join(instance.path, "agent-visor", "cli");
+    for (const file of (await this.environment.directory(directory)).filter(file => /^\d+\.json$/.test(file)).slice(0, 512)) {
+      try {
+        const value = await this.environment.codexCliObservation?.(Number.parseInt(file), instance.path);
+        if (value && value.home === instance.path && file === `${value.pid}.json`
+          && Date.parse(value.observedAt) <= this.environment.now().valueOf()) observations.set(value.pid, value);
+      } catch { /* Partial or invalid observer data never grants a route. */ }
+    }
     const live = processes.filter(process => process.tty && path.basename(process.command) === "codex"
       && !/(?:app|mcp|exec)-server/.test(process.arguments));
     for (const pid of this.cliHookByPID.keys()) if (!live.some(process => process.pid === pid)) this.cliHookByPID.delete(pid);
@@ -93,23 +105,48 @@ export class CodexProvider implements ProviderAdapter {
         add(herdr.sessionId, { cwd, owner: "Herdr", herdr }); continue;
       }
       const hook = this.cliHookByPID.get(process.pid);
-      if (!hook || hook.cwd !== cwd || hook.tty?.replace(/^\/dev\//, "") !== process.tty) continue;
+      const observation = observations.get(process.pid);
+      const useObservation = observation && (!hook || Date.parse(observation.observedAt) >= Date.parse(hook.receivedAt));
+      const identity = useObservation ? observation : hook;
+      if (!identity || identity.tty?.replace(/^\/dev\//, "") !== process.tty) continue;
       if (this.environment.codexProcessHome && await this.environment.codexProcessHome(process.pid) !== instance.path) continue;
       const started = await this.environment.processStartedAt(process.pid);
-      if (!started || started.valueOf() > Date.parse(hook.receivedAt)) continue;
-      add(hook.sessionId, { cwd, owner: ownerForProcess(process.pid, processes), sessionFile: hook.sessionFile,
+      if (!started || started.valueOf() > Date.parse(useObservation ? observation.observedAt : hook!.receivedAt)
+        || (useObservation && (observation.ended
+          || observation.processStartToken !== processInstanceToken(process.pid, started)))) continue;
+      const owner = ownerForProcess(process.pid, processes);
+      const exactHerdr = owner === "Herdr"
+        ? await this.environment.herdrSurface?.(process.pid, identity.sessionId, cwd) : undefined;
+      add(identity.sessionId, { cwd, owner, sessionFile: identity.sessionFile, ...(exactHerdr ? { herdr: exactHerdr } : {}),
         terminal: terminalTargetForProcess(process, cwd, processes, processInstanceToken(process.pid, started)) });
+    }
+    // Remember explicit CLI provenance even when its process/host route is now
+    // unavailable. An old Desktop transcript must not silently take it over.
+    for (const observation of observations.values()) if (!bindings.has(observation.sessionId)) {
+      add(observation.sessionId, { cwd: observation.cwd, owner: "Codex CLI", sessionFile: observation.sessionFile });
+    }
+    for (const [id, candidates] of bindings) {
+      if (!this.cliOrigins.has(id) && this.cliOrigins.size >= 512) this.cliOrigins.delete(this.cliOrigins.keys().next().value!);
+      this.cliOrigins.set(id, { cwd: candidates[0]!.cwd, sessionFile: candidates[0]!.sessionFile });
+    }
+    for (const [id, origin] of this.cliOrigins) if (!bindings.has(id)) {
+      // A transient observer read failure may remove navigation authority,
+      // but cannot turn a proven CLI conversation into a Desktop route.
+      add(id, { ...origin, owner: "Codex CLI" });
     }
     return bindings;
   }
 
   private boundSession(instance: CodexInstance, thread: CodexRow, titles: Map<string, string>,
     modelCatalog: DiscoveredProviderSession["modelCatalog"], bindings: Map<string, CliBinding[]>) {
-    const matches = (bindings.get(thread.id) ?? []).filter(binding => binding.cwd === thread.cwd
-      && (!binding.sessionFile || path.resolve(binding.sessionFile) === path.resolve(thread.rolloutPath)));
+    // A resumed thread keeps its workspace cwd; the frontend may have been
+    // launched elsewhere. UUID, home and process identity establish ownership.
+    const candidates = bindings.get(thread.id) ?? [];
+    const matches = candidates.filter(binding =>
+      !binding.sessionFile || path.resolve(binding.sessionFile) === path.resolve(thread.rolloutPath));
     const binding = matches.length === 1 ? matches[0] : undefined;
     return this.session(instance, thread, titles,
-      binding?.owner ?? (matches.length ? "Codex CLI" : instance.label), modelCatalog, binding?.terminal, binding?.herdr);
+      binding?.owner ?? (candidates.length ? "Codex CLI" : instance.label), modelCatalog, binding?.terminal, binding?.herdr);
   }
 
   private async instances(): Promise<CodexInstance[]> {
@@ -232,13 +269,15 @@ export class CodexProvider implements ProviderAdapter {
     const title = storedTitle || await codexRolloutTitle(this.environment, thread.rolloutPath);
     const rolloutStamp = await this.environment.stamp(thread.rolloutPath);
     let unverifiedHost = owner === "Herdr" || owner === "Unknown";
-    const latestTranscript = !terminalTarget && !unverifiedHost
+    const verifiedCli = Boolean(terminalTarget || herdrTarget);
+    const latestTranscript = verifiedCli || !unverifiedHost
       ? await this.transcriptReader.read(this.environment, sessionID, thread.rolloutPath, thread.id)
       : undefined;
     const movedToDesktop = latestTranscript?.originator === "Codex Desktop";
     // CLI lifecycle remains hook-owned unless a later client record proves
-    // Desktop ownership. Catalog source alone does not track client switches.
-    const transcript = thread.source !== "cli" || movedToDesktop ? latestTranscript : undefined;
+    // Desktop ownership or an exact live CLI binding restores transcript state.
+    // Catalog source alone does not track client switches.
+    const transcript = verifiedCli || thread.source !== "cli" || movedToDesktop ? latestTranscript : undefined;
     // The latest client metadata is provenance, not a process binding. It may
     // forbid a wrong Desktop fallback, but never identifies a terminal by cwd.
     const cliWithoutBinding = !terminalTarget && !herdrTarget
@@ -247,7 +286,7 @@ export class CodexProvider implements ProviderAdapter {
     if (cliWithoutBinding) { owner = "Codex CLI"; unverifiedHost = true; }
     const sessionClass = thread.source === "exec"
       ? "automation" as const
-      : (thread.source === "cli" && !movedToDesktop) || herdrTarget || cliWithoutBinding ? "terminal" as const : "interactive" as const;
+      : (thread.source === "cli" && !movedToDesktop) || terminalTarget || herdrTarget || cliWithoutBinding ? "terminal" as const : "interactive" as const;
     const lifecycle = transcript?.lifecycle;
     const managedBy = transcript?.originator === "Agent Room" ? "Agent Room" as const : undefined;
     // Transcript markers are claims, not liveness. A desktop turn whose process

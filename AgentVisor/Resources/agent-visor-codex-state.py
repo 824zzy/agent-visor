@@ -6,11 +6,15 @@ This observer hook is read-only: forward lifecycle/tool events to Agent Visor
 so the app can show live Codex sessions, but never approve/deny on Codex's
 behalf. Codex-owned PermissionRequest events fall through to Codex's native UI.
 """
+import datetime
+import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
+import tempfile
 
 SOCKET_PATH = "/tmp/agent-visor.sock"
 CONNECT_TIMEOUT = 1.0
@@ -46,6 +50,69 @@ def first(data, *keys):
     return None
 
 
+def observe_frontend(session_id, cwd, data, event):
+    """Capture the native CLI ancestor, never the short-lived hook shell."""
+    if event not in ("SessionStart", "UserPromptSubmit", "SessionEnd"):
+        return None
+    if not isinstance(session_id, str) or not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", session_id):
+        return None
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
+        return None
+    inherited = os.environ.get("CODEX_THREAD_ID")
+    if inherited and inherited.lower() != session_id.lower():
+        return None
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-axww", "-o", "pid=,ppid=,lstart=,tty=,comm="],
+            env={**os.environ, "TZ": "UTC", "LC_ALL": "C"},
+            capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode != 0:
+            return None
+        rows = {}
+        for line in result.stdout.splitlines():
+            match = re.fullmatch(r"\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(\S+)\s+(.+)", line)
+            if match:
+                pid, parent, started, tty, command = match.groups()
+                rows[int(pid)] = (int(parent), started, tty, command)
+        pid, visited = os.getppid(), set()
+        while pid in rows and pid not in visited:
+            visited.add(pid)
+            parent, started, tty, command = rows[pid]
+            if os.path.basename(command) == "codex":
+                break
+            pid = parent
+        else:
+            return None
+        if not re.fullmatch(r"tty[A-Za-z0-9]+", tty):
+            return None
+        started_ms = int(datetime.datetime.strptime(started, "%a %b %d %H:%M:%S %Y")
+                         .replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
+        digest = hashlib.sha256(f"{pid}|{started_ms}".encode()).hexdigest()
+        home = os.path.realpath(os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"))
+        observation = {"version": 1, "sessionId": session_id.lower(), "pid": pid,
+                       "tty": tty, "cwd": cwd, "home": home,
+                       "processStartToken": f"v1:{pid}:{started_ms}:{digest}",
+                       "observedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                       "ended": event == "SessionEnd"}
+        session_file = first(data, "transcript_path", "session_file")
+        if isinstance(session_file, str) and os.path.isabs(session_file):
+            observation["sessionFile"] = session_file
+        directory = os.path.join(home, "agent-visor", "cli")
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=f".{pid}-", dir=directory)
+        try:
+            with os.fdopen(fd, "w") as handle:
+                json.dump(observation, handle)
+            os.replace(temporary, os.path.join(directory, f"{pid}.json"))
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        return observation
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def send_event(state):
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -70,6 +137,8 @@ def main():
     cwd = first(data, "cwd", "workspace_root") or os.getcwd()
     tool_input = first(data, "tool_input", "arguments") or {}
 
+    observation = observe_frontend(session_id, cwd, data, event)
+
     state = {
         "session_id": session_id,
         "cwd": cwd,
@@ -78,6 +147,12 @@ def main():
         "tty": get_tty(),
         "agent": "codex",
     }
+
+    if observation:
+        state["pid"] = observation["pid"]
+        state["tty"] = "/dev/" + observation["tty"]
+        if "sessionFile" in observation:
+            state["session_file"] = observation["sessionFile"]
 
     if event == "UserPromptSubmit":
         state["status"] = "processing"
