@@ -3,7 +3,11 @@ import { chmod, mkdir, mkdtemp, rm, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { WebSocketServer } from "ws";
 import { afterEach, expect, it } from "vitest";
-import { readCodexTuiBinding, verifyCodexTuiBinding } from "./codex-tui-client.js";
+import {
+  readCodexTuiBinding,
+  readCodexTuiTransportCapability,
+  verifyCodexTuiBinding,
+} from "./codex-tui-client.js";
 import type { runProcess } from "../machine.js";
 
 const cli = "01a15c34-b525-7c00-a316-ca593fd2a167";
@@ -150,4 +154,18 @@ it("does not grant an identity when no TUI listener exists", async () => {
   const run: typeof runProcess = async () => ({ status: "failed", exitCode: 1, stdout: "", stderr: "" });
   expect(await readCodexTuiBinding(42, f.home, run)).toBeUndefined();
   expect(f.methods).toEqual([]);
+});
+
+it("distinguishes a cleanly absent modern listener from an unreadable probe", async () => {
+  const f = await fixture();
+  f.state.listening = "p42\n";
+  expect(await readCodexTuiTransportCapability(42, f.home, f.run)).toBe("unsupported");
+  expect(await readCodexTuiTransportCapability(42, f.home, async () => ({
+    status: "failed", stdout: "", stderr: "", exitCode: 1,
+  }))).toBe("unsupported");
+  const failed: typeof runProcess = async () => ({ status: "timed_out", stdout: "", stderr: "" });
+  expect(await readCodexTuiTransportCapability(42, f.home, failed)).toBe("unknown");
+  expect(await readCodexTuiTransportCapability(42, f.home, async () => ({
+    status: "success", stdout: "p42\nn127.0.0.1:60119\nn127.0.0.1:60120\n", stderr: "", exitCode: 0,
+  }))).toBe("unknown");
 });

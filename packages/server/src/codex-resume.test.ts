@@ -28,7 +28,8 @@ describe("Codex CLI closed-terminal resume", () => {
     const executableRef = realpathSync(executable);
     const transcriptPath = path.join(canonicalHome, "sessions", `${threadID}.jsonl`);
     mkdirSync(path.dirname(transcriptPath), { recursive: true });
-    writeFileSync(transcriptPath, "{}\n");
+    writeFileSync(transcriptPath,
+      `${JSON.stringify({ type: "session_meta", payload: { id: threadID, originator: "codex-tui" } })}\n`);
     const canonicalId = `codex:${"a".repeat(64)}:${threadID}`;
     const now = "2026-10-21T19:00:00.000Z";
     const resume = {
@@ -172,7 +173,8 @@ describe("Codex CLI closed-terminal resume", () => {
     const canonicalCwd = realpathSync(cwd);
     const executableRef = realpathSync(executable);
     const transcriptPath = path.join(canonicalHome, "sessions", `${thread}.jsonl`);
-    writeFileSync(transcriptPath, "{}\n");
+    writeFileSync(transcriptPath,
+      `${JSON.stringify({ type: "session_meta", payload: { id: thread, originator: "codex-tui" } })}\n`);
     const capability = {
       version: 1 as const,
       provider: "codex_cli" as const,
@@ -221,6 +223,123 @@ describe("Codex CLI closed-terminal resume", () => {
         },
       });
       expect(adapter.resumeTarget({ ...record, configHome: path.join(root, "wrong") }, "attempt", "0123456789abcdef0123456789abcdef")).toMatchObject({
+        state: "unavailable",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a retained Codex row when any provider override name was captured", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "agent-visor-codex-override-"));
+    const home = path.join(root, ".codex");
+    const cwd = path.join(root, "project");
+    const executable = path.join(root, "codex");
+    mkdirSync(path.join(home, "sessions"), { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(executable, "#!/bin/sh\n", { mode: 0o755 });
+    const canonicalHome = realpathSync(home);
+    const canonicalCwd = realpathSync(cwd);
+    const executableRef = realpathSync(executable);
+    const transcriptPath = path.join(canonicalHome, "sessions", `${threadID}.jsonl`);
+    writeFileSync(transcriptPath, `${JSON.stringify({ type: "session_meta", payload: { id: threadID, originator: "codex-tui" } })}\n`);
+    const observedAt = "2026-10-21T19:00:00.000Z";
+    const record: RetainedHistoryRecord = {
+      schemaVersion: 1,
+      id: `codex:${"a".repeat(64)}:${threadID}`,
+      canonicalId: `codex:${"a".repeat(64)}:${threadID}`,
+      provider: "codex",
+      title: "Codex",
+      subtitle: "Closed Codex CLI",
+      project: "project",
+      owner: "Codex CLI",
+      host: "Ghostty",
+      cwd: canonicalCwd,
+      configHome: canonicalHome,
+      transcriptPath,
+      resume: {
+        version: 1,
+        provider: "codex_cli",
+        host: "Ghostty",
+        executableRef,
+        configRootRef: canonicalHome,
+        profileState: "verified_absent",
+        overrideNames: ["OPENAI_BASE_URL"],
+        provenanceObservedAt: observedAt,
+      },
+      updatedAt: observedAt,
+      observedAt,
+      closedAt: observedAt,
+    };
+    const adapter = new CodexResumeAdapter(
+      { home: root, now: () => new Date(observedAt) } as unknown as ProviderEnvironment,
+      async () => [],
+      () => "authoritative",
+    );
+    try {
+      expect(adapter.resumeTarget(record, "attempt", "0123456789abcdef0123456789abcdef")).toMatchObject({
+        state: "unavailable",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a real Codex rollout filename only when bounded metadata proves its UUID", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "agent-visor-codex-rollout-"));
+    const home = path.join(root, ".codex");
+    const cwd = path.join(root, "project");
+    const executable = path.join(root, "codex");
+    mkdirSync(path.join(home, "sessions", "2026", "10", "21"), { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(executable, "#!/bin/sh\n", { mode: 0o755 });
+    const canonicalHome = realpathSync(home);
+    const canonicalCwd = realpathSync(cwd);
+    const executableRef = realpathSync(executable);
+    const transcriptPath = path.join(canonicalHome, "sessions", "2026", "10", "21",
+      `rollout-20261021T190000-${threadID}.jsonl`);
+    writeFileSync(transcriptPath, `${JSON.stringify({ type: "session_meta", payload: { id: threadID, originator: "codex-tui" } })}\n`);
+    const observedAt = "2026-10-21T19:00:00.000Z";
+    const record: RetainedHistoryRecord = {
+      schemaVersion: 1,
+      id: `codex:${"a".repeat(64)}:${threadID}`,
+      canonicalId: `codex:${"a".repeat(64)}:${threadID}`,
+      provider: "codex",
+      title: "Codex",
+      subtitle: "Closed Codex CLI",
+      project: "project",
+      owner: "Codex CLI",
+      host: "Ghostty",
+      cwd: canonicalCwd,
+      configHome: canonicalHome,
+      transcriptPath,
+      resume: {
+        version: 1,
+        provider: "codex_cli",
+        host: "Ghostty",
+        executableRef,
+        configRootRef: canonicalHome,
+        profileState: "verified_absent",
+        overrideNames: [],
+        provenanceObservedAt: observedAt,
+      },
+      updatedAt: observedAt,
+      observedAt,
+      closedAt: observedAt,
+    };
+    const adapter = new CodexResumeAdapter(
+      { home: root, now: () => new Date(observedAt) } as unknown as ProviderEnvironment,
+      async () => [],
+      () => "authoritative",
+    );
+    try {
+      expect(adapter.resumeTarget(record, "attempt", "0123456789abcdef0123456789abcdef")).toMatchObject({
+        state: "eligible",
+        target: { sessionId: threadID, configRoot: canonicalHome },
+      });
+      writeFileSync(transcriptPath,
+        `${JSON.stringify({ type: "session_meta", payload: { id: "11111111-1111-4111-8111-111111111111", originator: "codex-tui" } })}\n`);
+      expect(adapter.resumeTarget(record, "attempt", "0123456789abcdef0123456789abcdef")).toMatchObject({
         state: "unavailable",
       });
     } finally {

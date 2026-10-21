@@ -163,8 +163,14 @@ export class CodexProvider implements ProviderAdapter {
           add(modern.sessionIds[0]!, { cwd, owner: "Codex CLI", observed: true, proven: true,
             ...(resume ? { resume } : {}),
             terminal: terminalTargetForProcess(processWithToken, cwd, processes, processStartToken) });
+          continue;
         }
-        continue;
+        const capability = await this.environment.codexTuiTransportCapability?.(process.pid, instance.path)
+          .catch(() => "unknown" as const);
+        // A cleanly observed absence authorizes the existing bounded observer
+        // route. An undefined, failed, or ambiguous modern probe remains an
+        // identity boundary and must not downgrade to stale legacy data.
+        if (capability !== "unsupported") continue;
       }
       const hook = this.cliHookByPID.get(process.pid);
       const observation = observations.get(process.pid);

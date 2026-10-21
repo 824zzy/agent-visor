@@ -11,7 +11,7 @@ import { PiProvider } from "./pi.js";
 import { ZedProvider } from "./zed.js";
 import { PaseoProvider } from "./paseo.js";
 import { PaseoClient } from "./paseo-client.js";
-import { readCodexTuiBinding } from "./codex-tui-client.js";
+import { readCodexTuiBinding, readCodexTuiTransportCapability } from "./codex-tui-client.js";
 
 export function liveProviders(
   home = os.homedir(),
@@ -27,6 +27,7 @@ export function liveProviders(
     observedWindowMs,
     ghosttyTerminalViews,
     readCodexTuiBinding,
+    codexTuiTransportCapability: readCodexTuiTransportCapability,
     processProvenanceReader,
   });
   return [

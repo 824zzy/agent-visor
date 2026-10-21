@@ -6,7 +6,8 @@ import type { NativeHelperGhosttyTerminalView } from "@agent-visor/protocol";
 import { machineWork, runProcess, summaryWork } from "../machine.js";
 import { readCodexSettingsCatalog, type CodexSettingsCatalog } from "../codex-turn.js";
 import { readCodexCliObservation, type CodexCliObservation } from "./codex-cli-observer.js";
-import type { CodexTuiBinding } from "./codex-tui-client.js";
+import type { CodexTuiBinding, CodexTuiTransportCapability } from "./codex-tui-client.js";
+export type { CodexTuiTransportCapability } from "./codex-tui-client.js";
 import { CmuxClient, type CmuxSurfaceTarget } from "./cmux.js";
 import { HerdrClient, type HerdrSurfaceTarget } from "./herdr.js";
 import {
@@ -57,6 +58,8 @@ export interface ProviderEnvironment {
   codexCliObservation?(pid: number, home: string): Promise<CodexCliObservation | undefined>;
   /** Host-independent read-only identity for a modern Codex TUI server. */
   readCodexTuiBinding?(pid: number, home: string): Promise<CodexTuiBinding | undefined>;
+  /** Explicitly distinguishes a cleanly absent modern listener from probe failure. */
+  codexTuiTransportCapability?(pid: number, home: string): Promise<CodexTuiTransportCapability>;
   directory(path: string): Promise<string[]>;
   isDirectory(path: string): Promise<boolean>;
   stamp(path: string): Promise<FileStamp | undefined>;
@@ -101,6 +104,7 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
   private readonly herdr = new HerdrClient();
   readonly ghosttyTerminalViews?: (conversationTitles?: readonly string[]) => Promise<GhosttyTerminalView[]>;
   readonly readCodexTuiBinding?: (pid: number, home: string) => Promise<CodexTuiBinding | undefined>;
+  readonly codexTuiTransportCapability?: (pid: number, home: string) => Promise<CodexTuiTransportCapability>;
 
   constructor(
     readonly home: string,
@@ -108,6 +112,7 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
       observedWindowMs?: number | (() => number); now?: () => Date;
       ghosttyTerminalViews?: (conversationTitles?: readonly string[]) => Promise<GhosttyTerminalView[]>;
       readCodexTuiBinding?: (pid: number, home: string) => Promise<CodexTuiBinding | undefined>;
+      codexTuiTransportCapability?: (pid: number, home: string) => Promise<CodexTuiTransportCapability>;
       processProvenanceReader?: ProcessProvenanceReader;
     } = {},
   ) {
@@ -115,6 +120,7 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
     this.clock = options.now ?? (() => new Date());
     this.ghosttyTerminalViews = options.ghosttyTerminalViews;
     this.readCodexTuiBinding = options.readCodexTuiBinding;
+    this.codexTuiTransportCapability = options.codexTuiTransportCapability;
     this.claudeInventory = new ClaudeAgentInventory({
       home,
       now: () => this.now(),

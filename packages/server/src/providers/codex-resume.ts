@@ -1,4 +1,4 @@
-import { realpathSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type {
   NativeHelperGhosttyResumeDispatch,
@@ -21,11 +21,7 @@ import { codexThreadReference } from "./codex-instances.js";
 
 const fullThreadID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const pathLimit = 4_096;
-const knownCodexOverrideNames = new Set([
-  "CODEX_HOME", "CODEX_PROFILE", "CODEX_MODEL_PROVIDER", "CODEX_API_KEY", "CODEX_BASE_URL",
-  "CODEX_BACKEND", "CODEX_MODEL", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID",
-  "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION",
-]);
+const transcriptPrefixLimit = 64 * 1_024;
 
 /** Exact stopped-row strategy for the Codex CLI Ghostty route. */
 export class CodexResumeAdapter implements ResumeProviderAdapter {
@@ -185,16 +181,10 @@ function validateCapability(
   } else if (capability.profileRef) {
     return "The recorded Codex profile state is inconsistent.";
   }
-  if (capability.overrideNames.some((name) => !isKnownCodexOverride(name))) {
-    return "This Codex session used an unsupported provider override.";
+  if (capability.overrideNames.length > 0) {
+    return "This Codex session used a provider override whose value cannot be reconstructed safely.";
   }
   return undefined;
-}
-
-function isKnownCodexOverride(name: string): boolean {
-  return knownCodexOverrideNames.has(name)
-    || name.startsWith("OPENAI_")
-    || name.startsWith("AZURE_OPENAI_");
 }
 
 function validateTranscriptPath(
@@ -206,11 +196,50 @@ function validateTranscriptPath(
   try { actual = realpathSync(record.transcriptPath); } catch { return "The saved Codex transcript is unavailable."; }
   const relative = path.relative(capability.configRootRef, actual);
   const reference = codexThreadReference(record.canonicalId);
-  if (!reference || relative.startsWith("..") || path.isAbsolute(relative)
-    || path.basename(actual, path.extname(actual)) !== reference.threadID) {
+  const sessionsRoot = `${path.join(capability.configRootRef, "sessions")}${path.sep}`;
+  if (!reference || relative.startsWith("..") || path.isAbsolute(relative) || !actual.startsWith(sessionsRoot)
+    || !hasMatchingCodexSessionMetadata(actual, reference.threadID)) {
     return "The saved Codex transcript does not match the retained conversation identity.";
   }
   return undefined;
+}
+
+/**
+ * Rollout names carry a timestamp and are not identity authority. Read only a
+ * bounded prefix and retain the UUID/source marker; prompt and tool content is
+ * discarded as soon as each line is inspected.
+ */
+function hasMatchingCodexSessionMetadata(file: string, threadID: string): boolean {
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const info = fstatSync(descriptor);
+    if (!info.isFile() || info.size === 0) return false;
+    const bytes = Buffer.alloc(Math.min(info.size, transcriptPrefixLimit));
+    const length = readSync(descriptor, bytes, 0, bytes.length, 0);
+    for (const line of bytes.subarray(0, length).toString("utf8").split("\n")) {
+      if (!line.trim()) continue;
+      let value: unknown;
+      try { value = JSON.parse(line); } catch { continue; }
+      if (!isRecord(value) || value.type !== "session_meta" || !isRecord(value.payload)) continue;
+      if (typeof value.payload.id !== "string"
+        || value.payload.id.toLowerCase() !== threadID.toLowerCase()) continue;
+      const originator = value.payload.originator;
+      return typeof originator === "string"
+        && originator !== "Codex Desktop" && /^codex(?:[-_]|$)/i.test(originator);
+    }
+  } catch {
+    return false;
+  } finally {
+    if (descriptor !== undefined) {
+      try { closeSync(descriptor); } catch { /* best effort close */ }
+    }
+  }
+  return false;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function sameResumeProvenance(

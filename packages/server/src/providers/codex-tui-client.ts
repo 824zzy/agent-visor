@@ -8,6 +8,7 @@ import { isRecord } from "./shared.js";
 type ThreadInventory = { loaded: string[]; roots: Array<{ id: string; path: string | null }> };
 export type CodexTuiBinding = { sessionIds: string[]; origin: string; socketPath: string; socketIdentity: string;
   inventory?: ThreadInventory };
+export type CodexTuiTransportCapability = "supported" | "unsupported" | "unknown";
 const uuid = (value: unknown): value is string => typeof value === "string"
   && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 
@@ -15,6 +16,44 @@ const uuid = (value: unknown): value is string => typeof value === "string"
 export async function readCodexTuiBinding(pid: number, home: string,
   run: typeof runProcess = runProcess): Promise<CodexTuiBinding | undefined> {
   return readBinding(pid, home, run);
+}
+
+/**
+ * Classify only the bounded OS evidence needed to decide whether legacy CLI
+ * observation may be consulted. A successful exact process scan with no TCP
+ * listener is a positive absence; command failure, malformed ownership, and a
+ * listener that needs a deeper identity read remain unknown.
+ */
+export async function readCodexTuiTransportCapability(
+  pid: number,
+  _home: string,
+  run: typeof runProcess = runProcess,
+): Promise<CodexTuiTransportCapability> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return "unknown";
+  const result = await machineWork.run(() => run(
+    "/usr/sbin/lsof",
+    ["-b", "-w", "-nP", "-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN", "-Fpn"],
+    { deadlineMs: 500, maxOutputBytes: 8_192 },
+  ));
+  if (result.status === "failed" && result.exitCode === 1 && !result.stderr.trim()) {
+    const noListener = result.stdout.trim().split("\n").filter(Boolean);
+    // lsof uses exit 1 for a successful no-match query. The caller has
+    // already confirmed this exact PID is a live Codex frontend, so an empty
+    // or PID-only result is a clean absence rather than a missing process.
+    if (noListener.length === 0 || noListener.every(line => line === `p${pid}`)) return "unsupported";
+    return "unknown";
+  }
+  if (result.status !== "success") return "unknown";
+  const lines = result.stdout.trim().split("\n").filter(Boolean);
+  if (!lines.includes(`p${pid}`) || lines.some(line => /^p/.test(line) && line !== `p${pid}`)) {
+    return "unknown";
+  }
+  const addresses = lines.filter(line => /^n(?:127\.0\.0\.1|\[::1\]):\d+$/.test(line));
+  if (addresses.length === 0 && lines.every(line => line === `p${pid}`)) return "unsupported";
+  if (addresses.length === 1 && lines.every(line => line === `p${pid}` || line.startsWith("n"))) {
+    return "supported";
+  }
+  return "unknown";
 }
 
 /** Revalidate transport ownership, never repeat transcript discovery on navigation. */
