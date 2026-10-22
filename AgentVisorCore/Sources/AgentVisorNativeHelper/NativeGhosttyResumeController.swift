@@ -5,6 +5,7 @@ import Foundation
 public enum NativeGhosttyResumeError: Error, Equatable {
     case invalidTarget
     case permissionDenied
+    case preCreationFailed
     case unavailable
     case executableMismatch
     case profileUnavailable
@@ -82,7 +83,7 @@ public final class NativeGhosttyResumeController {
             // through NSWorkspace and then resolve one fresh process identity;
             // never use `open -n` or a second app instance as a route.
             guard launchApplication(), let launched = waitForApplication() else {
-                throw NativeGhosttyResumeError.unavailable
+                throw NativeGhosttyResumeError.preCreationFailed
             }
             application = launched
         }
@@ -104,6 +105,7 @@ public final class NativeGhosttyResumeController {
             throw NativeGhosttyResumeError.creationUncertain
         }
         guard result.status == "created" else {
+            if result.status == "pre_creation_failed" { throw NativeGhosttyResumeError.preCreationFailed }
             if result.status == "unavailable" { throw NativeGhosttyResumeError.unavailable }
             throw NativeGhosttyResumeError.creationUncertain
         }

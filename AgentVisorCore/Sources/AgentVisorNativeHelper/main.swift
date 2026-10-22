@@ -306,7 +306,9 @@ private func response(
                 case .invalidTarget:
                     return .error(id: id, code: .invalidRequest, message: "The \(providerName) resume target is invalid.")
                 case .permissionDenied:
-                    return .error(id: id, code: .failed, message: "Ghostty Automation permission is unavailable.", reason: "activation_failed")
+                    return .error(id: id, code: .failed, message: "Ghostty Automation permission is unavailable.", reason: "pre_creation_failed")
+                case .preCreationFailed:
+                    return .error(id: id, code: .failed, message: "Ghostty resume could not begin before surface creation.", reason: "pre_creation_failed")
                 case .unavailable:
                     return .error(id: id, code: .failed, message: "The existing Ghostty process is unavailable.", reason: "surface_unavailable")
                 case .executableMismatch:

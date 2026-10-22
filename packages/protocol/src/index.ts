@@ -1414,7 +1414,7 @@ const nativeHelperResultSchema = z.union([
 export const nativeHelperFocusFailureReasonSchema = z.enum([
   "invalid_target", "process_missing", "process_terminated", "bundle_mismatch",
   "profile_unavailable", "executable_mismatch", "profile_ambiguous", "profile_mismatch",
-  "deep_link_rejected", "activation_failed", "native_creation_uncertain", "surface_unavailable",
+  "deep_link_rejected", "activation_failed", "pre_creation_failed", "native_creation_uncertain", "surface_unavailable",
 ]);
 
 const nativeHelperResponseEnvelopeSchema = z.discriminatedUnion("ok", [

@@ -36,7 +36,7 @@ public enum ClaudeGhosttyResumeScript {
         (function () {
             var app = Application('com.mitchellh.ghostty');
             if (!app.running()) {
-                return JSON.stringify({status: 'unavailable', reason: 'surface_unavailable'});
+                return JSON.stringify({status: 'pre_creation_failed', reason: 'ghostty_not_running'});
             }
             var created = false;
             try {

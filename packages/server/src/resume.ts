@@ -61,7 +61,13 @@ export interface ResumeNativeController {
   focusGhosttyTerminal(target: NativeHelperGhosttyTerminalView): Promise<void>;
 }
 
-export type ResumeAttemptState = "claimed" | "dispatched" | "matched" | "unknown" | "unavailable";
+export type ResumeAttemptState =
+  | "claimed"
+  | "dispatched"
+  | "matched"
+  | "pre_creation_failed"
+  | "unknown"
+  | "unavailable";
 
 export type ResumeAttempt = {
   version: 1;
@@ -72,6 +78,10 @@ export type ResumeAttempt = {
   state: ResumeAttemptState;
   claimedAt: string;
   updatedAt: string;
+  /** Native correlation persisted before dispatch; legacy rows may omit it. */
+  nonce?: string;
+  /** Completion attention captured for this explicit attempt, if unread. */
+  completionIdentity?: string;
   dispatch?: NativeHelperGhosttyResumeDispatch;
   reason?: string;
 };
@@ -108,17 +118,23 @@ export class ResumeAttemptStore {
     sessionId: string,
     canonicalId: string,
     provider: ResumeProviderID = "claude_code",
+    correlation: { nonce?: string; completionIdentity?: string } = {},
   ): ResumeClaim | { state: "unavailable"; reason: string } {
     if (!this.file) return { state: "unavailable", reason: "Resume state has no durable store." };
     if (this.loadFailure) return { state: "unavailable", reason: this.loadFailure };
     const key = attemptKey(provider, canonicalId);
     const existing = this.attempts.get(key);
-    if (existing) {
+    if (existing && existing.state !== "pre_creation_failed" && existing.state !== "matched") {
       // The in-memory coordinator joins concurrent calls before reaching the
       // journal. A claimed row loaded after restart has no live owner and
       // therefore cannot authorize replay of a possibly-created window.
       return { state: "blocked", attempt: structuredClone(existing) };
     }
+    // A typed no-creation result or a previously matched cycle may be replaced
+    // by a later explicit action. Unknown/ambiguous rows remain authoritative
+    // until they are reconciled.
+    const previous = existing;
+    if (previous) this.attempts.delete(key);
     const now = this.now().toISOString();
     const attempt: ResumeAttempt = {
       version: 1,
@@ -129,10 +145,13 @@ export class ResumeAttemptStore {
       state: "claimed",
       claimedAt: now,
       updatedAt: now,
+      nonce: correlation.nonce ?? randomNonce(),
+      ...(correlation.completionIdentity ? { completionIdentity: correlation.completionIdentity } : {}),
     };
     this.attempts.set(key, attempt);
     if (!this.persist()) {
-      this.attempts.delete(key);
+      if (previous) this.attempts.set(key, previous);
+      else this.attempts.delete(key);
       return { state: "unavailable", reason: "Resume state could not be saved." };
     }
     return { state: "created", attempt: structuredClone(attempt) };
@@ -143,10 +162,11 @@ export class ResumeAttemptStore {
     state: ResumeAttemptState,
     patch: { dispatch?: NativeHelperGhosttyResumeDispatch; reason?: string } = {},
     provider: ResumeProviderID = "claude_code",
+    expectedAttemptId?: string,
   ): ResumeAttempt | undefined {
     const key = attemptKey(provider, canonicalId);
     const current = this.attempts.get(key);
-    if (!current) return undefined;
+    if (!current || (expectedAttemptId !== undefined && current.attemptId !== expectedAttemptId)) return undefined;
     const next: ResumeAttempt = {
       ...current,
       state,
@@ -249,11 +269,16 @@ type ResumeCoordinatorOptions = {
   helper: ResumeNativeController;
   attempts: ResumeAttemptStore;
   focusLive(session: DiscoveredProviderSession): Promise<void>;
-  onMatched?(record: RetainedHistoryRecord): void;
+  /** Monotonic successful live-navigation epoch for this retained identity. */
+  liveNavigationEpoch?(record: RetainedHistoryRecord): number;
+  onMatched?(record: RetainedHistoryRecord, attempt: Pick<ResumeAttempt, "attemptId" | "completionIdentity">): void;
 };
 
 /** Keep delayed provider startup outside the prepared live-focus action path. */
-const resumeReconciliationPollDelaysMs = [25, 50, 100] as const;
+// Keep cold startup outside the live focus queue while allowing a real
+// provider a few seconds to publish its exact UUID. This never creates a
+// second frontend; every read remains bound to the same dispatch receipt.
+const resumeReconciliationPollDelaysMs = [25, 50, 100, 250, 500, 1_000] as const;
 
 /** One cold coordinator, intentionally outside the live focus action queue. */
 export class ResumeCoordinator {
@@ -261,7 +286,7 @@ export class ResumeCoordinator {
 
   constructor(private readonly options: ResumeCoordinatorOptions) {}
 
-  resumeSession(sessionId: string): Promise<ResumeResult> {
+  resumeSession(sessionId: string, completionIdentity?: string): Promise<ResumeResult> {
     const record = this.options.history.get(sessionId);
     if (!record || !record.closedAt) {
       return Promise.resolve({ state: "unavailable", sessionId, reason: "This conversation is not closed History." });
@@ -284,7 +309,7 @@ export class ResumeCoordinator {
         attemptId: attempt?.attemptId ?? "unknown",
       });
     }
-    const operation = this.perform(record, provider);
+    const operation = this.perform(record, provider, completionIdentity);
     this.inFlight.set(key, operation);
     void operation.then(() => undefined, () => undefined).finally(() => {
       if (this.inFlight.get(key) === operation) this.inFlight.delete(key);
@@ -292,7 +317,12 @@ export class ResumeCoordinator {
     return operation;
   }
 
-  private async perform(record: RetainedHistoryRecord, provider: ResumeProviderAdapter): Promise<ResumeResult> {
+  private async perform(
+    record: RetainedHistoryRecord,
+    provider: ResumeProviderAdapter,
+    completionIdentity?: string,
+  ): Promise<ResumeResult> {
+    const liveNavigationEpoch = this.options.liveNavigationEpoch?.(record) ?? 0;
     const liveness = await provider.resumeLiveness(record).catch(() => ({
       state: "unknown" as const,
       reason: `Fresh ${record.provider} liveness is unavailable.`,
@@ -308,13 +338,21 @@ export class ResumeCoordinator {
     if (liveness.state === "unknown") {
       return { state: "unavailable", sessionId: record.id, reason: liveness.reason };
     }
+    const outstanding = this.options.attempts.get(record.provider, record.canonicalId);
+    const recovered = outstanding?.dispatch
+      ? await this.reconcileOutstandingAttempt(record, provider, outstanding, liveNavigationEpoch)
+      : undefined;
+    if (recovered) return recovered;
     const attemptID = randomUUID();
     const nonce = randomNonce();
     const preflightTarget = provider.resumeTarget(record, attemptID, nonce);
     if (preflightTarget.state !== "eligible") {
       return { state: "unavailable", sessionId: record.id, reason: preflightTarget.reason };
     }
-    const claim = this.options.attempts.claim(record.id, record.canonicalId, record.provider);
+    const claim = this.options.attempts.claim(record.id, record.canonicalId, record.provider, {
+      nonce,
+      ...(completionIdentity ? { completionIdentity } : {}),
+    });
     if (claim.state === "unavailable") {
       return { state: "unavailable", sessionId: record.id, reason: claim.reason };
     }
@@ -327,16 +365,16 @@ export class ResumeCoordinator {
     const attempt = claim.attempt;
     if (!this.historyStillAuthorizes(record)) {
       const reason = "This session was removed from Agent Visor History before dispatch.";
-      this.options.attempts.update(record.canonicalId, "unavailable", { reason }, record.provider);
+      this.options.attempts.update(record.canonicalId, "unavailable", { reason }, record.provider, attempt.attemptId);
       return { state: "unavailable", sessionId: record.id, reason };
     }
     // Bind the native request to the durable claim identity. The preflight
     // above only validates the provider references; dispatch must never use a
     // correlation ID that was not written to the journal first.
-    const targetResult = provider.resumeTarget(record, attempt.attemptId, nonce);
+    const targetResult = provider.resumeTarget(record, attempt.attemptId, attempt.nonce ?? nonce);
     if (targetResult.state !== "eligible") {
       const reason = targetResult.reason;
-      this.options.attempts.update(record.canonicalId, "unavailable", { reason }, record.provider);
+      this.options.attempts.update(record.canonicalId, "unavailable", { reason }, record.provider, attempt.attemptId);
       return { state: "unavailable", sessionId: record.id, reason };
     }
     let dispatch: NativeHelperGhosttyResumeDispatch;
@@ -344,53 +382,128 @@ export class ResumeCoordinator {
       dispatch = await this.options.helper.openGhosttyResume(targetResult.target);
     } catch (error) {
       const reason = errorMessage(error, "Ghostty resume dispatch is uncertain.");
-      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider);
+      const state = errorReason(error) === "pre_creation_failed" ? "pre_creation_failed" : "unknown";
+      this.options.attempts.update(record.canonicalId, state, { reason }, record.provider, attempt.attemptId);
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
     if (dispatch.attemptId !== attempt.attemptId || dispatch.sessionId !== targetResult.target.sessionId
       || dispatch.provider !== nativeProviderFor(provider) || dispatch.nonce !== targetResult.target.nonce) {
       const reason = "Ghostty returned an invalid resume receipt.";
-      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider);
+      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider, attempt.attemptId);
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
-    if (!this.options.attempts.update(record.canonicalId, "dispatched", { dispatch }, record.provider)) {
+    if (!this.options.attempts.update(record.canonicalId, "dispatched", { dispatch }, record.provider, attempt.attemptId)) {
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId,
         reason: "Resume dispatch state could not be saved." };
     }
     let reconciliation: ResumeReconciliation;
     try {
-      reconciliation = await this.reconcileAfterDispatch(record, dispatch, provider);
+      reconciliation = await this.reconcileAfterDispatch(record, dispatch, provider, attempt.attemptId);
     } catch (error) {
       const reason = errorMessage(error, `${resumeProviderName(record.provider)} resume identity is still unavailable.`);
-      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider);
+      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider, attempt.attemptId);
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
     if (reconciliation.state !== "matched" || reconciliation.sessionId !== record.canonicalId) {
       const reason = reconciliation.state === "matched"
         ? `The resumed ${resumeProviderName(record.provider)} conversation identity did not match the retained row.`
         : reconciliation.reason ?? `The resumed ${resumeProviderName(record.provider)} conversation could not be matched.`;
-      this.options.attempts.update(record.canonicalId, reconciliation.state === "unavailable" ? "unavailable" : "unknown", { reason }, record.provider);
+      this.options.attempts.update(record.canonicalId, reconciliation.state === "unavailable" ? "unavailable" : "unknown", { reason }, record.provider, attempt.attemptId);
       return { state: reconciliation.state === "unavailable" ? "unavailable" : "uncertain",
         sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
+    return this.finishMatched(record, reconciliation, attempt, liveNavigationEpoch);
+  }
+
+  /** Reconcile a durable receipt after restart or an explicit retry without launching again. */
+  private async reconcileOutstandingAttempt(
+    record: RetainedHistoryRecord,
+    provider: ResumeProviderAdapter,
+    attempt: ResumeAttempt,
+    liveNavigationEpoch: number,
+  ): Promise<ResumeResult | undefined> {
+    if (!attempt.dispatch || attempt.state === "matched" || attempt.state === "pre_creation_failed") return undefined;
+    let reconciliation: ResumeReconciliation;
+    try {
+      if (attempt.dispatch.attemptId !== attempt.attemptId
+        || (attempt.nonce !== undefined && attempt.dispatch.nonce !== attempt.nonce)) {
+        return {
+          state: "uncertain",
+          sessionId: record.id,
+          attemptId: attempt.attemptId,
+          reason: "The durable resume receipt does not match its attempt correlation.",
+        };
+      }
+      reconciliation = await this.reconcileAfterDispatch(record, attempt.dispatch, provider, attempt.attemptId);
+    } catch (error) {
+      const reason = errorMessage(error, `${resumeProviderName(record.provider)} resume identity is still unavailable.`);
+      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider, attempt.attemptId);
+      return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
+    }
+    if (reconciliation.state !== "matched" || reconciliation.sessionId !== record.canonicalId) {
+      const reason = reconciliation.state === "matched"
+        ? `The resumed ${resumeProviderName(record.provider)} conversation identity did not match the retained row.`
+        : reconciliation.reason ?? `The resumed ${resumeProviderName(record.provider)} conversation could not be matched.`;
+      this.options.attempts.update(record.canonicalId, reconciliation.state === "unavailable" ? "unavailable" : "unknown", { reason }, record.provider, attempt.attemptId);
+      return { state: reconciliation.state === "unavailable" ? "unavailable" : "uncertain",
+        sessionId: record.id, attemptId: attempt.attemptId, reason };
+    }
+    return this.finishMatched(record, reconciliation, attempt, liveNavigationEpoch);
+  }
+
+  private async finishMatched(
+    record: RetainedHistoryRecord,
+    reconciliation: Extract<ResumeReconciliation, { state: "matched" }>,
+    attempt: ResumeAttempt,
+    liveNavigationEpoch: number,
+  ): Promise<ResumeResult> {
     const terminal = reconciliation.terminal;
     if (!terminal) {
       const reason = `The resumed ${resumeProviderName(record.provider)} surface could not be linked exactly.`;
-      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider);
+      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider, attempt.attemptId);
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
+    }
+    const current = this.currentHistoryRecord(record);
+    if (!current || this.options.history.isSuppressed(record.provider, [record.id, record.canonicalId, ...(record.aliases ?? [])])) {
+      const reason = "This session was removed from Agent Visor History before focus.";
+      this.options.attempts.update(record.canonicalId, "unavailable", { reason }, record.provider, attempt.attemptId);
+      return { state: "unavailable", sessionId: record.id, reason };
+    }
+    // Recheck the durable claim immediately before any native focus. A late
+    // result from an older dispatch may still reconcile exactly, but it must
+    // never steal focus from a newer explicit attempt.
+    const currentAttempt = this.options.attempts.get(record.provider, record.canonicalId);
+    if (!currentAttempt || currentAttempt.attemptId !== attempt.attemptId) {
+      return {
+        state: "uncertain",
+        sessionId: record.id,
+        attemptId: attempt.attemptId,
+        reason: "The resume attempt was superseded before exact focus.",
+      };
+    }
+    // A successful live focus owns navigation and attention. Ambient discovery
+    // alone is not enough: a newly-created cold frontend may be visible before
+    // its exact terminal is ready for the final focus transaction.
+    const currentLiveNavigationEpoch = this.options.liveNavigationEpoch?.(record) ?? 0;
+    if (currentLiveNavigationEpoch > liveNavigationEpoch) {
+      if (!this.options.attempts.update(record.canonicalId, "matched", {}, record.provider, attempt.attemptId)) {
+        return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId,
+          reason: "Resume completion state could not be saved." };
+      }
+      return { state: "matched", sessionId: record.id, attemptId: attempt.attemptId };
     }
     try {
       await this.options.helper.focusGhosttyTerminal(terminal);
     } catch (error) {
       const reason = errorMessage(error, `The resumed ${resumeProviderName(record.provider)} surface could not be focused.`);
-      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider);
+      this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider, attempt.attemptId);
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
-    if (!this.options.attempts.update(record.canonicalId, "matched", {}, record.provider)) {
+    if (!this.options.attempts.update(record.canonicalId, "matched", {}, record.provider, attempt.attemptId)) {
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId,
         reason: "Resume completion state could not be saved." };
     }
-    this.options.onMatched?.(record);
+    this.options.onMatched?.(record, attempt);
     return { state: "matched", sessionId: record.id, attemptId: attempt.attemptId };
   }
 
@@ -404,26 +517,55 @@ export class ResumeCoordinator {
     record: RetainedHistoryRecord,
     dispatch: NativeHelperGhosttyResumeDispatch,
     provider: ResumeProviderAdapter,
+    expectedAttemptId: string,
   ): Promise<ResumeReconciliation> {
+    const authority = this.reconciliationAuthority(record, expectedAttemptId);
+    if (authority) return authority;
     let reconciliation = await provider.reconcileResume(record, dispatch);
     for (const delayMs of resumeReconciliationPollDelaysMs) {
       if (!isStartupReconciliationPending(reconciliation)) return reconciliation;
+      const beforeDelay = this.reconciliationAuthority(record, expectedAttemptId);
+      if (beforeDelay) return beforeDelay;
       await delay(delayMs);
+      const beforeRead = this.reconciliationAuthority(record, expectedAttemptId);
+      if (beforeRead) return beforeRead;
       reconciliation = await provider.reconcileResume(record, dispatch);
     }
     return reconciliation;
   }
 
+  private reconciliationAuthority(
+    record: RetainedHistoryRecord,
+    expectedAttemptId: string,
+  ): ResumeReconciliation | undefined {
+    const currentAttempt = this.options.attempts.get(record.provider, record.canonicalId);
+    if (!currentAttempt || currentAttempt.attemptId !== expectedAttemptId) {
+      return { state: "unknown", reason: "The resume attempt was superseded during reconciliation." };
+    }
+    if (!this.currentHistoryRecord(record)
+      || this.options.history.isSuppressed(record.provider, [record.id, record.canonicalId, ...(record.aliases ?? [])])) {
+      return { state: "unavailable", reason: "This session was removed from Agent Visor History during reconciliation." };
+    }
+    return undefined;
+  }
+
   private historyStillAuthorizes(record: RetainedHistoryRecord): boolean {
     const ids = [record.id, record.canonicalId, ...(record.aliases ?? [])];
     if (this.options.history.isSuppressed(record.provider, ids)) return false;
+    const current = this.currentHistoryRecord(record);
+    return current?.provider === record.provider
+      && current.canonicalId === record.canonicalId
+      && current.closedAt !== undefined;
+  }
+
+  private currentHistoryRecord(record: RetainedHistoryRecord): RetainedHistoryRecord | undefined {
     const getCurrent = this.options.history.getForProvider
       ? (id: string) => this.options.history.getForProvider!(record.provider, id)
       : (id: string) => this.options.history.get(id);
     const current = getCurrent(record.id) ?? getCurrent(record.canonicalId);
-    return current?.provider === record.provider
-      && current.canonicalId === record.canonicalId
-      && current.closedAt !== undefined;
+    return current?.provider === record.provider && current.canonicalId === record.canonicalId
+      ? current
+      : undefined;
   }
 
   private providerFor(provider: ResumeProviderID): ResumeProviderAdapter | undefined {
@@ -438,10 +580,13 @@ function normalizeAttempt(value: unknown): ResumeAttempt | undefined {
     || typeof value.attemptId !== "string" || !value.attemptId
     || typeof value.sessionId !== "string" || !value.sessionId
     || typeof value.canonicalId !== "string" || !value.canonicalId
-    || !["claimed", "dispatched", "matched", "unknown", "unavailable"].includes(String(value.state))
+    || !["claimed", "dispatched", "matched", "pre_creation_failed", "unknown", "unavailable"].includes(String(value.state))
     || typeof value.claimedAt !== "string" || !Number.isFinite(Date.parse(value.claimedAt))
     || typeof value.updatedAt !== "string" || !Number.isFinite(Date.parse(value.updatedAt))) return undefined;
   if (value.attemptId.length > 128 || value.sessionId.length > 512 || value.canonicalId.length > 1_024) {
+    return undefined;
+  }
+  if (value.nonce !== undefined && (typeof value.nonce !== "string" || !isResumeNonce(value.nonce))) {
     return undefined;
   }
   const dispatch = isRecord(value.dispatch)
@@ -451,6 +596,10 @@ function normalizeAttempt(value: unknown): ResumeAttempt | undefined {
   const provider = value.provider as ResumeProviderID;
   const expectedNativeProvider = provider === "codex" ? "codex_cli" : "claude_code";
   if (dispatch?.success && dispatch.data.provider !== expectedNativeProvider) return undefined;
+  if (dispatch?.success && typeof value.nonce === "string" && dispatch.data.nonce !== value.nonce) return undefined;
+  if (value.completionIdentity !== undefined
+    && (typeof value.completionIdentity !== "string"
+      || value.completionIdentity.length === 0 || value.completionIdentity.length > 1_024)) return undefined;
   return {
     version: 1,
     provider,
@@ -460,6 +609,8 @@ function normalizeAttempt(value: unknown): ResumeAttempt | undefined {
     state: value.state as ResumeAttemptState,
     claimedAt: new Date(value.claimedAt).toISOString(),
     updatedAt: new Date(value.updatedAt).toISOString(),
+    ...(typeof value.nonce === "string" ? { nonce: value.nonce } : {}),
+    ...(typeof value.completionIdentity === "string" ? { completionIdentity: value.completionIdentity } : {}),
     ...(dispatch?.success ? { dispatch: dispatch.data } : {}),
     ...(typeof value.reason === "string" && value.reason.length <= 1_024 ? { reason: value.reason } : {}),
   };
@@ -485,8 +636,16 @@ function randomNonce(): string {
   return randomUUID().replaceAll("-", "").slice(0, 32);
 }
 
+function isResumeNonce(value: string): boolean {
+  return /^[0-9a-f]{32}$/.test(value);
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function errorReason(error: unknown): string | undefined {
+  return isRecord(error) && typeof error.reason === "string" ? error.reason : undefined;
 }
 
 function isStartupReconciliationPending(reconciliation: ResumeReconciliation): boolean {
