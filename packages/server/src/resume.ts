@@ -312,14 +312,7 @@ export class ResumeCoordinator {
     const canonicalId = record.canonicalId;
     const key = attemptKey(record.provider, canonicalId);
     const existing = this.inFlight.get(key);
-    if (existing) {
-      const attempt = this.options.attempts.get(record.provider, canonicalId);
-      return Promise.resolve({
-        state: "joined",
-        sessionId,
-        attemptId: attempt?.attemptId ?? "unknown",
-      });
-    }
+    if (existing) return existing;
     const operation = this.perform(record, provider, completionIdentity);
     this.inFlight.set(key, operation);
     void operation.then(() => undefined, () => undefined).finally(() => {
@@ -519,11 +512,12 @@ export class ResumeCoordinator {
     // its exact terminal is ready for the final focus transaction.
     const currentLiveNavigationEpoch = this.options.liveNavigationEpoch?.(record) ?? 0;
     if (currentLiveNavigationEpoch > liveNavigationEpoch) {
-      if (!this.options.attempts.update(record.canonicalId, "matched", {}, record.provider, attempt.attemptId)) {
+      const reason = "A newer live navigation superseded cold resume focus.";
+      if (!this.options.attempts.update(record.canonicalId, "unknown", { reason }, record.provider, attempt.attemptId)) {
         return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId,
           reason: "Resume completion state could not be saved." };
       }
-      return { state: "matched", sessionId: record.id, attemptId: attempt.attemptId };
+      return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
     try {
       await this.options.helper.focusGhosttyTerminal(terminal);

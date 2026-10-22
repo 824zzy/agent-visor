@@ -156,6 +156,54 @@ describe("SessionRepository", () => {
     }
   });
 
+  it("does not reopen an Agent Visor removal from an unavailable stale provider inventory", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-history-outage-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const sessionID = "outage-stale-claude";
+    let phase: "open" | "closed" | "outage" = "open";
+    const observed: DiscoveredProviderSession = {
+      id: sessionID,
+      provider: "claude_code",
+      title: "Stale outage conversation",
+      subtitle: "Ready to continue",
+      cwd: directory,
+      owner: "Ghostty",
+      section: "ready",
+      conversationState: "open",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: true,
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty",
+        pid: 8_001,
+        processStartToken: "outage-stale-process",
+        tty: "ttys801",
+        cwd: directory,
+      } },
+      historyIdentity: { verified: true, current: true, host: "Ghostty", canonicalId: sessionID },
+    };
+    const provider: ProviderAdapter & { discoveryAuthority(): "authoritative" | "unavailable" } = {
+      id: "claude_code",
+      discover: async () => phase === "closed" ? [] : [structuredClone(observed)],
+      discoveryAuthority: () => phase === "outage" ? "unavailable" : "authoritative",
+    };
+    const repository = new SessionRepository([provider], { retainedHistoryPath: historyPath });
+
+    try {
+      await repository.refresh();
+      phase = "closed";
+      await repository.refresh();
+      await expect(repository.removeHistorySession(sessionID)).resolves.toBeUndefined();
+
+      phase = "outage";
+      await repository.refresh();
+
+      expect(repository.historyPage()).toMatchObject({ total: 0, sessions: [] });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the captured completion attention after an uncertain resume", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-claude-resume-attention-"));
     const historyPath = path.join(directory, "retained-history.json");
@@ -384,15 +432,14 @@ describe("SessionRepository", () => {
 
       const firstResume = first.resumeSession(sessionID);
       await initialReconciliationStartedSignal;
-      await expect(first.resumeSession(sessionID)).resolves.toMatchObject({
-        state: "joined",
-        sessionId: sessionID,
-      });
+      const secondResume = first.resumeSession(sessionID);
       releaseInitialReconciliation();
-      await expect(firstResume).resolves.toMatchObject({
+      const [firstResult, secondResult] = await Promise.all([firstResume, secondResume]);
+      expect(firstResult).toMatchObject({
         state: "uncertain",
         sessionId: sessionID,
       });
+      expect(secondResult).toEqual(firstResult);
       expect(helper.ghosttyResumeRequests).toHaveLength(1);
       const attemptPath = `${historyPath}.resume-attempts.json`;
       const firstJournal = JSON.parse(readFileSync(attemptPath, "utf8")) as {
@@ -698,7 +745,11 @@ describe("SessionRepository", () => {
       await repository.refresh();
       await expect(repository.focusSession(otherSessionID)).resolves.toBeUndefined();
       releaseReconciliation();
-      await expect(coldResume).resolves.toMatchObject({ state: "matched", sessionId: sessionID });
+      await expect(coldResume).resolves.toMatchObject({
+        state: "uncertain",
+        sessionId: sessionID,
+        reason: "A newer live navigation superseded cold resume focus.",
+      });
 
       expect(helper.terminalFocusRequests).toHaveLength(1);
       expect(helper.ghosttyTerminalFocusRequests).toHaveLength(0);
