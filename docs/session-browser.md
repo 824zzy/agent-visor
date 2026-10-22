@@ -28,6 +28,8 @@ With an empty query, the browser shows four sections:
 
 Ready sessions with activity in the last seven days share one section and one combined count, ordered by activity newest first regardless of acknowledgment. Opening a Ready row marks it as acknowledged without changing its rank or lifecycle state. The menu-bar pill priority order remains independent of browser section grouping.
 
+Lifecycle status is derived separately from placement. A known open conversation whose latest turn is Ready remains `Ready` (green) in the row, inspector, accessibility label, and native overflow even when the menu-only stale-session projection places it in the Recent/History tier. The native 30-minute projection changes attention ordering and grouping only; it does not archive the conversation or change its lifecycle evidence. The browser's seven-day History boundary remains an independent placement rule.
+
 Completed conversations older than seven days appear in History with a gray dot and `Completed` subtitle. The exact seven-day boundary remains Ready. Grouping, row text, status color, and accessibility labels use the same browser presentation, including search results. Agent Room records retain their management label. Working turns and pending approvals do not become completed merely because they are old.
 
 Claude background jobs can remain in the catalog after their worker disappears. A retained `blocked` or `working` value moves to History once its activity is older than the observed-session window and no current worker, known worker status, displayed conversation, or waiting reason corroborates it. Its subtitle states the last reported state; its exact open and Chat actions remain available. Refreshing the catalog does not renew its activity time.

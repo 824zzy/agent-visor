@@ -225,7 +225,7 @@ describe("menu presentation", () => {
           phase: "ready",
           priority: 1,
           defaultOverflowEligible: true,
-          accessibilityLabel: "Review result, ready to continue, Cursor, agent-visor",
+          accessibilityLabel: "Review result, Ready, Cursor, agent-visor",
         },
         {
           id: "work",
@@ -349,6 +349,8 @@ describe("menu presentation", () => {
       phase: "ready",
       attentionTier: "history",
       subtitle: "Ready to continue",
+      inspector: { status: "Ready" },
+      accessibilityLabel: "Review result, Ready, Claude Code, agent-visor",
     });
     expect(sourceSnapshot).toEqual(before);
     expect(sourceSnapshot.sessions[0]).toMatchObject({
@@ -460,8 +462,8 @@ describe("menu presentation", () => {
 
     expect(pills.map(({ title }) => title)).toEqual(["Codex · /", "Codex · Codes"]);
     expect(pills.map(({ accessibilityLabel }) => accessibilityLabel)).toEqual([
-      "Codex · /, ready to continue, Codex, /",
-      "Codex · Codes, ready to continue, Codex, Codes",
+      "Codex · /, Ready, Codex, /",
+      "Codex · Codes, Ready, Codex, Codes",
     ]);
   });
 

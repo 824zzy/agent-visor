@@ -12,8 +12,10 @@ import {
 } from "react-native";
 import {
   defaultChatVisibility,
+  sessionLifecyclePresentation,
   type AppSettings,
   type HistoryRepairSelection,
+  type SessionLifecycleTone,
   type SessionSummary,
 } from "@agent-visor/protocol";
 import {
@@ -553,6 +555,11 @@ function SessionRow({
     ? resumeStateOverride : undefined;
   const canResume = onResume !== undefined;
   const presentation = sessionPresentation(session, now);
+  const lifecycle = sessionLifecyclePresentation(session);
+  const statusLabel = lifecycle.status === "ready" ? lifecycle.label : presentation.title;
+  const statusColor = lifecycle.status === "ready"
+    ? lifecycleColor(lifecycle.tone, palette)
+    : sectionColor(presentation.section, palette);
   const logo = agentImage(session.source);
   const sourceLabel = session.source === "Codex" && session.owner.startsWith("Codex ·")
     ? session.owner : session.source;
@@ -560,7 +567,7 @@ function SessionRow({
   return (
     <View nativeID={rowId(session.id)} style={rowStyles.row}>
       <Pressable
-        accessibilityLabel={`${session.title}, ${presentation.title}, ${sourceLabel}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}${presentation.pillNotice ? `, ${presentation.pillNotice}` : ""}`}
+        accessibilityLabel={`${session.title}, ${statusLabel}, ${sourceLabel}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}${presentation.pillNotice ? `, ${presentation.pillNotice}` : ""}`}
         accessibilityRole="button"
         accessibilityState={{ selected: cursor }}
         disabled={!primary}
@@ -574,7 +581,7 @@ function SessionRow({
           pressed && rowStyles.pressed,
         ]}
       >
-        <View style={[rowStyles.statusSlot, { backgroundColor: sectionColor(presentation.section, palette) }]} />
+        <View style={[rowStyles.statusSlot, { backgroundColor: statusColor }]} />
         {logo ? (
           <Image accessibilityIgnoresInvertColors accessibilityLabel="" source={logo} style={rowStyles.logo} />
         ) : (
@@ -757,6 +764,15 @@ function rowId(sessionId: string): string {
 function agentImage(source: string): number | undefined {
   const key = source.toLocaleLowerCase().split(" ")[0] ?? "";
   return agentImages[key];
+}
+
+function lifecycleColor(tone: SessionLifecycleTone, palette: Palette): string {
+  return {
+    attention: palette.attention,
+    ready: palette.ready,
+    working: palette.working,
+    neutral: palette.history,
+  }[tone];
 }
 
 function sectionColor(section: SessionSummary["section"], palette: Palette): string {

@@ -1952,7 +1952,12 @@ final class NativeMenuController: NSObject {
     }
 
     private func statusColor(for pill: NativeHelperPill, now: Date) -> NSColor {
-        let fresh = color(for: pill.phase)
+        let lifecyclePhase = NativeMenuStatusPresentation.tone(for: pill)
+        let fresh = color(for: lifecyclePhase)
+        // Age changes placement and attention ordering, not the lifecycle
+        // meaning of a known Ready conversation. Keep its status dot green
+        // even when the menu presents it as a recent row.
+        if lifecyclePhase == .ready { return fresh }
         let staleness = readyAttention.statusStaleness(pill: pill, now: now)
         guard staleness > 0 else { return fresh }
         return fresh.blended(withFraction: staleness, of: srgb(0x7F, 0x84, 0x9C)) ?? fresh

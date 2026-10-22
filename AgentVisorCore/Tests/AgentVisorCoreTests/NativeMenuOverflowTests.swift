@@ -16,6 +16,30 @@ final class NativeMenuOverflowTests: XCTestCase {
         )
     }
 
+    func testStaleReadyOverflowKeepsReadyLabelAndTone() {
+        let stale = pill(
+            "stale", title: "Old Claude", project: "agent-visor",
+            activityAt: "2026-08-15T10:00:00.000Z",
+            attentionTier: .history, phase: .ready
+        )
+
+        XCTAssertEqual(NativeMenuDisplayPhase.phase(for: stale), .history)
+        XCTAssertEqual(NativeMenuStatusPresentation.status(for: stale), "Ready")
+        XCTAssertEqual(NativeMenuStatusPresentation.tone(for: stale), .ready)
+    }
+
+    func testHistoryPlacementKeepsKnownReadyLifecycleStatusAndTone() {
+        let historicalPlacement = pill(
+            "old-ready", title: "Old Ready", project: "agent-visor",
+            activityAt: "2026-08-15T10:00:00.000Z",
+            attentionTier: .history, phase: .history, inspectorStatus: "Ready"
+        )
+
+        XCTAssertEqual(NativeMenuDisplayPhase.phase(for: historicalPlacement), .history)
+        XCTAssertEqual(NativeMenuStatusPresentation.status(for: historicalPlacement), "Ready")
+        XCTAssertEqual(NativeMenuStatusPresentation.tone(for: historicalPlacement), .ready)
+    }
+
     func testOldUnarchivedConversationRemainsInOverflowAndSearch() {
         let old = pill(
             "old", title: "donut-feature-parity", project: "Donut",
@@ -178,7 +202,8 @@ final class NativeMenuOverflowTests: XCTestCase {
         activityAt: String? = nil,
         defaultOverflowEligible: Bool? = nil,
         attentionTier: NativeHelperSessionAttentionTier? = nil,
-        phase: NativeHelperPillPhase = .working
+        phase: NativeHelperPillPhase = .working,
+        inspectorStatus: String? = nil
     ) -> NativeHelperPill {
         NativeHelperPill(
             id: id,
@@ -188,7 +213,7 @@ final class NativeMenuOverflowTests: XCTestCase {
             owner: "Ghostty",
             inspector: activityAt.map {
                 NativeHelperSessionInspector(
-                    status: "Working",
+                    status: inspectorStatus ?? defaultStatus(for: phase),
                     runtimeItems: ["Pi · Ghostty"],
                     detailRows: [],
                     projectPath: "/repo",
@@ -202,6 +227,15 @@ final class NativeMenuOverflowTests: XCTestCase {
             priority: 0,
             accessibilityLabel: "\(title), in progress"
         )
+    }
+
+    private func defaultStatus(for phase: NativeHelperPillPhase) -> String {
+        switch phase {
+        case .needsYou: return "Needs you"
+        case .ready: return "Ready"
+        case .working: return "Working"
+        case .history: return "Historical"
+        }
     }
 }
 

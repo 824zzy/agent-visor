@@ -18,6 +18,24 @@ export const sessionSectionSchema = z.enum([
   "history",
 ]);
 
+/** Shared lifecycle meaning consumed by the menu and Sessions surfaces. */
+export const sessionLifecycleStatusSchema = z.enum([
+  "needs_you",
+  "ready",
+  "working",
+  "closed",
+  "unavailable",
+  "historical",
+]);
+
+/** Semantic color family for a lifecycle status, independent of placement. */
+export const sessionLifecycleToneSchema = z.enum([
+  "attention",
+  "ready",
+  "working",
+  "neutral",
+]);
+
 export const sessionAttentionTierSchema = z.enum([
   "needs_you",
   "ready",
@@ -1549,5 +1567,52 @@ export type SessionRouteState = z.infer<typeof sessionRouteStateSchema>;
 export type SessionRouteOwnership = z.infer<typeof sessionRouteOwnershipSchema>;
 export type SessionUnavailableReason = z.infer<typeof sessionUnavailableReasonSchema>;
 export type SessionState = z.infer<typeof sessionStateSchema>;
+export type SessionLifecycleStatus = z.infer<typeof sessionLifecycleStatusSchema>;
+export type SessionLifecycleTone = z.infer<typeof sessionLifecycleToneSchema>;
+export type SessionLifecyclePresentation = {
+  status: SessionLifecycleStatus;
+  label: string;
+  tone: SessionLifecycleTone;
+};
+
+/**
+ * Resolve lifecycle meaning once for every presentation surface.
+ *
+ * Attention tier and section control placement and ordering. They do not
+ * replace provider evidence: an open Ready conversation remains Ready even
+ * when an older completion is placed in History.
+ */
+export function sessionLifecyclePresentation(
+  session: Pick<SessionSummary, "section" | "sessionState">,
+): SessionLifecyclePresentation {
+  const state = session.sessionState;
+  if (state) {
+    if (state.conversation === "archived") return lifecycle("closed", "Closed", "neutral");
+    if (state.turn === "needs_you") return lifecycle("needs_you", "Needs you", "attention");
+    if (state.turn === "working") return lifecycle("working", "Working", "working");
+    if (state.conversation === "open" && state.turn === "ready") {
+      return lifecycle("ready", "Ready", "ready");
+    }
+    if (state.conversation === "unknown" || state.turn === "unknown") {
+      return lifecycle("unavailable", "Status unavailable", "neutral");
+    }
+  }
+
+  switch (session.section) {
+    case "needs_you": return lifecycle("needs_you", "Needs you", "attention");
+    case "working": return lifecycle("working", "Working", "working");
+    case "ready": return lifecycle("ready", "Ready", "ready");
+    case "history": return lifecycle("historical", "Historical", "neutral");
+  }
+}
+
+function lifecycle(
+  status: SessionLifecycleStatus,
+  label: string,
+  tone: SessionLifecycleTone,
+): SessionLifecyclePresentation {
+  return { status, label, tone };
+}
+
 export * from "./transcript-phase.js";
 export * from "./duration.js";

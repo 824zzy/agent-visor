@@ -152,6 +152,19 @@ describe("groupSessions", () => {
     expect(old.section).toBe("ready");
   });
 
+  it("keeps a known open Ready conversation visibly Ready in History placement", () => {
+    const old = {
+      ...session("old-ready", "ready", "2026-08-14T10:00:00.000Z"),
+      subtitle: "Ready to continue",
+      attentionTier: "acknowledged_ready" as const,
+      sessionState: { conversation: "open", turn: "ready", route: "available" } as const,
+    };
+
+    expect(sessionPresentation(old)).toEqual({
+      section: "history", title: "History", subtitle: "Ready",
+    });
+  });
+
   it("uses the product section order and sorts recent work first", () => {
     const groups = groupSessions([
       session("older-history", "history", "2026-08-20T10:00:00.000Z"),
