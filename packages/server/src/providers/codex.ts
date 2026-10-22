@@ -1,4 +1,4 @@
-import { transcriptPhase, type NativeHelperTerminalTarget } from "@agent-visor/protocol";
+import { transcriptPhase, type HistoryRepairSelection, type NativeHelperTerminalTarget } from "@agent-visor/protocol";
 import path from "node:path";
 import type {
   DiscoveredProviderSession,
@@ -12,7 +12,13 @@ import { CodexTranscriptReader } from "./codex-lifecycle.js";
 import { type CodexCliObservation } from "./codex-cli-observer.js";
 import type { HerdrSurfaceTarget } from "./herdr.js";
 import type { RetainedHistoryRecord, RetainedHistoryResumeCapability } from "../retained-history.js";
-import type { ResumeLiveness, ResumeProviderAdapter, ResumeReconciliation, ResumeTargetResult } from "../resume.js";
+import type {
+  ResumeLiveness,
+  ResumeProviderAdapter,
+  ResumeReconciliation,
+  ResumeRepairValidation,
+  ResumeTargetResult,
+} from "../resume.js";
 import { CodexResumeAdapter } from "./codex-resume.js";
 import {
   canonicalCodexHome, codexDesktopBindings, codexInstanceID, codexSessionID,
@@ -106,6 +112,13 @@ export class CodexProvider implements ProviderAdapter {
 
   resumeTarget(record: RetainedHistoryRecord, attemptId: string, nonce: string): ResumeTargetResult {
     return this.resumeAdapter.resumeTarget(record, attemptId, nonce);
+  }
+
+  validateRepair(
+    record: RetainedHistoryRecord,
+    selection: HistoryRepairSelection,
+  ): ResumeRepairValidation {
+    return this.resumeAdapter.validateRepair(record, selection);
   }
 
   reconcileResume(

@@ -12,6 +12,7 @@ import {
   type ChatSettings,
   type ChatSettingsPatch,
   type ChatSettingsUpdate,
+  type HistoryRepairSelection,
   type NativeHelperFocusTarget,
   type NativeHelperCodexThreadTarget,
   type NativeHelperPiRestorationUpdate,
@@ -64,10 +65,12 @@ import {
   type RetainedHistoryHost,
   type RetainedHistoryProvider,
   type RetainedHistoryResumeCapability,
+  type RetainedHistoryResumeUnavailableReason,
 } from "./retained-history.js";
 import {
   ResumeAttemptStore,
   ResumeCoordinator,
+  type ResumeRepairValidation,
   type ResumeProviderAdapter,
   type ResumeResult,
 } from "./resume.js";
@@ -88,6 +91,11 @@ export type RetainedHistoryOriginLookup = (
   provider: RetainedHistoryProvider,
   sessionId: string,
 ) => RetainedHistoryOrigin | undefined;
+
+export type HistoryRepairResult =
+  | { state: "accepted" }
+  | { state: "cancelled" }
+  | { state: "rejected"; reason: string };
 
 export type SessionControlTarget =
   | { kind: "herdr_surface"; target: import("./providers/herdr.js").HerdrSurfaceTarget }
@@ -189,6 +197,9 @@ export type DiscoveredProviderSession = {
   /** Explicit cold-resume capability state; never inferred from section. */
   resumeState?: SessionSummary["resumeState"];
   resumeReason?: string;
+  /** A closed provider record can offer one explicit, validated repair action. */
+  repairKind?: SessionSummary["repairKind"];
+  repairFields?: SessionSummary["repairFields"];
 };
 
 export type ChatDeliveryEvidence = {
@@ -320,6 +331,11 @@ export interface SessionSnapshotSource {
   historyPage?(query?: string, cursor?: string, limit?: number): SessionHistoryPage;
   /** Remove one closed retained row from Agent Visor's History only. */
   removeHistorySession?(sessionId: string): Promise<string | undefined>;
+  /** Validate and accept one explicit provider repair; never launches. */
+  repairHistorySession?(
+    sessionId: string,
+    selection: HistoryRepairSelection | null,
+  ): Promise<HistoryRepairResult>;
 }
 
 export interface ProviderAdapter {
@@ -344,6 +360,11 @@ export interface ProviderAdapter {
   hiddenSessionIds?(): ReadonlySet<string>;
   /** Acknowledge a provider-owned failure while retaining its history row. */
   acknowledgeFailure?(sessionId: string): void;
+  /** Validate one explicit provider repair without launching or persisting. */
+  validateRepair?(
+    record: import("./retained-history.js").RetainedHistoryRecord,
+    selection: HistoryRepairSelection,
+  ): ResumeRepairValidation;
 }
 
 export type HookSessionEvent = {
@@ -1056,6 +1077,42 @@ export class SessionRepository {
     }
     if (result === "storage_unavailable") return "Retained history storage is unavailable.";
     return "The retained session is no longer available.";
+  }
+
+  async repairHistorySession(
+    sessionId: string,
+    selection: HistoryRepairSelection | null,
+  ): Promise<HistoryRepairResult> {
+    if (selection === null) return { state: "cancelled" };
+    if (!Object.entries(selection).some(([key, value]) => key !== "kind" && value !== undefined)) {
+      return { state: "rejected", reason: "A provider repair must select at least one reference." };
+    }
+    const store = this.retainedHistory;
+    if (!store) return { state: "rejected", reason: "Retained history is unavailable." };
+    const record = store.get(sessionId);
+    if (!record || !record.closedAt) {
+      return { state: "rejected", reason: "Only a closed retained session can be repaired." };
+    }
+    if (store.isSuppressed(record.provider, [record.id, record.canonicalId, ...(record.aliases ?? [])])) {
+      return { state: "rejected", reason: "This session was removed from Agent Visor History." };
+    }
+    const provider = this.providers.find((candidate) => candidate.id === record.provider);
+    if (!provider?.validateRepair) {
+      return { state: "rejected", reason: "Provider repair is unavailable for this row." };
+    }
+    let validation: ResumeRepairValidation;
+    try {
+      validation = provider.validateRepair(record, selection);
+    } catch (error) {
+      return { state: "rejected", reason: error instanceof Error ? error.message : "Provider repair validation failed." };
+    }
+    if (validation.state !== "valid") return { state: "rejected", reason: validation.reason };
+    const result = store.updateResume(record.provider, record.canonicalId, validation.capability);
+    if (result === "updated") return { state: "accepted" };
+    if (result === "storage_unavailable") {
+      return { state: "rejected", reason: "Retained history storage is unavailable." };
+    }
+    return { state: "rejected", reason: "The retained session is no longer available." };
   }
 
   subscribe(listener: (snapshot: SessionSnapshot) => void): () => void {
@@ -3375,7 +3432,7 @@ function resumeCompletionKey(provider: RetainedHistoryProvider, canonicalId: str
 }
 
 function resumeReasonText(
-  reason: import("./retained-history.js").RetainedHistoryResumeUnavailableReason | undefined,
+  reason: RetainedHistoryResumeUnavailableReason | undefined,
   provider: "claude_code" | "codex" = "claude_code",
 ): string | undefined {
   const name = provider === "codex" ? "Codex" : "Claude";
@@ -3385,10 +3442,105 @@ function resumeReasonText(
     case "unsupported_override": return "Resume unavailable: provider runtime overrides cannot be reconstructed.";
     case "missing_transcript": return `Resume unavailable: the ${name} transcript is missing.`;
     case "missing_executable": return `Resume unavailable: the recorded ${name} executable is unavailable.`;
+    case "missing_working_directory": return "Resume unavailable: the original working directory is unavailable.";
     case "host_not_supported": return "Resume unavailable: this session was not observed in Ghostty.";
     case "ambiguous_identity": return "Resume unavailable: the Claude launch identity is ambiguous.";
     default: return undefined;
   }
+}
+
+/**
+ * Recheck only the references retained by this row when projecting History.
+ * A persisted missing-path reason is recoverable when the user restores the
+ * exact reference; hard provenance and policy failures remain authoritative.
+ */
+function currentResumeUnavailableReason(
+  record: import("./retained-history.js").RetainedHistoryRecord,
+): RetainedHistoryResumeUnavailableReason | undefined {
+  const stored = record.resumeUnavailableReason;
+  const resume = record.resume;
+  if (!resume) return stored ?? "missing_provenance";
+  if (isHardResumeUnavailableReason(stored)) return stored;
+  if (record.host !== "Ghostty" || resume.host !== "Ghostty") return "host_not_supported";
+  if (resume.overrideNames.length > 0) return "unsupported_override";
+  if (!isExistingDirectory(record.cwd)) return "missing_working_directory";
+  if (!record.transcriptPath || !isReadableTranscript(record.transcriptPath)) return "missing_transcript";
+  if (!isExecutableFile(resume.executableRef)) return "missing_executable";
+  if (record.provider === "codex") {
+    if (resume.provider !== "codex_cli"
+      || !record.configHome
+      || record.configHome !== resume.configRootRef
+      || !isExistingDirectory(record.configHome)
+      || !isExistingDirectory(resume.configRootRef)) return "unsupported_profile";
+    if (resume.profileState === "present") {
+      if (!resume.profileRef
+        || !isCodexProfileFile(path.join(resume.configRootRef, `${resume.profileRef}.config.toml`))) {
+        return "unsupported_profile";
+      }
+    } else if (resume.profileRef) {
+      return "unsupported_profile";
+    }
+  } else {
+    if (resume.provider !== "claude_code") return "missing_provenance";
+    if (resume.configRootRef && !isExistingDirectory(resume.configRootRef)) {
+      return "unsupported_profile";
+    }
+    if (resume.profileState === "present" && !resume.profileRef) {
+      return "unsupported_profile";
+    }
+    if (resume.profileState === "verified_absent" && resume.profileRef) {
+      return "unsupported_profile";
+    }
+    if (resume.profileRef && !resume.settingsFileRef) {
+      return "unsupported_profile";
+    }
+    if (resume.settingsFileRef && !isReadableJSONFile(resume.settingsFileRef)) {
+      return "unsupported_profile";
+    }
+  }
+  return undefined;
+}
+
+function isHardResumeUnavailableReason(
+  reason: RetainedHistoryResumeUnavailableReason | undefined,
+): reason is "missing_provenance" | "unsupported_override" | "host_not_supported" | "ambiguous_identity" {
+  return reason === "missing_provenance"
+    || reason === "unsupported_override"
+    || reason === "host_not_supported"
+    || reason === "ambiguous_identity";
+}
+
+function historyRepairFields(
+  record: import("./retained-history.js").RetainedHistoryRecord,
+  reason: RetainedHistoryResumeUnavailableReason | undefined,
+): SessionSummary["repairFields"] {
+  if (reason !== "missing_executable" && reason !== "unsupported_profile") return undefined;
+  const fields: Array<NonNullable<SessionSummary["repairFields"]>[number]> = [];
+  if (reason === "missing_executable") fields.push("executable");
+  const resume = record.resume;
+  if (!resume) return fields.length ? fields : undefined;
+  if (record.provider === "codex") {
+    if (resume.provider !== "codex_cli") return fields.length ? fields : undefined;
+    if (!record.configHome
+      || record.configHome !== resume.configRootRef
+      || !isExistingDirectory(resume.configRootRef)) fields.push("configRoot");
+    if (resume.profileState === "present"
+      && (!resume.profileRef
+        || !isCodexProfileFile(path.join(resume.configRootRef, `${resume.profileRef}.config.toml`)))) {
+      fields.push("profile");
+    } else if (resume.profileState === "verified_absent" && resume.profileRef) {
+      fields.push("profile");
+    }
+  } else {
+    if (resume.provider !== "claude_code") return fields.length ? fields : undefined;
+    if (resume.configRootRef && !isExistingDirectory(resume.configRootRef)) fields.push("configRoot");
+    if (resume.profileState === "present" && !resume.profileRef) fields.push("profile");
+    if (resume.profileState === "verified_absent" && resume.profileRef) fields.push("profile");
+    if (resume.profileRef && !resume.settingsFileRef) fields.push("settingsFile");
+    if (resume.settingsFileRef && !isReadableJSONFile(resume.settingsFileRef)) fields.push("settingsFile");
+  }
+  const unique = [...new Set(fields)];
+  return unique.length ? unique : undefined;
 }
 
 function canonicalBootSessionUUID(value: unknown): string | undefined {
@@ -3545,6 +3697,36 @@ function normalizedTTY(value: string): string {
 function isPersistedRegularFile(value: string): boolean {
   try {
     return statSync(value).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isExecutableFile(value: string): boolean {
+  try {
+    const metadata = statSync(value);
+    return metadata.isFile() && (metadata.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+function isReadableJSONFile(value: string): boolean {
+  try {
+    const metadata = statSync(value);
+    if (!metadata.isFile() || metadata.size === 0 || metadata.size > 256 * 1_024) return false;
+    const parsed: unknown = JSON.parse(readFileSync(value, "utf8"));
+    return isRecord(parsed);
+  } catch {
+    return false;
+  }
+}
+
+function isCodexProfileFile(value: string): boolean {
+  try {
+    const metadata = statSync(value);
+    if (!metadata.isFile() || metadata.size === 0 || metadata.size > 256 * 1_024) return false;
+    return /^\s*[A-Za-z][A-Za-z0-9_.-]*\s*=/m.test(readFileSync(value, "utf8"));
   } catch {
     return false;
   }
@@ -4011,6 +4193,8 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
       ...(session.failureAlert !== undefined ? { failureAlert: session.failureAlert } : {}),
       ...(session.resumeState ? { resumeState: session.resumeState } : {}),
       ...(session.resumeReason ? { resumeReason: session.resumeReason } : {}),
+      ...(session.repairKind ? { repairKind: session.repairKind } : {}),
+      ...(session.repairFields ? { repairFields: session.repairFields } : {}),
       ...(session.conversationState || session.turnState
         ? { sessionState: resolveSessionState(session) } : {}),
       ...(session.stateRevision !== undefined ? { stateRevision: session.stateRevision } : {}),
@@ -4117,13 +4301,13 @@ function retainedHistorySession(
   record: import("./retained-history.js").RetainedHistoryRecord,
   unknownLiveness = false,
 ): DiscoveredProviderSession {
-  const resumeUnavailableReason = record.resumeUnavailableReason
-    ?? (!record.resume ? "missing_provenance" : undefined);
+  const resumeUnavailableReason = currentResumeUnavailableReason(record);
   const resumable = (record.provider === "claude_code" || record.provider === "codex")
     && Boolean(record.closedAt)
     && Boolean(record.resume)
     && !resumeUnavailableReason;
   const resumeReason = resumable ? undefined : resumeReasonText(resumeUnavailableReason, record.provider);
+  const repairFields = historyRepairFields(record, resumeUnavailableReason);
   return {
     id: record.id,
     provider: record.provider,
@@ -4145,6 +4329,7 @@ function retainedHistorySession(
     canEnterChat: Boolean(record.transcriptPath && isReadableTranscript(record.transcriptPath)),
     canRemoveHistory: Boolean(record.closedAt),
     resumeState: resumable ? "eligible" as const : "unavailable" as const,
+    ...(repairFields ? { repairKind: "provider" as const, repairFields } : {}),
     ...(resumeReason ? { resumeReason } : {}),
     ...(record.transcriptPath ? { chatPath: record.transcriptPath } : {}),
     ...(record.provider === "codex" ? { messageTransport: "terminal" as const } : {}),
@@ -4157,8 +4342,8 @@ function retainedHistorySession(
         ...(record.host ? { host: record.host } : {}),
         ...(record.configHome ? { configHome: record.configHome } : {}),
         ...(record.resume ? { resume: record.resume } : {}),
-        ...(record.resumeUnavailableReason
-          ? { resumeUnavailableReason: record.resumeUnavailableReason } : {}),
+        ...(resumeUnavailableReason
+          ? { resumeUnavailableReason } : {}),
       },
     } : {}),
     retainedHistory: true,

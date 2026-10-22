@@ -25,12 +25,14 @@ export type RetainedHistoryProvider = "claude_code" | "codex";
 export type RetainedHistoryHost = "Ghostty" | "cmux" | "Herdr" | "iTerm2" | "Terminal";
 export type RetainedHistoryRemovalReason = "agent_visor" | "provider_archived";
 export type RetainedHistoryRemovalResult = "removed" | "not_found" | "storage_unavailable";
+export type RetainedHistoryRepairResult = "updated" | "not_found" | "storage_unavailable";
 export type RetainedHistoryResumeUnavailableReason =
   | "missing_provenance"
   | "unsupported_profile"
   | "unsupported_override"
   | "missing_transcript"
   | "missing_executable"
+  | "missing_working_directory"
   | "host_not_supported"
   | "ambiguous_identity";
 
@@ -357,6 +359,30 @@ export class RetainedHistoryStore {
     const key = this.keyByIdentity.get(historyKey(provider, id));
     const record = key ? this.recordsByKey.get(key) : undefined;
     return record ? structuredClone(record) : undefined;
+  }
+
+  /** Atomically replace launch references for one retained record only. */
+  updateResume(
+    provider: RetainedHistoryProvider,
+    id: string,
+    resume: RetainedHistoryResumeCapability,
+  ): RetainedHistoryRepairResult {
+    const key = this.keyByIdentity.get(historyKey(provider, id));
+    const record = key ? this.recordsByKey.get(key) : undefined;
+    if (!key || !record) return "not_found";
+    const previous = record;
+    const next: RetainedHistoryRecord = {
+      ...record,
+      resume: structuredClone(resume),
+      resumeUnavailableReason: undefined,
+      // The provider config home is part of the source identity. A validated
+      // provider capability may repair it only for this exact record.
+      ...("configRootRef" in resume ? { configHome: resume.configRootRef } : {}),
+    };
+    this.recordsByKey.set(key, next);
+    if (this.persist()) return "updated";
+    this.recordsByKey.set(key, previous);
+    return "storage_unavailable";
   }
 
   /** Return provider-qualified origin even after AV removal suppressed the row. */
@@ -779,7 +805,8 @@ function profileName(value: unknown): string | undefined {
 function normalizeResumeUnavailableReason(value: unknown): RetainedHistoryResumeUnavailableReason | undefined {
   return value === "missing_provenance" || value === "unsupported_profile"
     || value === "unsupported_override" || value === "missing_transcript"
-    || value === "missing_executable" || value === "host_not_supported"
+    || value === "missing_executable" || value === "missing_working_directory"
+    || value === "host_not_supported"
     || value === "ambiguous_identity" ? value : undefined;
 }
 

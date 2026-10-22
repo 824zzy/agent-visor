@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type {
+  HistoryRepairSelection,
   NativeHelperGhosttyResumeDispatch,
   NativeHelperGhosttyResumeTarget,
   NativeHelperGhosttyTerminalView,
@@ -20,6 +21,10 @@ export type ResumeLiveness =
 
 export type ResumeTargetResult =
   | { state: "eligible"; target: NativeHelperGhosttyResumeTarget }
+  | { state: "unavailable"; reason: string };
+
+export type ResumeRepairValidation =
+  | { state: "valid"; capability: import("./retained-history.js").RetainedHistoryResumeCapability }
   | { state: "unavailable"; reason: string };
 
 export type ResumeReconciliation =
@@ -43,6 +48,8 @@ export interface ResumeProviderAdapter {
   readonly nativeProvider?: ResumeNativeProvider;
   resumeLiveness(record: RetainedHistoryRecord): Promise<ResumeLiveness>;
   resumeTarget(record: RetainedHistoryRecord, attemptId: string, nonce: string): ResumeTargetResult;
+  /** Validate one explicit provider repair without dispatching or mutating state. */
+  validateRepair?(record: RetainedHistoryRecord, selection: HistoryRepairSelection): ResumeRepairValidation;
   reconcileResume(
     record: RetainedHistoryRecord,
     dispatch: NativeHelperGhosttyResumeDispatch,

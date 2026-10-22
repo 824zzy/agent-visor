@@ -149,6 +149,47 @@ describe("Agent Visor daemon", () => {
     socket.close();
   });
 
+  it("routes an explicit retained-history repair and returns its typed state", async () => {
+    const repairs: Array<{ sessionId: string; selection: unknown }> = [];
+    const source = {
+      current: () => ({ ...fixtureSnapshot, sessions: [] }),
+      subscribe: () => () => undefined,
+      repairHistorySession: async (sessionId: string, selection: unknown) => {
+        repairs.push({ sessionId, selection });
+        return { state: "accepted" as const };
+      },
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+
+    socket.send(JSON.stringify({
+      type: "repair_history_session",
+      id: "repair-1",
+      sessionId: "closed-claude",
+      selection: { kind: "provider", executableRef: "/tmp/claude" },
+    }));
+    await expect.poll(() => messages.length).toBe(2);
+    expect(repairs).toEqual([{
+      sessionId: "closed-claude",
+      selection: { kind: "provider", executableRef: "/tmp/claude" },
+    }]);
+    expect(messages[1]).toEqual({
+      type: "history_action_result",
+      id: "repair-1",
+      action: "repair",
+      sessionId: "closed-claude",
+      state: "accepted",
+      ok: true,
+    });
+    socket.close();
+  });
+
   it("rejects clients without the ephemeral desktop token", async () => {
     running = await startServer({ port: 0, snapshot: fixtureSnapshot, token });
     const socket = new WebSocket(running.url.replace(/\?.*$/, ""));

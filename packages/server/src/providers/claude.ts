@@ -4,6 +4,7 @@ import { navigationStep } from "../navigation-diagnostics.js";
 import { verifiedTerminalRoute } from "../session-state.js";
 import {
   TRANSCRIPT_STALE_CEILING_MS,
+  type HistoryRepairSelection,
   type NativeHelperGhosttyResumeDispatch,
   type NativeHelperTerminalTarget,
 } from "@agent-visor/protocol";
@@ -17,7 +18,7 @@ import type {
   RetainedHistoryResumeCapability,
   RetainedHistoryResumeUnavailableReason,
 } from "../retained-history.js";
-import type { ResumeLiveness, ResumeReconciliation, ResumeTargetResult } from "../resume.js";
+import type { ResumeLiveness, ResumeReconciliation, ResumeRepairValidation, ResumeTargetResult } from "../resume.js";
 import type { FileStamp, ProcessRecord, ProviderEnvironment } from "./environment.js";
 import {
   trustedClaudeExecutableCandidates,
@@ -125,6 +126,10 @@ export class ClaudeProvider implements ProviderAdapter {
 
   resumeTarget(record: RetainedHistoryRecord, attemptId: string, nonce: string): ResumeTargetResult {
     return this.resumeAdapter.resumeTarget(record, attemptId, nonce);
+  }
+
+  validateRepair(record: RetainedHistoryRecord, selection: HistoryRepairSelection): ResumeRepairValidation {
+    return this.resumeAdapter.validateRepair(record, selection);
   }
 
   reconcileResume(

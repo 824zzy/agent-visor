@@ -13,6 +13,7 @@ import {
 import {
   defaultChatVisibility,
   type AppSettings,
+  type HistoryRepairSelection,
   type SessionSummary,
 } from "@agent-visor/protocol";
 import {
@@ -147,6 +148,7 @@ export function App() {
           onContentScaleChange={adjustContentScale}
           onOpenChat={(session) => setChatSelection((selection) => reduceChatSelection(selection, { type: "open", session }))}
           onRemoveHistory={history.remove}
+          onRepair={history.repair}
           onResume={async (session) => {
             const result = await requestResumeSession(session.id);
             if (!result.ok && result.error) window.alert(result.error);
@@ -196,6 +198,7 @@ function SessionBrowser({
   onLoadMoreHistory,
   onOpenChat,
   onRemoveHistory,
+  onRepair,
   onResume,
   onOpenSettings,
   onQueryChange,
@@ -211,6 +214,7 @@ function SessionBrowser({
   onLoadMoreHistory(): void;
   onOpenChat(session: SessionSummary): void;
   onRemoveHistory(sessionId: string): void;
+  onRepair(sessionId: string, selection: HistoryRepairSelection | null): void;
   onResume(session: SessionSummary): Promise<{ ok: boolean; state: ResumeActionState; error?: string }>;
   onOpenSettings(): void;
   onQueryChange(query: string): void;
@@ -240,6 +244,24 @@ function SessionBrowser({
   const primaryFooterAction = cursorSession ? sessionAction(cursorSession) : "owner";
   const alternateFooterAction = cursorSession ? sessionAction(cursorSession, true) : "chat";
   const shortcutEducation = sessionShortcutEducation(shortcutModifierFamily);
+
+  const beginRepair = async (session: SessionSummary): Promise<void> => {
+    const fields = session.repairFields ?? ["executable"];
+    const selection: HistoryRepairSelection = { kind: "provider" };
+    for (const field of fields) {
+      const picked = await window.agentVisor?.pickRepairPath?.(field);
+      if (!picked) {
+        onRepair(session.id, null);
+        return;
+      }
+      if (field === "executable") selection.executableRef = picked;
+      else if (field === "configRoot") selection.configRootRef = picked;
+      else if (field === "settingsFile") selection.settingsFileRef = picked;
+      else if (session.source === "Codex") selection.profileFileRef = picked;
+      else selection.profileRef = selectedProfileName(picked);
+    }
+    onRepair(session.id, selection);
+  };
 
   useEffect(() => {
     const reason = previous.current.query === query ? "background" : "query";
@@ -373,6 +395,11 @@ function SessionBrowser({
               <Text style={browserStyles.historyWarningText}>{historyState.removeError}</Text>
             </View>
           ) : null}
+          {historyState.repairError ? (
+            <View accessibilityLabel="History repair error" style={browserStyles.historyWarning}>
+              <Text style={browserStyles.historyWarningText}>{historyState.repairError}</Text>
+            </View>
+          ) : null}
           {selection.groups.flatMap((group) => [
               <View key={`header:${group.id}`} style={browserStyles.sectionHeader}>
                 <Text style={browserStyles.sectionTitle}>{group.title}</Text>
@@ -412,6 +439,10 @@ function SessionBrowser({
                   onRemoveHistory={session.canRemoveHistory === true
                     ? () => onRemoveHistory(session.id)
                     : undefined}
+                  onRepair={session.repairKind === "provider"
+                    ? () => void beginRepair(session)
+                    : undefined}
+                  repairing={historyState.repairingSessionID === session.id}
                   removing={historyState.removingSessionID === session.id}
                   palette={palette}
                   session={session}
@@ -470,7 +501,9 @@ function SessionRow({
   onResume,
   resumeState: resumeStateOverride,
   onRemoveHistory,
+  onRepair,
   palette,
+  repairing,
   removing,
   session,
   styles: rowStyles,
@@ -486,7 +519,9 @@ function SessionRow({
   onResume?: () => Promise<void>;
   resumeState?: SessionSummary["resumeState"];
   onRemoveHistory?: () => void;
+  onRepair?: () => void;
   palette: Palette;
+  repairing: boolean;
   removing: boolean;
   session: SessionSummary;
   styles: BrowserStyles;
@@ -624,6 +659,25 @@ function SessionRow({
             </Text>
           </Pressable>
         ) : null}
+        {onRepair ? (
+          <Pressable
+            accessibilityLabel={repairing
+              ? `Repairing ${session.title}`
+              : `Repair provider references for ${session.title}`}
+            accessibilityRole="button"
+            disabled={repairing}
+            onPress={onRepair}
+            style={({ pressed }) => [
+              rowStyles.chatAction,
+              !repairing && rowStyles.chatHovered,
+              pressed && rowStyles.pressed,
+            ]}
+          >
+            <Text style={[rowStyles.chatText, rowStyles.linkText]}>
+              {repairing ? "Repairing…" : "Repair provider references"}
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
     </View>
   );
@@ -631,6 +685,11 @@ function SessionRow({
 
 function Chip({ label, styles }: { label: string; styles: BrowserStyles }) {
   return <Text numberOfLines={1} style={styles.chip}>{label}</Text>;
+}
+
+function selectedProfileName(value: string): string {
+  const basename = value.replaceAll("\\", "/").split("/").pop() ?? value;
+  return basename.replace(/\.(?:toml|json|jsonl|yaml|yml)$/i, "");
 }
 
 function FooterHint({ keys, label, styles }: { keys: string; label: string; styles: BrowserStyles }) {

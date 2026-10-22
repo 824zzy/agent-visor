@@ -36,6 +36,37 @@ import {
 } from "./index.js";
 
 describe("session snapshot protocol", () => {
+  it("accepts an explicit per-record provider repair action and cancellation", () => {
+    const selection = {
+      kind: "provider" as const,
+      executableRef: "/Users/me/.local/bin/claude",
+      configRootRef: "/Users/me/.claude",
+      settingsFileRef: "/Users/me/.claude/settings.json",
+      profileRef: "work",
+      profileState: "present" as const,
+    };
+    expect(clientMessageSchema.parse({
+      type: "repair_history_session",
+      id: "repair-1",
+      sessionId: "closed-claude",
+      selection,
+    })).toMatchObject({ type: "repair_history_session", selection });
+    expect(clientMessageSchema.parse({
+      type: "repair_history_session",
+      id: "repair-cancel",
+      sessionId: "closed-claude",
+      selection: null,
+    })).toMatchObject({ type: "repair_history_session", selection: null });
+    expect(serverMessageSchema.parse({
+      type: "history_action_result",
+      id: "repair-1",
+      action: "repair",
+      sessionId: "closed-claude",
+      state: "accepted",
+      ok: true,
+    })).toMatchObject({ action: "repair", state: "accepted", ok: true });
+  });
+
   it("accepts bounded Ghostty footer scopes and rejects broader requests", () => {
     const base = { version: 1, id: "views", method: "ghostty_terminal_views" };
     expect(nativeHelperRequestSchema.safeParse(base).success).toBe(true);
