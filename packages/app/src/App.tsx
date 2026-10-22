@@ -554,6 +554,7 @@ function SessionRow({
     || resumeStateOverride === "uncertain" || resumeStateOverride === "reopening"
     ? resumeStateOverride : undefined;
   const canResume = onResume !== undefined;
+  const resumeReason = !canResume && session.resumeState === "unavailable" ? session.resumeReason : undefined;
   const presentation = sessionPresentation(session, now);
   const lifecycle = sessionLifecyclePresentation(session);
   const statusLabel = lifecycle.label;
@@ -564,139 +565,139 @@ function SessionRow({
 
   return (
     <View nativeID={rowId(session.id)} style={rowStyles.row}>
-      <Pressable
-        accessibilityLabel={`${session.title}, ${statusLabel}, ${sourceLabel}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}${presentation.pillNotice ? `, ${presentation.pillNotice}` : ""}`}
-        accessibilityRole="button"
-        accessibilityState={{ selected: cursor }}
-        disabled={!primary}
-        onHoverIn={() => setPrimaryHovered(true)}
-        onHoverOut={() => setPrimaryHovered(false)}
-        onPress={() => onActivate(false)}
-        style={({ pressed }) => [
-          rowStyles.primaryAction,
-          cursor && rowStyles.primarySelected,
-          primaryHovered && !cursor && rowStyles.primaryHovered,
-          pressed && rowStyles.pressed,
-        ]}
-      >
-        <View style={[rowStyles.statusSlot, { backgroundColor: statusColor }]} />
-        {logo ? (
-          <Image accessibilityIgnoresInvertColors accessibilityLabel="" source={logo} style={rowStyles.logo} />
-        ) : (
-          <View style={rowStyles.logoFallback}><Text style={rowStyles.logoLetter}>{session.source[0]}</Text></View>
-        )}
-        <View style={rowStyles.identity}>
-          <View style={rowStyles.titleLine}>
-            <Text numberOfLines={1} style={rowStyles.title}>{session.title}</Text>
-            <Chip label={sourceLabel} styles={rowStyles} />
-            {!compact ? <Chip label={session.project} styles={rowStyles} /> : null}
+      <View style={rowStyles.rowMain}>
+        <Pressable
+          accessibilityLabel={`${session.title}, ${statusLabel}, ${sourceLabel}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}${presentation.pillNotice ? `, ${presentation.pillNotice}` : ""}`}
+          accessibilityRole="button"
+          accessibilityState={{ selected: cursor }}
+          disabled={!primary}
+          onHoverIn={() => setPrimaryHovered(true)}
+          onHoverOut={() => setPrimaryHovered(false)}
+          onPress={() => onActivate(false)}
+          style={({ pressed }) => [
+            rowStyles.primaryAction,
+            cursor && rowStyles.primarySelected,
+            primaryHovered && !cursor && rowStyles.primaryHovered,
+            pressed && rowStyles.pressed,
+          ]}
+        >
+          <View style={[rowStyles.statusSlot, { backgroundColor: statusColor }]} />
+          {logo ? (
+            <Image accessibilityIgnoresInvertColors accessibilityLabel="" source={logo} style={rowStyles.logo} />
+          ) : (
+            <View style={rowStyles.logoFallback}><Text style={rowStyles.logoLetter}>{session.source[0]}</Text></View>
+          )}
+          <View style={rowStyles.identity}>
+            <View style={rowStyles.titleLine}>
+              <Text numberOfLines={1} style={rowStyles.title}>{session.title}</Text>
+              <Chip label={sourceLabel} styles={rowStyles} />
+              {!compact ? <Chip label={session.project} styles={rowStyles} /> : null}
+            </View>
+            <Text numberOfLines={1} style={rowStyles.subtitle}>{presentation.subtitle || session.cwd}</Text>
+            {presentation.pillNotice ? <Text style={rowStyles.pillNotice}>{presentation.pillNotice}</Text> : null}
           </View>
-          <Text numberOfLines={1} style={rowStyles.subtitle}>{presentation.subtitle || session.cwd}</Text>
-          {presentation.pillNotice ? <Text style={rowStyles.pillNotice}>{presentation.pillNotice}</Text> : null}
-        </View>
-        <Text style={rowStyles.age}>{relativeSessionAge(session.updatedAt, now)}</Text>
-        <View style={rowStyles.hotkeySlot}>
-          {commandHeld && hotkeyPosition < 9 ? (
-            <Text style={rowStyles.hotkey}>⌘{hotkeyPosition + 1}</Text>
+          <Text style={rowStyles.age}>{relativeSessionAge(session.updatedAt, now)}</Text>
+          <View style={rowStyles.hotkeySlot}>
+            {commandHeld && hotkeyPosition < 9 ? (
+              <Text style={rowStyles.hotkey}>⌘{hotkeyPosition + 1}</Text>
+            ) : null}
+          </View>
+          <View style={rowStyles.ownerColumn}>
+            <Text numberOfLines={1} style={[rowStyles.actionText, primaryHovered && rowStyles.linkText]}>
+              {primary === "owner" ? `↗ ${compact ? session.owner : `Open in ${session.owner}`}` : "▢ Open Chat"}
+            </Text>
+          </View>
+        </Pressable>
+        <View style={rowStyles.chatColumn}>
+          {canResume ? (
+            <Pressable
+              accessibilityLabel={resumeState === "uncertain"
+                ? `Retry resume for ${session.title}`
+                : resumeState === "eligible" ? `Resume ${session.title} in Ghostty` : `Reopening ${session.title} in Ghostty`}
+              accessibilityRole="button"
+              disabled={resumeState === "reopening"}
+              onPress={() => void onResume?.()}
+              style={({ pressed }) => [
+                rowStyles.chatAction,
+                resumeState !== "reopening" && rowStyles.chatHovered,
+                pressed && rowStyles.pressed,
+              ]}
+            >
+              <Text style={[rowStyles.chatText, rowStyles.linkText]}>
+                {resumeState === "uncertain" ? "Retry resume" : resumeState === "reopening" ? "Reopening…" : "Resume in Ghostty"}
+              </Text>
+            </Pressable>
+          ) : null}
+          {hasSeparateChat ? (
+            <Pressable
+              accessibilityLabel={`Open Chat for ${session.title}`}
+              accessibilityRole="button"
+              onHoverIn={() => setChatHovered(true)}
+              onHoverOut={() => setChatHovered(false)}
+              onPress={onOpenChat}
+              style={({ pressed }) => [
+                rowStyles.chatAction,
+                chatHovered && rowStyles.chatHovered,
+                pressed && rowStyles.pressed,
+              ]}
+            >
+              <Text style={[rowStyles.chatText, chatHovered && rowStyles.linkText]}>
+                ▢ {compact ? "Chat" : "Open Chat"}
+              </Text>
+            </Pressable>
+          ) : null}
+          {onRemoveHistory ? (
+            <Pressable
+              accessibilityLabel={removing
+                ? `Removing ${session.title} from Agent Visor`
+                : `Remove ${session.title} from Agent Visor`}
+              accessibilityRole="button"
+              disabled={removing}
+              onHoverIn={() => setRemoveHovered(true)}
+              onHoverOut={() => setRemoveHovered(false)}
+              onPress={onRemoveHistory}
+              style={({ pressed }) => [
+                rowStyles.chatAction,
+                removeHovered && rowStyles.chatHovered,
+                pressed && rowStyles.pressed,
+              ]}
+            >
+              <Text style={[rowStyles.chatText, removeHovered && rowStyles.linkText]}>
+                {removing ? "Removing from Agent Visor…" : "Remove from Agent Visor"}
+              </Text>
+            </Pressable>
+          ) : null}
+          {onRepair ? (
+            <Pressable
+              accessibilityLabel={repairing
+                ? "Repairing " + session.title
+                : session.repairKind === "working_directory"
+                  ? "Locate folder for " + session.title
+                  : "Repair provider references for " + session.title}
+              accessibilityRole="button"
+              disabled={repairing}
+              onPress={onRepair}
+              style={({ pressed }) => [
+                rowStyles.chatAction,
+                !repairing && rowStyles.chatHovered,
+                pressed && rowStyles.pressed,
+              ]}
+            >
+              <Text style={[rowStyles.chatText, rowStyles.linkText]}>
+                {repairing
+                  ? "Repairing…"
+                  : session.repairKind === "working_directory" ? "Locate folder" : "Repair provider references"}
+              </Text>
+            </Pressable>
           ) : null}
         </View>
-        <View style={rowStyles.ownerColumn}>
-          <Text numberOfLines={1} style={[rowStyles.actionText, primaryHovered && rowStyles.linkText]}>
-            {primary === "owner" ? `↗ ${compact ? session.owner : `Open in ${session.owner}`}` : "▢ Open Chat"}
-          </Text>
-        </View>
-      </Pressable>
-      <View style={rowStyles.chatColumn}>
-        {canResume ? (
-          <Pressable
-            accessibilityLabel={resumeState === "uncertain"
-              ? `Retry resume for ${session.title}`
-              : resumeState === "eligible" ? `Resume ${session.title} in Ghostty` : `Reopening ${session.title} in Ghostty`}
-            accessibilityRole="button"
-            disabled={resumeState === "reopening"}
-            onPress={() => void onResume?.()}
-            style={({ pressed }) => [
-              rowStyles.chatAction,
-              resumeState !== "reopening" && rowStyles.chatHovered,
-              pressed && rowStyles.pressed,
-            ]}
-          >
-            <Text style={[rowStyles.chatText, rowStyles.linkText]}>
-              {resumeState === "uncertain" ? "Retry resume" : resumeState === "reopening" ? "Reopening…" : "Resume in Ghostty"}
-            </Text>
-          </Pressable>
-        ) : session.resumeState === "unavailable" && session.resumeReason ? (
-          <Text
-            accessibilityLabel={`Resume unavailable for ${session.title}: ${session.resumeReason}`}
-            numberOfLines={2}
-            style={rowStyles.chatText}
-          >
-            {`Resume unavailable · ${session.resumeReason}`}
-          </Text>
-        ) : null}
-        {hasSeparateChat ? (
-          <Pressable
-            accessibilityLabel={`Open Chat for ${session.title}`}
-            accessibilityRole="button"
-            onHoverIn={() => setChatHovered(true)}
-            onHoverOut={() => setChatHovered(false)}
-            onPress={onOpenChat}
-            style={({ pressed }) => [
-              rowStyles.chatAction,
-              chatHovered && rowStyles.chatHovered,
-              pressed && rowStyles.pressed,
-            ]}
-          >
-            <Text style={[rowStyles.chatText, chatHovered && rowStyles.linkText]}>
-              ▢ {compact ? "Chat" : "Open Chat"}
-            </Text>
-          </Pressable>
-        ) : null}
-        {onRemoveHistory ? (
-          <Pressable
-            accessibilityLabel={removing
-              ? `Removing ${session.title} from Agent Visor`
-              : `Remove ${session.title} from Agent Visor`}
-            accessibilityRole="button"
-            disabled={removing}
-            onHoverIn={() => setRemoveHovered(true)}
-            onHoverOut={() => setRemoveHovered(false)}
-            onPress={onRemoveHistory}
-            style={({ pressed }) => [
-              rowStyles.chatAction,
-              removeHovered && rowStyles.chatHovered,
-              pressed && rowStyles.pressed,
-            ]}
-          >
-            <Text style={[rowStyles.chatText, removeHovered && rowStyles.linkText]}>
-              {removing ? "Removing from Agent Visor…" : "Remove from Agent Visor"}
-            </Text>
-          </Pressable>
-        ) : null}
-        {onRepair ? (
-          <Pressable
-            accessibilityLabel={repairing
-              ? "Repairing " + session.title
-              : session.repairKind === "working_directory"
-                ? "Locate folder for " + session.title
-                : "Repair provider references for " + session.title}
-            accessibilityRole="button"
-            disabled={repairing}
-            onPress={onRepair}
-            style={({ pressed }) => [
-              rowStyles.chatAction,
-              !repairing && rowStyles.chatHovered,
-              pressed && rowStyles.pressed,
-            ]}
-          >
-            <Text style={[rowStyles.chatText, rowStyles.linkText]}>
-              {repairing
-                ? "Repairing…"
-                : session.repairKind === "working_directory" ? "Locate folder" : "Repair provider references"}
-            </Text>
-          </Pressable>
-        ) : null}
       </View>
+      {resumeReason ? (
+        <View accessibilityLabel={`Can’t reopen automatically for ${session.title}: ${resumeReason}`} style={rowStyles.resumeNotice}>
+          <Text style={rowStyles.resumeNoticeHeading}>Can’t reopen automatically</Text>
+          <Text style={rowStyles.resumeNoticeReason}>{resumeReason}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -792,7 +793,11 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
     sectionHeader: { alignItems: "center", flexDirection: "row", gap: 7, paddingBottom: 5, paddingHorizontal: 10, paddingTop: 11 },
     sectionTitle: { color: palette.muted, fontSize: font(12), fontWeight: "600" },
     count: { backgroundColor: palette.border, borderRadius: 10, color: palette.tertiary, fontSize: font(10), fontWeight: "600", overflow: "hidden", paddingHorizontal: 6, paddingVertical: 2 },
-    row: { alignItems: "stretch", flexDirection: "row", minHeight: Math.max(58, 40 + font(18)) },
+    row: { alignItems: "stretch", flexDirection: "column" },
+    rowMain: { alignItems: "stretch", flexDirection: "row", minHeight: Math.max(58, 40 + font(18)) },
+    resumeNotice: { gap: 4, paddingBottom: 12, paddingHorizontal: 12 },
+    resumeNoticeHeading: { color: palette.muted, fontSize: font(11), fontWeight: "600" },
+    resumeNoticeReason: { color: palette.muted, fontSize: font(11), lineHeight: font(16) },
     primaryAction: { alignItems: "center", borderColor: "transparent", borderRadius: 10, borderWidth: 1, flex: 1, flexDirection: "row", gap: 13, minWidth: 0, paddingLeft: 12, paddingRight: 8 },
     primarySelected: { backgroundColor: palette.card, borderColor: palette.accent },
     primaryHovered: { backgroundColor: palette.card },

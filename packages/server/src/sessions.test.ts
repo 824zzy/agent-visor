@@ -1238,11 +1238,11 @@ describe("SessionRepository", () => {
   });
 
   it.each([
-    ["cmux", "cmux"],
-    ["Herdr", "Herdr"],
-    ["iTerm2", "iTerm2"],
-    ["Terminal.app", "Terminal"],
-  ] as const)("retains a Claude conversation observed in %s even when its class is not terminal", async (_label, host) => {
+    ["cmux", "cmux", "Automatic resume for cmux isn’t supported yet. Resume this session manually in cmux."],
+    ["Herdr", "Herdr", "Automatic resume for Herdr isn’t supported yet. Resume this session manually in Herdr."],
+    ["iTerm2", "iTerm2", "Automatic resume for iTerm2 isn’t supported yet. Resume this session manually in iTerm2."],
+    ["Terminal.app", "Terminal", "Automatic resume for Terminal isn’t supported yet. Resume this session manually in Terminal."],
+  ] as const)("retains a Claude conversation observed in %s even when its class is not terminal", async (_label, host, reason) => {
     const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-host-history-"));
     const historyPath = path.join(directory, "retained-history.json");
     const id = `claude-host-${host}`;
@@ -1293,6 +1293,7 @@ describe("SessionRepository", () => {
         section: "history",
         owner: host,
         canOpenOwner: false,
+        resumeReason: reason,
       }));
     } finally {
       rmSync(directory, { recursive: true, force: true });

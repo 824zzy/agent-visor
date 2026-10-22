@@ -367,6 +367,31 @@ describe("Codex production-shaped retained resume", () => {
     }
   });
 
+  it("explains how to check a missing saved conversation without offering automatic resume", async () => {
+    const root = realpathSync(mkdtempSync(path.join("/tmp", "agent-visor-codex-missing-conversation-")));
+    const environment = new ProductionCodexEnvironment(root);
+    const repository = new SessionRepository([new CodexProvider(environment)], {
+      now: () => observedAt,
+      retainedHistoryPath: path.join(root, "retained-history.json"),
+    });
+    try {
+      await repository.refresh();
+      environment.live = false;
+      await repository.refresh();
+      rmSync(environment.rollout);
+
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id: threadID,
+        resumeState: "unavailable",
+        canEnterChat: false,
+        canOpenOwner: false,
+        resumeReason: "Agent Visor couldn’t find the saved Codex conversation. Check the original terminal or your backups for it.",
+      }));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("repairs a missing cwd from the exact Codex source row without launching", async () => {
     const root = realpathSync(mkdtempSync(path.join("/tmp", "agent-visor-codex-working-directory-")));
     const historyPath = path.join(root, "retained-history.json");
@@ -390,7 +415,7 @@ describe("Codex production-shaped retained resume", () => {
         id: threadID,
         resumeState: "unavailable",
         repairKind: "working_directory",
-        resumeReason: "Resume unavailable: the original working directory is unavailable.",
+        resumeReason: "Agent Visor couldn’t find the original project folder. Choose Locate folder to select it.",
       }));
 
       const before = JSON.parse(readFileSync(historyPath, "utf8")) as {

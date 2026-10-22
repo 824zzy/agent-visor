@@ -111,7 +111,7 @@ try {
   const renderedStatuses = await evaluate(`(() => {
     const read = (id) => {
       const row = document.getElementById(id);
-      const action = row?.firstElementChild;
+      const action = row?.querySelector('[role="button"]');
       const dot = action?.firstElementChild;
       return {
         label: action?.getAttribute('aria-label'),
@@ -181,7 +181,7 @@ try {
   await waitFor(`document.querySelector('[aria-label="1 search results"]')`);
   assert(await evaluate(`document.querySelector('[aria-label^="Expired completion, Ready,"]')`),
     "search keeps the same Ready status in History placement");
-  const color = await evaluate(`getComputedStyle(document.getElementById('session-row-Expired%20completion').firstElementChild.firstElementChild).backgroundColor`);
+  const color = await evaluate(`getComputedStyle(document.querySelector('[aria-label^="Expired completion, Ready,"]').firstElementChild).backgroundColor`);
   assert(["rgb(47, 125, 32)", "rgb(166, 227, 161)"].includes(color), `Ready has a green status dot in History (${color})`);
   await evaluate(`document.querySelector('[aria-label="Open Chat for Expired completion"]').click()`);
   await waitFor(`document.querySelector('[aria-label="Conversation status: Ready"]')`);

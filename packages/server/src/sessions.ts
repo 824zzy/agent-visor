@@ -3561,17 +3561,22 @@ function retainedCompletionIdentity(session: { completionAt?: string; turnId?: s
 function resumeReasonText(
   reason: RetainedHistoryResumeUnavailableReason | undefined,
   provider: "claude_code" | "codex" = "claude_code",
+  host?: RetainedHistoryHost,
 ): string | undefined {
-  const name = provider === "codex" ? "Codex" : "Claude";
+  if (host && host !== "Ghostty"
+    && (reason === "host_not_supported" || reason === "missing_provenance")) {
+    return `Automatic resume for ${host} isn’t supported yet. Resume this session manually in ${host}.`;
+  }
+  const name = provider === "codex" ? "Codex" : "Claude Code";
   switch (reason) {
-    case "missing_provenance": return "Resume unavailable: launch provenance was not verified.";
-    case "unsupported_profile": return `Resume unavailable: the ${name} profile is unsupported.`;
-    case "unsupported_override": return "Resume unavailable: provider runtime overrides cannot be reconstructed.";
-    case "missing_transcript": return `Resume unavailable: the ${name} transcript is missing.`;
-    case "missing_executable": return `Resume unavailable: the recorded ${name} executable is unavailable.`;
-    case "missing_working_directory": return "Resume unavailable: the original working directory is unavailable.";
-    case "host_not_supported": return "Resume unavailable: this session was not observed in Ghostty.";
-    case "ambiguous_identity": return "Resume unavailable: the Claude launch identity is ambiguous.";
+    case "missing_provenance": return "Agent Visor didn’t record how this session was started. Resume it manually in its terminal.";
+    case "unsupported_profile": return `Agent Visor can’t restore this ${name} profile. Resume this session manually in its terminal.`;
+    case "unsupported_override": return "Agent Visor can’t restore this session’s launch settings. Resume it manually in its terminal.";
+    case "missing_transcript": return `Agent Visor couldn’t find the saved ${name} conversation. Check the original terminal or your backups for it.`;
+    case "missing_executable": return `Agent Visor couldn’t find ${name} at its saved location. Choose Repair provider references to locate it.`;
+    case "missing_working_directory": return "Agent Visor couldn’t find the original project folder. Choose Locate folder to select it.";
+    case "host_not_supported": return "Automatic resume currently supports Ghostty only. Resume this session manually in its terminal.";
+    case "ambiguous_identity": return "Agent Visor can’t identify the exact saved conversation. Resume it manually in its terminal.";
     default: return undefined;
   }
 }
@@ -4521,7 +4526,7 @@ function retainedHistorySession(
     && Boolean(record.closedAt)
     && Boolean(record.resume)
     && !resumeUnavailableReason;
-  const resumeReason = resumable ? undefined : resumeReasonText(resumeUnavailableReason, record.provider);
+  const resumeReason = resumable ? undefined : resumeReasonText(resumeUnavailableReason, record.provider, record.host);
   const repairFields = historyRepairFields(record, resumeUnavailableReason);
   const repairKind = resumeUnavailableReason === "missing_working_directory"
     ? "working_directory" as const

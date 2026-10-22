@@ -295,6 +295,49 @@ async function run() {
   assert(await window.webContents.executeJavaScript(`Boolean(document.querySelector('[aria-label*="Agent session updated,"][aria-label*="Managed by Agent Room"]'))`),
     "managed sessions remain searchable by their managing app");
 
+  snapshot = {
+    ...snapshot, revision: snapshot.revision + 1,
+    sessions: [{
+      ...sessions[0], id: "unavailable-resume", title: "Agent unavailable resume",
+      source: "Claude Code", owner: "Herdr", section: "history", managedBy: undefined,
+      subtitle: "Closed terminal conversation", lifecycleStatus: "closed",
+      canOpenOwner: false, canEnterChat: true, canRemoveHistory: true,
+      resumeState: "unavailable",
+      resumeReason: "Automatic resume for Herdr isn’t supported yet. Resume this session manually in Herdr.",
+    }],
+  };
+  for (const subscriber of subscribers) subscriber(snapshot);
+  await window.webContents.executeJavaScript(`(() => {
+    const input = document.querySelector('[aria-label="Search sessions"]');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await waitFor(window, `document.body.textContent.includes('Can’t reopen automatically')`);
+  const resumeNotice = await window.webContents.executeJavaScript(`(() => {
+    const notice = document.querySelector('[aria-label^="Can’t reopen automatically for Agent unavailable resume:"]');
+    const reason = [...notice.querySelectorAll('*')].find(element => !element.children.length
+      && element.textContent === 'Automatic resume for Herdr isn’t supported yet. Resume this session manually in Herdr.');
+    const primary = document.querySelector('[aria-label^="Agent unavailable resume,"]');
+    const remove = document.querySelector('[aria-label="Remove Agent unavailable resume from Agent Visor"]');
+    const textStyle = getComputedStyle(reason);
+    return {
+      headingCount: notice.textContent.split('Can’t reopen automatically').length - 1,
+      duplicatePrefix: notice.textContent.includes('Resume unavailable'),
+      belowPrimary: notice.getBoundingClientRect().top >= primary.getBoundingClientRect().bottom,
+      fillsRow: notice.getBoundingClientRect().width > primary.getBoundingClientRect().width,
+      completeText: reason.scrollHeight <= reason.clientHeight + 1
+        && reason.scrollWidth <= reason.clientWidth + 1
+        && textStyle.textOverflow !== 'ellipsis'
+        && (!textStyle.webkitLineClamp || textStyle.webkitLineClamp === 'none'),
+      separateRemoval: !notice.contains(remove),
+      horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    };
+  })()`);
+  assert(resumeNotice.headingCount === 1 && !resumeNotice.duplicatePrefix, "resume limitation has one clear heading without a duplicated prefix");
+  assert(resumeNotice.belowPrimary && resumeNotice.fillsRow, "resume explanation wraps beneath the row rather than in its narrow action column");
+  assert(resumeNotice.completeText && !resumeNotice.horizontalOverflow, "the entire resume reason remains visible at 250% content scaling");
+  assert(resumeNotice.separateRemoval, "removal remains a separate secondary action");
+
   console.log("Sessions accessibility PASS: action labels, disjoint frames, aligned columns, shared canvas, and retained browser state.");
   } finally {
     nativeTheme.themeSource = "system";
