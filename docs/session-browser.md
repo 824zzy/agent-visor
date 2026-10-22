@@ -50,10 +50,19 @@ The browser merges:
 - current navigable sessions from all supported sources;
 - all saved, non-archived direct Codex tasks with real rollout evidence, including idle/unloaded tasks and tasks older than the observed-session window;
 - saved Pi sessions with a valid session header and renderable active-branch transcript evidence;
-- verified retained History metadata, including closed rows that no longer have a current provider catalog entry;
+- verified retained History metadata, including bounded metadata-only closed rows that no longer have a current provider catalog entry;
 - no fabricated provider source rows from an unverified title, path, transcript guess, or other metadata.
 
 Codex archival is the normal visibility boundary, not elapsed time. A successful empty catalog clears previous rows; a failed database read retains the last successful snapshot until recovery. The native menu shows only conversations with activity in the last seven days, including popover search, and keeps its existing bounds (64 physical candidates and 512 navigator rows); the full Sessions browser is not limited to those native batches.
+
+### Retained History and Ghostty Resume
+
+Retained History is a durable, bounded record of verified provider metadata and validated launch references. It survives daemon and app restart and does not expire merely because time has passed; explicit removal is required. These metadata-only rows remain distinct from fabricated provider source records. Open Chat reads an existing conversation when its transcript is available, while Resume is a separate, explicit cold-creation action.
+
+- The first release can create a closed Claude Code or Codex CLI conversation only in the already supported Ghostty route, after fresh provider, process, and surface checks prove the exact identity.
+- cmux, Herdr, iTerm2, Terminal.app, unsupported profiles or relocations, and ambiguous provider records remain searchable with an unavailable or repair explanation. Unknown liveness or failed identity evidence never launches a record.
+- A row shows `Reopening…` during its one active attempt. `Retry resume` reconciles an uncertain dispatch receipt without creating a second surface; a fresh explicit Resume is required for a safe pre-creation retry. App startup never launches or retries a retained row.
+- A repair changes only the selected row after explicit provider validation. It does not rewrite unrelated History or turn an unverified source record into provider history.
 
 ## Interaction State
 
@@ -76,6 +85,7 @@ The keyboard cursor starts at the first visible row when the browser opens or th
 | Hover row | Show hover styling only |
 | Click row | Open the canonical owner; if owner routing is unavailable, use the only supported Chat destination |
 | Resume on a closed History row | Revalidate the retained provider identity and launch only when the exact Ghostty resume contract is eligible; otherwise keep the row and show its unavailable or repair action |
+| Reopening / Retry resume | Keep the row visible while the attempt is active; reconcile an uncertain receipt without a second launch, or report the unavailable/unknown reason |
 | Return | Apply the same source-first action to the keyboard-cursor row |
 | Shift+Return | Open Agent Visor Chat; if Chat is unavailable, use the only supported owner destination |
 | Up/Down | Move the keyboard cursor by one row and minimally reveal it if needed |
