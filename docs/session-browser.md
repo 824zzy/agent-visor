@@ -1,7 +1,7 @@
 # Sessions Browser Interaction Design
 
 Status: Accepted
-Last reviewed: 2026-10-16
+Last reviewed: 2026-10-21
 
 ## Purpose
 
@@ -50,7 +50,8 @@ The browser merges:
 - current navigable sessions from all supported sources;
 - all saved, non-archived direct Codex tasks with real rollout evidence, including idle/unloaded tasks and tasks older than the observed-session window;
 - saved Pi sessions with a valid session header and renderable active-branch transcript evidence;
-- no metadata-only or fabricated history rows.
+- verified retained History metadata, including closed rows that no longer have a current provider catalog entry;
+- no fabricated provider source rows from an unverified title, path, transcript guess, or other metadata.
 
 Codex archival is the normal visibility boundary, not elapsed time. A successful empty catalog clears previous rows; a failed database read retains the last successful snapshot until recovery. The native menu shows only conversations with activity in the last seven days, including popover search, and keeps its existing bounds (64 physical candidates and 512 navigator rows); the full Sessions browser is not limited to those native batches.
 
@@ -74,6 +75,7 @@ The keyboard cursor starts at the first visible row when the browser opens or th
 | --- | --- |
 | Hover row | Show hover styling only |
 | Click row | Open the canonical owner; if owner routing is unavailable, use the only supported Chat destination |
+| Resume on a closed History row | Revalidate the retained provider identity and launch only when the exact Ghostty resume contract is eligible; otherwise keep the row and show its unavailable or repair action |
 | Return | Apply the same source-first action to the keyboard-cursor row |
 | Shift+Return | Open Agent Visor Chat; if Chat is unavailable, use the only supported owner destination |
 | Up/Down | Move the keyboard cursor by one row and minimally reveal it if needed |
@@ -85,6 +87,8 @@ The keyboard cursor starts at the first visible row when the browser opens or th
 | Escape with a query | Clear the query and keep search focused |
 | `Open in <owner>` label | Names the row's canonical owner inside the primary row target; its hover and selection stop before Chat |
 | `Open Chat` action | Enter Agent Visor Chat through a separate, visually quieter target |
+| History pagination | Load the next retained page using its cursor without dropping earlier rows or resetting the current query |
+| Unavailable repair | Offer only the provider or working-directory references supported by that retained row; an invalid or unavailable repair leaves History unchanged |
 | Details menu | Reveal optional source, owner, project, path, model, and last-tool metadata from the Chat header |
 | Context menu | Duplicate `Open in <owner>` and `Open Chat` when available, plus hide |
 

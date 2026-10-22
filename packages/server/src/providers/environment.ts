@@ -206,6 +206,8 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
   }
 
   async processesFreshInventory(): Promise<FreshProcessInventory> {
+    this.cwdByPID.clear();
+    this.startedAtByPID.clear();
     const result = await Promise.all([
       "pid=,ppid=,tty=,comm=", "pid=,args=",
     ].map(fields => machineWork.run(() => runProcess(

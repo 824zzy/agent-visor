@@ -72,6 +72,33 @@ describe("RetainedHistoryStore", () => {
     expect(persisted.records[0]?.observedAt).toBe("2026-10-21T18:00:00.000Z");
   });
 
+  it("does not rewrite durable history when only resume provenance confirmation advances", () => {
+    const pathName = storePath();
+    const resume = {
+      version: 1 as const,
+      provider: "claude_code" as const,
+      host: "Ghostty" as const,
+      executableRef: "/usr/local/bin/claude",
+      configRootRef: "/Users/me/.claude",
+      profileState: "verified_absent" as const,
+      overrideNames: [],
+      provenanceObservedAt: "2026-10-21T18:00:00.000Z",
+    };
+    const store = new RetainedHistoryStore({ path: pathName });
+    store.observe(fixture("claude-provenance-confirmation", {
+      resume,
+      current: true,
+    }));
+    const before = readFileSync(pathName, "utf8");
+
+    store.observe(fixture("claude-provenance-confirmation", {
+      resume: { ...resume, provenanceObservedAt: "2026-10-21T18:01:00.000Z" },
+      current: true,
+    }));
+
+    expect(readFileSync(pathName, "utf8")).toBe(before);
+  });
+
   it("persists minimal metadata and reconstructs the same retained row", () => {
     const pathName = storePath();
     const first = new RetainedHistoryStore({ path: pathName });
@@ -115,6 +142,37 @@ describe("RetainedHistoryStore", () => {
     const remainder = store.page(undefined, all.nextCursor, 1_000);
     expect(remainder.records).toHaveLength(5);
     expect(remainder.nextCursor).toBeUndefined();
+  });
+
+  it("retains canonical history and removal suppression across many public projections", () => {
+    const pathName = storePath();
+    const canonicalId = "claude-canonical-history";
+    const projectionIds = Array.from({ length: 18 }, (_, index) => `claude-projection-${index}`);
+    const store = new RetainedHistoryStore({ path: pathName });
+
+    for (const [index, id] of projectionIds.entries()) {
+      store.observe(fixture(id, {
+        canonicalId,
+        updatedAt: new Date(1_700_000_000_000 + index).toISOString(),
+        observedAt: new Date(1_700_000_000_000 + index).toISOString(),
+      }));
+    }
+    store.closeMissing(new Set());
+
+    const restarted = new RetainedHistoryStore({ path: pathName });
+    expect(restarted.page()).toMatchObject({
+      total: 1,
+      records: [{ id: projectionIds.at(-1), canonicalId, closedAt: expect.any(String) }],
+    });
+    expect(restarted.getForProvider("claude_code", canonicalId)).toMatchObject({ canonicalId });
+    const retainedAlias = projectionIds.at(-2)!;
+    expect(restarted.getForProvider("claude_code", retainedAlias)).toMatchObject({ canonicalId });
+
+    expect(restarted.remove(retainedAlias, "agent_visor")).toBe("removed");
+    const afterRemoval = new RetainedHistoryStore({ path: pathName });
+    expect(afterRemoval.getForProvider("claude_code", canonicalId)).toBeUndefined();
+    expect(afterRemoval.getOriginForProvider("claude_code", canonicalId)).toMatchObject({ canonicalId });
+    expect(afterRemoval.isSuppressed("claude_code", [canonicalId, retainedAlias])).toBe(true);
   });
 
   it("ignores malformed or incompatible persisted records without making them launchable", () => {

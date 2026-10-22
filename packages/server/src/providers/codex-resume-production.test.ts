@@ -265,6 +265,24 @@ describe("Codex production-shaped retained resume", () => {
       }));
 
       const beforeRepair = readFileSync(historyPath, "utf8");
+      const malformedNameProfile = path.join(environment.codexHome, "bad name.config.toml");
+      writeFileSync(malformedNameProfile, "x = true\n");
+      await expect(restarted.repairHistorySession(threadID, {
+        kind: "provider",
+        executableRef: environment.repairExecutable,
+        profileFileRef: malformedNameProfile,
+      })).resolves.toMatchObject({ state: "rejected" });
+      expect(readFileSync(historyPath, "utf8")).toBe(beforeRepair);
+
+      const malformedSyntaxProfile = path.join(environment.codexHome, "malformed.config.toml");
+      writeFileSync(malformedSyntaxProfile, "x =\n");
+      await expect(restarted.repairHistorySession(threadID, {
+        kind: "provider",
+        executableRef: environment.repairExecutable,
+        profileFileRef: malformedSyntaxProfile,
+      })).resolves.toMatchObject({ state: "rejected" });
+      expect(readFileSync(historyPath, "utf8")).toBe(beforeRepair);
+
       const malformedProfile = path.join(environment.codexHome, "broken.config.toml");
       writeFileSync(malformedProfile, "not a Codex profile\n");
       await expect(restarted.repairHistorySession(threadID, {
@@ -596,6 +614,84 @@ describe("Codex production-shaped retained resume", () => {
       expect(helper.ghosttyResumeRequests).toHaveLength(0);
     } finally {
       releaseValidation();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks a retained resume when Codex archives the source row after close", async () => {
+    const root = realpathSync(mkdtempSync(path.join("/tmp", "agent-visor-codex-resume-archive-")));
+    const historyPath = path.join(root, "retained-history.json");
+    const environment = new ProductionCodexEnvironment(root);
+    const helper = new FakeNativeHelper();
+    const repository = new SessionRepository([new CodexProvider(environment)], {
+      now: () => observedAt,
+      retainedHistoryPath: historyPath,
+    });
+    repository.setControls(new NativeSessionControls(helper));
+    try {
+      await repository.refresh();
+      environment.live = false;
+      await repository.refresh();
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id: threadID,
+        source: "Codex",
+      }));
+
+      // The provider changes state after the browser's last refresh. Resume
+      // must perform its own bounded lifetime authorization before dispatch.
+      environment.sourceRowArchived = 1;
+      await expect(repository.resumeSession(threadID)).resolves.toMatchObject({
+        state: "unavailable",
+        sessionId: threadID,
+      });
+      expect(helper.ghosttyResumeRequests).toHaveLength(0);
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id: threadID,
+        source: "Codex",
+      }));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rechecks Codex lifetime when the source row archives during resume preflight", async () => {
+    const root = realpathSync(mkdtempSync(path.join("/tmp", "agent-visor-codex-resume-archive-race-")));
+    const historyPath = path.join(root, "retained-history.json");
+    const environment = new ProductionCodexEnvironment(root);
+    const helper = new FakeNativeHelper();
+    const repository = new SessionRepository([new CodexProvider(environment)], {
+      now: () => observedAt,
+      retainedHistoryPath: historyPath,
+    });
+    repository.setControls(new NativeSessionControls(helper));
+    let releasePreflight: () => void = () => {};
+    const preflightBlocked = new Promise<void>((resolve) => {
+      environment.sqliteBlocked = resolve;
+    });
+    environment.sqliteRelease = new Promise<void>((resolve) => {
+      releasePreflight = resolve;
+    });
+    try {
+      await repository.refresh();
+      environment.live = false;
+      await repository.refresh();
+      environment.sqliteCallCount = 0;
+      environment.blockSqliteCall = 0;
+      const resume = repository.resumeSession(threadID);
+      await preflightBlocked;
+      environment.sourceRowArchived = 1;
+      releasePreflight();
+      await expect(resume).resolves.toMatchObject({
+        state: "unavailable",
+        sessionId: threadID,
+      });
+      expect(helper.ghosttyResumeRequests).toHaveLength(0);
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id: threadID,
+        source: "Codex",
+      }));
+    } finally {
+      releasePreflight();
       rmSync(root, { recursive: true, force: true });
     }
   });

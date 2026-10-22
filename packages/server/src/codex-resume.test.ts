@@ -378,4 +378,92 @@ describe("Codex CLI closed-terminal resume", () => {
     const adapter = new CodexResumeAdapter(environment, async () => [], () => "authoritative");
     await expect(adapter.resumeLiveness(record)).resolves.toMatchObject({ state: "unknown" });
   });
+
+  it("does not block a closed row for a different exactly bound Codex frontend", async () => {
+    const savedThreadID = "77777777-7777-4777-8777-777777777777";
+    const otherThreadID = "88888888-8888-4888-8888-888888888888";
+    const configHome = "/fixture/.codex";
+    const executableRef = "/usr/local/bin/codex";
+    const observedAt = "2026-10-21T19:02:00.000Z";
+    const capability = {
+      version: 1 as const,
+      provider: "codex_cli" as const,
+      host: "Ghostty" as const,
+      executableRef,
+      configRootRef: configHome,
+      profileState: "verified_absent" as const,
+      overrideNames: [],
+      provenanceObservedAt: observedAt,
+    };
+    const record: RetainedHistoryRecord = {
+      schemaVersion: 1,
+      id: `codex:native:${savedThreadID}`,
+      canonicalId: `codex:native:${savedThreadID}`,
+      provider: "codex",
+      title: "Closed Codex row",
+      subtitle: "Closed conversation",
+      project: "project",
+      owner: "Codex CLI",
+      host: "Ghostty",
+      cwd: "/fixture/saved-project",
+      configHome,
+      resume: capability,
+      updatedAt: observedAt,
+      observedAt,
+      closedAt: observedAt,
+    };
+    const other: DiscoveredProviderSession = {
+      id: `codex:native:${otherThreadID}`,
+      provider: "codex",
+      title: "Other Codex frontend",
+      subtitle: "Current conversation",
+      project: "other-project",
+      cwd: "/fixture/other-project",
+      owner: "Codex CLI",
+      section: "ready",
+      updatedAt: observedAt,
+      canOpenOwner: true,
+      canEnterChat: false,
+      conversationState: "open",
+      controlTarget: {
+        kind: "terminal",
+        target: {
+          application: "Ghostty",
+          pid: 6262,
+          processStartToken: "codex-other-start",
+          tty: "ttys-codex-other",
+          cwd: "/fixture/other-project",
+        },
+      },
+      historyIdentity: {
+        verified: true,
+        current: true,
+        canonicalId: `codex:native:${otherThreadID}`,
+        host: "Ghostty",
+        configHome,
+        resume: capability,
+      },
+    };
+    const environment = {
+      home: "/fixture",
+      now: () => new Date(observedAt),
+      processesFreshInventory: async () => ({
+        state: "authoritative" as const,
+        observedAt,
+        processes: [{
+          pid: 6262,
+          parentPID: 1,
+          processStartToken: "codex-other-start",
+          tty: "ttys-codex-other",
+          command: executableRef,
+          arguments: `${executableRef} resume ${otherThreadID} --cd /fixture/other-project`,
+        }],
+      }),
+      codexProcessHome: async () => configHome,
+      cwd: async () => "/fixture/other-project",
+    } as unknown as ProviderEnvironment;
+    const adapter = new CodexResumeAdapter(environment, async () => [other], () => "authoritative");
+
+    await expect(adapter.resumeLiveness(record)).resolves.toMatchObject({ state: "stopped" });
+  });
 });
