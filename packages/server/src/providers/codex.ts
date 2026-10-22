@@ -18,6 +18,7 @@ import type {
   ResumeReconciliation,
   ResumeRepairValidation,
   ResumeTargetResult,
+  ResumeWorkingDirectoryValidation,
 } from "../resume.js";
 import { CodexResumeAdapter } from "./codex-resume.js";
 import {
@@ -119,6 +120,13 @@ export class CodexProvider implements ProviderAdapter {
     selection: HistoryRepairSelection,
   ): ResumeRepairValidation {
     return this.resumeAdapter.validateRepair(record, selection);
+  }
+
+  validateWorkingDirectory(
+    record: RetainedHistoryRecord,
+    candidateCwd: string,
+  ): Promise<ResumeWorkingDirectoryValidation> {
+    return this.resumeAdapter.validateWorkingDirectory(record, candidateCwd);
   }
 
   reconcileResume(

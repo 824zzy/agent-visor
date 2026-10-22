@@ -16,6 +16,7 @@ import type {
   ResumeReconciliation,
   ResumeRepairValidation,
   ResumeTargetResult,
+  ResumeWorkingDirectoryValidation,
 } from "../resume.js";
 import type { FreshProcessInventory, ProcessRecord, ProviderEnvironment } from "./environment.js";
 import type { ProcessProvenance } from "./process-provenance.js";
@@ -24,6 +25,13 @@ import { codexInstanceID, codexThreadReference } from "./codex-instances.js";
 const fullThreadID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const pathLimit = 4_096;
 const transcriptPrefixLimit = 64 * 1_024;
+type CodexSourceRow = {
+  id: string;
+  rolloutPath: string;
+  cwd: string;
+  archived: boolean;
+  source: string;
+};
 
 /** Exact stopped-row strategy for the Codex CLI Ghostty route. */
 export class CodexResumeAdapter implements ResumeProviderAdapter {
@@ -155,6 +163,62 @@ export class CodexResumeAdapter implements ResumeProviderAdapter {
     return { state: "valid", capability };
   }
 
+  async validateWorkingDirectory(
+    record: RetainedHistoryRecord,
+    candidateCwd: string,
+  ): Promise<ResumeWorkingDirectoryValidation> {
+    if (record.provider !== "codex") {
+      return { state: "unavailable", reason: "This repair does not match the retained Codex provider." };
+    }
+    const capability = record.resume;
+    if (!capability || capability.provider !== "codex_cli") {
+      return { state: "unavailable", reason: "Codex launch provenance is unavailable for this row." };
+    }
+    const selectedCwd = canonicalDirectorySelection(candidateCwd);
+    if (!selectedCwd) {
+      return { state: "unavailable", reason: "The selected Codex working directory is unavailable." };
+    }
+    const reference = codexThreadReference(record.canonicalId);
+    if (!reference || !fullThreadID.test(reference.threadID)) {
+      return { state: "unavailable", reason: "The full Codex conversation ID is unavailable." };
+    }
+    if (!record.configHome
+      || record.configHome !== capability.configRootRef
+      || !codexHomeMatchesSource(record.canonicalId, capability.configRootRef, this.environment.home)) {
+      return {
+        state: "unavailable",
+        reason: "The retained Codex configuration home does not match the conversation.",
+      };
+    }
+    const sourceRow = await this.readSourceRow(capability.configRootRef, reference.threadID);
+    if (!sourceRow) {
+      return { state: "unavailable", reason: "Codex source metadata for this conversation is unavailable." };
+    }
+    if (sourceRow.id !== reference.threadID
+      || sourceRow.source !== "cli"
+      || sourceRow.archived
+      || !path.isAbsolute(sourceRow.cwd)
+      || !path.isAbsolute(sourceRow.rolloutPath)
+      || !sameCanonicalPath(sourceRow.cwd, selectedCwd)) {
+      return {
+        state: "unavailable",
+        reason: "Codex cannot prove this UUID belongs to the selected folder from its saved source row.",
+      };
+    }
+    const candidateRecord = { ...record, cwd: selectedCwd };
+    const capabilityReason = validateCapability(candidateRecord, capability);
+    if (capabilityReason) return { state: "unavailable", reason: capabilityReason };
+    const transcriptReason = validateTranscriptPath(candidateRecord, capability);
+    if (transcriptReason) return { state: "unavailable", reason: transcriptReason };
+    if (!record.transcriptPath || !sameCanonicalPath(sourceRow.rolloutPath, record.transcriptPath)) {
+      return {
+        state: "unavailable",
+        reason: "Codex source metadata does not match the retained conversation transcript.",
+      };
+    }
+    return { state: "valid", cwd: selectedCwd };
+  }
+
   async reconcileResume(
     record: RetainedHistoryRecord,
     dispatch: NativeHelperGhosttyResumeDispatch,
@@ -219,6 +283,36 @@ export class CodexResumeAdapter implements ResumeProviderAdapter {
   private async freshInventory(): Promise<FreshProcessInventory> {
     if (this.environment.processesFreshInventory) return this.environment.processesFreshInventory();
     return { state: "unknown", observedAt: this.environment.now().toISOString(), reason: "scan_failed" };
+  }
+
+  private async readSourceRow(configRoot: string, threadID: string): Promise<CodexSourceRow | undefined> {
+    const database = await codexDatabase(this.environment, configRoot);
+    if (!database) return undefined;
+    try {
+      const values = await this.environment.sqlite(database, threadByIDSQL(threadID));
+      return values.flatMap((value) => {
+        if (!isRecord(value)
+          || typeof value.id !== "string"
+          || typeof value.rollout_path !== "string"
+          || typeof value.cwd !== "string"
+          || typeof value.source !== "string") return [];
+        const archived = value.archived === false || value.archived === 0 || value.archived === "0"
+          ? false
+          : value.archived === true || value.archived === 1 || value.archived === "1"
+            ? true
+            : undefined;
+        if (archived === undefined) return [];
+        return [{
+          id: value.id,
+          rolloutPath: value.rollout_path,
+          cwd: value.cwd,
+          archived,
+          source: value.source,
+        }];
+      })[0];
+    } catch {
+      return undefined;
+    }
   }
 }
 
@@ -341,6 +435,40 @@ function sameProcessProvenance(
     && observed.profileRef === expected.profileRef
     && observed.profileState === expected.profileState
     && JSON.stringify(observed.overrideNames) === JSON.stringify(expected.overrideNames);
+}
+
+const threadByIDSQL = (id: string): string => [
+  "select id, rollout_path, cwd, archived, source",
+  "from threads",
+  "where id = '" + id.replaceAll("'", "''") + "'",
+  "limit 1",
+].join("\n");
+
+async function codexDatabase(
+  environment: ProviderEnvironment,
+  home: string,
+): Promise<string | undefined> {
+  const candidates = [
+    path.join(home, "sqlite", "state_5.sqlite"),
+    path.join(home, "state_5.sqlite"),
+  ];
+  let best: { path: string; modifiedAt: number } | undefined;
+  for (const candidate of candidates) {
+    const database = await environment.stamp(candidate).catch(() => undefined);
+    if (!database) continue;
+    const wal = await environment.stamp(candidate + "-wal").catch(() => undefined);
+    const modifiedAt = Math.max(database.modifiedAt.valueOf(), wal?.modifiedAt.valueOf() ?? 0);
+    if (!best || modifiedAt > best.modifiedAt) best = { path: candidate, modifiedAt };
+  }
+  return best?.path;
+}
+
+function sameCanonicalPath(left: string, right: string): boolean {
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return false;
+  }
 }
 
 async function hasPossibleCodexOwner(

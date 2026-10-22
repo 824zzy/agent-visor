@@ -104,7 +104,7 @@ const historyRepairAbsolutePathSchema = z.string()
 const historyRepairProfileNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
 
 /** Explicit, provider-owned repair references; values are never credentials or commands. */
-export const historyRepairSelectionSchema = z.object({
+const historyRepairProviderSelectionSchema = z.object({
   kind: z.literal("provider"),
   executableRef: historyRepairAbsolutePathSchema.optional(),
   configRootRef: historyRepairAbsolutePathSchema.optional(),
@@ -117,6 +117,17 @@ export const historyRepairSelectionSchema = z.object({
 }).strict().refine((selection) => Object.keys(selection).some((key) => key !== "kind"), {
   message: "A provider repair must select at least one reference.",
 });
+
+/** A user-selected existing project root; the provider must validate its identity. */
+const historyRepairWorkingDirectorySelectionSchema = z.object({
+  kind: z.literal("working_directory"),
+  cwd: historyRepairAbsolutePathSchema,
+}).strict();
+
+export const historyRepairSelectionSchema = z.union([
+  historyRepairProviderSelectionSchema,
+  historyRepairWorkingDirectorySelectionSchema,
+]);
 
 export const sessionSummarySchema = z.object({
   id: z.string().min(1),
@@ -155,8 +166,8 @@ export const sessionSummarySchema = z.object({
   /** Resume is a separate action from opening the read-only transcript. */
   resumeState: sessionResumeStateSchema.optional(),
   resumeReason: z.string().min(1).max(256).optional(),
-  /** Explicit user-driven repair is available for provider launch references. */
-  repairKind: z.literal("provider").optional(),
+  /** Explicit user-driven repair is available for provider references or a working directory. */
+  repairKind: z.enum(["provider", "working_directory"]).optional(),
   repairFields: z.array(z.enum(["executable", "configRoot", "profile", "settingsFile"]))
     .max(4).optional(),
 });

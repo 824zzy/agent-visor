@@ -18,7 +18,13 @@ import type {
   RetainedHistoryResumeCapability,
   RetainedHistoryResumeUnavailableReason,
 } from "../retained-history.js";
-import type { ResumeLiveness, ResumeReconciliation, ResumeRepairValidation, ResumeTargetResult } from "../resume.js";
+import type {
+  ResumeLiveness,
+  ResumeReconciliation,
+  ResumeRepairValidation,
+  ResumeTargetResult,
+  ResumeWorkingDirectoryValidation,
+} from "../resume.js";
 import type { FileStamp, ProcessRecord, ProviderEnvironment } from "./environment.js";
 import {
   trustedClaudeExecutableCandidates,
@@ -130,6 +136,13 @@ export class ClaudeProvider implements ProviderAdapter {
 
   validateRepair(record: RetainedHistoryRecord, selection: HistoryRepairSelection): ResumeRepairValidation {
     return this.resumeAdapter.validateRepair(record, selection);
+  }
+
+  validateWorkingDirectory(
+    record: RetainedHistoryRecord,
+    candidateCwd: string,
+  ): Promise<ResumeWorkingDirectoryValidation> {
+    return this.resumeAdapter.validateWorkingDirectory(record, candidateCwd);
   }
 
   reconcileResume(

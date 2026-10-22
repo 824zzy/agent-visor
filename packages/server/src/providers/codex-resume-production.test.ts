@@ -22,10 +22,18 @@ const ghosttyToken = "fixture-ghostty-start";
 class ProductionCodexEnvironment extends LiveProviderEnvironment {
   readonly codexHome = path.join(this.home, ".codex");
   readonly cwdPath = path.join(this.home, "project");
+  sourceRowCwd = this.cwdPath;
   readonly executable = path.join(this.home, "bin", "codex");
   readonly database = path.join(this.codexHome, "sqlite", "state_5.sqlite");
   readonly rollout = path.join(this.codexHome, "sessions", "2026", "10", "21",
     `rollout-20261021T190000-${threadID}.jsonl`);
+  sourceRowRollout = this.rollout;
+  sourceRowSource = "cli";
+  sourceRowArchived = 0;
+  sqliteCallCount = 0;
+  blockSqliteCall?: number;
+  sqliteBlocked?: () => void;
+  sqliteRelease?: Promise<void>;
   readonly repairExecutable = path.join(this.home, ".local", "bin", "codex");
   readonly repairProfilePath = path.join(this.codexHome, "repair.config.toml");
   live = true;
@@ -121,14 +129,19 @@ class ProductionCodexEnvironment extends LiveProviderEnvironment {
   }
 
   override async sqlite(_database: string, _query: string) {
+    const call = this.sqliteCallCount++;
+    if (call === this.blockSqliteCall) {
+      this.sqliteBlocked?.();
+      await this.sqliteRelease;
+    }
     return [{
       id: threadID,
-      rollout_path: this.rollout,
-      cwd: this.cwdPath,
+      rollout_path: this.sourceRowRollout,
+      cwd: this.sourceRowCwd,
       title: "Production-shaped Codex row",
       updated_at: observedAt.valueOf() / 1_000,
-      archived: 0,
-      source: "cli",
+      archived: this.sourceRowArchived,
+      source: this.sourceRowSource,
     }];
   }
 
@@ -332,6 +345,257 @@ describe("Codex production-shaped retained resume", () => {
       expect(adapter.validateRepair(record, { kind: "provider", profileFileRef: malformed }).state)
         .toBe("unavailable");
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs a missing cwd from the exact Codex source row without launching", async () => {
+    const root = realpathSync(mkdtempSync(path.join("/tmp", "agent-visor-codex-working-directory-")));
+    const historyPath = path.join(root, "retained-history.json");
+    const environment = new ProductionCodexEnvironment(root);
+    const selectedCwd = path.join(root, "relocated-project");
+    mkdirSync(selectedCwd, { recursive: true });
+    const helper = new FakeNativeHelper();
+    const initial = new SessionRepository([new CodexProvider(environment)], {
+      now: () => observedAt,
+      retainedHistoryPath: historyPath,
+    });
+    initial.setControls(new NativeSessionControls(helper));
+    try {
+      await initial.refresh();
+      environment.live = false;
+      await initial.refresh();
+      rmSync(environment.cwdPath, { recursive: true, force: true });
+      environment.sourceRowCwd = realpathSync(selectedCwd);
+
+      expect(initial.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id: threadID,
+        resumeState: "unavailable",
+        repairKind: "working_directory",
+        resumeReason: "Resume unavailable: the original working directory is unavailable.",
+      }));
+
+      const before = JSON.parse(readFileSync(historyPath, "utf8")) as {
+        records: Array<Record<string, unknown>>;
+      };
+      const repaired = new SessionRepository([new CodexProvider(environment)], {
+        now: () => observedAt,
+        retainedHistoryPath: historyPath,
+      });
+      repaired.setControls(new NativeSessionControls(helper));
+      await repaired.refresh();
+      await expect(repaired.repairHistorySession(threadID, {
+        kind: "working_directory",
+        cwd: selectedCwd,
+      })).resolves.toMatchObject({ state: "accepted" });
+      expect(helper.ghosttyResumeRequests).toHaveLength(0);
+
+      const after = JSON.parse(readFileSync(historyPath, "utf8")) as {
+        records: Array<Record<string, unknown>>;
+      };
+      expect(after.records).toHaveLength(1);
+      expect(after.records[0]).toEqual({
+        ...before.records[0],
+        cwd: realpathSync(selectedCwd),
+      });
+      expect(environment.sourceRowCwd).toBe(realpathSync(selectedCwd));
+
+      const restarted = new SessionRepository([new CodexProvider(environment)], {
+        now: () => observedAt,
+        retainedHistoryPath: historyPath,
+      });
+      restarted.setControls(new NativeSessionControls(helper));
+      await restarted.refresh();
+      expect(restarted.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id: threadID,
+        cwd: realpathSync(selectedCwd),
+        resumeState: "eligible",
+      }));
+      await expect(restarted.resumeSession(threadID)).resolves.toMatchObject({
+        state: "uncertain",
+      });
+      expect(helper.ghosttyResumeRequests).toHaveLength(1);
+      expect(helper.ghosttyResumeRequests[0]).toMatchObject({
+        provider: "codex_cli",
+        sessionId: threadID,
+        cwd: realpathSync(selectedCwd),
+        executable: environment.executable,
+        configRoot: environment.codexHome,
+        profileRef: "work",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels and rejects invalid or mismatched folder repairs without mutation", async () => {
+    const root = realpathSync(mkdtempSync(path.join("/tmp", "agent-visor-codex-working-directory-reject-")));
+    const historyPath = path.join(root, "retained-history.json");
+    const environment = new ProductionCodexEnvironment(root);
+    const selectedCwd = path.join(root, "relocated-project");
+    const invalidCwd = path.join(root, "missing-project");
+    mkdirSync(selectedCwd, { recursive: true });
+    const helper = new FakeNativeHelper();
+    const initial = new SessionRepository([new CodexProvider(environment)], {
+      now: () => observedAt,
+      retainedHistoryPath: historyPath,
+    });
+    initial.setControls(new NativeSessionControls(helper));
+    try {
+      await initial.refresh();
+      environment.live = false;
+      await initial.refresh();
+      rmSync(environment.cwdPath, { recursive: true, force: true });
+      environment.sourceRowCwd = realpathSync(selectedCwd);
+
+      const repaired = new SessionRepository([new CodexProvider(environment)], {
+        now: () => observedAt,
+        retainedHistoryPath: historyPath,
+      });
+      repaired.setControls(new NativeSessionControls(helper));
+      await repaired.refresh();
+      const before = readFileSync(historyPath, "utf8");
+
+      await expect(repaired.repairHistorySession(threadID, null)).resolves.toMatchObject({ state: "cancelled" });
+      expect(readFileSync(historyPath, "utf8")).toBe(before);
+
+      await expect(repaired.repairHistorySession(threadID, {
+        kind: "working_directory",
+        cwd: invalidCwd,
+      })).resolves.toMatchObject({
+        state: "rejected",
+        reason: "The selected Codex working directory is unavailable.",
+      });
+      expect(readFileSync(historyPath, "utf8")).toBe(before);
+
+      environment.sourceRowCwd = environment.cwdPath;
+      await expect(repaired.repairHistorySession(threadID, {
+        kind: "working_directory",
+        cwd: selectedCwd,
+      })).resolves.toMatchObject({
+        state: "rejected",
+        reason: "Codex cannot prove this UUID belongs to the selected folder from its saved source row.",
+      });
+      expect(readFileSync(historyPath, "utf8")).toBe(before);
+
+      environment.sourceRowCwd = realpathSync(selectedCwd);
+      environment.sourceRowRollout = path.join(root, "other-rollout.jsonl");
+      await expect(repaired.repairHistorySession(threadID, {
+        kind: "working_directory",
+        cwd: selectedCwd,
+      })).resolves.toMatchObject({
+        state: "rejected",
+        reason: "Codex source metadata does not match the retained conversation transcript.",
+      });
+      expect(readFileSync(historyPath, "utf8")).toBe(before);
+      expect(helper.ghosttyResumeRequests).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a removal racing async source validation without dispatch", async () => {
+    const root = realpathSync(mkdtempSync(path.join("/tmp", "agent-visor-codex-working-directory-race-")));
+    const historyPath = path.join(root, "retained-history.json");
+    const environment = new ProductionCodexEnvironment(root);
+    const selectedCwd = path.join(root, "relocated-project");
+    mkdirSync(selectedCwd, { recursive: true });
+    const helper = new FakeNativeHelper();
+    const initial = new SessionRepository([new CodexProvider(environment)], {
+      now: () => observedAt,
+      retainedHistoryPath: historyPath,
+    });
+    initial.setControls(new NativeSessionControls(helper));
+    let releaseValidation: () => void = () => {};
+    const validationBlocked = new Promise<void>((resolve) => {
+      environment.sqliteBlocked = resolve;
+    });
+    environment.sqliteRelease = new Promise<void>((resolve) => {
+      releaseValidation = resolve;
+    });
+    try {
+      await initial.refresh();
+      environment.live = false;
+      await initial.refresh();
+      rmSync(environment.cwdPath, { recursive: true, force: true });
+      environment.sourceRowCwd = realpathSync(selectedCwd);
+
+      const repaired = new SessionRepository([new CodexProvider(environment)], {
+        now: () => observedAt,
+        retainedHistoryPath: historyPath,
+      });
+      repaired.setControls(new NativeSessionControls(helper));
+      await repaired.refresh();
+      environment.sqliteCallCount = 0;
+      environment.blockSqliteCall = 1;
+      const repair = repaired.repairHistorySession(threadID, {
+        kind: "working_directory",
+        cwd: selectedCwd,
+      });
+      await validationBlocked;
+      await expect(repaired.removeHistorySession(threadID)).resolves.toBeUndefined();
+      releaseValidation();
+      await expect(repair).resolves.toMatchObject({
+        state: "rejected",
+        reason: "The retained session is no longer available.",
+      });
+      expect(helper.ghosttyResumeRequests).toHaveLength(0);
+    } finally {
+      releaseValidation();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a source-row change between validation and the atomic repair", async () => {
+    const root = realpathSync(mkdtempSync(path.join("/tmp", "agent-visor-codex-working-directory-source-race-")));
+    const historyPath = path.join(root, "retained-history.json");
+    const environment = new ProductionCodexEnvironment(root);
+    const selectedCwd = path.join(root, "relocated-project");
+    mkdirSync(selectedCwd, { recursive: true });
+    const helper = new FakeNativeHelper();
+    const initial = new SessionRepository([new CodexProvider(environment)], {
+      now: () => observedAt,
+      retainedHistoryPath: historyPath,
+    });
+    initial.setControls(new NativeSessionControls(helper));
+    let releaseValidation: () => void = () => {};
+    const validationBlocked = new Promise<void>((resolve) => {
+      environment.sqliteBlocked = resolve;
+    });
+    environment.sqliteRelease = new Promise<void>((resolve) => {
+      releaseValidation = resolve;
+    });
+    try {
+      await initial.refresh();
+      environment.live = false;
+      await initial.refresh();
+      rmSync(environment.cwdPath, { recursive: true, force: true });
+      environment.sourceRowCwd = realpathSync(selectedCwd);
+
+      const repaired = new SessionRepository([new CodexProvider(environment)], {
+        now: () => observedAt,
+        retainedHistoryPath: historyPath,
+      });
+      repaired.setControls(new NativeSessionControls(helper));
+      await repaired.refresh();
+      const before = readFileSync(historyPath, "utf8");
+      environment.sqliteCallCount = 0;
+      environment.blockSqliteCall = 1;
+      const repair = repaired.repairHistorySession(threadID, {
+        kind: "working_directory",
+        cwd: selectedCwd,
+      });
+      await validationBlocked;
+      environment.sourceRowCwd = environment.cwdPath;
+      releaseValidation();
+      await expect(repair).resolves.toMatchObject({
+        state: "rejected",
+        reason: "Codex cannot prove this UUID belongs to the selected folder from its saved source row.",
+      });
+      expect(readFileSync(historyPath, "utf8")).toBe(before);
+      expect(helper.ghosttyResumeRequests).toHaveLength(0);
+    } finally {
+      releaseValidation();
       rmSync(root, { recursive: true, force: true });
     }
   });

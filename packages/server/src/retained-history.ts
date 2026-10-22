@@ -25,7 +25,7 @@ export type RetainedHistoryProvider = "claude_code" | "codex";
 export type RetainedHistoryHost = "Ghostty" | "cmux" | "Herdr" | "iTerm2" | "Terminal";
 export type RetainedHistoryRemovalReason = "agent_visor" | "provider_archived";
 export type RetainedHistoryRemovalResult = "removed" | "not_found" | "storage_unavailable";
-export type RetainedHistoryRepairResult = "updated" | "not_found" | "storage_unavailable";
+export type RetainedHistoryRepairResult = "updated" | "not_found" | "storage_unavailable" | "conflict";
 export type RetainedHistoryResumeUnavailableReason =
   | "missing_provenance"
   | "unsupported_profile"
@@ -366,10 +366,12 @@ export class RetainedHistoryStore {
     provider: RetainedHistoryProvider,
     id: string,
     resume: RetainedHistoryResumeCapability,
+    expected?: RetainedHistoryRecord,
   ): RetainedHistoryRepairResult {
     const key = this.keyByIdentity.get(historyKey(provider, id));
     const record = key ? this.recordsByKey.get(key) : undefined;
     if (!key || !record) return "not_found";
+    if (expected && !sameRepairRecord(record, expected)) return "conflict";
     const previous = record;
     const next: RetainedHistoryRecord = {
       ...record,
@@ -378,6 +380,28 @@ export class RetainedHistoryStore {
       // The provider config home is part of the source identity. A validated
       // provider capability may repair it only for this exact record.
       ...("configRootRef" in resume ? { configHome: resume.configRootRef } : {}),
+    };
+    this.recordsByKey.set(key, next);
+    if (this.persist()) return "updated";
+    this.recordsByKey.set(key, previous);
+    return "storage_unavailable";
+  }
+
+  /** Atomically replace only the working directory for one retained record. */
+  updateWorkingDirectory(
+    provider: RetainedHistoryProvider,
+    id: string,
+    cwd: string,
+    expected?: RetainedHistoryRecord,
+  ): RetainedHistoryRepairResult {
+    const key = this.keyByIdentity.get(historyKey(provider, id));
+    const record = key ? this.recordsByKey.get(key) : undefined;
+    if (!key || !record) return "not_found";
+    if (expected && !sameRepairRecord(record, expected)) return "conflict";
+    const previous = record;
+    const next: RetainedHistoryRecord = {
+      ...record,
+      cwd,
     };
     this.recordsByKey.set(key, next);
     if (this.persist()) return "updated";
@@ -691,6 +715,40 @@ function mergeAliases(
   const aliases = [...new Set([...(previous ?? []), ...(current ?? [])])]
     .filter((alias) => alias !== canonicalId && alias !== id);
   return aliases.length ? { aliases } : {};
+}
+
+function sameRepairRecord(current: RetainedHistoryRecord, expected: RetainedHistoryRecord): boolean {
+  return JSON.stringify({
+    provider: current.provider,
+    id: current.id,
+    canonicalId: current.canonicalId,
+    aliases: current.aliases,
+    host: current.host,
+    cwd: current.cwd,
+    configHome: current.configHome,
+    transcriptPath: current.transcriptPath,
+    resume: current.resume,
+    resumeUnavailableReason: current.resumeUnavailableReason,
+    completionIdentity: current.completionIdentity,
+    closedAt: current.closedAt,
+    updatedAt: current.updatedAt,
+    observedAt: current.observedAt,
+  }) === JSON.stringify({
+    provider: expected.provider,
+    id: expected.id,
+    canonicalId: expected.canonicalId,
+    aliases: expected.aliases,
+    host: expected.host,
+    cwd: expected.cwd,
+    configHome: expected.configHome,
+    transcriptPath: expected.transcriptPath,
+    resume: expected.resume,
+    resumeUnavailableReason: expected.resumeUnavailableReason,
+    completionIdentity: expected.completionIdentity,
+    closedAt: expected.closedAt,
+    updatedAt: expected.updatedAt,
+    observedAt: expected.observedAt,
+  });
 }
 
 function historyKey(provider: RetainedHistoryProvider, canonicalId: string): string {

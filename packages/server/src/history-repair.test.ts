@@ -6,6 +6,8 @@ import { FakeNativeHelper } from "./native-helper.js";
 import { NativeSessionControls } from "./session-controls.js";
 import type { RetainedHistoryResumeCapability } from "./retained-history.js";
 import { SessionRepository, type DiscoveredProviderSession, type ProviderAdapter } from "./sessions.js";
+import { ClaudeProvider } from "./providers/claude.js";
+import { LiveProviderEnvironment } from "./providers/environment.js";
 
 const sessionID = "11111111-1111-4111-8111-111111111111";
 
@@ -75,7 +77,8 @@ describe("retained history provider repair", () => {
     const provider: ProviderAdapter = {
       id: "claude_code",
       discover: async () => open ? [structuredClone(session)] : [],
-      validateRepair: (_record, selection) => selection.executableRef === executable
+      validateRepair: (_record, selection) => selection.kind === "provider"
+        && selection.executableRef === executable
         ? { state: "valid", capability: { ...capability, executableRef: executable } }
         : { state: "unavailable", reason: "The selected Claude executable is invalid." },
     };
@@ -104,6 +107,76 @@ describe("retained history provider repair", () => {
         id: sessionID,
         resumeState: "eligible",
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a changed Claude folder with a concrete unsupported-relocation reason", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "agent-visor-claude-working-directory-"));
+    const historyPath = path.join(root, "retained-history.json");
+    const home = path.join(root, "home");
+    const configRoot = path.join(home, ".claude");
+    const executable = path.join(home, ".local", "share", "claude", "versions", "2.1.296");
+    const oldCwd = path.join(root, "old-project");
+    const selectedCwd = path.join(root, "new-project");
+    mkdirSync(path.dirname(executable), { recursive: true });
+    mkdirSync(configRoot, { recursive: true });
+    mkdirSync(selectedCwd, { recursive: true });
+    writeFileSync(executable, "#!/bin/sh\n", { mode: 0o755 });
+    const observedAt = "2026-10-21T19:00:00.000Z";
+    const capability = {
+      version: 1 as const,
+      provider: "claude_code" as const,
+      host: "Ghostty" as const,
+      executableRef: executable,
+      configRootRef: configRoot,
+      profileState: "verified_absent" as const,
+      overrideNames: [],
+      provenanceObservedAt: observedAt,
+    };
+    const record = {
+      schemaVersion: 1 as const,
+      id: sessionID,
+      canonicalId: sessionID,
+      title: "Moved Claude conversation",
+      subtitle: "Closed conversation",
+      project: "old-project",
+      owner: "Ghostty",
+      host: "Ghostty" as const,
+      cwd: oldCwd,
+      configHome: configRoot,
+      resume: capability,
+      resumeUnavailableReason: "missing_working_directory" as const,
+      updatedAt: observedAt,
+      observedAt,
+      closedAt: observedAt,
+      provider: "claude_code" as const,
+    };
+    writeFileSync(historyPath, JSON.stringify({ schemaVersion: 1, records: [record], tombstones: [] }));
+    const environment = new LiveProviderEnvironment(home, { now: () => new Date(observedAt) });
+    const provider = new ClaudeProvider(environment);
+    const repository = new SessionRepository([provider], {
+      now: () => new Date(observedAt),
+      retainedHistoryPath: historyPath,
+    });
+    const helper = new FakeNativeHelper();
+    repository.setControls(new NativeSessionControls(helper));
+    const before = readFileSync(historyPath, "utf8");
+    try {
+      expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id: sessionID,
+        repairKind: "working_directory",
+      }));
+      await expect(repository.repairHistorySession(sessionID, {
+        kind: "working_directory",
+        cwd: selectedCwd,
+      })).resolves.toMatchObject({
+        state: "rejected",
+        reason: "Claude Code cannot prove that this saved conversation belongs to the selected folder; the provider does not expose a supported relocation mapping.",
+      });
+      expect(readFileSync(historyPath, "utf8")).toBe(before);
+      expect(helper.ghosttyResumeRequests).toHaveLength(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
