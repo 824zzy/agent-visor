@@ -4300,6 +4300,28 @@ function responseIdentity(
   });
 }
 
+/**
+ * Project the verified navigation host into the public destination label.
+ * Provider discovery can retain a generic or stale owner while it resolves a
+ * stronger route target. The target is the authority for terminal hosts; an
+ * application or URL target keeps the provider/editor owner because it does
+ * not identify a terminal destination.
+ */
+function ownerForPublicDestination(session: DiscoveredProviderSession): string {
+  switch (session.controlTarget?.kind) {
+    case "terminal":
+      return session.controlTarget.target.application;
+    case "claude_background":
+      return session.controlTarget.target.application;
+    case "herdr_surface":
+      return "Herdr";
+    case "cmux_surface":
+      return "cmux";
+    default:
+      return session.owner;
+  }
+}
+
 function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
   const byID = new Map<string, DiscoveredProviderSession>();
   for (const session of deduplicateSessions(discovered)) {
@@ -4352,7 +4374,7 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
       source: providerNames[session.provider],
       ...(session.sourceProfile ? { sourceProfile: session.sourceProfile } : {}),
       project: session.project?.trim() || path.basename(session.cwd) || session.cwd,
-      owner: session.owner,
+      owner: ownerForPublicDestination(session),
       cwd: session.cwd,
       section: session.section,
       updatedAt: session.updatedAt,
