@@ -127,6 +127,10 @@ export class PiProvider implements ProviderAdapter {
         canEnterChat: true,
         sessionClass: process ? "terminal" : "interactive",
         conversationState: process ? "open" : "unknown",
+        // A transcript with no matched Pi process is an explicit source
+        // history record. Preserve unknown liveness and route facts while
+        // giving lifecycle presentation the stronger historical evidence.
+        ...(!process ? { lifecycleStatus: "historical" as const } : {}),
         ...(process && runtime
           ? {
             turnState: runtime.isIdle === true || runtime.status.trim().toLowerCase() === "idle"

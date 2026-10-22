@@ -2148,6 +2148,94 @@ describe("SessionRepository", () => {
     });
   });
 
+  it("updates an opened hook-only record through newer lifecycle hooks", async () => {
+    const sessionId = "claude-opened-hook-only";
+    const provider: ProviderAdapter = {
+      id: "claude_code",
+      discover: async () => [],
+    };
+    const openedRecords: DiscoveredProviderSession[] = [];
+    const repository = new SessionRepository([provider], {
+      chatPageReader: async (session) => {
+        openedRecords.push(structuredClone(session));
+        return {
+          type: "chat_page",
+          sessionId: session.id,
+          items: [],
+          hasMoreBefore: false,
+          capabilities: {
+            canSendText: false,
+            canSendImages: false,
+            canCancel: false,
+            canApprove: false,
+            canAnswer: false,
+          },
+          pendingAction: null,
+        };
+      },
+    });
+    const baseHook: Pick<HookSessionEvent, "sessionId" | "cwd" | "provider" | "pid" | "tty"> = {
+      sessionId,
+      cwd: "/Users/me/Codes/agent-visor",
+      provider: "claude_code",
+      pid: 9_901,
+      tty: "/dev/ttys901",
+    };
+
+    repository.applyHook({
+      ...baseHook,
+      event: "Stop",
+      status: "idle",
+      receivedAt: "2026-08-22T08:00:00.000Z",
+    });
+    // This stores the admitted hook-only projection in the exact opened-record
+    // cache used by Chat before a provider inventory can resolve it.
+    await repository.chatPage(sessionId);
+    expect(openedRecords.at(-1)).toMatchObject({ lifecycleStatus: "ready", turnState: "ready" });
+
+    repository.applyHook({
+      ...baseHook,
+      event: "PreToolUse",
+      status: "processing",
+      receivedAt: "2026-08-22T08:01:00.000Z",
+    });
+    await repository.chatPage(sessionId);
+    expect(openedRecords.at(-1)).toMatchObject({ lifecycleStatus: "working", turnState: "working" });
+
+    repository.applyHook({
+      ...baseHook,
+      event: "PermissionRequest",
+      status: "waiting_for_approval",
+      expectsResponse: true,
+      tool: "Bash",
+      toolInput: { command: "echo review" },
+      toolUseId: "approval-1",
+      receivedAt: "2026-08-22T08:02:00.000Z",
+    });
+    expect(repository.pendingAction(sessionId)).toMatchObject({
+      type: "approval",
+      toolUseId: "approval-1",
+    });
+    await repository.chatPage(sessionId);
+    expect(openedRecords.at(-1)).toMatchObject({ lifecycleStatus: "needs_you", turnState: "needs_you" });
+
+    repository.applyHook({
+      ...baseHook,
+      event: "SessionEnd",
+      status: "ended",
+      receivedAt: "2026-08-22T08:03:00.000Z",
+    });
+    await repository.chatPage(sessionId);
+    expect(openedRecords.at(-1)).toMatchObject({
+      lifecycleStatus: "closed",
+      turnState: "unknown",
+      canOpenOwner: false,
+      canEnterChat: true,
+    });
+    expect(openedRecords.at(-1)?.conversationState).toBeUndefined();
+    expect(openedRecords.at(-1)?.routeState).toBeUndefined();
+  });
+
   it("returns only accepted exact Ghostty Pi restoration candidates", async () => {
     const transcript = temporaryTranscript("2026-08-22T08:00:00.000Z");
     const cwd = path.dirname(transcript.path);
