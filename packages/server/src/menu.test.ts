@@ -429,7 +429,7 @@ describe("menu presentation", () => {
     });
   });
 
-  it("lets newer non-Claude History outrank stale acknowledged Claude without rewriting source state", () => {
+  it("keeps a stale acknowledged Ready session before newer neutral History", () => {
     const now = Date.parse("2026-08-22T22:00:00.000Z");
     const staleClaude: SessionSnapshot["sessions"][number] = {
       ...snapshot.sessions[4]!,
@@ -454,9 +454,9 @@ describe("menu presentation", () => {
     const presentation = menuPresentation(sourceSnapshot, [], now);
 
     expect(presentation.pills.map(({ id }) => id)).toEqual([
-      "newer-history", "stale-claude",
+      "stale-claude", "newer-history",
     ]);
-    expect(presentation.pills[1]).toMatchObject({
+    expect(presentation.pills[0]).toMatchObject({
       id: "stale-claude",
       phase: "ready",
       lifecycleStatus: "ready",
@@ -471,6 +471,106 @@ describe("menu presentation", () => {
       subtitle: "Ready to continue",
       sessionState: { turn: "ready" },
     });
+  });
+
+  it("groups every neutral History lifecycle after Ready and keeps recency ties stable", () => {
+    const historyRows = [
+      {
+        ...snapshot.sessions[4]!,
+        id: "ready-older",
+        section: "history" as const,
+        attentionTier: "history" as const,
+        lifecycleStatus: "ready" as const,
+        updatedAt: "2026-08-22T20:00:00.000Z",
+      },
+      {
+        ...snapshot.sessions[4]!,
+        id: "ready-newer",
+        section: "history" as const,
+        attentionTier: "history" as const,
+        lifecycleStatus: "ready" as const,
+        updatedAt: "2026-08-22T21:00:00.000Z",
+      },
+      {
+        ...snapshot.sessions[1]!,
+        id: "closed-newer",
+        section: "history" as const,
+        attentionTier: "history" as const,
+        lifecycleStatus: "closed" as const,
+        updatedAt: "2026-08-22T21:30:00.000Z",
+      },
+      {
+        ...snapshot.sessions[1]!,
+        id: "historical-older",
+        section: "history" as const,
+        attentionTier: "history" as const,
+        lifecycleStatus: "historical" as const,
+        updatedAt: "2026-08-22T19:00:00.000Z",
+      },
+      {
+        ...snapshot.sessions[1]!,
+        id: "unavailable-tie-b",
+        section: "history" as const,
+        attentionTier: "history" as const,
+        lifecycleStatus: "unavailable" as const,
+        updatedAt: "2026-08-22T20:30:00.000Z",
+      },
+      {
+        ...snapshot.sessions[1]!,
+        id: "unavailable-tie-a",
+        section: "history" as const,
+        attentionTier: "history" as const,
+        lifecycleStatus: "unavailable" as const,
+        updatedAt: "2026-08-22T20:30:00.000Z",
+      },
+    ] satisfies SessionSnapshot["sessions"];
+
+    const presentation = menuPresentation({ ...snapshot, sessions: historyRows }, []);
+    for (const rows of [presentation.pills, presentation.navigatorPills]) {
+      expect(rows.map(({ id }) => id)).toEqual([
+        "ready-newer",
+        "ready-older",
+        "closed-newer",
+        "unavailable-tie-a",
+        "unavailable-tie-b",
+        "historical-older",
+      ]);
+    }
+  });
+
+  it("moves a History row ahead of neutral rows after a genuine Ready transition", () => {
+    const neutral = {
+      ...snapshot.sessions[1]!,
+      id: "neutral",
+      section: "history" as const,
+      attentionTier: "history" as const,
+      lifecycleStatus: "historical" as const,
+      updatedAt: "2026-08-22T21:00:00.000Z",
+    };
+    const session = {
+      ...snapshot.sessions[1]!,
+      id: "transition",
+      section: "history" as const,
+      attentionTier: "history" as const,
+      lifecycleStatus: "historical" as const,
+      updatedAt: "2026-08-22T20:00:00.000Z",
+    };
+
+    expect(menuPresentation({ ...snapshot, sessions: [session, neutral] }, []).pills.map(({ id }) => id)).toEqual([
+      "neutral", "transition",
+    ]);
+    const ready = {
+      ...session,
+      lifecycleStatus: "ready" as const,
+      sessionState: {
+        conversation: "open" as const,
+        turn: "ready" as const,
+        route: "available" as const,
+      },
+    };
+    expect(menuPresentation({ ...snapshot, sessions: [ready, neutral] }, []).pills.map(({ id }) => id)).toEqual([
+      "transition", "neutral",
+    ]);
   });
 
   it("puts unopened completions before running work and opened completions", () => {

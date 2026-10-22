@@ -107,10 +107,17 @@ export function menuPresentation(
     .map((session) => menuSession(session, now))
     .filter((session) => Date.parse(session.updatedAt) >= cutoff)
     .filter((session) => session.canOpenOwner || session.canEnterChat)
-    .sort((left, right) => attentionOrder[left.attentionTier ?? left.section]
-      - attentionOrder[right.attentionTier ?? right.section]
-      || right.updatedAt.localeCompare(left.updatedAt)
-      || left.id.localeCompare(right.id));
+    .sort((left, right) => {
+      const leftTier = left.attentionTier ?? left.section;
+      const rightTier = right.attentionTier ?? right.section;
+      const attentionDifference = attentionOrder[leftTier] - attentionOrder[rightTier];
+      if (attentionDifference !== 0) return attentionDifference;
+      const lifecycleDifference = historyLifecycleOrder(left, leftTier)
+        - historyLifecycleOrder(right, rightTier);
+      if (lifecycleDifference !== 0) return lifecycleDifference;
+      return right.updatedAt.localeCompare(left.updatedAt)
+        || left.id.localeCompare(right.id);
+    });
   const navigatorPills = ordered.slice(0, 512).map(presentationPill);
   const pills = ordered
     // Automation and app-managed conversations stay in the navigator, while
@@ -148,6 +155,14 @@ function menuSession(
     ...session,
     attentionTier: "history",
   };
+}
+
+function historyLifecycleOrder(
+  session: SessionSnapshot["sessions"][number],
+  attentionTier: keyof typeof attentionOrder,
+): number {
+  if (attentionTier !== "history") return 0;
+  return sessionLifecyclePresentation(session).tone === "ready" ? 0 : 1;
 }
 
 function isAmbientSession(session: SessionSnapshot["sessions"][number]): boolean {
