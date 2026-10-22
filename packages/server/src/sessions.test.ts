@@ -2724,6 +2724,64 @@ describe("SessionRepository", () => {
     expect(focus).toHaveBeenCalledOnce();
   });
 
+  it("projects verified host targets as the public owner destination", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [
+      {
+        ...live,
+        id: "terminal-target",
+        owner: "Terminal",
+        controlTarget: {
+          kind: "terminal",
+          target: { application: "Ghostty", pid: 42, tty: "ttys001", cwd: live.cwd },
+        },
+      },
+      {
+        ...live,
+        id: "herdr-target",
+        owner: "Terminal",
+        controlTarget: { kind: "herdr_surface", target: {} as never },
+      },
+      {
+        ...live,
+        id: "cmux-target",
+        owner: "Terminal",
+        controlTarget: { kind: "cmux_surface", target: {} as never },
+      },
+      {
+        ...live,
+        id: "unknown-target",
+        owner: "Terminal",
+        canOpenOwner: false,
+        controlTarget: undefined,
+      },
+      {
+        ...live,
+        id: "provider-target",
+        owner: "Codex",
+        controlTarget: { kind: "application", target: { pid: 42, bundleIdentifier: "com.openai.codex" } },
+      },
+      {
+        ...live,
+        id: "editor-target",
+        owner: "Zed",
+        controlTarget: { kind: "application", target: { pid: 43, bundleIdentifier: "dev.zed.Zed" } },
+      },
+    ];
+    const repository = new SessionRepository([provider]);
+
+    const rows = (await repository.refresh()).sessions;
+
+    expect(rows.find(({ id }) => id === "terminal-target")?.owner).toBe("Ghostty");
+    expect(rows.find(({ id }) => id === "herdr-target")?.owner).toBe("Herdr");
+    expect(rows.find(({ id }) => id === "cmux-target")?.owner).toBe("cmux");
+    expect(rows.find(({ id }) => id === "unknown-target")).toMatchObject({
+      owner: "Terminal", canOpenOwner: false,
+    });
+    expect(rows.find(({ id }) => id === "provider-target")?.owner).toBe("Codex");
+    expect(rows.find(({ id }) => id === "editor-target")?.owner).toBe("Zed");
+  });
+
   it("presents and answers Claude questions through the pending hook", async () => {
     const repository = new SessionRepository([]);
     repository.applyHook({
