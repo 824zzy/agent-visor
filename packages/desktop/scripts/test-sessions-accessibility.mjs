@@ -131,7 +131,13 @@ async function run() {
     document.querySelector('[aria-label*="Open in"]')?.click()`);
   await waitFor(window, `window.__focusError === 'Exact session focus is unavailable.'`);
   assert(ownerActions === 0, "a failed exact focus never launches the named owner app");
+  await window.webContents.executeJavaScript(`window.__codexFocusError = null;
+    window.alert = (message) => { window.__codexFocusError = message; };
+    document.querySelector('[aria-label*="Open in Codex"]')?.click()`);
+  await waitFor(window, `window.__codexFocusError === 'Exact session focus is unavailable.'`);
+  assert(ownerActions === 0, "Codex focus failure keeps the exact error and never launches the owner app");
   await window.webContents.executeJavaScript(`window.__focusError = null;
+    window.alert = (message) => { window.__focusError = message; };
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', metaKey: true, bubbles: true }))`);
   await waitFor(window, `window.__focusError === 'Exact session focus is unavailable.'`);
   assert(ownerActions === 0, "keyboard owner activation also stays exact on focus failure");

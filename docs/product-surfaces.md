@@ -296,8 +296,11 @@ Claude Code rows that remain open and Ready but have no activity within the shar
 - Pointer and keyboard activation agree. Menu-bar pills and the `+N` popover retain their original-owner-first behavior; Option-click or their explicit Agent Visor action enters Chat.
 - Saved legacy browser-action and click-routing preferences are inert and must not override these surface-specific actions.
 - A session pill's context menu contains only `Pill Settings...`. It does not repeat the normal open action or expose alternate click defaults.
+- Capability selection happens before activation. If owner navigation is unavailable, an ownerless Chat-capable row uses Chat as its safe primary action; that capability fallback is distinct from a failed attempt to focus an exact owner route.
+- A live owner action names the verified destination supplied by its current control target, such as Ghostty, Herdr, cmux, or Apple Terminal. If exact focus then fails, surface the bounded error and keep the action closed; do not silently activate a generic owner application, another window, or a replacement session. Failed navigation keeps unread attention, while successful navigation uses the existing acknowledgment behavior.
+- Closed conversations use their separate supported resume action (currently `Resume in Ghostty`) rather than the live-session focus path. Resume provenance, folder, profile, duplicate prevention, and safe failure rules remain independent of live destination labels.
 - Routing is best effort. When a source cannot select an exact task, the UI must not claim exact routing.
-- A navigation action acknowledges the Ready completion. Menu and browser rank continue to follow authoritative activity; opening a session alone does not promote or demote it.
+- A successful navigation action acknowledges the Ready completion. Failed navigation preserves unread attention. Menu and browser rank continue to follow authoritative activity; opening a session alone does not promote or demote it.
 
 ## Zed-Hosted Agent Ownership
 

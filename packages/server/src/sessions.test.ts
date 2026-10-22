@@ -2757,6 +2757,16 @@ describe("SessionRepository", () => {
       },
       {
         ...live,
+        id: "stale-target",
+        owner: "Terminal",
+        canOpenOwner: false,
+        controlTarget: {
+          kind: "terminal",
+          target: { application: "Ghostty", pid: 43, tty: "ttys002", cwd: live.cwd },
+        },
+      },
+      {
+        ...live,
         id: "provider-target",
         owner: "Codex",
         controlTarget: { kind: "application", target: { pid: 42, bundleIdentifier: "com.openai.codex" } },
@@ -2776,6 +2786,9 @@ describe("SessionRepository", () => {
     expect(rows.find(({ id }) => id === "herdr-target")?.owner).toBe("Herdr");
     expect(rows.find(({ id }) => id === "cmux-target")?.owner).toBe("cmux");
     expect(rows.find(({ id }) => id === "unknown-target")).toMatchObject({
+      owner: "Terminal", canOpenOwner: false,
+    });
+    expect(rows.find(({ id }) => id === "stale-target")).toMatchObject({
       owner: "Terminal", canOpenOwner: false,
     });
     expect(rows.find(({ id }) => id === "provider-target")?.owner).toBe("Codex");

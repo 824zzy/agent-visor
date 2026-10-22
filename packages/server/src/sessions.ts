@@ -4308,6 +4308,11 @@ function responseIdentity(
  * not identify a terminal destination.
  */
 function ownerForPublicDestination(session: DiscoveredProviderSession): string {
+  // A retained target is only a public destination when the provider has
+  // confirmed that the owner action is currently available.  Keep the
+  // provider's existing metadata when discovery leaves a stale target behind
+  // so the UI cannot advertise a terminal that the action cannot open.
+  if (!session.canOpenOwner) return session.owner;
   switch (session.controlTarget?.kind) {
     case "terminal":
       return session.controlTarget.target.application;
