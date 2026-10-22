@@ -41,6 +41,13 @@ let nativeActionQueue = Promise.resolve();
 let showingSessionFocusError = false;
 let quitting = false;
 
+type RepairPathKind = "executable" | "configRoot" | "profile" | "settingsFile";
+
+function isRepairPathKind(value: unknown): value is RepairPathKind {
+  return value === "executable" || value === "configRoot"
+    || value === "profile" || value === "settingsFile";
+}
+
 app.setName(productName);
 const appDataPath = app.getPath("appData");
 const userDataPath = path.join(appDataPath, electronDataName);
@@ -63,6 +70,21 @@ ipcMain.handle("chat:read-image-file", (event, value: unknown) => {
     || !event.senderFrame
     || !rendererURLAllowed(rendererTrust, event.senderFrame.url)) return undefined;
   return readImageFileURL(value);
+});
+ipcMain.handle("history:pick-repair-path", async (event, value: unknown) => {
+  if (event.sender !== mainWindow?.webContents
+    || !rendererTrust
+    || !event.senderFrame
+    || !rendererURLAllowed(rendererTrust, event.senderFrame.url)
+    || !isRepairPathKind(value)) return undefined;
+  const properties: Array<"openDirectory" | "openFile"> = [
+    value === "configRoot" ? "openDirectory" : "openFile",
+  ];
+  const options = { properties };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  return result.canceled ? undefined : result.filePaths[0];
 });
 ipcMain.handle("chat:open-external", async (event, value: unknown) => {
   if (event.sender !== mainWindow?.webContents

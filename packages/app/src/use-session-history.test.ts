@@ -150,4 +150,42 @@ describe("session history controller", () => {
     });
     controller.close();
   });
+
+  it("cancels a repair without refreshing and refreshes after acceptance", () => {
+    const fake = fakeConnection();
+    const states: Array<{ repairingSessionID?: string; repairError?: string }> = [];
+    const controller = createSessionHistoryController((state) => {
+      states.push({ repairingSessionID: state.repairingSessionID, repairError: state.repairError });
+    }, fake.connect);
+    fake.open();
+    fake.message(page(["closed"]));
+
+    controller.repair("closed", null);
+    const cancelled = JSON.parse(fake.sent[1]!);
+    expect(cancelled).toMatchObject({ type: "repair_history_session", sessionId: "closed", selection: null });
+    fake.message({
+      type: "history_action_result",
+      id: cancelled.id,
+      action: "repair",
+      sessionId: "closed",
+      state: "cancelled",
+      ok: true,
+    });
+    expect(fake.sent).toHaveLength(2);
+    expect(states.at(-1)).toEqual({ repairingSessionID: undefined, repairError: undefined });
+
+    controller.repair("closed", { kind: "provider", executableRef: "/tmp/claude" });
+    const accepted = JSON.parse(fake.sent[2]!);
+    fake.message({
+      type: "history_action_result",
+      id: accepted.id,
+      action: "repair",
+      sessionId: "closed",
+      state: "accepted",
+      ok: true,
+    });
+    expect(JSON.parse(fake.sent[3]!)).toMatchObject({ type: "get_session_history", limit: 100 });
+    expect(states.at(-1)).toEqual({ repairingSessionID: undefined, repairError: undefined });
+    controller.close();
+  });
 });

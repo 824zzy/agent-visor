@@ -143,6 +143,41 @@ export async function startServer(options: {
           requestId: parsed.data.id,
           sessionId: parsed.data.sessionId,
         });
+      } else if (parsed.data.type === "repair_history_session") {
+        try {
+          const result = source.repairHistorySession
+            ? await source.repairHistorySession(parsed.data.sessionId, parsed.data.selection)
+            : { state: "rejected" as const, reason: "History repair is unavailable." };
+          const ok = result.state === "accepted" || result.state === "cancelled";
+          sendDaemonMessage(socket, {
+            type: "history_action_result",
+            id: parsed.data.id,
+            action: "repair",
+            sessionId: parsed.data.sessionId,
+            state: result.state,
+            ok,
+            ...(result.state === "rejected" ? { error: result.reason } : {}),
+          }, {
+            requestType: parsed.data.type,
+            requestId: parsed.data.id,
+            sessionId: parsed.data.sessionId,
+          });
+        } catch (error) {
+          reportRequestFailure(error);
+          sendDaemonMessage(socket, {
+            type: "history_action_result",
+            id: parsed.data.id,
+            action: "repair",
+            sessionId: parsed.data.sessionId,
+            state: "rejected",
+            ok: false,
+            error: requestFailureMessage(error),
+          }, {
+            requestType: parsed.data.type,
+            requestId: parsed.data.id,
+            sessionId: parsed.data.sessionId,
+          });
+        }
       } else if (parsed.data.type === "get_native_services") {
         if (options.nativeServices) {
           nativeSubscribers.add(socket);

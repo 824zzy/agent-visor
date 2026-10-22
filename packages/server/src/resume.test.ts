@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -191,7 +191,7 @@ describe("ResumeCoordinator", () => {
     const project = canonicalCwd.replaceAll("/", "-").replaceAll(".", "-").replaceAll("_", "-");
     const transcriptPath = path.join(canonicalConfigRoot, "projects", project, `${sessionID}.jsonl`);
     mkdirSync(path.dirname(transcriptPath), { recursive: true });
-    writeFileSync(transcriptPath, "{}\n");
+    writeFileSync(transcriptPath, `${JSON.stringify({ sessionId: sessionID, cwd: canonicalCwd })}\n`);
     const now = new Date("2026-10-21T18:02:00.000Z");
     const capability = {
       version: 1 as const,
@@ -286,7 +286,7 @@ describe("ResumeCoordinator", () => {
     const project = canonicalCwd.replaceAll("/", "-").replaceAll(".", "-").replaceAll("_", "-");
     const transcriptPath = path.join(canonicalConfigRoot, "projects", project, `${sessionID}.jsonl`);
     mkdirSync(path.dirname(transcriptPath), { recursive: true });
-    writeFileSync(transcriptPath, "{}\n");
+    writeFileSync(transcriptPath, `${JSON.stringify({ sessionId: sessionID, cwd: canonicalCwd })}\n`);
     const capability = {
       version: 1 as const,
       provider: "claude_code" as const,
@@ -461,6 +461,8 @@ describe("ResumeCoordinator", () => {
     const transcriptPath = path.join(canonicalConfigRoot, "projects", project, `${sessionID}.jsonl`);
     mkdirSync(path.dirname(transcriptPath), { recursive: true });
     const firstUser = JSON.stringify({
+      sessionId: sessionID,
+      cwd: canonicalCwd,
       type: "user",
       uuid: "real-repository-user",
       timestamp: "2026-10-21T18:05:00.000Z",
@@ -561,6 +563,74 @@ describe("ResumeCoordinator", () => {
         id: sessionID,
         section: "working",
       }));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Claude provider repair validation", () => {
+  it("requires executable permission and bounded transcript UUID proof", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "agent-visor-claude-repair-"));
+    const home = path.join(root, "home");
+    const cwd = path.join(root, "project");
+    const configRoot = path.join(home, ".claude");
+    const executable = path.join(home, ".local", "share", "claude", "versions", "2.1.296");
+    const sessionID = "77777777-7777-4777-8777-777777777777";
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(configRoot, { recursive: true });
+    mkdirSync(path.dirname(executable), { recursive: true });
+    writeFileSync(executable, "#!/bin/sh\n", { mode: 0o755 });
+    const selectedExecutable = path.join(home, ".local", "bin", "claude");
+    mkdirSync(path.dirname(selectedExecutable), { recursive: true });
+    symlinkSync(executable, selectedExecutable);
+    const canonicalCwd = realpathSync(cwd);
+    const canonicalConfigRoot = realpathSync(configRoot);
+    const project = canonicalCwd.replaceAll("/", "-").replaceAll(".", "-").replaceAll("_", "-");
+    const transcriptPath = path.join(canonicalConfigRoot, "projects", project, `${sessionID}.jsonl`);
+    const settingsFile = path.join(canonicalConfigRoot, "settings.json");
+    mkdirSync(path.dirname(transcriptPath), { recursive: true });
+    const capability = {
+      version: 1 as const,
+      provider: "claude_code" as const,
+      host: "Ghostty" as const,
+      executableRef: realpathSync(executable),
+      configRootRef: canonicalConfigRoot,
+      profileState: "verified_absent" as const,
+      overrideNames: [],
+      provenanceObservedAt: "2026-10-21T18:07:00.000Z",
+    };
+    const record = {
+      id: sessionID,
+      canonicalId: sessionID,
+      provider: "claude_code" as const,
+      host: "Ghostty" as const,
+      cwd: canonicalCwd,
+      configHome: canonicalConfigRoot,
+      transcriptPath,
+      resume: capability,
+    } as RetainedHistoryRecord;
+    const environment = new RealClaudeResumeFixtureEnvironment(
+      realpathSync(home), canonicalCwd, canonicalConfigRoot, realpathSync(executable), sessionID,
+    );
+    const adapter = new ClaudeResumeAdapter(environment, async () => [], () => "authoritative");
+    const selection = { kind: "provider" as const, executableRef: selectedExecutable };
+    try {
+      writeFileSync(transcriptPath, `${JSON.stringify({ sessionId: sessionID, cwd: canonicalCwd })}\n`);
+      expect(adapter.validateRepair(record, selection).state).toBe("valid");
+      writeFileSync(settingsFile, "{}\n");
+      expect(adapter.validateRepair(record, { ...selection, settingsFileRef: settingsFile }).state).toBe("valid");
+      writeFileSync(settingsFile, "not-json\n");
+      expect(adapter.validateRepair(record, { ...selection, settingsFileRef: settingsFile }).state).toBe("unavailable");
+
+      writeFileSync(transcriptPath, `${JSON.stringify({ sessionId: "88888888-8888-4888-8888-888888888888", cwd: canonicalCwd })}\n`);
+      expect(adapter.validateRepair(record, selection).state).toBe("unavailable");
+      writeFileSync(transcriptPath, "");
+      expect(adapter.validateRepair(record, selection).state).toBe("unavailable");
+
+      writeFileSync(transcriptPath, `${JSON.stringify({ sessionId: sessionID, cwd: canonicalCwd })}\n`);
+      chmodSync(executable, 0o644);
+      expect(adapter.validateRepair(record, selection).state).toBe("unavailable");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

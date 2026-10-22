@@ -1,6 +1,7 @@
-import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type {
+  HistoryRepairSelection,
   NativeHelperGhosttyResumeDispatch,
   NativeHelperGhosttyResumeTarget,
 } from "@agent-visor/protocol";
@@ -13,11 +14,12 @@ import type {
   ResumeLiveness,
   ResumeProviderAdapter,
   ResumeReconciliation,
+  ResumeRepairValidation,
   ResumeTargetResult,
 } from "../resume.js";
 import type { FreshProcessInventory, ProcessRecord, ProviderEnvironment } from "./environment.js";
 import type { ProcessProvenance } from "./process-provenance.js";
-import { codexThreadReference } from "./codex-instances.js";
+import { codexInstanceID, codexThreadReference } from "./codex-instances.js";
 
 const fullThreadID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const pathLimit = 4_096;
@@ -80,6 +82,77 @@ export class CodexResumeAdapter implements ResumeProviderAdapter {
       nonce,
     };
     return { state: "eligible", target };
+  }
+
+  validateRepair(record: RetainedHistoryRecord, selection: HistoryRepairSelection): ResumeRepairValidation {
+    if (selection.kind !== "provider" || record.provider !== "codex") {
+      return { state: "unavailable", reason: "This repair does not match the retained Codex provider." };
+    }
+    if (!record.resume || record.resume.provider !== "codex_cli") {
+      return { state: "unavailable", reason: "Codex launch provenance is unavailable for this row." };
+    }
+    const executableRef = selection.executableRef
+      ? canonicalExecutableSelection(selection.executableRef)
+      : undefined;
+    if (selection.executableRef && (!executableRef || !isTrustedCodexExecutable(executableRef, this.environment.home))) {
+      return { state: "unavailable", reason: "The selected Codex executable is not an approved native binary." };
+    }
+    if (selection.settingsFileRef) {
+      return { state: "unavailable", reason: "Codex does not support a separate settings file." };
+    }
+    let profileRef = record.resume.profileRef;
+    let profileState = record.resume.profileState;
+    const configRootRef = selection.configRootRef
+      ? canonicalDirectorySelection(selection.configRootRef)
+      : record.resume.configRootRef;
+    if (selection.configRootRef && !configRootRef) {
+      return { state: "unavailable", reason: "The selected Codex configuration home is unavailable." };
+    }
+    if (selection.profileFileRef) {
+      if (!configRootRef) return { state: "unavailable", reason: "The Codex configuration home is unavailable." };
+      let selected: string;
+      try { selected = realpathSync(selection.profileFileRef); } catch {
+        return { state: "unavailable", reason: "The selected Codex profile is unavailable." };
+      }
+      const basename = path.basename(selected);
+      const match = /^(.*)\.config\.toml$/.exec(basename);
+      let expectedRoot: string;
+      try { expectedRoot = realpathSync(configRootRef); } catch {
+        return { state: "unavailable", reason: "The selected Codex configuration home is unavailable." };
+      }
+      if (!match || !isCodexProfileFile(selected) || path.dirname(selected) !== expectedRoot) {
+        return { state: "unavailable", reason: "The selected Codex profile is not in the selected configuration home." };
+      }
+      profileRef = match[1];
+      profileState = "present";
+    }
+    if (selection.profileRef) {
+      profileRef = selection.profileRef;
+      profileState = "present";
+    }
+    if (selection.profileState) profileState = selection.profileState;
+    if (profileState === "verified_absent") profileRef = undefined;
+    if (!configRootRef) return { state: "unavailable", reason: "The Codex configuration home is unavailable." };
+    if (!codexHomeMatchesSource(record.canonicalId, configRootRef, this.environment.home)) {
+      return { state: "unavailable", reason: "The selected Codex configuration home does not match the retained conversation." };
+    }
+    const { profileRef: _oldProfileRef, ...withoutOldProfile } = record.resume;
+    const capability: RetainedHistoryCodexResumeCapability = {
+      ...withoutOldProfile,
+      ...(executableRef ? { executableRef } : {}),
+      configRootRef,
+      ...(profileRef ? { profileRef } : {}),
+      profileState,
+      provenanceObservedAt: this.environment.now().toISOString(),
+    };
+    const candidateRecord = selection.configRootRef
+      ? { ...record, configHome: configRootRef }
+      : record;
+    const capabilityReason = validateCapability(candidateRecord, capability);
+    if (capabilityReason) return { state: "unavailable", reason: capabilityReason };
+    const transcriptReason = validateTranscriptPath(candidateRecord, capability);
+    if (transcriptReason) return { state: "unavailable", reason: transcriptReason };
+    return { state: "valid", capability };
   }
 
   async reconcileResume(
@@ -175,7 +248,7 @@ function validateCapability(
   }
   if (capability.profileState === "present") {
     if (!capability.profileRef) return "The recorded Codex profile is ambiguous.";
-    if (!isFile(path.join(capability.configRootRef, `${capability.profileRef}.config.toml`))) {
+    if (!isCodexProfileFile(path.join(capability.configRootRef, `${capability.profileRef}.config.toml`))) {
       return "The recorded Codex profile is unavailable.";
     }
   } else if (capability.profileRef) {
@@ -298,11 +371,70 @@ function isFile(value: string): boolean {
   try { return statSync(value).isFile(); } catch { return false; }
 }
 
+function isCodexProfileFile(value: string): boolean {
+  try {
+    const metadata = statSync(value);
+    if (!metadata.isFile() || metadata.size === 0 || metadata.size > 256 * 1_024) return false;
+    const content = readFileSync(value, "utf8");
+    // Profile files are TOML settings. Only inspect bounded key syntax; never
+    // retain or parse values that may contain credentials.
+    return /^\s*[A-Za-z][A-Za-z0-9_.-]*\s*=/m.test(content);
+  } catch {
+    return false;
+  }
+}
+
 function isExecutableFile(value: string): boolean {
   try {
     const stat = statSync(value);
     return stat.isFile() && (stat.mode & 0o111) !== 0;
   } catch { return false; }
+}
+
+function canonicalExecutableSelection(value: string): string | undefined {
+  try {
+    const resolved = realpathSync(value);
+    return isExecutableFile(resolved) ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function canonicalDirectorySelection(value: string): string | undefined {
+  try {
+    const resolved = realpathSync(value);
+    return isDirectory(resolved) ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isTrustedCodexExecutable(executable: string, home: string): boolean {
+  try {
+    if (realpathSync(executable) !== executable) return false;
+    return [
+      path.join(home, ".local", "bin", "codex"),
+      "/Applications/ChatGPT.app/Contents/Resources/codex",
+      "/opt/homebrew/bin/codex",
+      "/usr/local/bin/codex",
+    ].some((candidate) => {
+      try { return realpathSync(candidate) === executable; } catch { return false; }
+    });
+  } catch {
+    return false;
+  }
+}
+
+function codexHomeMatchesSource(canonicalId: string, configRoot: string, home: string): boolean {
+  const reference = codexThreadReference(canonicalId);
+  if (!reference) return false;
+  try {
+    const canonicalRoot = realpathSync(configRoot);
+    const nativeHome = realpathSync(path.join(home, ".codex"));
+    return canonicalRoot === configRoot && codexInstanceID(canonicalRoot, nativeHome) === reference.instanceID;
+  } catch {
+    return false;
+  }
 }
 
 function isDirectory(value: string): boolean {

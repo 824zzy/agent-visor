@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   serverMessageSchema,
+  type HistoryRepairSelection,
   type SessionHistoryPage,
 } from "@agent-visor/protocol";
 import {
@@ -18,6 +19,8 @@ export type SessionHistoryState = {
   loadingMore: boolean;
   removingSessionID?: string;
   removeError?: string;
+  repairingSessionID?: string;
+  repairError?: string;
 };
 
 type HistoryConnector = (handlers: DaemonConnectionHandlers) => DaemonConnection;
@@ -36,6 +39,7 @@ export function createSessionHistoryController(
   setQuery(query: string): void;
   loadMore(): void;
   remove(sessionId: string): void;
+  repair(sessionId: string, selection: HistoryRepairSelection | null): void;
   observeLiveSessionIDs(ids: readonly string[]): void;
   close(): void;
 } {
@@ -47,6 +51,7 @@ export function createSessionHistoryController(
   let pending: HistoryRequest | undefined;
   let queued: HistoryRequest | undefined;
   let pendingRemoval: { id: string; sessionId: string } | undefined;
+  let pendingRepair: { id: string; sessionId: string } | undefined;
   let previousLiveIDs: Set<string> | undefined;
 
   const publish = (next: SessionHistoryState): void => {
@@ -84,6 +89,20 @@ export function createSessionHistoryController(
       type: "remove_history_session" as const,
       id,
       sessionId,
+    }));
+  };
+
+  const repair = (sessionId: string, selection: HistoryRepairSelection | null): void => {
+    if (closed || pendingRepair || !sessionId) return;
+    if (!connected || !connection) return;
+    const id = `history-repair-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    pendingRepair = { id, sessionId };
+    publish({ ...state, repairingSessionID: sessionId, repairError: undefined });
+    connection.send(JSON.stringify({
+      type: "repair_history_session" as const,
+      id,
+      sessionId,
+      selection,
     }));
   };
 
@@ -131,6 +150,21 @@ export function createSessionHistoryController(
     requestCurrent({ query, append: false });
   };
 
+  const handleRepair = (result: Extract<
+    import("@agent-visor/protocol").ServerMessage,
+    { type: "history_action_result" }
+  >): void => {
+    if (!pendingRepair || pendingRepair.id !== result.id) return;
+    pendingRepair = undefined;
+    if (!result.ok || result.state === "rejected") {
+      publish({ ...state, repairingSessionID: undefined,
+        repairError: result.error ?? "History repair failed." });
+      return;
+    }
+    publish({ ...state, repairingSessionID: undefined, repairError: undefined });
+    if (result.state === "accepted") requestCurrent({ query, append: false });
+  };
+
   const client = connect({
     url: daemonUrl(),
     onDisconnect: () => {
@@ -142,7 +176,10 @@ export function createSessionHistoryController(
     onMessage: (data) => {
       const parsed = serverMessageSchema.safeParse(parseJSON(data));
       if (parsed.success && parsed.data.type === "session_history_page") handlePage(parsed.data);
-      if (parsed.success && parsed.data.type === "history_action_result") handleRemoval(parsed.data);
+      if (parsed.success && parsed.data.type === "history_action_result") {
+        if (parsed.data.action === "remove") handleRemoval(parsed.data);
+        else handleRepair(parsed.data);
+      }
     },
     onOpen: (opened) => {
       connection = opened;
@@ -167,6 +204,7 @@ export function createSessionHistoryController(
       requestCurrent({ query, cursor: state.page.nextCursor, append: true });
     },
     remove,
+    repair,
     observeLiveSessionIDs(ids: readonly string[]): void {
       const current = new Set(ids);
       const closedLiveSession = previousLiveIDs !== undefined
@@ -187,7 +225,11 @@ export function createSessionHistoryController(
 export function useSessionHistory(
   query: string,
   liveSessionIDs: readonly string[],
-): SessionHistoryState & { loadMore(): void; remove(sessionId: string): void } {
+): SessionHistoryState & {
+  loadMore(): void;
+  remove(sessionId: string): void;
+  repair(sessionId: string, selection: HistoryRepairSelection | null): void;
+} {
   const [state, setState] = useState<SessionHistoryState>({ status: "loading", loadingMore: false });
   const controller = useRef<ReturnType<typeof createSessionHistoryController> | undefined>(undefined);
   const liveKey = liveSessionIDs.join("\0");
@@ -211,7 +253,11 @@ export function useSessionHistory(
 
   const loadMore = useCallback(() => controller.current?.loadMore(), []);
   const remove = useCallback((sessionId: string) => controller.current?.remove(sessionId), []);
-  return { ...state, loadMore, remove };
+  const repair = useCallback(
+    (sessionId: string, selection: HistoryRepairSelection | null) => controller.current?.repair(sessionId, selection),
+    [],
+  );
+  return { ...state, loadMore, remove, repair };
 }
 
 function mergeHistoryRows(

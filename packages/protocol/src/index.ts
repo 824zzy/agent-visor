@@ -97,6 +97,27 @@ export const sessionResumeStateSchema = z.enum([
   "unavailable",
 ]);
 
+const historyRepairAbsolutePathSchema = z.string()
+  .startsWith("/")
+  .max(4_096)
+  .regex(/^[^\0]+$/);
+const historyRepairProfileNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+
+/** Explicit, provider-owned repair references; values are never credentials or commands. */
+export const historyRepairSelectionSchema = z.object({
+  kind: z.literal("provider"),
+  executableRef: historyRepairAbsolutePathSchema.optional(),
+  configRootRef: historyRepairAbsolutePathSchema.optional(),
+  settingsFileRef: historyRepairAbsolutePathSchema.optional(),
+  /** Bounded name for providers whose profile is selected from its config home. */
+  profileRef: historyRepairProfileNameSchema.optional(),
+  /** Exact selected profile file; adapters derive and validate its provider name. */
+  profileFileRef: historyRepairAbsolutePathSchema.optional(),
+  profileState: z.enum(["present", "verified_absent"]).optional(),
+}).strict().refine((selection) => Object.keys(selection).some((key) => key !== "kind"), {
+  message: "A provider repair must select at least one reference.",
+});
+
 export const sessionSummarySchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -134,6 +155,10 @@ export const sessionSummarySchema = z.object({
   /** Resume is a separate action from opening the read-only transcript. */
   resumeState: sessionResumeStateSchema.optional(),
   resumeReason: z.string().min(1).max(256).optional(),
+  /** Explicit user-driven repair is available for provider launch references. */
+  repairKind: z.literal("provider").optional(),
+  repairFields: z.array(z.enum(["executable", "configRoot", "profile", "settingsFile"]))
+    .max(4).optional(),
 });
 
 export const sessionSnapshotSchema = z.object({
@@ -808,6 +833,12 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
   }).strict(),
   z.object({
     ...requestEnvelope,
+    type: z.literal("repair_history_session"),
+    sessionId: z.string().min(1).max(512),
+    selection: historyRepairSelectionSchema.nullable(),
+  }).strict(),
+  z.object({
+    ...requestEnvelope,
     type: z.literal("update_settings"),
     patch: appSettingsPatchSchema,
   }).strict(),
@@ -934,8 +965,9 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("history_action_result"),
     id: z.string().min(1).max(128),
-    action: z.literal("remove"),
+    action: z.enum(["remove", "repair"]),
     sessionId: z.string().min(1).max(512),
+    state: z.enum(["accepted", "cancelled", "rejected"]).optional(),
     ok: z.boolean(),
     error: z.string().min(1).max(1_024).optional(),
   }).strict(),
@@ -1496,6 +1528,7 @@ export type SessionSection = z.infer<typeof sessionSectionSchema>;
 export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
 export type SessionHistoryPage = z.infer<typeof sessionHistoryPageSchema>;
 export type SessionSummary = z.infer<typeof sessionSummarySchema>;
+export type HistoryRepairSelection = z.infer<typeof historyRepairSelectionSchema>;
 export type SessionAttentionTier = z.infer<typeof sessionAttentionTierSchema>;
 export type SessionClass = z.infer<typeof sessionClassSchema>;
 export type SessionResumeState = z.infer<typeof sessionResumeStateSchema>;

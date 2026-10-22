@@ -6,8 +6,10 @@ import { FakeNativeHelper } from "../native-helper.js";
 import { NativeSessionControls } from "../session-controls.js";
 import { SessionRepository } from "../sessions.js";
 import { CodexProvider } from "./codex.js";
+import { CodexResumeAdapter } from "./codex-resume.js";
 import { LiveProviderEnvironment, type ProcessRecord } from "./environment.js";
 import type { ProcessProvenanceResult } from "./process-provenance.js";
+import type { RetainedHistoryRecord } from "../retained-history.js";
 
 const threadID = "019f3931-ec11-7f31-8400-1c8624aa9e4d";
 const observedAt = new Date("2026-10-21T19:00:00.000Z");
@@ -24,8 +26,12 @@ class ProductionCodexEnvironment extends LiveProviderEnvironment {
   readonly database = path.join(this.codexHome, "sqlite", "state_5.sqlite");
   readonly rollout = path.join(this.codexHome, "sessions", "2026", "10", "21",
     `rollout-20261021T190000-${threadID}.jsonl`);
+  readonly repairExecutable = path.join(this.home, ".local", "bin", "codex");
+  readonly repairProfilePath = path.join(this.codexHome, "repair.config.toml");
   live = true;
   resumeNonce: string | undefined;
+  activeExecutable = this.executable;
+  activeProfile = "work";
 
   override readonly readCodexTuiBinding = async (pid: number, home: string) => {
     if (!this.live || pid !== codexPID || home !== this.codexHome) return undefined;
@@ -45,10 +51,13 @@ class ProductionCodexEnvironment extends LiveProviderEnvironment {
     mkdirSync(path.dirname(this.database), { recursive: true });
     mkdirSync(path.dirname(this.rollout), { recursive: true });
     mkdirSync(path.dirname(this.executable), { recursive: true });
+    mkdirSync(path.dirname(this.repairExecutable), { recursive: true });
     mkdirSync(this.cwdPath, { recursive: true });
     writeFileSync(this.database, "fixture database\n");
     writeFileSync(this.executable, "#!/bin/sh\n", { mode: 0o755 });
+    writeFileSync(this.repairExecutable, "#!/bin/sh\n", { mode: 0o755 });
     writeFileSync(path.join(this.codexHome, "work.config.toml"), "profile = true\n");
+    writeFileSync(this.repairProfilePath, "profile = true\n");
     writeFileSync(this.rollout, [
       JSON.stringify({ type: "session_meta", payload: { id: threadID, originator: "codex_cli_rs" } }),
       JSON.stringify({ type: "event_msg", timestamp: observedAt.toISOString(), payload: { type: "task_complete" } }),
@@ -61,8 +70,8 @@ class ProductionCodexEnvironment extends LiveProviderEnvironment {
       { pid: ghosttyPID, parentPID: 1, processStartToken: ghosttyToken,
         command: "/Applications/Ghostty.app/Contents/MacOS/ghostty", arguments: "ghostty" },
       { pid: codexPID, parentPID: ghosttyPID, processStartToken: codexToken,
-        tty: "ttys-codex", command: this.executable,
-        arguments: `codex resume ${threadID} --cd ${this.cwdPath} --profile work` },
+        tty: "ttys-codex", command: this.activeExecutable,
+        arguments: `codex resume ${threadID} --cd ${this.cwdPath} --profile ${this.activeProfile}` },
     ];
   }
 
@@ -137,10 +146,10 @@ class ProductionCodexEnvironment extends LiveProviderEnvironment {
         version: 1,
         pid,
         processStartToken: codexToken,
-        executableRef: this.executable,
+        executableRef: this.activeExecutable,
         executableVersion: "1.2.3",
         configRootRef: this.codexHome,
-        profileRef: "work",
+        profileRef: this.activeProfile,
         profileState: "present",
         overrideNames: [],
         ...(this.resumeNonce ? { resumeNonce: this.resumeNonce } : {}),
@@ -223,6 +232,10 @@ describe("Codex production-shaped retained resume", () => {
 
       environment.live = false;
       await initial.refresh();
+      environment.activeExecutable = environment.repairExecutable;
+      environment.activeProfile = "repair";
+      rmSync(environment.executable);
+      rmSync(path.join(environment.codexHome, "work.config.toml"));
 
       const restarted = new SessionRepository([new CodexProvider(environment)], {
         now: () => observedAt,
@@ -233,10 +246,40 @@ describe("Codex production-shaped retained resume", () => {
       expect(restarted.historyPage().sessions).toContainEqual(expect.objectContaining({
         id: threadID,
         source: "Codex",
-        resumeState: "eligible",
+        resumeState: "unavailable",
+        repairKind: "provider",
+        repairFields: ["executable", "profile"],
       }));
 
-      await expect(restarted.resumeSession(threadID)).resolves.toMatchObject({
+      const beforeRepair = readFileSync(historyPath, "utf8");
+      const malformedProfile = path.join(environment.codexHome, "broken.config.toml");
+      writeFileSync(malformedProfile, "not a Codex profile\n");
+      await expect(restarted.repairHistorySession(threadID, {
+        kind: "provider",
+        profileFileRef: malformedProfile,
+      })).resolves.toMatchObject({ state: "rejected" });
+      expect(readFileSync(historyPath, "utf8")).toBe(beforeRepair);
+      await expect(restarted.repairHistorySession(threadID, null)).resolves.toMatchObject({ state: "cancelled" });
+      expect(readFileSync(historyPath, "utf8")).toBe(beforeRepair);
+      await expect(restarted.repairHistorySession(threadID, {
+        kind: "provider",
+        executableRef: environment.repairExecutable,
+        profileFileRef: environment.repairProfilePath,
+      })).resolves.toMatchObject({ state: "accepted" });
+      expect(helper.ghosttyResumeRequests).toHaveLength(0);
+
+      const repaired = new SessionRepository([new CodexProvider(environment)], {
+        now: () => observedAt,
+        retainedHistoryPath: historyPath,
+      });
+      repaired.setControls(new NativeSessionControls(helper));
+      await repaired.refresh();
+      expect(repaired.historyPage().sessions).toContainEqual(expect.objectContaining({
+        id: threadID,
+        source: "Codex",
+        resumeState: "eligible",
+      }));
+      await expect(repaired.resumeSession(threadID)).resolves.toMatchObject({
         state: "matched",
         sessionId: threadID,
       });
@@ -245,13 +288,55 @@ describe("Codex production-shaped retained resume", () => {
         provider: "codex_cli",
         sessionId: threadID,
         cwd: environment.cwdPath,
-        executable: environment.executable,
+        executable: environment.repairExecutable,
         configRoot: environment.codexHome,
-        profileRef: "work",
+        profileRef: "repair",
       });
       expect(helper.ghosttyTerminalFocusRequests).toHaveLength(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("accepts an explicit profile clear and rejects a malformed selected profile", () => {
+    const root = realpathSync(mkdtempSync(path.join("/tmp", "agent-visor-codex-repair-")));
+    const environment = new ProductionCodexEnvironment(root);
+    const capability = {
+      version: 1 as const,
+      provider: "codex_cli" as const,
+      host: "Ghostty" as const,
+      executableRef: environment.executable,
+      executableVersion: "1.2.3",
+      configRootRef: environment.codexHome,
+      profileRef: "work",
+      profileState: "present" as const,
+      overrideNames: [],
+      provenanceObservedAt: observedAt.toISOString(),
+    };
+    const record = {
+      id: canonicalThreadID(threadID),
+      canonicalId: `codex:native:${threadID}`,
+      provider: "codex" as const,
+      host: "Ghostty" as const,
+      cwd: environment.cwdPath,
+      configHome: environment.codexHome,
+      transcriptPath: environment.rollout,
+      resume: capability,
+    } as RetainedHistoryRecord;
+    const adapter = new CodexResumeAdapter(environment, async () => [], () => "authoritative");
+    const malformed = path.join(environment.codexHome, "broken.config.toml");
+    writeFileSync(malformed, "not a profile\n");
+    try {
+      expect(adapter.validateRepair(record, { kind: "provider", profileState: "verified_absent" }).state)
+        .toBe("valid");
+      expect(adapter.validateRepair(record, { kind: "provider", profileFileRef: malformed }).state)
+        .toBe("unavailable");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
+
+function canonicalThreadID(threadID: string): string {
+  return `codex:native:${threadID}`;
+}

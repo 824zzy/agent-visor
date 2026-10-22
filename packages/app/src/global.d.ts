@@ -10,6 +10,8 @@ declare global {
         byteLength: number;
         data: string;
       } | undefined>;
+      pickRepairPath?(kind: "executable" | "configRoot" | "profile" | "settingsFile"):
+        Promise<string | undefined>;
       onNavigate(listener: (action:
         | { page: "sessions" }
         | { page: "settings"; checkUpdates: boolean }
