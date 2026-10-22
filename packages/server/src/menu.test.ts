@@ -89,6 +89,37 @@ const snapshot: SessionSnapshot = {
 };
 
 describe("menu presentation", () => {
+  it.each([
+    ["compaction", "ready", "working", "Compacting context", "Working"],
+    ["async question", "working", "needs_you", "Answer required", "Needs you"],
+    ["permission", "working", "needs_you", "Approval required", "Needs you"],
+    ["new turn", "needs_you", "working", "Agent is working", "Working"],
+    ["completed turn", "working", "ready", "Ready to continue", "Ready"],
+  ] as const)(
+    "uses the resolved lifecycle label for a %s transition even when placement is stale",
+    (_name, section, turn, subtitle, expectedStatus) => {
+      const session = {
+        ...snapshot.sessions[4]!,
+        id: `transition-${_name.replaceAll(" ", "-")}`,
+        section,
+        subtitle,
+        sessionState: {
+          conversation: "open",
+          turn,
+          route: turn === "ready" ? "available" : "waiting",
+        },
+      } satisfies SessionSnapshot["sessions"][number];
+      const presentation = menuPresentation({ ...snapshot, sessions: [session] }, []);
+      const pill = presentation.navigatorPills[0];
+
+      expect(pill).toMatchObject({
+        phase: section,
+        inspector: { status: expectedStatus },
+      });
+      expect(pill?.accessibilityLabel).toContain(`, ${expectedStatus},`);
+    },
+  );
+
   it("keeps neutral History lifecycle status identical across menu inspector and accessibility", () => {
     const historyRows = [
       ["closed", "Closed", "Closed terminal conversation"],
@@ -253,7 +284,7 @@ describe("menu presentation", () => {
           lifecycleStatus: "needs_you",
           priority: 0,
           defaultOverflowEligible: true,
-          accessibilityLabel: "Approve release, needs you, Claude Code, agent-visor",
+          accessibilityLabel: "Approve release, Needs you, Claude Code, agent-visor",
         },
         {
           id: "ready",
@@ -279,7 +310,7 @@ describe("menu presentation", () => {
           lifecycleStatus: "working",
           priority: 2,
           defaultOverflowEligible: true,
-          accessibilityLabel: "Build menu, in progress, Pi, agent-visor",
+          accessibilityLabel: "Build menu, Working, Pi, agent-visor",
         },
         {
           id: "history",

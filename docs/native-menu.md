@@ -104,7 +104,7 @@ Needs you items come first, then unopened Ready completions, In progress, opened
 
 Codex completion freshness uses the recorded completion time. Running freshness uses start and actual turn-progress records, including bounded headers of large answer/tool rows. File modification times, settings, client metadata, and context records do not refresh either claim. Opening an old conversation cannot turn History into unopened Ready or revive a dormant start marker. Transcript revisions still track file changes so Chat refreshes normally.
 
-Claude Code rows that remain Ready without activity for the shared 30-minute transcript stale ceiling keep their Ready wire phase and true turn/route state, but receive a History attention tier on native surfaces. That tier moves them behind newer work and makes the overflow show them as Recent without truncating the Ready age fade. Their full Sessions-browser row remains unchanged.
+Claude Code rows that remain Ready without activity for the shared 30-minute transcript stale ceiling keep their Ready wire phase and true turn/route state, but receive a History attention tier on native surfaces. That tier moves them behind newer work and makes the overflow show them as Recent; it does not replace the Ready status or green semantic mark. Their full Sessions-browser row remains unchanged.
 
 ### Pill-surface selection contract
 
@@ -154,7 +154,7 @@ Unopened completions stay ahead of In progress once the layout settles. Opening 
 
 An authoritative unopened completion keeps a gentle green status-dot pulse until that exact completion is opened. Its three-second cycle varies opacity from 0.65 to 1. Reduce Motion keeps its green marker static, and hidden strips stop the animation timer. Completion attention is stored separately from lifecycle age and restored after app/helper restarts. Old catalog entries, empty idle conversations, and settings writes do not invent unopened completions. The seven-day menu cap and ambient eligibility still apply.
 
-Unopened completions stay green. Opening marks that completion seen and stops its pulse; the existing 42-minute fade then uses the original completion date, without resetting its age. A later completion receives a new identity and starts attention again. Hover, overflow browsing, elapsed time, metadata writes, and failed opens never mark it seen.
+Unopened completions stay green. Opening marks that completion seen and stops its pulse without changing its Ready status or semantic color. A later completion receives a new identity and starts attention again. Hover, overflow browsing, elapsed time, metadata writes, and failed opens never mark it seen.
 
 Completion acknowledgment requires a successful explicit source activation through Agent Visor or a valid Chat open. Opening a window or conversation directly in another app leaves its completion unopened in Agent Visor. Automatic detection of direct opens is deferred until a reliable identity integration is available; catalog refresh never infers that a result was seen from foreground windows, titles, or document URLs.
 
@@ -201,7 +201,7 @@ Activity, phase, and membership changes adopt the daemon's new priority order. E
 The status colors match the released sRGB roles:
 
 - `#f4c114` means Needs you.
-- `#a6e3a1` means a fresh Ready completion and fades toward `#7f849c` as activity ages.
+- `#a6e3a1` means Ready at every age. History placement may use muted surrounding treatment, while the lifecycle mark remains green.
 - `#d97857` means In progress.
 - Recent History uses the muted `#7f849c` role and lighter capsule treatment.
 

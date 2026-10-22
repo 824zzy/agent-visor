@@ -344,10 +344,10 @@ public struct NativeMenuOverflowView: View {
 
     private func status(for phase: NativeHelperPillPhase) -> String {
         switch phase {
-        case .needsYou: "Needs attention"
+        case .needsYou: "Needs you"
         case .ready: "Ready"
-        case .working: "In progress"
-        case .history: "History"
+        case .working: "Working"
+        case .history: "Historical"
         }
     }
 

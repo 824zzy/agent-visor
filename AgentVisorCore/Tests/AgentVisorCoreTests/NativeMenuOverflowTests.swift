@@ -40,6 +40,30 @@ final class NativeMenuOverflowTests: XCTestCase {
         XCTAssertEqual(NativeMenuStatusPresentation.tone(for: historicalPlacement), .ready)
     }
 
+    func testNativeFallbackUsesSharedLifecycleLabelsForWorkingAndNeedsYou() {
+        let needsYou = pill("question", title: "Answer", project: "agent-visor", phase: .needsYou)
+        let working = pill("working", title: "Build", project: "agent-visor", phase: .working)
+        let historical = pill("historical", title: "Old", project: "agent-visor", phase: .history)
+
+        XCTAssertEqual(NativeMenuStatusPresentation.status(for: needsYou), "Needs you")
+        XCTAssertEqual(NativeMenuStatusPresentation.tone(for: needsYou), .needsYou)
+        XCTAssertEqual(NativeMenuStatusPresentation.status(for: working), "Working")
+        XCTAssertEqual(NativeMenuStatusPresentation.tone(for: working), .working)
+        XCTAssertEqual(NativeMenuStatusPresentation.status(for: historical), "Historical")
+        XCTAssertEqual(NativeMenuStatusPresentation.tone(for: historical), .history)
+    }
+
+    func testNativeInspectorStatusOverridesPlacementPhaseForTransitionRows() {
+        let questionDuringWork = pill(
+            "question", title: "Answer", project: "agent-visor",
+            activityAt: "2026-10-21T19:00:00.000Z",
+            phase: .working, inspectorStatus: "Needs you"
+        )
+
+        XCTAssertEqual(NativeMenuStatusPresentation.status(for: questionDuringWork), "Needs you")
+        XCTAssertEqual(NativeMenuStatusPresentation.tone(for: questionDuringWork), .needsYou)
+    }
+
     func testExplicitLifecycleStatusWinsOverLegacyInspectorCopy() throws {
         let json = #"{"id":"closed","title":"Closed","phase":"history","priority":0,"accessibilityLabel":"Closed, Closed","lifecycleStatus":"closed","inspector":{"status":"Recent","runtimeItems":["Claude Code"],"detailRows":[],"projectPath":"~/Codes","activityAt":"2026-10-21T18:00:00.000Z"}}"#
         let closed = try JSONDecoder().decode(NativeHelperPill.self, from: Data(json.utf8))

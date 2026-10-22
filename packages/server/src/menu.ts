@@ -17,13 +17,6 @@ const attentionOrder = {
   history: 4,
 } as const;
 
-const phaseLabel = {
-  needs_you: "needs you",
-  ready: "ready to continue",
-  working: "in progress",
-  history: "recent session",
-} as const;
-
 /** Native clicks must report a rejected focus instead of silently dropping it. */
 export async function activateMenuPill(
   event: Extract<NativeHelperEvent, { event: "activate_pill" }>,
@@ -139,7 +132,7 @@ export function menuPresentation(
  * longer a fresh Ready shortcut. Keep the source snapshot's phase, subtitle,
  * turn, and route evidence unchanged; this projection only moves dormant rows
  * behind recent work on the native menu surfaces. The helper uses the tier for
- * Recent grouping while retaining the Ready phase for its age fade.
+ * Recent grouping without changing the resolved lifecycle status.
  */
 function menuSession(
   session: SessionSnapshot["sessions"][number],
@@ -174,9 +167,6 @@ function presentationPill(
   const sourceLabel = session.source === "Codex" && session.owner.startsWith("Codex ·")
     ? session.owner : session.source;
   const lifecycle = sessionLifecyclePresentation(session);
-  const status = lifecycle.tone === "ready" || lifecycle.tone === "neutral"
-    ? lifecycle.label
-    : inspectorStatus(session.section, session.subtitle);
   return {
     id: session.id,
     title,
@@ -189,7 +179,7 @@ function presentationPill(
     ...(session.failureAlert !== undefined ? { failureAlert: session.failureAlert } : {}),
     lifecycleStatus: lifecycle.status,
     inspector: {
-      status,
+      status: lifecycle.label,
       runtimeItems: [runtimeSource(session.source, session.owner)],
       detailRows: session.sourceProfile ? [{ label: "Profile", value: session.sourceProfile }] : [],
       projectPath: displayPath(session.cwd),
@@ -200,22 +190,12 @@ function presentationPill(
     defaultOverflowEligible: isAmbientSession(session),
     accessibilityLabel: [
       title,
-      lifecycle.tone === "ready" || lifecycle.tone === "neutral"
-        ? lifecycle.label : phaseLabel[session.section],
+      lifecycle.label,
       sourceLabel,
       session.project,
       ...(session.managedBy ? [`Managed by ${session.managedBy}`] : []),
     ].join(", "),
   };
-}
-
-function inspectorStatus(section: SessionSnapshot["sessions"][number]["section"], subtitle: string): string {
-  switch (section) {
-    case "needs_you": return "Needs attention";
-    case "ready": return "Ready";
-    case "working": return "Working";
-    case "history": return subtitle.toLowerCase().includes("ended") ? "Ended" : "Recent";
-  }
 }
 
 function runtimeSource(source: string, owner: string): string {

@@ -2778,6 +2778,76 @@ describe("SessionRepository", () => {
     expect(decision).toBe("allow_always");
   });
 
+  it("keeps an unanswered nonblocking question in Needs you while work continues", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{ ...live, conversationState: "open", section: "working", turnState: "working" }];
+    const repository = new SessionRepository([provider]);
+    await repository.refresh();
+
+    let answerCalls = 0;
+    repository.registerExternalAction("pi-1", {
+      type: "question", toolUseId: "question-while-working", blocking: false,
+      questions: [{ id: "continue", question: "Continue?", choices: ["Yes"], multiple: false }],
+    }, async () => { answerCalls += 1; });
+
+    expect(repository.current().sessions[0]).toMatchObject({
+      section: "needs_you",
+      lifecycleStatus: "needs_you",
+      sessionState: { turn: "working" },
+      subtitle: "Answer required",
+    });
+
+    // A refresh while the nonblocking question is still unanswered must keep
+    // the Needs you presentation while preserving provider Working evidence.
+    provider.sessions = [{
+      ...provider.sessions[0]!, updatedAt: "2026-08-22T08:01:00.000Z",
+      section: "working", turnState: "working",
+    }];
+    await repository.refresh();
+
+    expect(repository.current().sessions[0]).toMatchObject({
+      section: "needs_you",
+      lifecycleStatus: "needs_you",
+      sessionState: { turn: "working" },
+      subtitle: "Answer required",
+    });
+
+    await expect(repository.chatAction({
+      type: "respond_chat", id: "answer-while-working", sessionId: "pi-1",
+      toolUseId: "question-while-working", decision: "answer", answers: { continue: "Yes" },
+    })).resolves.toBeUndefined();
+    expect(answerCalls).toBe(1);
+    expect(repository.current().sessions[0]).toMatchObject({
+      section: "working",
+      lifecycleStatus: "working",
+      sessionState: { turn: "working" },
+    });
+
+    provider.sessions = [{
+      ...provider.sessions[0]!, updatedAt: "2026-08-22T08:01:30.000Z",
+      section: "working", turnState: "working",
+    }];
+    await repository.refresh();
+    expect(repository.current().sessions[0]).toMatchObject({
+      section: "working",
+      lifecycleStatus: "working",
+      sessionState: { turn: "working" },
+    });
+
+    provider.sessions = [{
+      ...provider.sessions[0]!, updatedAt: "2026-08-22T08:02:00.000Z",
+      section: "ready", turnState: "ready", subtitle: "Ready to continue",
+    }];
+    await repository.refresh();
+
+    expect(repository.current().sessions[0]).toMatchObject({
+      section: "ready",
+      lifecycleStatus: "ready",
+      sessionState: { turn: "ready" },
+      subtitle: "Ready to continue",
+    });
+  });
+
   it("rejects automation cancellation and approval/question responses", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{

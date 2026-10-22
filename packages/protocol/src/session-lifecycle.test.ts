@@ -18,6 +18,26 @@ const session = (overrides: Partial<SessionSummary> = {}): SessionSummary => ({
 });
 
 describe("session lifecycle presentation", () => {
+  it.each([
+    ["working during compaction", "ready", "working", "Working", "working"],
+    ["unanswered async question", "working", "needs_you", "Needs you", "attention"],
+    ["pending permission", "working", "needs_you", "Needs you", "attention"],
+    ["new busy turn after an answer", "needs_you", "working", "Working", "working"],
+    ["normal idle prompt", "needs_you", "ready", "Ready", "ready"],
+  ] as const)(
+    "keeps %s status independent from the prior placement",
+    (_name, section, turn, label, tone) => {
+      expect(sessionLifecyclePresentation(session({
+        section,
+        sessionState: { conversation: "open", turn, route: turn === "ready" ? "available" : "waiting" },
+      }))).toEqual({
+        status: turn === "needs_you" ? "needs_you" : turn,
+        label,
+        tone,
+      });
+    },
+  );
+
   it("keeps an acknowledged Ready conversation green when recency moves it to History", () => {
     expect(sessionLifecyclePresentation(session({
       attentionTier: "history",
