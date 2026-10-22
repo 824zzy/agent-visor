@@ -231,10 +231,12 @@ public struct NativeMenuOverflowView: View {
     }
 
     private func row(_ pill: NativeHelperPill) -> some View {
-        let displayPhase = NativeMenuDisplayPhase.phase(for: pill)
         return HStack(spacing: 9) {
             Circle()
-                .fill(color(for: displayPhase))
+                // Attention/recency controls the section, while the wire
+                // phase remains the lifecycle color. A known Ready row may
+                // live in Recent without becoming a gray historical status.
+                .fill(color(for: NativeMenuStatusPresentation.tone(for: pill)))
                 .frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 2) {
                 Text(pill.title)
@@ -246,7 +248,7 @@ public struct NativeMenuOverflowView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            Text(status(for: displayPhase))
+            Text(NativeMenuStatusPresentation.status(for: pill))
                 .font(.system(size: 9.5, weight: .medium))
                 .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
         }

@@ -174,6 +174,8 @@ Color never carries state alone. Section placement and accessibility text provid
 
 A freshly completed, unacknowledged `Ready` turn may pulse for at most seven minutes. Opening that session through Agent Visor acknowledges the current completion and makes the mark static without changing its color, browser section, or browser row position. The menu-bar pill may move below Working according to the product-surface attention order. A later Ready transition may pulse and return to the higher menu-bar tier again.
 
+The menu's stale-session grouping is a placement projection, not a lifecycle rewrite. When a known open conversation remains Ready but moves into the native Recent/History tier after the stale ceiling, its status dot, overflow status text, hover status, and accessibility label remain Ready and green. The seven-day Sessions grouping continues to use its own placement boundary.
+
 ## Row States
 
 | State | Background | Border | Behavior |

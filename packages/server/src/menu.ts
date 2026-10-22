@@ -1,6 +1,7 @@
 import os from "node:os";
 import {
   TRANSCRIPT_STALE_CEILING_MS,
+  sessionLifecyclePresentation,
   type NativeHelperUsageGlance,
   type SessionSnapshot,
 } from "@agent-visor/protocol";
@@ -172,6 +173,10 @@ function presentationPill(
     : session.title).slice(0, 256);
   const sourceLabel = session.source === "Codex" && session.owner.startsWith("Codex ·")
     ? session.owner : session.source;
+  const lifecycle = sessionLifecyclePresentation(session);
+  const status = lifecycle.status === "ready"
+    ? lifecycle.label
+    : inspectorStatus(session.section, session.subtitle);
   return {
     id: session.id,
     title,
@@ -183,7 +188,7 @@ function presentationPill(
     ...(session.completionUnseen ? { completionUnseen: true } : {}),
     ...(session.failureAlert !== undefined ? { failureAlert: session.failureAlert } : {}),
     inspector: {
-      status: inspectorStatus(session.section, session.subtitle),
+      status,
       runtimeItems: [runtimeSource(session.source, session.owner)],
       detailRows: session.sourceProfile ? [{ label: "Profile", value: session.sourceProfile }] : [],
       projectPath: displayPath(session.cwd),
@@ -194,7 +199,7 @@ function presentationPill(
     defaultOverflowEligible: isAmbientSession(session),
     accessibilityLabel: [
       title,
-      phaseLabel[session.section],
+      lifecycle.status === "ready" ? lifecycle.label : phaseLabel[session.section],
       sourceLabel,
       session.project,
       ...(session.managedBy ? [`Managed by ${session.managedBy}`] : []),

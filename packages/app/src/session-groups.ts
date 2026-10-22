@@ -1,4 +1,4 @@
-import type { SessionSection, SessionSummary } from "@agent-visor/protocol";
+import { sessionLifecyclePresentation, type SessionSection, type SessionSummary } from "@agent-visor/protocol";
 
 const sections: ReadonlyArray<{
   id: SessionSection;
@@ -34,14 +34,19 @@ const pillNotices: Partial<Record<NonNullable<SessionSummary["claudePresence"]>,
 export function sessionPresentation(session: SessionSummary, now = new Date()) {
   const tier = session.attentionTier ?? session.section;
   let section: SessionSection = tier === "acknowledged_ready" ? "ready" : tier;
+  const lifecycle = sessionLifecyclePresentation(session);
+  // History is a placement group. Preserve a provider-confirmed open Ready
+  // label when the seven-day boundary moves the row out of Ready to continue.
+  const knownOpenReady = session.sessionState?.conversation === "open"
+    && lifecycle.status === "ready";
   const turn = session.sessionState?.turn;
   const completed = session.section === "ready" && (turn === undefined || turn === "ready");
   if (section === "ready" && completed
     && Date.parse(session.updatedAt) < now.valueOf() - 7 * 24 * 60 * 60 * 1_000) {
     section = "history";
   }
-  const subtitle = section === "history" && completed
-    ? `${session.managedBy ? `Managed by ${session.managedBy} · ` : ""}Completed`
+  const subtitle = section === "history" && (completed || knownOpenReady)
+    ? `${session.managedBy ? `Managed by ${session.managedBy} · ` : ""}${knownOpenReady ? "Ready" : "Completed"}`
     : session.subtitle;
   const pillNotice = session.claudePresence ? pillNotices[session.claudePresence] : undefined;
   return { section, title: sections.find(({ id }) => id === section)!.title, subtitle,
