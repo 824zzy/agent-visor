@@ -1,10 +1,11 @@
 import Foundation
 
-/// Phase used by the overflow presentation for grouping and status copy.
+/// Placement phase used by the overflow presentation for grouping.
 ///
-/// The wire phase remains the provider's turn phase. A history attention tier
-/// is a menu-only projection for an old Ready row, so it must not erase the
-/// Ready phase that drives the native age fade.
+/// This menu-only projection does not define lifecycle status or tone;
+/// `NativeMenuStatusPresentation` keeps those meanings tied to explicit
+/// lifecycle evidence. A history attention tier may regroup an old Ready row
+/// without changing its Ready lifecycle status or semantic tone.
 public enum NativeMenuDisplayPhase {
     public static func phase(for pill: NativeHelperPill) -> NativeHelperPillPhase {
         guard let attentionTier = pill.attentionTier else { return pill.phase }
