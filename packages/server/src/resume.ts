@@ -425,12 +425,7 @@ export class ResumeCoordinator {
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
     if (reconciliation.state !== "matched" || reconciliation.sessionId !== record.canonicalId) {
-      const reason = reconciliation.state === "matched"
-        ? `The resumed ${resumeProviderName(record.provider)} conversation identity did not match the retained row.`
-        : reconciliation.reason ?? `The resumed ${resumeProviderName(record.provider)} conversation could not be matched.`;
-      this.options.attempts.update(record.canonicalId, reconciliation.state === "unavailable" ? "unavailable" : "unknown", { reason }, record.provider, attempt.attemptId);
-      return { state: reconciliation.state === "unavailable" ? "unavailable" : "uncertain",
-        sessionId: record.id, attemptId: attempt.attemptId, reason };
+      return this.reconciliationFailure(record, attempt, reconciliation);
     }
     return this.finishMatched(record, reconciliation, attempt, liveNavigationEpoch);
   }
@@ -461,14 +456,32 @@ export class ResumeCoordinator {
       return { state: "uncertain", sessionId: record.id, attemptId: attempt.attemptId, reason };
     }
     if (reconciliation.state !== "matched" || reconciliation.sessionId !== record.canonicalId) {
-      const reason = reconciliation.state === "matched"
-        ? `The resumed ${resumeProviderName(record.provider)} conversation identity did not match the retained row.`
-        : reconciliation.reason ?? `The resumed ${resumeProviderName(record.provider)} conversation could not be matched.`;
-      this.options.attempts.update(record.canonicalId, reconciliation.state === "unavailable" ? "unavailable" : "unknown", { reason }, record.provider, attempt.attemptId);
-      return { state: reconciliation.state === "unavailable" ? "unavailable" : "uncertain",
-        sessionId: record.id, attemptId: attempt.attemptId, reason };
+      return this.reconciliationFailure(record, attempt, reconciliation);
     }
     return this.finishMatched(record, reconciliation, attempt, liveNavigationEpoch);
+  }
+
+  private reconciliationFailure(
+    record: RetainedHistoryRecord,
+    attempt: ResumeAttempt,
+    reconciliation: ResumeReconciliation,
+  ): ResumeResult {
+    const reason = reconciliation.state === "matched"
+      ? `The resumed ${resumeProviderName(record.provider)} conversation identity did not match the retained row.`
+      : reconciliation.reason ?? `The resumed ${resumeProviderName(record.provider)} conversation could not be matched.`;
+    this.options.attempts.update(
+      record.canonicalId,
+      reconciliation.state === "unavailable" ? "unavailable" : "unknown",
+      { reason },
+      record.provider,
+      attempt.attemptId,
+    );
+    return {
+      state: reconciliation.state === "unavailable" ? "unavailable" : "uncertain",
+      sessionId: record.id,
+      attemptId: attempt.attemptId,
+      reason,
+    };
   }
 
   private async finishMatched(
