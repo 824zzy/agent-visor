@@ -9,6 +9,7 @@ import {
 } from "@agent-visor/protocol";
 import { activateMenuPill, menuPresentation, nativeActionFor } from "./menu.js";
 import { NavigationDiagnostics, navigationStep } from "./navigation-diagnostics.js";
+import { SessionRepository } from "./sessions.js";
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -89,6 +90,43 @@ const snapshot: SessionSnapshot = {
 };
 
 describe("menu presentation", () => {
+  it.each([
+    ["Stop", "idle", undefined],
+    ["SessionStart", "working", true],
+  ] as const)("keeps an admitted hook-only %s Ready across the repository and menu surfaces", (event, status, isIdle) => {
+    const repository = new SessionRepository([]);
+    const snapshot = repository.applyHook({
+      sessionId: `claude-hook-only-ready-${event}`,
+      cwd: "/Users/me/Codes/agent-visor",
+      provider: "claude_code",
+      event,
+      status,
+      receivedAt: "2026-08-22T21:59:00.000Z",
+      pid: 63462,
+      tty: "/dev/ttys001",
+      ...(isIdle === undefined ? {} : { isIdle }),
+    });
+
+    expect(snapshot.sessions[0]).toMatchObject({
+      section: "ready",
+      lifecycleStatus: "ready",
+      sessionState: {
+        conversation: "unknown",
+        turn: "ready",
+        route: "unavailable",
+      },
+    });
+    const presentation = menuPresentation(snapshot, []);
+    expect(presentation.navigatorPills).toEqual([
+      expect.objectContaining({
+        id: `claude-hook-only-ready-${event}`,
+        lifecycleStatus: "ready",
+        inspector: expect.objectContaining({ status: "Ready" }),
+        accessibilityLabel: expect.stringContaining(", Ready,"),
+      }),
+    ]);
+  });
+
   it.each([
     ["compaction", "ready", "working", "Compacting context", "Working"],
     ["async question", "working", "needs_you", "Answer required", "Needs you"],

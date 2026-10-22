@@ -72,6 +72,24 @@ final class NativeMenuOverflowTests: XCTestCase {
         XCTAssertEqual(NativeMenuStatusPresentation.tone(for: closed), .history)
     }
 
+    func testLegacyInspectorLabelsUseSharedLifecycleCopyAndTone() {
+        let cases: [(String, String, NativeHelperPillPhase)] = [
+            ("Needs attention", "Needs you", .needsYou),
+            ("In progress", "Working", .working),
+            ("Recent", "Historical", .history),
+        ]
+
+        for (legacy, expectedStatus, expectedTone) in cases {
+            let pill = pill(
+                "legacy-\(legacy)", title: "Legacy \(legacy)", project: "agent-visor",
+                phase: expectedTone, inspectorStatus: legacy
+            )
+
+            XCTAssertEqual(NativeMenuStatusPresentation.status(for: pill), expectedStatus)
+            XCTAssertEqual(NativeMenuStatusPresentation.tone(for: pill), expectedTone)
+        }
+    }
+
     func testOldUnarchivedConversationRemainsInOverflowAndSearch() {
         let old = pill(
             "old", title: "donut-feature-parity", project: "Donut",

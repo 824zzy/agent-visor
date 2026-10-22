@@ -1473,6 +1473,60 @@ describe("SessionRepository", () => {
     }
   });
 
+  it("keeps an open retained record visibly historical when no provider confirms it", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-history-subtitle-red-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const id = "claude:historical-subtitle";
+    writeFileSync(historyPath, JSON.stringify({
+      schemaVersion: 1,
+      records: [{
+        schemaVersion: 1,
+        provider: "claude_code",
+        id,
+        canonicalId: id,
+        title: "Historical provider record",
+        subtitle: "Provider subtitle",
+        project: "agent-visor",
+        owner: "Claude",
+        cwd: "/Users/me/Codes/agent-visor",
+        updatedAt: "2026-10-21T18:00:00.000Z",
+        observedAt: "2026-10-21T18:00:00.000Z",
+      }],
+    }));
+    let observed: DiscoveredProviderSession | undefined;
+    const repository = new SessionRepository([], {
+      retainedHistoryPath: historyPath,
+      chatPageReader: async (session) => {
+        observed = structuredClone(session);
+        return {
+          type: "chat_page",
+          sessionId: session.id,
+          items: [],
+          hasMoreBefore: false,
+          capabilities: {
+            canSendText: false,
+            canSendImages: false,
+            canCancel: false,
+            canApprove: false,
+            canAnswer: false,
+          },
+          pendingAction: null,
+        };
+      },
+    });
+    try {
+      await repository.chatPage(id);
+      expect(observed).toMatchObject({
+        id,
+        section: "history",
+        lifecycleStatus: "historical",
+        subtitle: "Historical provider record",
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("closes an observed Codex CLI record when only an unverified Desktop catalog copy remains", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-history-catalog-copy-"));
     const historyPath = path.join(directory, "retained-history.json");

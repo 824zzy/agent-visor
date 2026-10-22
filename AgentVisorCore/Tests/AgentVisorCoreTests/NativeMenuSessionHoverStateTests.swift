@@ -45,7 +45,7 @@ final class NativeMenuSessionHoverStateTests: XCTestCase {
             NativeMenuSessionDetailPresentation(
                 id: "session-1",
                 title: "Review migration",
-                status: "Ready to continue",
+                status: "Ready",
                 phase: .ready,
                 rows: [
                     .init(label: "Source", value: "Pi"),
@@ -57,6 +57,28 @@ final class NativeMenuSessionHoverStateTests: XCTestCase {
 
         state.pointerExited("session-1")
         XCTAssertNil(state.presentation(pills: ["session-1": pill], at: 11))
+    }
+
+    func testLegacyHoverWithoutInspectorUsesSharedLifecycleStatus() {
+        let pill = NativeHelperPill(
+            id: "legacy-ready",
+            title: "Review migration",
+            subtitle: "Ready to continue",
+            source: "Pi",
+            project: "agent-visor",
+            owner: "Ghostty",
+            phase: .ready,
+            priority: 0,
+            accessibilityLabel: "Review migration, Ready, Pi, agent-visor"
+        )
+        var state = NativeMenuSessionHoverState()
+
+        state.pointerEntered(pill.id, at: 10)
+
+        XCTAssertEqual(
+            state.presentation(pills: [pill.id: pill], at: 10.35)?.status,
+            "Ready"
+        )
     }
 
     func testPresentsEveryAvailableSwiftInspectorElement() throws {

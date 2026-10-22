@@ -4017,14 +4017,19 @@ function hookCanEnterChat(hook: HookSessionEvent): boolean {
 }
 
 function hookSession(hook: HookSessionEvent): DiscoveredProviderSession {
+  const phase = hookPhase(hook);
   return {
     id: hook.sessionId,
     provider: hook.provider,
     cwd: hook.cwd,
     owner: hookOwner(hook),
-    section: hookPhase(hook).section,
-    turnState: hookPhase(hook).turnState,
+    section: phase.section,
+    turnState: phase.turnState,
     updatedAt: hook.activityAt ?? hook.receivedAt,
+    // An admitted hook's Ready phase is direct lifecycle evidence. Keep the
+    // conversation/route state unknown until a provider resolves it, but do
+    // not let that missing route evidence erase the hook's Ready status.
+    ...(phase.section === "ready" ? { lifecycleStatus: "ready" as const } : {}),
     // A hook carries lifecycle facts, not a validated navigation target.
     // Discovery supplies the owner capability after resolving that target.
     canOpenOwner: false,
@@ -4485,7 +4490,9 @@ function retainedHistorySession(
     id: record.id,
     provider: record.provider,
     title: record.title,
-    subtitle: unknownLiveness ? "Terminal state unavailable" : "Closed terminal conversation",
+    subtitle: unknownLiveness
+      ? "Terminal state unavailable"
+      : record.closedAt ? "Closed terminal conversation" : "Historical provider record",
     project: record.project,
     cwd: record.cwd,
     owner: record.owner,

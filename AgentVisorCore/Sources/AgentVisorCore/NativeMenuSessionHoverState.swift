@@ -99,9 +99,7 @@ public struct NativeMenuSessionHoverState: Sendable {
         return NativeMenuSessionDetailPresentation(
             id: pill.id,
             title: pill.title,
-            status: pill.lifecycleStatus == nil
-                ? pill.subtitle ?? NativeMenuStatusPresentation.status(for: pill)
-                : NativeMenuStatusPresentation.status(for: pill),
+            status: NativeMenuStatusPresentation.status(for: pill),
             phase: NativeMenuStatusPresentation.tone(for: pill),
             rows: [
                 pill.source.map { SessionHoverDetailRow(label: "Source", value: $0) },
