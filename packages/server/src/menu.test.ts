@@ -89,6 +89,37 @@ const snapshot: SessionSnapshot = {
 };
 
 describe("menu presentation", () => {
+  it.each([
+    ["compaction", "ready", "working", "Compacting context", "Working"],
+    ["async question", "working", "needs_you", "Answer required", "Needs you"],
+    ["permission", "working", "needs_you", "Approval required", "Needs you"],
+    ["new turn", "needs_you", "working", "Agent is working", "Working"],
+    ["completed turn", "working", "ready", "Ready to continue", "Ready"],
+  ] as const)(
+    "uses the resolved lifecycle label for a %s transition even when placement is stale",
+    (_name, section, turn, subtitle, expectedStatus) => {
+      const session = {
+        ...snapshot.sessions[4]!,
+        id: `transition-${_name.replaceAll(" ", "-")}`,
+        section,
+        subtitle,
+        sessionState: {
+          conversation: "open",
+          turn,
+          route: turn === "ready" ? "available" : "waiting",
+        },
+      } satisfies SessionSnapshot["sessions"][number];
+      const presentation = menuPresentation({ ...snapshot, sessions: [session] }, []);
+      const pill = presentation.navigatorPills[0];
+
+      expect(pill).toMatchObject({
+        phase: section,
+        inspector: { status: expectedStatus },
+      });
+      expect(pill?.accessibilityLabel).toContain(`, ${expectedStatus},`);
+    },
+  );
+
   it.each(["needs_you", "working", "ready", "history"] as const)(
     "keeps retained %s jobs searchable without pills or default overflow", (section) => {
       const catalog: SessionSnapshot = {
