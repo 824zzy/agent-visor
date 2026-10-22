@@ -126,15 +126,24 @@ async function run() {
   assert(await window.webContents.executeJavaScript(`Boolean(document.querySelector('[aria-label*="Managed by Agent Room"]'))`),
     "managed-session ownership is accessible on its row");
 
-  await window.webContents.executeJavaScript(`document.querySelector('[aria-label*="Open in"]')?.click()`);
-  await waitUntil(() => ownerActions === 1);
-  await window.webContents.executeJavaScript(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', metaKey: true, bubbles: true }))`);
-  await waitUntil(() => ownerActions === 2);
-  await window.webContents.executeJavaScript(`window.__codexFocusError = null;
-    window.alert = (message) => { window.__codexFocusError = message; };
-    document.querySelector('[aria-label*="Open in Codex"]')?.click()`);
-  await waitFor(window, `window.__codexFocusError === 'Exact session focus is unavailable.'`);
-  assert(ownerActions === 2, "Codex focus failure never launches a second app");
+  await window.webContents.executeJavaScript(`window.__focusError = null;
+    window.alert = (message) => { window.__focusError = message; };
+    document.querySelector('[aria-label*="Open in"]')?.click()`);
+  await waitFor(window, `window.__focusError === 'Exact session focus is unavailable.'`);
+  assert(ownerActions === 0, "a failed exact focus never launches the named owner app");
+  await window.webContents.executeJavaScript(`window.__focusError = null;
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', metaKey: true, bubbles: true }))`);
+  await waitFor(window, `window.__focusError === 'Exact session focus is unavailable.'`);
+  assert(ownerActions === 0, "keyboard owner activation also stays exact on focus failure");
+
+  await window.webContents.executeJavaScript(`document.querySelector('[aria-label^="Open Chat for"]')?.click()`);
+  await waitFor(window, `Boolean(document.querySelector('[aria-label="Back to Sessions"]'))`);
+  await window.webContents.executeJavaScript(`window.__focusError = null;
+    document.querySelector('[aria-label*="Open in Ghostty"]')?.click()`);
+  await waitFor(window, `window.__focusError === 'Exact session focus is unavailable.'`);
+  assert(ownerActions === 0, "the Chat owner action also stays exact on focus failure");
+  await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Back to Sessions"]')?.click()`);
+  await waitFor(window, `Boolean(document.querySelector('[aria-label="Search sessions"]'))`);
 
   await window.webContents.executeJavaScript(`(() => {
     const input = document.querySelector('[aria-label="Search sessions"]');

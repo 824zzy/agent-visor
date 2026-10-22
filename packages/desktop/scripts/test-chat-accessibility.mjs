@@ -2070,8 +2070,11 @@ async function run() {
     assertRailGeometry(narrowChat, "narrow Chat");
     assertDetailsGeometry(await measureDetails(window), "narrow Chat");
 
-    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Open in Ghostty"]')?.click()`);
-    await waitUntil(() => ownerActions === 1);
+    await window.webContents.executeJavaScript(`window.__focusError = null;
+      window.alert = (message) => { window.__focusError = message; };
+      document.querySelector('[aria-label="Open in Ghostty"]')?.click()`);
+    await waitFor(window, `window.__focusError === 'Exact session focus is unavailable.'`);
+    assert(ownerActions === 0, "Chat owner focus failure never launches the named owner app");
     await waitFor(window, `document.body.textContent.includes('Path: /tmp/agent-visor')`);
     assert(
       await window.webContents.executeJavaScript(`document.body.textContent.includes('Model: GPT-5.6 Sol')

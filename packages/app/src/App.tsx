@@ -744,11 +744,7 @@ async function openOwner(session: SessionSummary): Promise<void> {
   if (!session.canOpenOwner) return;
   const result = await focusSession(session.id);
   if (result.ok) return;
-  if (session.source === "Codex") {
-    window.alert(result.error ?? "Could not open this thread in its owning Codex window.");
-    return;
-  }
-  window.agentVisor?.openOwner(session.owner);
+  window.alert(result.error ?? `Could not open this session in ${session.owner}.`);
 }
 
 function footerLabel(action: "owner" | "chat"): string {
