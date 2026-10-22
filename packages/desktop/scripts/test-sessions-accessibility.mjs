@@ -67,7 +67,7 @@ async function run() {
       .filter((element) => !element.children.length && element.textContent === 'Ready to continue').length,
     rows: [...document.querySelectorAll('[aria-label*="Open in"]')]
       .map((element) => element.getAttribute('aria-label'))
-      .filter((label) => label.includes(', Ready to continue,'))
+      .filter((label) => label.includes(', Ready,'))
       .map((label) => label.split(',')[0]),
   }))()`);
   assert(readyGroups.headings === 1, "Ready completions share one visible section heading");
@@ -75,7 +75,7 @@ async function run() {
     [1, 5, 9, 13, 17, 21, 25, 29].map((index) => `Agent session ${index}`),
   ), "the merged Ready section lists all completions by recency regardless of acknowledgment");
   const readyLabels = `[...document.querySelectorAll('[aria-label*="Open in"]')]
-    .map(element => element.getAttribute('aria-label')).filter(label => label.includes(', Ready to continue,'))`;
+    .map(element => element.getAttribute('aria-label')).filter(label => label.includes(', Ready,'))`;
   snapshot = {
     ...snapshot, revision: snapshot.revision + 1,
     sessions: sessions.map(session => session.id === "session-29"

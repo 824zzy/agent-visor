@@ -25,21 +25,14 @@ public enum NativeMenuStatusPresentation {
         if let lifecycleStatus = pill.lifecycleStatus {
             return label(for: lifecycleStatus)
         }
-        if pill.phase == .ready { return pill.inspector?.status ?? "Ready" }
-        return pill.inspector?.status ?? fallbackStatus(for: NativeMenuDisplayPhase.phase(for: pill))
+        return legacyPresentation(for: pill.inspector?.status, phase: pill.phase).label
     }
 
     public static func tone(for pill: NativeHelperPill) -> NativeHelperPillPhase {
         if let lifecycleStatus = pill.lifecycleStatus {
             return tone(for: lifecycleStatus)
         }
-        switch pill.inspector?.status {
-        case "Needs attention", "Needs you": return .needsYou
-        case "Ready": return .ready
-        case "Working": return .working
-        case "Closed", "Status unavailable", "Ended", "Recent", "Historical": return .history
-        default: return pill.phase
-        }
+        return legacyPresentation(for: pill.inspector?.status, phase: pill.phase).tone
     }
 
     private static func label(for lifecycleStatus: NativeHelperLifecycleStatus) -> String {
@@ -68,6 +61,22 @@ public enum NativeMenuStatusPresentation {
         case .ready: return "Ready"
         case .working: return "Working"
         case .history: return "Historical"
+        }
+    }
+
+    private static func legacyPresentation(
+        for inspectorStatus: String?,
+        phase: NativeHelperPillPhase
+    ) -> (label: String, tone: NativeHelperPillPhase) {
+        switch inspectorStatus?.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "Needs attention", "Needs you": return ("Needs you", .needsYou)
+        case "Ready", "Ready to continue": return ("Ready", .ready)
+        case "Working", "In progress": return ("Working", .working)
+        case "Closed", "Ended": return ("Closed", .history)
+        case "Status unavailable": return ("Status unavailable", .history)
+        case "Recent", "Historical": return ("Historical", .history)
+        default:
+            return (fallbackStatus(for: phase), phase)
         }
     }
 }

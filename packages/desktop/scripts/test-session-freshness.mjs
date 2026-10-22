@@ -23,6 +23,18 @@ const sessions = [
   makeSession("Expiring completion", "ready", 7 * day - 60_000),
   makeSession("Expired completion", "ready", 9 * day),
   makeSession("Pending approval", "needs_you", 30 * day),
+  { ...makeSession("Closed terminal", "history", 2 * day),
+    subtitle: "Closed terminal conversation", lifecycleStatus: "closed",
+    sessionState: { conversation: "archived", turn: "unknown", route: "unavailable", unavailableReason: "archived" },
+    canOpenOwner: false, canEnterChat: false },
+  { ...makeSession("Unverified state", "history", 3 * day),
+    subtitle: "Terminal state unavailable", lifecycleStatus: "unavailable",
+    sessionState: { conversation: "unknown", turn: "unknown", route: "unavailable", unavailableReason: "unknown" },
+    canOpenOwner: false, canEnterChat: false },
+  { ...makeSession("Historical record", "history", 4 * day),
+    subtitle: "Historical provider record", lifecycleStatus: "historical",
+    sessionState: { conversation: "unknown", turn: "unknown", route: "unavailable", unavailableReason: "unknown" },
+    canOpenOwner: false, canEnterChat: false },
   { ...makeSession("Claude title unavailable", "working", 0), source: "Claude Code",
     owner: "Ghostty", ambientEligible: false, claudePresence: "unrecognized_title" },
   ...Array.from({ length: 30 }, (_, index) => makeSession(`Working ${index}`, "working", index * day)),
@@ -79,7 +91,7 @@ try {
   await waitFor(`${claudeRow}?.textContent.includes('Pill hidden: terminal title cannot identify the displayed conversation.')`);
   assert(await evaluate(`${claudeRow}.textContent.includes('Agent is working')`),
     "the title warning does not replace the worker's status");
-  assert(await evaluate(`document.querySelector('[aria-label^="Claude title unavailable, In progress,"]').getAttribute('aria-label').includes('terminal title cannot identify the displayed conversation.')`),
+  assert(await evaluate(`document.querySelector('[aria-label^="Claude title unavailable, Working,"]').getAttribute('aria-label').includes('terminal title cannot identify the displayed conversation.')`),
     "the visibility explanation survives the wire schema and is accessible");
   for (const [claudePresence, notice] of [["read_failed", "terminal could not be checked"], ["overview", null], ["conversation", null]]) {
     snapshot.revision += 1;
@@ -90,10 +102,46 @@ try {
       ? `${claudeRow}?.textContent.includes(${JSON.stringify(notice)})`
       : `${claudeRow} && !${claudeRow}.textContent.includes('Pill hidden:')`);
   }
-  await waitFor(`document.querySelector('[aria-label^="Expired completion, History,"]')`);
-  assert(await evaluate(`document.getElementById('session-row-Expired%20completion').textContent.includes('Completed')`),
-    "an expired completion has History accessibility and Completed row text");
-  await waitFor(`document.querySelector('[aria-label^="Expiring completion, Ready to continue,"]')`);
+  await waitFor(`document.querySelector('[aria-label^="Expired completion, Ready,"]')`);
+  assert(await evaluate(`document.getElementById('session-row-Expired%20completion').textContent.includes('Ready')`),
+    "an aged Ready completion keeps its Ready row text in History placement");
+  await waitFor(`document.querySelector('[aria-label^="Closed terminal, Closed,"]')`);
+  await waitFor(`document.querySelector('[aria-label^="Unverified state, Status unavailable,"]')`);
+  await waitFor(`document.querySelector('[aria-label^="Historical record, Historical,"]')`);
+  const renderedStatuses = await evaluate(`(() => {
+    const read = (id) => {
+      const row = document.getElementById(id);
+      const action = row?.firstElementChild;
+      const dot = action?.firstElementChild;
+      return {
+        label: action?.getAttribute('aria-label'),
+        color: dot ? getComputedStyle(dot).backgroundColor : undefined,
+      };
+    };
+    return {
+      ready: read('session-row-Expired%20completion'),
+      working: read('session-row-Working%2029'),
+      needsYou: read('session-row-Pending%20approval'),
+      closed: read('session-row-Closed%20terminal'),
+      unavailable: read('session-row-Unverified%20state'),
+      historical: read('session-row-Historical%20record'),
+    };
+  })()`);
+  const green = ["rgb(47, 125, 32)", "rgb(166, 227, 161)"];
+  const orange = ["rgb(184, 66, 0)", "rgb(217, 120, 87)"];
+  const yellow = ["rgb(160, 90, 0)", "rgb(244, 193, 20)"];
+  const neutral = ["rgb(124, 127, 147)", "rgb(147, 153, 178)"];
+  assert(renderedStatuses.ready.label?.startsWith("Expired completion, Ready,"), "aged Ready status is accessible in History placement");
+  assert(green.includes(renderedStatuses.ready.color), `aged Ready stays green (${renderedStatuses.ready.color})`);
+  assert(renderedStatuses.working.label?.startsWith("Working 29, Working,"), "working status is accessible");
+  assert(orange.includes(renderedStatuses.working.color), `working stays orange (${renderedStatuses.working.color})`);
+  assert(renderedStatuses.needsYou.label?.startsWith("Pending approval, Needs you,"), "pending status is accessible");
+  assert(yellow.includes(renderedStatuses.needsYou.color), `pending stays yellow (${renderedStatuses.needsYou.color})`);
+  for (const [key, label] of [["closed", "Closed"], ["unavailable", "Status unavailable"], ["historical", "Historical"]]) {
+    assert(renderedStatuses[key].label?.includes(`, ${label},`), `${key} status is accessible`);
+    assert(neutral.includes(renderedStatuses[key].color), `${key} stays neutral (${renderedStatuses[key].color})`);
+  }
+  await waitFor(`document.querySelector('[aria-label^="Expiring completion, Ready,"]')`);
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
   await waitUntil(() => ownerActions.length === 1);
   assert.equal(ownerActions[0], "Pending approval");
@@ -106,8 +154,9 @@ try {
       top: document.getElementById('session-row-Expiring%20completion').getBoundingClientRect().top,
     };
   })()`);
-  await evaluate(`window.fixtureNow += 120000`);
-  await waitFor(`document.querySelector('[aria-label^="Expiring completion, History,"]')`);
+  await evaluate(`window.fixtureNow += 120000; window.dispatchEvent(new Event('focus'))`);
+  await waitFor(`document.getElementById('session-row-Expiring%20completion')
+    && !document.getElementById('session-row-Expiring%20completion').textContent.includes('Ready to continue')`);
   const after = await evaluate(`({
     top: document.getElementById('session-row-Expiring%20completion').getBoundingClientRect().top,
     readyHeading: [...document.querySelectorAll('#sessions-canvas *')].some(e => !e.children.length && e.textContent === 'Ready to continue'),
@@ -117,7 +166,7 @@ try {
   await waitUntil(() => ownerActions.length === 2);
   assert.equal(ownerActions[1], "Pending approval", "expiry preserves the exact keyboard action target");
   assert.equal(after.readyHeading, false, "time alone removes the empty Ready section");
-  assert(await evaluate(`document.querySelector('[aria-label^="Working 29, In progress,"]') && document.querySelector('[aria-label^="Pending approval, Needs you,"]')`),
+  assert(await evaluate(`document.querySelector('[aria-label^="Working 29, Working,"]') && document.querySelector('[aria-label^="Pending approval, Needs you,"]')`),
     "age does not declare working turns or pending approvals completed");
 
   const neighborTop = await evaluate(`document.getElementById('session-row-Expired%20completion').getBoundingClientRect().top`);
@@ -130,10 +179,10 @@ try {
 
   await setSearch("Expired completion");
   await waitFor(`document.querySelector('[aria-label="1 search results"]')`);
-  assert(await evaluate(`document.querySelector('[aria-label^="Expired completion, History,"]')`),
-    "search keeps the same History presentation");
+  assert(await evaluate(`document.querySelector('[aria-label^="Expired completion, Ready,"]')`),
+    "search keeps the same Ready status in History placement");
   const color = await evaluate(`getComputedStyle(document.getElementById('session-row-Expired%20completion').firstElementChild.firstElementChild).backgroundColor`);
-  assert(["rgb(124, 127, 147)", "rgb(147, 153, 178)"].includes(color), `History has a gray status dot (${color})`);
+  assert(["rgb(47, 125, 32)", "rgb(166, 227, 161)"].includes(color), `Ready has a green status dot in History (${color})`);
   await evaluate(`document.querySelector('[aria-label="Open Chat for Expired completion"]').click()`);
   await waitFor(`document.querySelector('[aria-label="Conversation status: Ready"]')`);
   await waitFor(`document.querySelector('[aria-label="Chat message"]')`);
