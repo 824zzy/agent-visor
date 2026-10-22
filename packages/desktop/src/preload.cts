@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld("agentVisor", Object.freeze({
   openOwner: (owner: string) => ipcRenderer.send("session:open-owner", owner),
   openExternal: (url: string) => ipcRenderer.invoke("chat:open-external", url),
   readImageFile: (url: string) => ipcRenderer.invoke("chat:read-image-file", url),
-  pickRepairPath: (kind: "executable" | "configRoot" | "profile" | "settingsFile") =>
+  pickRepairPath: (kind: "executable" | "configRoot" | "profile" | "settingsFile" | "workingDirectory") =>
     ipcRenderer.invoke("history:pick-repair-path", kind),
   onNavigate: (listener: (action: unknown) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, value: unknown) => {

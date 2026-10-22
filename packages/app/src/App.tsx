@@ -246,8 +246,17 @@ function SessionBrowser({
   const shortcutEducation = sessionShortcutEducation(shortcutModifierFamily);
 
   const beginRepair = async (session: SessionSummary): Promise<void> => {
+    if (session.repairKind === "working_directory") {
+      const picked = await window.agentVisor?.pickRepairPath?.("workingDirectory");
+      if (!picked) {
+        onRepair(session.id, null);
+        return;
+      }
+      onRepair(session.id, { kind: "working_directory", cwd: picked });
+      return;
+    }
     const fields = session.repairFields ?? ["executable"];
-    const selection: HistoryRepairSelection = { kind: "provider" };
+    const selection: Extract<HistoryRepairSelection, { kind: "provider" }> = { kind: "provider" };
     for (const field of fields) {
       const picked = await window.agentVisor?.pickRepairPath?.(field);
       if (!picked) {
@@ -439,7 +448,7 @@ function SessionBrowser({
                   onRemoveHistory={session.canRemoveHistory === true
                     ? () => onRemoveHistory(session.id)
                     : undefined}
-                  onRepair={session.repairKind === "provider"
+                  onRepair={session.repairKind === "provider" || session.repairKind === "working_directory"
                     ? () => void beginRepair(session)
                     : undefined}
                   repairing={historyState.repairingSessionID === session.id}
@@ -662,8 +671,10 @@ function SessionRow({
         {onRepair ? (
           <Pressable
             accessibilityLabel={repairing
-              ? `Repairing ${session.title}`
-              : `Repair provider references for ${session.title}`}
+              ? "Repairing " + session.title
+              : session.repairKind === "working_directory"
+                ? "Locate folder for " + session.title
+                : "Repair provider references for " + session.title}
             accessibilityRole="button"
             disabled={repairing}
             onPress={onRepair}
@@ -674,7 +685,9 @@ function SessionRow({
             ]}
           >
             <Text style={[rowStyles.chatText, rowStyles.linkText]}>
-              {repairing ? "Repairing…" : "Repair provider references"}
+              {repairing
+                ? "Repairing…"
+                : session.repairKind === "working_directory" ? "Locate folder" : "Repair provider references"}
             </Text>
           </Pressable>
         ) : null}

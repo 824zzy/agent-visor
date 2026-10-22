@@ -19,6 +19,7 @@ import type {
   ResumeReconciliation,
   ResumeRepairValidation,
   ResumeTargetResult,
+  ResumeWorkingDirectoryValidation,
 } from "../resume.js";
 import type { FreshProcessInventory, ProcessRecord, ProviderEnvironment } from "./environment.js";
 import type { ProcessProvenance } from "./process-provenance.js";
@@ -145,6 +146,39 @@ export class ClaudeResumeAdapter implements ResumeProviderAdapter {
     const transcriptReason = validateTranscriptPath(record, capability, this.environment.home);
     if (transcriptReason) return { state: "unavailable", reason: transcriptReason };
     return { state: "valid", capability };
+  }
+
+  async validateWorkingDirectory(
+    record: RetainedHistoryRecord,
+    candidateCwd: string,
+  ): Promise<ResumeWorkingDirectoryValidation> {
+    if (record.provider !== "claude_code") {
+      return { state: "unavailable", reason: "This repair does not match the retained Claude provider." };
+    }
+    const selectedCwd = canonicalDirectorySelection(candidateCwd);
+    if (!selectedCwd) {
+      return { state: "unavailable", reason: "The selected Claude working directory is unavailable." };
+    }
+    const originalCwd = canonicalDirectorySelection(record.cwd);
+    if (!originalCwd || originalCwd !== selectedCwd) {
+      return {
+        state: "unavailable",
+        reason: "Claude Code cannot prove that this saved conversation belongs to the selected folder; the provider does not expose a supported relocation mapping.",
+      };
+    }
+    const capability = record.resume;
+    if (!capability || capability.provider !== "claude_code") {
+      return { state: "unavailable", reason: "Claude launch provenance is unavailable for this row." };
+    }
+    if (record.configHome !== undefined && record.configHome !== capability.configRootRef) {
+      return { state: "unavailable", reason: "The recorded Claude configuration identity changed." };
+    }
+    const candidateRecord = { ...record, cwd: selectedCwd };
+    const capabilityReason = validateCapability(capability, selectedCwd, this.environment.home);
+    if (capabilityReason) return { state: "unavailable", reason: capabilityReason };
+    const transcriptReason = validateTranscriptPath(candidateRecord, capability, this.environment.home);
+    if (transcriptReason) return { state: "unavailable", reason: transcriptReason };
+    return { state: "valid", cwd: selectedCwd };
   }
 
   async reconcileResume(

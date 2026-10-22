@@ -74,6 +74,7 @@ import {
   type ResumeRepairValidation,
   type ResumeProviderAdapter,
   type ResumeResult,
+  type ResumeWorkingDirectoryValidation,
 } from "./resume.js";
 
 export type ProviderID = "claude_code" | "codex" | "pi" | "cursor" | "zed" | "auggie" | "paseo";
@@ -366,6 +367,11 @@ export interface ProviderAdapter {
     record: import("./retained-history.js").RetainedHistoryRecord,
     selection: HistoryRepairSelection,
   ): ResumeRepairValidation;
+  /** Validate one selected working directory without launching or persisting. */
+  validateWorkingDirectory?(
+    record: import("./retained-history.js").RetainedHistoryRecord,
+    candidateCwd: string,
+  ): Promise<ResumeWorkingDirectoryValidation>;
 }
 
 export type HookSessionEvent = {
@@ -1086,13 +1092,19 @@ export class SessionRepository {
     selection: HistoryRepairSelection | null,
   ): Promise<HistoryRepairResult> {
     if (selection === null) return { state: "cancelled" };
+    if (selection.kind === "working_directory") {
+      return this.repairHistoryWorkingDirectory(sessionId, selection.cwd);
+    }
     if (!Object.entries(selection).some(([key, value]) => key !== "kind" && value !== undefined)) {
       return { state: "rejected", reason: "A provider repair must select at least one reference." };
     }
     const store = this.retainedHistory;
     if (!store) return { state: "rejected", reason: "Retained history is unavailable." };
     const record = store.get(sessionId);
-    if (!record || !record.closedAt) {
+    if (!record) {
+      return { state: "rejected", reason: "The retained session is no longer available." };
+    }
+    if (!record.closedAt) {
       return { state: "rejected", reason: "Only a closed retained session can be repaired." };
     }
     if (store.isSuppressed(record.provider, [record.id, record.canonicalId, ...(record.aliases ?? [])])) {
@@ -1109,10 +1121,92 @@ export class SessionRepository {
       return { state: "rejected", reason: error instanceof Error ? error.message : "Provider repair validation failed." };
     }
     if (validation.state !== "valid") return { state: "rejected", reason: validation.reason };
-    const result = store.updateResume(record.provider, record.canonicalId, validation.capability);
+    const result = store.updateResume(record.provider, record.canonicalId, validation.capability, record);
     if (result === "updated") return { state: "accepted" };
     if (result === "storage_unavailable") {
       return { state: "rejected", reason: "Retained history storage is unavailable." };
+    }
+    if (result === "conflict") {
+      return { state: "rejected", reason: "The retained session changed while it was being validated." };
+    }
+    return { state: "rejected", reason: "The retained session is no longer available." };
+  }
+
+  private async repairHistoryWorkingDirectory(
+    sessionId: string,
+    candidateCwd: string,
+  ): Promise<HistoryRepairResult> {
+    const store = this.retainedHistory;
+    if (!store) return { state: "rejected", reason: "Retained history is unavailable." };
+    const record = store.get(sessionId);
+    if (!record) {
+      return { state: "rejected", reason: "The retained session is no longer available." };
+    }
+    if (!record.closedAt) {
+      return { state: "rejected", reason: "Only a closed retained session can be repaired." };
+    }
+    if (store.isSuppressed(record.provider, [record.id, record.canonicalId, ...(record.aliases ?? [])])) {
+      return { state: "rejected", reason: "This session was removed from Agent Visor History." };
+    }
+    const provider = this.providers.find((candidate) => candidate.id === record.provider);
+    if (!provider?.validateWorkingDirectory) {
+      return { state: "rejected", reason: "Working-directory repair is unavailable for this row." };
+    }
+    const lifetime = provider.historyLifetime
+      ? await provider.historyLifetime(record.canonicalId).catch(() => "unknown" as const)
+      : undefined;
+    if (lifetime === "archived" || lifetime === "deleted") {
+      return { state: "rejected", reason: "The provider conversation is archived or deleted." };
+    }
+    if (lifetime === "unknown") {
+      return { state: "rejected", reason: "The provider conversation lifetime is unavailable." };
+    }
+    let validation: ResumeWorkingDirectoryValidation;
+    try {
+      validation = await provider.validateWorkingDirectory(record, candidateCwd);
+    } catch (error) {
+      return {
+        state: "rejected",
+        reason: error instanceof Error ? error.message : "Working-directory repair validation failed.",
+      };
+    }
+    if (validation.state !== "valid") return { state: "rejected", reason: validation.reason };
+    const current = store.get(sessionId);
+    if (!current) {
+      return { state: "rejected", reason: "The retained session is no longer available." };
+    }
+    if (!current.closedAt) {
+      return { state: "rejected", reason: "Only a closed retained session can be repaired." };
+    }
+    if (store.isSuppressed(current.provider, [current.id, current.canonicalId, ...(current.aliases ?? [])])) {
+      return { state: "rejected", reason: "This session was removed from Agent Visor History." };
+    }
+    const currentLifetime = provider.historyLifetime
+      ? await provider.historyLifetime(current.canonicalId).catch(() => "unknown" as const)
+      : undefined;
+    if (currentLifetime === "archived" || currentLifetime === "deleted") {
+      return { state: "rejected", reason: "The provider conversation is archived or deleted." };
+    }
+    if (currentLifetime === "unknown") {
+      return { state: "rejected", reason: "The provider conversation lifetime is unavailable." };
+    }
+    let currentValidation: ResumeWorkingDirectoryValidation;
+    try {
+      currentValidation = await provider.validateWorkingDirectory(current, candidateCwd);
+    } catch (error) {
+      return {
+        state: "rejected",
+        reason: error instanceof Error ? error.message : "Working-directory repair validation failed.",
+      };
+    }
+    if (currentValidation.state !== "valid") return { state: "rejected", reason: currentValidation.reason };
+    const result = store.updateWorkingDirectory(record.provider, record.canonicalId, currentValidation.cwd, record);
+    if (result === "updated") return { state: "accepted" };
+    if (result === "storage_unavailable") {
+      return { state: "rejected", reason: "Retained history storage is unavailable." };
+    }
+    if (result === "conflict") {
+      return { state: "rejected", reason: "The retained session changed while it was being validated." };
     }
     return { state: "rejected", reason: "The retained session is no longer available." };
   }
@@ -4324,6 +4418,9 @@ function retainedHistorySession(
     && !resumeUnavailableReason;
   const resumeReason = resumable ? undefined : resumeReasonText(resumeUnavailableReason, record.provider);
   const repairFields = historyRepairFields(record, resumeUnavailableReason);
+  const repairKind = resumeUnavailableReason === "missing_working_directory"
+    ? "working_directory" as const
+    : repairFields ? "provider" as const : undefined;
   return {
     id: record.id,
     provider: record.provider,
@@ -4345,7 +4442,8 @@ function retainedHistorySession(
     canEnterChat: Boolean(record.transcriptPath && isReadableTranscript(record.transcriptPath)),
     canRemoveHistory: Boolean(record.closedAt),
     resumeState: resumable ? "eligible" as const : "unavailable" as const,
-    ...(repairFields ? { repairKind: "provider" as const, repairFields } : {}),
+    ...(repairKind ? { repairKind } : {}),
+    ...(repairFields ? { repairFields } : {}),
     ...(resumeReason ? { resumeReason } : {}),
     ...(record.transcriptPath ? { chatPath: record.transcriptPath } : {}),
     ...(record.provider === "codex" ? { messageTransport: "terminal" as const } : {}),

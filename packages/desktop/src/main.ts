@@ -41,11 +41,11 @@ let nativeActionQueue = Promise.resolve();
 let showingSessionFocusError = false;
 let quitting = false;
 
-type RepairPathKind = "executable" | "configRoot" | "profile" | "settingsFile";
+type RepairPathKind = "executable" | "configRoot" | "profile" | "settingsFile" | "workingDirectory";
 
 function isRepairPathKind(value: unknown): value is RepairPathKind {
   return value === "executable" || value === "configRoot"
-    || value === "profile" || value === "settingsFile";
+    || value === "profile" || value === "settingsFile" || value === "workingDirectory";
 }
 
 app.setName(productName);
@@ -78,7 +78,7 @@ ipcMain.handle("history:pick-repair-path", async (event, value: unknown) => {
     || !rendererURLAllowed(rendererTrust, event.senderFrame.url)
     || !isRepairPathKind(value)) return undefined;
   const properties: Array<"openDirectory" | "openFile"> = [
-    value === "configRoot" ? "openDirectory" : "openFile",
+    value === "configRoot" || value === "workingDirectory" ? "openDirectory" : "openFile",
   ];
   const options = { properties };
   const result = mainWindow

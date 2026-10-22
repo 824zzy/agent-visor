@@ -27,6 +27,10 @@ export type ResumeRepairValidation =
   | { state: "valid"; capability: import("./retained-history.js").RetainedHistoryResumeCapability }
   | { state: "unavailable"; reason: string };
 
+export type ResumeWorkingDirectoryValidation =
+  | { state: "valid"; cwd: string }
+  | { state: "unavailable"; reason: string };
+
 export type ResumeReconciliation =
   | { state: "matched"; sessionId: string; terminal: NativeHelperGhosttyTerminalView }
   | { state: "pending"; reason: string }
@@ -50,6 +54,11 @@ export interface ResumeProviderAdapter {
   resumeTarget(record: RetainedHistoryRecord, attemptId: string, nonce: string): ResumeTargetResult;
   /** Validate one explicit provider repair without dispatching or mutating state. */
   validateRepair?(record: RetainedHistoryRecord, selection: HistoryRepairSelection): ResumeRepairValidation;
+  /** Validate one selected working directory without dispatching or mutating state. */
+  validateWorkingDirectory?(
+    record: RetainedHistoryRecord,
+    candidateCwd: string,
+  ): Promise<ResumeWorkingDirectoryValidation>;
   reconcileResume(
     record: RetainedHistoryRecord,
     dispatch: NativeHelperGhosttyResumeDispatch,
