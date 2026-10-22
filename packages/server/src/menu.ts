@@ -174,7 +174,7 @@ function presentationPill(
   const sourceLabel = session.source === "Codex" && session.owner.startsWith("Codex ·")
     ? session.owner : session.source;
   const lifecycle = sessionLifecyclePresentation(session);
-  const status = lifecycle.status === "ready"
+  const status = lifecycle.tone === "ready" || lifecycle.tone === "neutral"
     ? lifecycle.label
     : inspectorStatus(session.section, session.subtitle);
   return {
@@ -187,6 +187,7 @@ function presentationPill(
     ...(session.attentionTier ? { attentionTier: session.attentionTier } : {}),
     ...(session.completionUnseen ? { completionUnseen: true } : {}),
     ...(session.failureAlert !== undefined ? { failureAlert: session.failureAlert } : {}),
+    lifecycleStatus: lifecycle.status,
     inspector: {
       status,
       runtimeItems: [runtimeSource(session.source, session.owner)],
@@ -199,7 +200,8 @@ function presentationPill(
     defaultOverflowEligible: isAmbientSession(session),
     accessibilityLabel: [
       title,
-      lifecycle.status === "ready" ? lifecycle.label : phaseLabel[session.section],
+      lifecycle.tone === "ready" || lifecycle.tone === "neutral"
+        ? lifecycle.label : phaseLabel[session.section],
       sourceLabel,
       session.project,
       ...(session.managedBy ? [`Managed by ${session.managedBy}`] : []),

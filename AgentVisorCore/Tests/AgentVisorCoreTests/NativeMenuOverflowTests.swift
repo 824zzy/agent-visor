@@ -40,6 +40,14 @@ final class NativeMenuOverflowTests: XCTestCase {
         XCTAssertEqual(NativeMenuStatusPresentation.tone(for: historicalPlacement), .ready)
     }
 
+    func testExplicitLifecycleStatusWinsOverLegacyInspectorCopy() throws {
+        let json = #"{"id":"closed","title":"Closed","phase":"history","priority":0,"accessibilityLabel":"Closed, Closed","lifecycleStatus":"closed","inspector":{"status":"Recent","runtimeItems":["Claude Code"],"detailRows":[],"projectPath":"~/Codes","activityAt":"2026-10-21T18:00:00.000Z"}}"#
+        let closed = try JSONDecoder().decode(NativeHelperPill.self, from: Data(json.utf8))
+
+        XCTAssertEqual(NativeMenuStatusPresentation.status(for: closed), "Closed")
+        XCTAssertEqual(NativeMenuStatusPresentation.tone(for: closed), .history)
+    }
+
     func testOldUnarchivedConversationRemainsInOverflowAndSearch() {
         let old = pill(
             "old", title: "donut-feature-parity", project: "Donut",
