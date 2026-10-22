@@ -86,6 +86,21 @@ export class NativeHelperRequestTooLargeError extends Error {
   }
 }
 
+type NativeHelperFailureReason = Extract<NativeHelperResponse, { ok: false }>['error']['reason'];
+
+/** A typed helper failure preserves the native classification for retry policy. */
+export class NativeHelperRequestError extends Error {
+  readonly reason: NativeHelperFailureReason;
+  readonly systemCode: number | undefined;
+
+  constructor(message: string, reason?: NativeHelperFailureReason, systemCode?: number) {
+    super(message);
+    this.name = "NativeHelperRequestError";
+    this.reason = reason;
+    this.systemCode = systemCode;
+  }
+}
+
 /**
  * Serialize one helper request completely before touching the socket. The
  * helper protocol uses a four-byte length prefix around a JSON payload; doing
@@ -649,7 +664,11 @@ export class NativeHelperProcess implements NativeHelperAdapter {
             ...(!response.ok ? { reason: response.error.reason, systemCode: response.error.systemCode } : {}),
           });
           if (response.ok) resolve(response);
-          else reject(new Error(response.error.message));
+          else reject(new NativeHelperRequestError(
+            response.error.message,
+            response.error.reason,
+            response.error.systemCode,
+          ));
         },
         reject: (error) => {
           trace("helper_response", { method, requestId: id, outcome: "failed" });

@@ -13,7 +13,7 @@ import {
   type ProviderAdapter,
   type SessionRouteProbeResult,
 } from "./sessions.js";
-import type { ChatPage } from "@agent-visor/protocol";
+import type { ChatPage, NativeHelperGhosttyResumeDispatch } from "@agent-visor/protocol";
 import { processInstanceToken } from "./providers/shared.js";
 import { FakeNativeHelper } from "./native-helper.js";
 import { NativeSessionControls } from "./session-controls.js";
@@ -257,6 +257,456 @@ describe("SessionRepository", () => {
         attentionTier: "ready",
         completionUnseen: true,
       });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers an exact lost receipt after repository restart without replaying an uncertain launch", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-resume-restart-recovery-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const attentionPath = path.join(directory, "completion-attention.json");
+    const transcriptPath = path.join(directory, "claude-resume-restart.jsonl");
+    const sessionID = "33333333-3333-4333-8333-333333333333";
+    const completionAt = "2026-10-21T18:00:00.000Z";
+    const newerCompletionAt = "2026-10-21T18:11:00.000Z";
+    const now = () => new Date("2026-10-21T18:12:00.000Z");
+    const resume: RetainedHistoryResumeCapability = {
+      version: 1,
+      provider: "claude_code",
+      host: "Ghostty",
+      executableRef: "/Users/me/.local/bin/claude",
+      profileState: "verified_absent",
+      overrideNames: [],
+      provenanceObservedAt: completionAt,
+    };
+    writeFileSync(transcriptPath, `${JSON.stringify({
+      type: "user",
+      sessionId: sessionID,
+      cwd: directory,
+      uuid: "resume-restart-user",
+      timestamp: completionAt,
+      message: { role: "user", content: "Recover this exact receipt" },
+    })}\n`);
+    let phase: "live" | "closed" = "live";
+    let recoverable = false;
+    let releaseInitialReconciliation!: () => void;
+    let initialReconciliationStarted!: () => void;
+    const initialReconciliationGate = new Promise<void>((resolve) => { releaseInitialReconciliation = resolve; });
+    const initialReconciliationStartedSignal = new Promise<void>((resolve) => { initialReconciliationStarted = resolve; });
+    const reconciledDispatches: NativeHelperGhosttyResumeDispatch[] = [];
+    const observed: DiscoveredProviderSession = {
+      id: sessionID,
+      provider: "claude_code",
+      title: "Recover this exact receipt",
+      subtitle: "Ready to continue",
+      project: "agent-visor",
+      cwd: directory,
+      owner: "Ghostty",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      turnId: "turn-resume-restart",
+      completionAt,
+      updatedAt: completionAt,
+      canOpenOwner: true,
+      canEnterChat: true,
+      chatPath: transcriptPath,
+      historyIdentity: {
+        verified: true,
+        current: true,
+        canonicalId: sessionID,
+        host: "Ghostty",
+        resume,
+      },
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty",
+        pid: 3_333,
+        processStartToken: "resume-restart-process",
+        tty: "ttys333",
+        cwd: directory,
+      } },
+    };
+    const provider: ProviderAdapter = {
+      id: "claude_code",
+      discover: async () => phase === "live" ? [structuredClone(observed)] : [],
+      resumeLiveness: async () => ({ state: "stopped" as const }),
+      resumeTarget: (_record: unknown, attemptId: string, nonce: string) => ({
+        state: "eligible" as const,
+        target: {
+          attemptId,
+          provider: "claude_code" as const,
+          sessionId: sessionID,
+          cwd: directory,
+          executable: resume.executableRef,
+          profileState: resume.profileState,
+          nonce,
+        },
+      }),
+      reconcileResume: async (_record: unknown, dispatch: NativeHelperGhosttyResumeDispatch) => {
+        reconciledDispatches.push(structuredClone(dispatch));
+        if (!recoverable) {
+          initialReconciliationStarted();
+          await initialReconciliationGate;
+          return { state: "unknown" as const, reason: "The first receipt was lost before identity publication." };
+        }
+        return {
+          state: "matched" as const,
+          sessionId: sessionID,
+          terminal: {
+            applicationPID: 33_334,
+            processStartToken: "resume-restart-ghostty",
+            terminalId: "resume-restart-terminal",
+            title: observed.title,
+            cwd: directory,
+            viewMode: "conversation" as const,
+          },
+        };
+      },
+    } as ProviderAdapter & Record<string, unknown>;
+    const helper = new FakeNativeHelper();
+    const options = {
+      now,
+      retainedHistoryPath: historyPath,
+      completionAttentionPath: attentionPath,
+    };
+    const first = new SessionRepository([provider], options);
+    first.setControls(new NativeSessionControls(helper));
+    try {
+      expect((await first.refresh()).sessions[0]).toMatchObject({
+        id: sessionID,
+        completionUnseen: true,
+        attentionTier: "ready",
+      });
+      phase = "closed";
+      await first.refresh();
+
+      const firstResume = first.resumeSession(sessionID);
+      await initialReconciliationStartedSignal;
+      await expect(first.resumeSession(sessionID)).resolves.toMatchObject({
+        state: "joined",
+        sessionId: sessionID,
+      });
+      releaseInitialReconciliation();
+      await expect(firstResume).resolves.toMatchObject({
+        state: "uncertain",
+        sessionId: sessionID,
+      });
+      expect(helper.ghosttyResumeRequests).toHaveLength(1);
+      const attemptPath = `${historyPath}.resume-attempts.json`;
+      const firstJournal = JSON.parse(readFileSync(attemptPath, "utf8")) as {
+        attempts: Array<{
+          state: string;
+          nonce?: string;
+          completionIdentity?: string;
+          dispatch?: NativeHelperGhosttyResumeDispatch;
+        }>;
+      };
+      expect(firstJournal.attempts[0]).toMatchObject({
+        state: "unknown",
+        nonce: expect.stringMatching(/^[0-9a-f]{32}$/),
+        completionIdentity: "turn:turn-resume-restart",
+        dispatch: { sessionId: sessionID },
+      });
+      const firstAttention = JSON.parse(readFileSync(attentionPath, "utf8")) as {
+        entries: Array<[string, { identity: string; seen: boolean }]>;
+      };
+      expect(firstAttention.entries.find(([key, entry]) =>
+        key === `claude_code:${sessionID}` && entry.identity === "turn:turn-resume-restart")?.[1].seen).toBe(false);
+
+      // A newer completion is observed before the daemon is reconstructed.
+      // The old durable receipt must retain its original captured identity.
+      observed.turnId = "turn-resume-restart-new";
+      observed.completionAt = newerCompletionAt;
+      observed.updatedAt = newerCompletionAt;
+      phase = "live";
+      await first.refresh();
+      phase = "closed";
+      await first.refresh();
+
+      recoverable = true;
+      const restarted = new SessionRepository([provider], options);
+      restarted.setControls(new NativeSessionControls(helper));
+      await restarted.refresh();
+      await expect(restarted.resumeSession(sessionID)).resolves.toMatchObject({
+        state: "matched",
+        sessionId: sessionID,
+      });
+
+      expect(helper.ghosttyResumeRequests).toHaveLength(1);
+      expect(helper.ghosttyResumeDispatches).toHaveLength(1);
+      expect(helper.ghosttyTerminalFocusRequests).toHaveLength(1);
+      expect(reconciledDispatches).toHaveLength(2);
+      expect(reconciledDispatches[1]).toEqual(reconciledDispatches[0]);
+      const recoveredAttention = JSON.parse(readFileSync(attentionPath, "utf8")) as {
+        entries: Array<[string, { identity: string; seen: boolean }]>;
+      };
+      expect(recoveredAttention.entries.find(([key, entry]) =>
+        key === `claude_code:${sessionID}` && entry.identity === "turn:turn-resume-restart-new")?.[1].seen).toBe(false);
+
+      phase = "live";
+      await restarted.refresh();
+      expect(restarted.current().sessions[0]).toMatchObject({
+        id: sessionID,
+        section: "ready",
+      });
+      expect(restarted.current().sessions[0]?.completionUnseen).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reopens a matched cycle after fresh stopped liveness before another ambient refresh", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-resume-reopen-cycle-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const sessionID = "44444444-4444-4444-8444-444444444444";
+    const now = () => new Date("2026-10-21T18:20:00.000Z");
+    const resume: RetainedHistoryResumeCapability = {
+      version: 1,
+      provider: "claude_code",
+      host: "Ghostty",
+      executableRef: "/Users/me/.local/bin/claude",
+      profileState: "verified_absent",
+      overrideNames: [],
+      provenanceObservedAt: "2026-10-21T18:00:00.000Z",
+    };
+    let phase: "live" | "closed" = "live";
+    const observed: DiscoveredProviderSession = {
+      id: sessionID,
+      provider: "claude_code",
+      title: "Reopen this cycle",
+      subtitle: "Ready to continue",
+      project: "agent-visor",
+      cwd: directory,
+      owner: "Ghostty",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: false,
+      historyIdentity: {
+        verified: true,
+        current: true,
+        canonicalId: sessionID,
+        host: "Ghostty",
+        resume,
+      },
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty",
+        pid: 4_444,
+        processStartToken: "resume-reopen-process",
+        tty: "ttys444",
+        cwd: directory,
+      } },
+    };
+    const provider: ProviderAdapter = {
+      id: "claude_code",
+      discover: async () => phase === "live" ? [structuredClone(observed)] : [],
+      resumeLiveness: async () => phase === "live"
+        ? { state: "live" as const, session: structuredClone(observed) }
+        : { state: "stopped" as const },
+      resumeTarget: (_record: unknown, attemptId: string, nonce: string) => ({
+        state: "eligible" as const,
+        target: {
+          attemptId,
+          provider: "claude_code" as const,
+          sessionId: sessionID,
+          cwd: directory,
+          executable: resume.executableRef,
+          profileState: resume.profileState,
+          nonce,
+        },
+      }),
+      reconcileResume: async () => ({
+        state: "matched" as const,
+        sessionId: sessionID,
+        terminal: {
+          applicationPID: 44_445,
+          processStartToken: "resume-reopen-ghostty",
+          terminalId: "resume-reopen-terminal",
+          title: observed.title,
+          cwd: directory,
+          viewMode: "conversation" as const,
+        },
+      }),
+    } as ProviderAdapter & Record<string, unknown>;
+    const helper = new FakeNativeHelper();
+    const repository = new SessionRepository([provider], { retainedHistoryPath: historyPath, now });
+    repository.setControls(new NativeSessionControls(helper));
+    try {
+      await repository.refresh();
+      phase = "closed";
+      await repository.refresh();
+      const first = await repository.resumeSession(sessionID);
+      expect(first).toMatchObject({ state: "matched", sessionId: sessionID });
+
+      // The terminal closes before the next ambient discovery. A fresh
+      // stopped liveness result is the explicit proof that permits reuse of
+      // the matched cycle.
+      phase = "closed";
+      const second = await repository.resumeSession(sessionID);
+      expect(second).toMatchObject({ state: "matched", sessionId: sessionID });
+      expect(helper.ghosttyResumeRequests).toHaveLength(2);
+      expect(helper.ghosttyTerminalFocusRequests).toHaveLength(2);
+      expect(helper.ghosttyResumeRequests[0]?.attemptId).not.toBe(helper.ghosttyResumeRequests[1]?.attemptId);
+      expect(helper.ghosttyResumeRequests[0]?.nonce).not.toBe(helper.ghosttyResumeRequests[1]?.nonce);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("lets another live navigation supersede cold final focus and preserve the cold row attention", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-resume-live-supersedes-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const attentionPath = path.join(directory, "completion-attention.json");
+    const transcriptPath = path.join(directory, "claude-resume-live-supersedes.jsonl");
+    const sessionID = "55555555-5555-4555-8555-555555555555";
+    const otherSessionID = "55666666-6666-4666-8666-666666666666";
+    const oldCompletion = "2026-10-21T18:00:00.000Z";
+    const newCompletion = "2026-10-21T18:21:00.000Z";
+    const now = () => new Date("2026-10-21T18:22:00.000Z");
+    const resume: RetainedHistoryResumeCapability = {
+      version: 1,
+      provider: "claude_code",
+      host: "Ghostty",
+      executableRef: "/Users/me/.local/bin/claude",
+      profileState: "verified_absent",
+      overrideNames: [],
+      provenanceObservedAt: oldCompletion,
+    };
+    writeFileSync(transcriptPath, `${JSON.stringify({
+      type: "user",
+      sessionId: sessionID,
+      cwd: directory,
+      uuid: "live-supersedes-user",
+      timestamp: oldCompletion,
+      message: { role: "user", content: "Keep the live route authoritative" },
+    })}\n`);
+    let phase: "live" | "closed" = "live";
+    let completionAt = oldCompletion;
+    let releaseReconciliation!: () => void;
+    let reconciliationStarted!: () => void;
+    const reconciliationGate = new Promise<void>((resolve) => { releaseReconciliation = resolve; });
+    const reconciliationStartedSignal = new Promise<void>((resolve) => { reconciliationStarted = resolve; });
+    const observed = (): DiscoveredProviderSession => ({
+      id: sessionID,
+      provider: "claude_code",
+      title: "Keep the live route authoritative",
+      subtitle: "Ready to continue",
+      project: "agent-visor",
+      cwd: directory,
+      owner: "Ghostty",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      turnId: `turn-live-supersedes-${completionAt}`,
+      completionAt,
+      updatedAt: completionAt,
+      canOpenOwner: true,
+      canEnterChat: true,
+      chatPath: transcriptPath,
+      historyIdentity: {
+        verified: true,
+        current: true,
+        canonicalId: sessionID,
+        host: "Ghostty",
+        resume,
+      },
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty",
+        pid: 5_555,
+        processStartToken: "resume-live-supersedes-process",
+        tty: "ttys555",
+        cwd: directory,
+      } },
+    });
+    const otherObserved = (): DiscoveredProviderSession => ({
+      ...observed(),
+      id: otherSessionID,
+      title: "Another live route",
+      turnId: "turn-live-other",
+      completionAt: oldCompletion,
+      updatedAt: oldCompletion,
+      historyIdentity: {
+        verified: true,
+        current: true,
+        canonicalId: otherSessionID,
+        host: "Ghostty",
+        resume,
+      },
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty",
+        pid: 5_556,
+        processStartToken: "resume-live-other-process",
+        tty: "ttys556",
+        cwd: directory,
+      } },
+    });
+    const provider: ProviderAdapter = {
+      id: "claude_code",
+      discover: async () => phase === "live" ? [observed(), otherObserved()] : [],
+      resumeLiveness: async () => ({ state: "stopped" as const }),
+      resumeTarget: (_record: unknown, attemptId: string, nonce: string) => ({
+        state: "eligible" as const,
+        target: {
+          attemptId,
+          provider: "claude_code" as const,
+          sessionId: sessionID,
+          cwd: directory,
+          executable: resume.executableRef,
+          profileState: resume.profileState,
+          nonce,
+        },
+      }),
+      reconcileResume: async () => {
+        reconciliationStarted();
+        await reconciliationGate;
+        return {
+          state: "matched" as const,
+          sessionId: sessionID,
+          terminal: {
+            applicationPID: 55_556,
+            processStartToken: "resume-live-supersedes-ghostty",
+            terminalId: "resume-live-supersedes-terminal",
+            title: "Cold terminal that must lose focus",
+            cwd: directory,
+            viewMode: "conversation" as const,
+          },
+        };
+      },
+    } as ProviderAdapter & Record<string, unknown>;
+    const helper = new FakeNativeHelper();
+    const repository = new SessionRepository([provider], {
+      now,
+      retainedHistoryPath: historyPath,
+      completionAttentionPath: attentionPath,
+    });
+    repository.setControls(new NativeSessionControls(helper));
+    try {
+      await repository.refresh();
+      phase = "closed";
+      await repository.refresh();
+      const coldResume = repository.resumeSession(sessionID);
+      await reconciliationStartedSignal;
+
+      phase = "live";
+      completionAt = newCompletion;
+      await repository.refresh();
+      await expect(repository.focusSession(otherSessionID)).resolves.toBeUndefined();
+      releaseReconciliation();
+      await expect(coldResume).resolves.toMatchObject({ state: "matched", sessionId: sessionID });
+
+      expect(helper.terminalFocusRequests).toHaveLength(1);
+      expect(helper.ghosttyTerminalFocusRequests).toHaveLength(0);
+      const attention = JSON.parse(readFileSync(attentionPath, "utf8")) as {
+        entries: Array<[string, { identity: string; seen: boolean }]>;
+      };
+      expect(attention.entries.find(([key, entry]) =>
+        key === `claude_code:${sessionID}` && entry.identity === `turn:turn-live-supersedes-${newCompletion}`)?.[1].seen).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

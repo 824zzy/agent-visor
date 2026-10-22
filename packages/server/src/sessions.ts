@@ -70,6 +70,7 @@ import {
 import {
   ResumeAttemptStore,
   ResumeCoordinator,
+  type ResumeAttempt,
   type ResumeRepairValidation,
   type ResumeProviderAdapter,
   type ResumeResult,
@@ -557,8 +558,8 @@ export class SessionRepository {
   private readonly retainedHistory: RetainedHistoryStore | undefined;
   private readonly resumeAttempts: ResumeAttemptStore | undefined;
   private resumeCoordinator: ResumeCoordinator | undefined;
-  /** Provider-qualified so equal Codex/Claude UUIDs cannot cross-acknowledge. */
-  private readonly resumeCompletionByCanonical = new Map<string, string>();
+  /** Successful live focus generation is separate from ambient presence. */
+  private liveNavigationGeneration = 0;
   /** Offset of the next bounded background History lifetime batch. */
   private retainedHistoryLifetimeCursor = 0;
   private readonly acknowledgedFailureIDs = new Set<string>();
@@ -732,7 +733,8 @@ export class SessionRepository {
         focusLive: (session) => this.focusSession(session.id).then((error) => {
           if (error) throw new Error(error);
         }),
-        onMatched: (record) => this.acknowledgeRetainedResume(record),
+        liveNavigationEpoch: () => this.liveNavigationGeneration,
+        onMatched: (record, attempt) => this.acknowledgeRetainedResume(record, attempt),
       });
     }
     this.codexRouteEventUnsubscribe = controls.subscribeCodexRouteEvents?.((event) => {
@@ -1756,6 +1758,7 @@ export class SessionRepository {
     try {
       const result = await this.controls.focus(structuredClone(session));
       if (result === "superseded") return undefined;
+      this.noteSuccessfulLiveNavigation();
       // Focus can fail or outlive the completion the user clicked. Only a
       // successful opening of that same completion may demote its pill.
       if (completion !== undefined && completion === this.readyCompletionIdentity(sessionId)) {
@@ -1774,30 +1777,47 @@ export class SessionRepository {
       return { state: "unavailable", sessionId, reason: "This session was removed from Agent Visor History." };
     }
     const record = this.retainedHistory?.get(sessionId);
-    if (record?.completionIdentity) {
-      const key = `${record.provider}:${record.id}`;
-      const attention = this.completionAttention.get(key, record.completionIdentity)
-        ?? this.completionAttention.get(`${record.provider}:${record.canonicalId}`, record.completionIdentity);
-      if (attention && !attention.seen) {
-        this.resumeCompletionByCanonical.set(resumeCompletionKey(record.provider, record.canonicalId), record.completionIdentity);
-      }
-    }
     if (!this.resumeCoordinator) {
       return { state: "unavailable", sessionId, reason: "Closed terminal resume is unavailable." };
     }
-    return this.resumeCoordinator.resumeSession(sessionId);
+    const capturedCompletionIdentity = record?.completionIdentity && this.unseenCompletion(
+      record.provider,
+      record.id,
+      record.canonicalId,
+      record.completionIdentity,
+    ) ? record.completionIdentity : undefined;
+    return this.resumeCoordinator.resumeSession(sessionId, capturedCompletionIdentity);
   }
 
-  private acknowledgeRetainedResume(record: import("./retained-history.js").RetainedHistoryRecord): void {
-    const completion = this.resumeCompletionByCanonical.get(resumeCompletionKey(record.provider, record.canonicalId));
-    if (!completion || record.completionIdentity !== completion) return;
+  private acknowledgeRetainedResume(
+    record: import("./retained-history.js").RetainedHistoryRecord,
+    attempt: Pick<ResumeAttempt, "attemptId" | "completionIdentity">,
+  ): void {
+    const completion = attempt.completionIdentity;
+    if (!completion) return;
+    const currentAttempt = this.resumeAttempts?.get(record.provider, record.canonicalId);
+    if (!currentAttempt || currentAttempt.attemptId !== attempt.attemptId) return;
     const key = `${record.provider}:${record.id}`;
     const attention = this.completionAttention.get(key, completion)
       ?? this.completionAttention.get(`${record.provider}:${record.canonicalId}`, completion);
     if (!attention || attention.seen) return;
     this.completionAttention.acknowledge(key, completion, record.updatedAt);
-    this.resumeCompletionByCanonical.delete(resumeCompletionKey(record.provider, record.canonicalId));
     this.completionAttention.save();
+  }
+
+  private unseenCompletion(
+    provider: RetainedHistoryProvider,
+    id: string,
+    canonicalId: string,
+    completion: string,
+  ): boolean {
+    const attention = this.completionAttention.get(`${provider}:${id}`, completion)
+      ?? this.completionAttention.get(`${provider}:${canonicalId}`, completion);
+    return attention?.seen === false;
+  }
+
+  private noteSuccessfulLiveNavigation(): void {
+    this.liveNavigationGeneration += 1;
   }
 
   acknowledgeReady(sessionId: string): void {
@@ -3425,10 +3445,6 @@ function completionIdentity(session: { turnId?: string; updatedAt: string }): st
 
 function retainedCompletionIdentity(session: { completionAt?: string; turnId?: string }): string {
   return session.turnId ? `turn:${session.turnId}` : `completion:${session.completionAt}`;
-}
-
-function resumeCompletionKey(provider: RetainedHistoryProvider, canonicalId: string): string {
-  return `${provider}\u0000${canonicalId}`;
 }
 
 function resumeReasonText(
