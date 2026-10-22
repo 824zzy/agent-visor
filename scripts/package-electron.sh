@@ -196,7 +196,7 @@ ditto "$ROOT/packages/server/dist" "$RESOURCES/app/packages/server/dist"
 ditto "$ROOT/packages/app/dist" "$RESOURCES/app/packages/app/dist"
 ditto "$ROOT/packages/protocol/dist" "$RESOURCES/app/node_modules/@agent-visor/protocol/dist"
 cp "$ROOT/packages/protocol/package.json" "$RESOURCES/app/node_modules/@agent-visor/protocol/package.json"
-for dependency in ws zod; do
+for dependency in ws zod smol-toml; do
     if [[ ! -d "$ROOT/node_modules/$dependency" ]]; then
         echo "ERROR: runtime dependency is missing: $ROOT/node_modules/$dependency" >&2
         exit 1
@@ -213,7 +213,7 @@ if [[ ! -s "$CHROMIUM_LICENSE" ]]; then
 fi
 copy_required_notice "$CHROMIUM_LICENSE" "$NOTICES/LICENSES.chromium.html"
 copy_required_notice "$ROOT/LICENSE.md" "$NOTICES/AgentVisor.LICENSE.md"
-for dependency in ws zod; do
+for dependency in ws zod smol-toml; do
     if [[ -s "$ROOT/node_modules/$dependency/LICENSE" ]]; then
         cp "$ROOT/node_modules/$dependency/LICENSE" "$NOTICES/$dependency.LICENSE"
     fi

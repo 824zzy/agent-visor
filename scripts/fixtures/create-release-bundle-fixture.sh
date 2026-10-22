@@ -28,6 +28,7 @@ mkdir -p "$APP_PATH/Contents/MacOS" \
     "$APP_PATH/Contents/Resources/app/node_modules/@agent-visor/protocol/dist" \
     "$APP_PATH/Contents/Resources/app/node_modules/ws" \
     "$APP_PATH/Contents/Resources/app/node_modules/zod" \
+    "$APP_PATH/Contents/Resources/app/node_modules/smol-toml" \
     "$APP_PATH/Contents/Resources/AgentIntegrations" \
     "$APP_PATH/Contents/Resources/ThirdPartyLicenses"
 
@@ -83,6 +84,7 @@ printf '%s\n' \
     "export {};" > "$APP_PATH/Contents/Resources/app/node_modules/@agent-visor/protocol/dist/index.js"
 printf '%s\n' runtime > "$APP_PATH/Contents/Resources/app/node_modules/ws/index.js"
 printf '%s\n' runtime > "$APP_PATH/Contents/Resources/app/node_modules/zod/index.js"
+printf '%s\n' runtime > "$APP_PATH/Contents/Resources/app/node_modules/smol-toml/index.js"
 
 for integration in \
     agent-visor-state.py \
@@ -93,6 +95,7 @@ for integration in \
         > "$APP_PATH/Contents/Resources/AgentIntegrations/$integration"
 done
 printf 'Electron license\n' > "$APP_PATH/Contents/Resources/ThirdPartyLicenses/Electron.LICENSE"
+printf 'Synthetic TOML parser license\n' > "$APP_PATH/Contents/Resources/ThirdPartyLicenses/smol-toml.LICENSE"
 printf '<html>Chromium license</html>\n' \
     > "$APP_PATH/Contents/Resources/ThirdPartyLicenses/LICENSES.chromium.html"
 cp "$PROJECT_DIR/LICENSE.md" \

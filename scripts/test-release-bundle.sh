@@ -145,6 +145,7 @@ require_file "$RUNTIME_ROOT/node_modules/@agent-visor/protocol/package.json" "El
 require_file "$RUNTIME_ROOT/node_modules/@agent-visor/protocol/dist/index.js" "Electron protocol runtime"
 require_directory "$RUNTIME_ROOT/node_modules/ws" "Electron ws runtime dependency"
 require_directory "$RUNTIME_ROOT/node_modules/zod" "Electron zod runtime dependency"
+require_directory "$RUNTIME_ROOT/node_modules/smol-toml" "Electron smol-toml runtime dependency"
 
 INTEGRATIONS="$APP_PATH/Contents/Resources/AgentIntegrations"
 for integration in \
@@ -160,6 +161,7 @@ require_file "$NOTICES/Electron.LICENSE" "Electron license notice"
 require_file "$NOTICES/LICENSES.chromium.html" "Chromium license notice"
 require_file "$NOTICES/AgentVisor.LICENSE.md" "Agent Visor license notice"
 require_file "$NOTICES/README.txt" "third-party notices index"
+require_file "$NOTICES/smol-toml.LICENSE" "TOML parser license notice"
 
 if find "$APP_PATH/Contents" -name '__MACOSX' -o -name '.DS_Store' -o -name '*.p12' -o -name '*.password' | grep -q .; then
     fail "release app contains metadata or signing secret artifacts"

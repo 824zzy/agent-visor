@@ -89,6 +89,22 @@ if [[ ! -x "$SCRIPT_DIR/validate-release-candidate.sh" ]]; then
     exit 1
 fi
 
+# A complete signed candidate must reject a missing server runtime dependency,
+# even when the source checkout has that package installed.
+MISSING_RUNTIME_LOG="$TEMP_ROOT/missing-runtime.log"
+if "$SCRIPT_DIR/test-release-bundle.sh" "$APP_PATH" >"$MISSING_RUNTIME_LOG" 2>&1; then
+    echo "ERROR: release bundle accepted a missing smol-toml runtime dependency" >&2
+    exit 1
+fi
+if ! grep -Fq 'smol-toml' "$MISSING_RUNTIME_LOG"; then
+    cat "$MISSING_RUNTIME_LOG" >&2
+    echo "ERROR: missing runtime dependency failed for an unrelated reason" >&2
+    exit 1
+fi
+ditto "$PROJECT_DIR/node_modules/smol-toml" "$APP_PATH/Contents/Resources/app/node_modules/smol-toml"
+cp "$PROJECT_DIR/node_modules/smol-toml/LICENSE" "$APP_PATH/Contents/Resources/ThirdPartyLicenses/smol-toml.LICENSE"
+codesign --force --options runtime --entitlements "$ENTITLEMENTS_PATH" --sign - "$APP_PATH"
+
 "$SCRIPT_DIR/validate-release-candidate.sh" "$APP_PATH" "$CASK_PATH" >/dev/null
 
 set +e
