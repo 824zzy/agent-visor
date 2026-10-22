@@ -3788,6 +3788,10 @@ function applyHooks(
       existing.turnState = phase.turnState;
       existing.subtitle = phase.subtitle;
       existing.updatedAt = hook.activityAt ?? hook.receivedAt;
+      // The accepted hook is the newest lifecycle evidence for this record.
+      // Refresh its explicit presentation projection while leaving provider
+      // conversation and route facts untouched.
+      existing.lifecycleStatus = lifecycleStatusForHookPhase(phase);
       continue;
     }
     if (hook.provider === "codex" || hook.provider === "pi"
@@ -4003,6 +4007,15 @@ function hookPhase(event: HookSessionEvent): {
   return { section: "working", turnState: "working", subtitle: "Agent is working" };
 }
 
+function lifecycleStatusForHookPhase(phase: ReturnType<typeof hookPhase>): SessionLifecycleStatus {
+  switch (phase.section) {
+    case "needs_you": return "needs_you";
+    case "ready": return "ready";
+    case "working": return "working";
+    case "history": return "closed";
+  }
+}
+
 function hookOwner(event: HookSessionEvent): string {
   if (event.tty) return "Terminal";
   if (event.provider === "cursor") return "Cursor";
@@ -4026,10 +4039,10 @@ function hookSession(hook: HookSessionEvent): DiscoveredProviderSession {
     section: phase.section,
     turnState: phase.turnState,
     updatedAt: hook.activityAt ?? hook.receivedAt,
-    // An admitted hook's Ready phase is direct lifecycle evidence. Keep the
+    // An admitted hook's phase is direct lifecycle evidence. Keep the
     // conversation/route state unknown until a provider resolves it, but do
-    // not let that missing route evidence erase the hook's Ready status.
-    ...(phase.section === "ready" ? { lifecycleStatus: "ready" as const } : {}),
+    // not let that missing route evidence erase the hook's status.
+    lifecycleStatus: lifecycleStatusForHookPhase(phase),
     // A hook carries lifecycle facts, not a validated navigation target.
     // Discovery supplies the owner capability after resolving that target.
     canOpenOwner: false,

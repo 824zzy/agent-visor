@@ -761,6 +761,46 @@ describe("live provider adapters", () => {
     expect((await provider.discover())[0]?.modelCatalog).toBeUndefined();
   });
 
+  it("presents a transcript-only Pi source record as Historical through the repository", async () => {
+    const environment = new FixtureEnvironment();
+    const root = `${home}/.pi/agent/sessions`;
+    const project = `${root}/--Users-me-Codes-agent-visor--`;
+    const transcript = `${project}/pi-history.jsonl`;
+    const body = [
+      { type: "session", id: "pi-history", cwd, timestamp: "2026-08-22T07:59:58.000Z" },
+      { type: "message", id: "history-message", parentId: "root", role: "user", content: "Review history" },
+    ].map((value) => JSON.stringify(value)).join("\n") + "\n";
+    environment.directories.set(root, ["--Users-me-Codes-agent-visor--"]);
+    environment.directories.set(project, ["pi-history.jsonl"]);
+    environment.files.set(transcript, body);
+    environment.headTails.set(transcript, { head: body, tail: body });
+    environment.stamps.set(transcript, { modifiedAt: now, size: Buffer.byteLength(body) });
+    environment.processRows = [];
+
+    const repository = new SessionRepository([new PiProvider(environment)], { now: () => now });
+    const snapshot = await repository.refresh();
+    const record = snapshot.sessions[0];
+    expect(record).toMatchObject({
+      id: "pi-history",
+      source: "Pi",
+      section: "history",
+      lifecycleStatus: "historical",
+      canOpenOwner: false,
+      canEnterChat: true,
+      sessionState: { conversation: "unknown", turn: "unknown", route: "unavailable" },
+    });
+
+    const presentation = menuPresentation(snapshot, [], now.valueOf());
+    expect(presentation.navigatorPills).toEqual([
+      expect.objectContaining({
+        id: "pi-history",
+        lifecycleStatus: "historical",
+        inspector: expect.objectContaining({ status: "Historical" }),
+        accessibilityLabel: expect.stringContaining(", Historical,"),
+      }),
+    ]);
+  });
+
   it("uses Pi hook identity for a resumed session in its exact terminal", async () => {
     const environment = new FixtureEnvironment();
     const root = `${home}/.pi/agent/sessions`;
