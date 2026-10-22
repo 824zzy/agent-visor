@@ -2792,6 +2792,7 @@ describe("SessionRepository", () => {
 
     expect(repository.current().sessions[0]).toMatchObject({
       section: "needs_you",
+      lifecycleStatus: "needs_you",
       sessionState: { turn: "working" },
       subtitle: "Answer required",
     });
@@ -2806,6 +2807,7 @@ describe("SessionRepository", () => {
 
     expect(repository.current().sessions[0]).toMatchObject({
       section: "needs_you",
+      lifecycleStatus: "needs_you",
       sessionState: { turn: "working" },
       subtitle: "Answer required",
     });
@@ -2817,6 +2819,7 @@ describe("SessionRepository", () => {
     expect(answerCalls).toBe(1);
     expect(repository.current().sessions[0]).toMatchObject({
       section: "working",
+      lifecycleStatus: "working",
       sessionState: { turn: "working" },
     });
 
@@ -2827,6 +2830,7 @@ describe("SessionRepository", () => {
     await repository.refresh();
     expect(repository.current().sessions[0]).toMatchObject({
       section: "working",
+      lifecycleStatus: "working",
       sessionState: { turn: "working" },
     });
 
@@ -2838,6 +2842,7 @@ describe("SessionRepository", () => {
 
     expect(repository.current().sessions[0]).toMatchObject({
       section: "ready",
+      lifecycleStatus: "ready",
       sessionState: { turn: "ready" },
       subtitle: "Ready to continue",
     });

@@ -64,10 +64,10 @@ public enum NativeMenuStatusPresentation {
 
     private static func fallbackStatus(for phase: NativeHelperPillPhase) -> String {
         switch phase {
-        case .needsYou: return "Needs attention"
+        case .needsYou: return "Needs you"
         case .ready: return "Ready"
-        case .working: return "In progress"
-        case .history: return "History"
+        case .working: return "Working"
+        case .history: return "Historical"
         }
     }
 }

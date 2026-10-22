@@ -284,7 +284,7 @@ describe("menu presentation", () => {
           lifecycleStatus: "needs_you",
           priority: 0,
           defaultOverflowEligible: true,
-          accessibilityLabel: "Approve release, needs you, Claude Code, agent-visor",
+          accessibilityLabel: "Approve release, Needs you, Claude Code, agent-visor",
         },
         {
           id: "ready",
@@ -310,7 +310,7 @@ describe("menu presentation", () => {
           lifecycleStatus: "working",
           priority: 2,
           defaultOverflowEligible: true,
-          accessibilityLabel: "Build menu, in progress, Pi, agent-visor",
+          accessibilityLabel: "Build menu, Working, Pi, agent-visor",
         },
         {
           id: "history",

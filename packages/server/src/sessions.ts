@@ -3388,10 +3388,18 @@ export class SessionRepository {
           }
         }
       }
-      if (this.pendingActions(record.id).some((action) => action.type === "approval" || action.blocking !== false)) {
+      const pendingActions = this.pendingActions(record.id);
+      const hasPendingQuestion = pendingActions.some((action) => action.type === "question");
+      const needsYouTurn = pendingActions.some((action) =>
+        action.type === "approval" || action.blocking !== false);
+      if (needsYouTurn || hasPendingQuestion) {
         record.section = "needs_you";
-        record.turnState = "needs_you";
-        record.subtitle = this.pendingActions(record.id).some((action) => action.type === "question") ? "Answer required" : "Approval required";
+        record.lifecycleStatus = "needs_you";
+        // A blocking action owns the provider turn. A nonblocking question
+        // only overlays the display status and preserves the provider's
+        // working evidence for state, routing, and subsequent refreshes.
+        if (needsYouTurn) record.turnState = "needs_you";
+        record.subtitle = hasPendingQuestion ? "Answer required" : "Approval required";
         const latestApproval = [...(this.externalActions.get(record.id)?.values() ?? [])]
           .find((action) => action.state === "pending");
         const hookRequest = [...this.hookRequests.values()].find((request) => request.sessionId === record.id);
