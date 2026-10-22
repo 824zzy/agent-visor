@@ -46,6 +46,17 @@ public enum NativeHelperPillPhase: String, Codable, Equatable {
     case history
 }
 
+/// Lifecycle meaning resolved by the daemon before a pill crosses the wire.
+/// This is separate from the phase/tier used for native placement.
+public enum NativeHelperLifecycleStatus: String, Codable, Equatable {
+    case needsYou = "needs_you"
+    case ready
+    case working
+    case closed
+    case unavailable
+    case historical
+}
+
 public enum NativeHelperSessionAttentionTier: String, Codable, Equatable {
     case needsYou = "needs_you"
     case ready
@@ -83,6 +94,7 @@ public struct NativeHelperPill: Codable, Equatable {
     public let owner: String?
     public let inspector: NativeHelperSessionInspector?
     public let phase: NativeHelperPillPhase
+    public let lifecycleStatus: NativeHelperLifecycleStatus?
     public let attentionTier: NativeHelperSessionAttentionTier?
     public let completionUnseen: Bool?
     /// Whether this needs-you pill represents a newly observed failure.
@@ -104,6 +116,7 @@ public struct NativeHelperPill: Codable, Equatable {
         owner: String? = nil,
         inspector: NativeHelperSessionInspector? = nil,
         phase: NativeHelperPillPhase,
+        lifecycleStatus: NativeHelperLifecycleStatus? = nil,
         attentionTier: NativeHelperSessionAttentionTier? = nil,
         completionUnseen: Bool? = nil,
         failureAlert: Bool? = nil,
@@ -119,6 +132,7 @@ public struct NativeHelperPill: Codable, Equatable {
         self.owner = owner
         self.inspector = inspector
         self.phase = phase
+        self.lifecycleStatus = lifecycleStatus
         self.attentionTier = attentionTier
         self.completionUnseen = completionUnseen
         self.failureAlert = failureAlert
@@ -1223,7 +1237,8 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
             "id", "title", "phase", "priority", "accessibilityLabel",
         ]
         let detailedPillKeys = legacyPillKeys.union([
-            "subtitle", "source", "project", "owner", "inspector", "attentionTier",
+            "subtitle", "source", "project", "owner", "inspector", "lifecycleStatus",
+            "attentionTier",
             "failureAlert", "defaultOverflowEligible", "completionUnseen",
         ])
         return (pills + navigatorPills).allSatisfy {

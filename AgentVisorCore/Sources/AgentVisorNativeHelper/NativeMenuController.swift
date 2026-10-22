@@ -567,7 +567,10 @@ final class NativeMenuController: NSObject {
         let now = Date()
         updateReadyPulse(now: now)
         guard presentationIsVisible && readyAttention.hasActivePulse(
-            pills: sessionPresentations.values.filter { sessionPanels[$0.id]?.isVisible == true },
+            pills: sessionPresentations.values.filter {
+                sessionPanels[$0.id]?.isVisible == true
+                    && NativeMenuStatusPresentation.tone(for: $0) == .ready
+            },
             now: now,
             reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         ) else {
@@ -586,7 +589,10 @@ final class NativeMenuController: NSObject {
         let now = Date()
         updateReadyPulse(now: now)
         if !presentationIsVisible || !readyAttention.hasActivePulse(
-            pills: sessionPresentations.values.filter { sessionPanels[$0.id]?.isVisible == true },
+            pills: sessionPresentations.values.filter {
+                sessionPanels[$0.id]?.isVisible == true
+                    && NativeMenuStatusPresentation.tone(for: $0) == .ready
+            },
             now: now,
             reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         ) {
@@ -596,7 +602,8 @@ final class NativeMenuController: NSObject {
 
     private func updateReadyPulse(now: Date) {
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        for (id, pill) in sessionPresentations where pill.phase == .ready {
+        for (id, pill) in sessionPresentations
+        where NativeMenuStatusPresentation.tone(for: pill) == .ready {
             guard let panel = sessionPanels[id], panel.isVisible else { continue }
             updateSessionAppearance(panel.pillButton, pill: pill, now: now, reduceMotion: reduceMotion)
         }
@@ -605,9 +612,11 @@ final class NativeMenuController: NSObject {
     private func updateSessionAppearance(
         _ button: NativePillButton, pill: NativeHelperPill, now: Date, reduceMotion: Bool
     ) {
-        let unopened = readyAttention.isUnopened(pill)
+        let isReady = NativeMenuStatusPresentation.tone(for: pill) == .ready
+        let unopened = isReady && readyAttention.isUnopened(pill)
         let green = color(for: .ready)
-        let blend = readyAttention.backgroundPulse(for: pill, now: now, reduceMotion: reduceMotion)
+        let blend = isReady
+            ? readyAttention.backgroundPulse(for: pill, now: now, reduceMotion: reduceMotion) : 0
         button.attentionBackgroundColor = blend > 0
             ? button.normalBackgroundColor.blended(withFraction: blend, of: green) : nil
         let recent = NativeMenuDisplayPhase.phase(for: pill) == .history
@@ -617,10 +626,10 @@ final class NativeMenuController: NSObject {
         button.refreshBackground()
         if shortcutSnapshot?.positions[pill.id] == nil {
             button.contentTintColor = statusColor(for: pill, now: now).withAlphaComponent(
-                readyAttention.opacity(
+                isReady ? readyAttention.opacity(
                     id: pill.id, phase: pill.phase, attentionTier: pill.attentionTier, now: now,
                     reduceMotion: reduceMotion
-                )
+                ) : 1
             )
         }
     }
@@ -634,7 +643,7 @@ final class NativeMenuController: NSObject {
         let now = Date()
         updateReadyFade(now: now)
         guard sessionPresentations.values.contains(where: {
-            $0.phase == .ready && $0.inspector != nil
+            NativeMenuStatusPresentation.tone(for: $0) == .ready && $0.inspector != nil
                 && readyAttention.statusStaleness(pill: $0, now: now) < 1
         }) else {
             readyFadeTimer?.invalidate()
@@ -651,7 +660,8 @@ final class NativeMenuController: NSObject {
 
     private func updateReadyFade(now: Date) {
         for (id, pill) in sessionPresentations
-        where pill.phase == .ready && shortcutSnapshot?.positions[id] == nil {
+        where NativeMenuStatusPresentation.tone(for: pill) == .ready
+            && shortcutSnapshot?.positions[id] == nil {
             sessionPanels[id]?.pillButton.contentTintColor = statusColor(for: pill, now: now)
                 .withAlphaComponent(readyAttention.opacity(
                     id: id, phase: pill.phase, attentionTier: pill.attentionTier, now: now,
@@ -1524,6 +1534,7 @@ final class NativeMenuController: NSObject {
             pill.id,
             label,
             pill.phase.rawValue,
+            pill.lifecycleStatus?.rawValue ?? "",
             pill.attentionTier?.rawValue ?? "",
             pill.failureAlert == true ? "failure-alert" : "",
             pill.accessibilityLabel,

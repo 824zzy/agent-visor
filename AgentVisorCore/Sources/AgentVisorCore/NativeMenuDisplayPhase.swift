@@ -22,17 +22,43 @@ public enum NativeMenuDisplayPhase {
 /// remain Ready.
 public enum NativeMenuStatusPresentation {
     public static func status(for pill: NativeHelperPill) -> String {
+        if let lifecycleStatus = pill.lifecycleStatus {
+            return label(for: lifecycleStatus)
+        }
         if pill.phase == .ready { return pill.inspector?.status ?? "Ready" }
         return pill.inspector?.status ?? fallbackStatus(for: NativeMenuDisplayPhase.phase(for: pill))
     }
 
     public static func tone(for pill: NativeHelperPill) -> NativeHelperPillPhase {
+        if let lifecycleStatus = pill.lifecycleStatus {
+            return tone(for: lifecycleStatus)
+        }
         switch pill.inspector?.status {
         case "Needs attention", "Needs you": return .needsYou
         case "Ready": return .ready
         case "Working": return .working
         case "Closed", "Status unavailable", "Ended", "Recent", "Historical": return .history
         default: return pill.phase
+        }
+    }
+
+    private static func label(for lifecycleStatus: NativeHelperLifecycleStatus) -> String {
+        switch lifecycleStatus {
+        case .needsYou: return "Needs you"
+        case .ready: return "Ready"
+        case .working: return "Working"
+        case .closed: return "Closed"
+        case .unavailable: return "Status unavailable"
+        case .historical: return "Historical"
+        }
+    }
+
+    private static func tone(for lifecycleStatus: NativeHelperLifecycleStatus) -> NativeHelperPillPhase {
+        switch lifecycleStatus {
+        case .needsYou: return .needsYou
+        case .ready: return .ready
+        case .working: return .working
+        case .closed, .unavailable, .historical: return .history
         }
     }
 
