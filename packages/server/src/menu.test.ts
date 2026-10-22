@@ -120,6 +120,45 @@ describe("menu presentation", () => {
     },
   );
 
+  it("keeps neutral History lifecycle status identical across menu inspector and accessibility", () => {
+    const historyRows = [
+      ["closed", "Closed", "Closed terminal conversation"],
+      ["unavailable", "Status unavailable", "Terminal state unavailable"],
+      ["historical", "Historical", "Retained provider record"],
+    ] as const;
+    const catalog: SessionSnapshot = {
+      ...snapshot,
+      sessions: [
+        ...historyRows.map(([status, _label, subtitle]) => Object.assign({
+          ...snapshot.sessions[0]!,
+          id: `history-${status}`,
+          title: `${status} record`,
+          subtitle,
+          section: "history" as const,
+          canOpenOwner: false,
+          canEnterChat: true,
+          ambientEligible: false,
+          sessionState: {
+            conversation: "open" as const,
+            turn: "unknown" as const,
+            route: "unavailable" as const,
+            unavailableReason: "unknown" as const,
+          },
+        }, { lifecycleStatus: status })),
+      ],
+    };
+
+    const presentation = menuPresentation(catalog, []);
+    expect(presentation.navigatorPills).toEqual(expect.arrayContaining(
+      historyRows.map(([status, label]) => expect.objectContaining({
+        id: `history-${status}`,
+        phase: "history",
+        inspector: expect.objectContaining({ status: label }),
+        accessibilityLabel: expect.stringContaining(`, ${label},`),
+      })),
+    ));
+  });
+
   it.each(["needs_you", "working", "ready", "history"] as const)(
     "keeps retained %s jobs searchable without pills or default overflow", (section) => {
       const catalog: SessionSnapshot = {
@@ -242,6 +281,7 @@ describe("menu presentation", () => {
           project: "agent-visor",
           owner: "Ghostty",
           phase: "needs_you",
+          lifecycleStatus: "needs_you",
           priority: 0,
           defaultOverflowEligible: true,
           accessibilityLabel: "Approve release, needs you, Claude Code, agent-visor",
@@ -254,6 +294,7 @@ describe("menu presentation", () => {
           project: "agent-visor",
           owner: "Cursor",
           phase: "ready",
+          lifecycleStatus: "ready",
           priority: 1,
           defaultOverflowEligible: true,
           accessibilityLabel: "Review result, Ready, Cursor, agent-visor",
@@ -266,6 +307,7 @@ describe("menu presentation", () => {
           project: "agent-visor",
           owner: "Ghostty",
           phase: "working",
+          lifecycleStatus: "working",
           priority: 2,
           defaultOverflowEligible: true,
           accessibilityLabel: "Build menu, in progress, Pi, agent-visor",
@@ -278,9 +320,10 @@ describe("menu presentation", () => {
           project: "agent-visor",
           owner: "Codex",
           phase: "history",
+          lifecycleStatus: "historical",
           priority: 3,
           defaultOverflowEligible: true,
-          accessibilityLabel: "Old session, recent session, Codex, agent-visor",
+          accessibilityLabel: "Old session, Historical, Codex, agent-visor",
         },
       ],
       usageGlances: [],
@@ -378,6 +421,7 @@ describe("menu presentation", () => {
     expect(presentation.pills[1]).toMatchObject({
       id: "stale-claude",
       phase: "ready",
+      lifecycleStatus: "ready",
       attentionTier: "history",
       subtitle: "Ready to continue",
       inspector: { status: "Ready" },
@@ -433,7 +477,7 @@ describe("menu presentation", () => {
     expect(presentation.pills.find(({ id }) => id === "history")).toMatchObject({
       phase: "history",
       priority: 3,
-      accessibilityLabel: "Old session, recent session, Codex, agent-visor",
+      accessibilityLabel: "Old session, Historical, Codex, agent-visor",
       defaultOverflowEligible: true,
     });
   });

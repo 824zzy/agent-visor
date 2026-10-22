@@ -168,13 +168,17 @@ The fixed Chat accessory prevents rows from moving when Cmd shortcuts appear or 
 | Needs you | `ChatTheme.statusPending` | State mark |
 | Ready to continue | `ChatTheme.statusSuccess` | State mark |
 | In progress | `ChatTheme.statusRunning` | State mark |
-| History | `ChatTheme.tertiary` | Neutral state mark |
+| Closed | `ChatTheme.tertiary` | Neutral state mark |
+| Status unavailable | `ChatTheme.tertiary` | Neutral state mark |
+| Historical | `ChatTheme.tertiary` | Neutral state mark |
 
 Color never carries state alone. Section placement and accessibility text provide the same meaning. Chips use brand or metadata tints only as quiet identification, not status.
 
 A freshly completed, unacknowledged `Ready` turn may pulse for at most seven minutes. Opening that session through Agent Visor acknowledges the current completion and makes the mark static without changing its color, browser section, or browser row position. The menu-bar pill may move below Working according to the product-surface attention order. A later Ready transition may pulse and return to the higher menu-bar tier again.
 
 The menu's stale-session grouping is a placement projection, not a lifecycle rewrite. When a known open conversation remains Ready but moves into the native Recent/History tier after the stale ceiling, its status dot, overflow status text, hover status, and accessibility label remain Ready and green. The seven-day Sessions grouping continues to use its own placement boundary.
+
+History placement has the same separation in the Sessions browser. Closed retained records say `Closed`, records with unverified current liveness say `Status unavailable`, and source records without stronger lifecycle evidence say `Historical`; all three use the neutral state mark. A known open Ready row keeps `Ready` and the green state mark wherever it is shown.
 
 ## Row States
 

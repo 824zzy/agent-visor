@@ -556,10 +556,8 @@ function SessionRow({
   const canResume = onResume !== undefined;
   const presentation = sessionPresentation(session, now);
   const lifecycle = sessionLifecyclePresentation(session);
-  const statusLabel = lifecycle.status === "ready" ? lifecycle.label : presentation.title;
-  const statusColor = lifecycle.status === "ready"
-    ? lifecycleColor(lifecycle.tone, palette)
-    : sectionColor(presentation.section, palette);
+  const statusLabel = lifecycle.label;
+  const statusColor = lifecycleColor(lifecycle.tone, palette);
   const logo = agentImage(session.source);
   const sourceLabel = session.source === "Codex" && session.owner.startsWith("Codex ·")
     ? session.owner : session.source;
@@ -773,15 +771,6 @@ function lifecycleColor(tone: SessionLifecycleTone, palette: Palette): string {
     working: palette.working,
     neutral: palette.history,
   }[tone];
-}
-
-function sectionColor(section: SessionSummary["section"], palette: Palette): string {
-  return {
-    needs_you: palette.attention,
-    ready: palette.ready,
-    working: palette.working,
-    history: palette.history,
-  }[section];
 }
 
 function createStyles(palette: Palette, scale: number, compact: boolean) {

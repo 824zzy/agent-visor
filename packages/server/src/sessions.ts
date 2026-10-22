@@ -1,5 +1,6 @@
 import {
   sessionSnapshotSchema,
+  sessionLifecyclePresentation,
   validateQuestionAnswers,
   type ChatPage,
   type ChatCommands,
@@ -29,6 +30,7 @@ import {
   type SessionSnapshot,
   type SessionHistoryPage,
   type SessionSummary,
+  type SessionLifecycleStatus,
   TRANSCRIPT_STALE_CEILING_MS,
 } from "@agent-visor/protocol";
 import { randomUUID } from "node:crypto";
@@ -162,6 +164,8 @@ export type DiscoveredProviderSession = {
   conversationState?: SessionConversationState;
   /** Current provider turn state, independent of attention ordering. */
   turnState?: SessionTurnState;
+  /** Explicit lifecycle presentation resolved from provider evidence. */
+  lifecycleStatus?: SessionLifecycleStatus;
   /** Provider-confirmed action route ownership, independent of transcript state. */
   routeState?: SessionRouteState;
   /** Tentative availability is distinct from a daemon-owned writer. */
@@ -4328,6 +4332,7 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
       updatedAt: session.updatedAt,
       canOpenOwner: session.canOpenOwner,
       canEnterChat: session.canEnterChat,
+      lifecycleStatus: lifecycleStatusFor(session),
       ...(session.canRemoveHistory !== undefined ? { canRemoveHistory: session.canRemoveHistory } : {}),
       ...(session.sessionClass ? { sessionClass: session.sessionClass } : {}),
       ...(session.ambientEligible !== undefined ? { ambientEligible: session.ambientEligible } : {}),
@@ -4344,6 +4349,20 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
     }))
     .sort((left, right) =>
       right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id));
+}
+
+/**
+ * Resolve display lifecycle at the daemon boundary from explicit evidence.
+ * Section and attention remain placement policy, so they are only the final
+ * compatibility fallback for older provider projections without state facts.
+ */
+function lifecycleStatusFor(session: DiscoveredProviderSession): SessionLifecycleStatus {
+  if (session.lifecycleStatus) return session.lifecycleStatus;
+  return sessionLifecyclePresentation({
+    section: session.section,
+    ...(session.conversationState || session.turnState
+      ? { sessionState: resolveSessionState(session) } : {}),
+  }).status;
 }
 
 function sessionIdentityKey(session: DiscoveredProviderSession): string {
@@ -4466,6 +4485,7 @@ function retainedHistorySession(
     section: "history",
     sessionClass: "terminal",
     ambientEligible: false,
+    lifecycleStatus: record.closedAt ? "closed" : unknownLiveness ? "unavailable" : "historical",
     conversationState: "open",
     turnState: "unknown",
     updatedAt: record.updatedAt,

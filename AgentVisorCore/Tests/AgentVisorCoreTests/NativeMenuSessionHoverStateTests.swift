@@ -105,4 +105,15 @@ final class NativeMenuSessionHoverStateTests: XCTestCase {
             )
         )
     }
+
+    func testHoverUsesExplicitLifecycleStatusInsteadOfLegacyInspectorCopy() throws {
+        let json = #"{"id":"unknown","title":"Unverified","phase":"ready","priority":0,"accessibilityLabel":"Unverified, Status unavailable","lifecycleStatus":"unavailable","inspector":{"status":"Recent","runtimeItems":["Claude Code"],"detailRows":[],"projectPath":"~/Codes","activityAt":"2026-10-21T18:00:00.000Z"}}"#
+        let pill = try JSONDecoder().decode(NativeHelperPill.self, from: Data(json.utf8))
+        var state = NativeMenuSessionHoverState()
+        state.pointerEntered(pill.id, at: 10)
+
+        let presentation = state.presentation(pills: [pill.id: pill], at: 10.35)
+        XCTAssertEqual(presentation?.status, "Status unavailable")
+        XCTAssertEqual(presentation?.phase, .history)
+    }
 }

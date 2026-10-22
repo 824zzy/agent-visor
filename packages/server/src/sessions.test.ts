@@ -1028,6 +1028,7 @@ describe("SessionRepository", () => {
       expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({
         id,
         section: "history",
+        lifecycleStatus: "closed",
       }));
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1165,6 +1166,7 @@ describe("SessionRepository", () => {
         id: record.id,
         title: "Claude Code session",
         section: "history",
+        lifecycleStatus: "unavailable",
         canOpenOwner: false,
       }));
       expect(unavailable.current().sessions).not.toContainEqual(expect.objectContaining({ id: record.id }));
@@ -1670,6 +1672,7 @@ describe("SessionRepository", () => {
       expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({
         id: claude.id,
         section: "history",
+        lifecycleStatus: "closed",
       }));
 
       codexOutage = true;
@@ -1677,6 +1680,7 @@ describe("SessionRepository", () => {
       expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({
         id: codex.id,
         subtitle: "Terminal state unavailable",
+        lifecycleStatus: "unavailable",
       }));
       expect(repository.historyPage().sessions).toContainEqual(expect.objectContaining({ id: claude.id }));
     } finally {

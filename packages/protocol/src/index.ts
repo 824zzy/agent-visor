@@ -158,6 +158,8 @@ export const sessionSummarySchema = z.object({
   owner: z.string().min(1),
   cwd: z.string().min(1),
   section: sessionSectionSchema,
+  /** Explicit provider evidence resolved before section/normalization. */
+  lifecycleStatus: sessionLifecycleStatusSchema.optional(),
   sessionClass: sessionClassSchema.optional(),
   /** Provider-confirmed ambient presence; false keeps resumable rows searchable only. */
   ambientEligible: z.boolean().optional(),
@@ -1049,6 +1051,8 @@ export const nativeHelperPillSchema = z.object({
   owner: z.string().min(1).max(128).optional(),
   inspector: nativeHelperSessionInspectorSchema.optional(),
   phase: sessionSectionSchema,
+  /** Explicit lifecycle meaning; native surfaces must prefer this over labels. */
+  lifecycleStatus: sessionLifecycleStatusSchema.optional(),
   attentionTier: sessionAttentionTierSchema.optional(),
   completionUnseen: z.boolean().optional(),
   /** Marks a needs-you pill that can be explicitly dismissed as a failure. */
@@ -1583,8 +1587,19 @@ export type SessionLifecyclePresentation = {
  * when an older completion is placed in History.
  */
 export function sessionLifecyclePresentation(
-  session: Pick<SessionSummary, "section" | "sessionState">,
+  session: Pick<SessionSummary, "section" | "sessionState" | "lifecycleStatus">,
 ): SessionLifecyclePresentation {
+  if (session.lifecycleStatus) {
+    switch (session.lifecycleStatus) {
+      case "needs_you": return lifecycle("needs_you", "Needs you", "attention");
+      case "ready": return lifecycle("ready", "Ready", "ready");
+      case "working": return lifecycle("working", "Working", "working");
+      case "closed": return lifecycle("closed", "Closed", "neutral");
+      case "unavailable": return lifecycle("unavailable", "Status unavailable", "neutral");
+      case "historical": return lifecycle("historical", "Historical", "neutral");
+    }
+  }
+
   const state = session.sessionState;
   if (state) {
     if (state.conversation === "archived") return lifecycle("closed", "Closed", "neutral");

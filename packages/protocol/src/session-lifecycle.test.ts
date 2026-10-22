@@ -57,4 +57,33 @@ describe("session lifecycle presentation", () => {
       status: "ready", label: "Ready", tone: "ready",
     });
   });
+
+  it.each([
+    ["closed", "Closed", "neutral"],
+    ["unavailable", "Status unavailable", "neutral"],
+    ["historical", "Historical", "neutral"],
+  ] as const)("uses explicit %s lifecycle evidence over retained placement facts", (status, label, tone) => {
+    const retained = Object.assign(session({
+      section: "history",
+      sessionState: {
+        conversation: "open",
+        turn: "unknown",
+        route: "unavailable",
+        unavailableReason: "unknown",
+      },
+    }), { lifecycleStatus: status });
+
+    expect(sessionLifecyclePresentation(retained)).toEqual({ status, label, tone });
+  });
+
+  it("keeps a known Ready lifecycle green when its placement is History", () => {
+    const retained = Object.assign(session({
+      section: "history",
+      sessionState: { conversation: "open", turn: "ready", route: "available" },
+    }), { lifecycleStatus: "ready" as const });
+
+    expect(sessionLifecyclePresentation(retained)).toEqual({
+      status: "ready", label: "Ready", tone: "ready",
+    });
+  });
 });

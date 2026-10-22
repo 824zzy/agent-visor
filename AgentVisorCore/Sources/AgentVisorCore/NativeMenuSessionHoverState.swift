@@ -83,8 +83,8 @@ public struct NativeMenuSessionHoverState: Sendable {
             return NativeMenuSessionDetailPresentation(
                 id: pill.id,
                 title: pill.title,
-                status: inspector.status,
-                phase: pill.phase,
+                status: NativeMenuStatusPresentation.status(for: pill),
+                phase: NativeMenuStatusPresentation.tone(for: pill),
                 rows: rows,
                 context: inspector.context.map {
                     SessionHoverContextPresentation(
@@ -99,8 +99,10 @@ public struct NativeMenuSessionHoverState: Sendable {
         return NativeMenuSessionDetailPresentation(
             id: pill.id,
             title: pill.title,
-            status: pill.subtitle ?? status(for: pill.phase),
-            phase: pill.phase,
+            status: pill.lifecycleStatus == nil
+                ? pill.subtitle ?? NativeMenuStatusPresentation.status(for: pill)
+                : NativeMenuStatusPresentation.status(for: pill),
+            phase: NativeMenuStatusPresentation.tone(for: pill),
             rows: [
                 pill.source.map { SessionHoverDetailRow(label: "Source", value: $0) },
                 pill.project.map { SessionHoverDetailRow(label: "Project", value: $0) },
@@ -121,12 +123,4 @@ public struct NativeMenuSessionHoverState: Sendable {
         return hours < 24 ? "\(hours)h ago" : "\(hours / 24)d ago"
     }
 
-    private func status(for phase: NativeHelperPillPhase) -> String {
-        switch phase {
-        case .needsYou: return "Needs you"
-        case .ready: return "Ready to continue"
-        case .working: return "In progress"
-        case .history: return "History"
-        }
-    }
 }
