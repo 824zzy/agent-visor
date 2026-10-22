@@ -3044,14 +3044,19 @@ export class SessionRepository {
       // Only reconcile absence after a discovery that explicitly establishes
       // provider-scoped authority, including an authoritative empty inventory.
       if (!this.lastByProvider.has(provider)) continue;
+      // An unavailable inventory may still carry a provider-owned stale cache.
+      // Keep it available for display, but mark it as non-current so it cannot
+      // undo durable Agent Visor removal intent or reopen a closed row.
+      const unavailable = this.providerDiscoveryAuthority.get(provider) === "unavailable";
       const current = discovered.filter((session) => session.provider === provider);
       const observations = current
         .map((session) => retainedHistoryObservation(session, observedAt))
-        .filter((observation): observation is RetainedHistoryObservation => observation !== undefined);
+        .filter((observation): observation is RetainedHistoryObservation => observation !== undefined)
+        .map((observation) => unavailable ? { ...observation, current: false } : observation);
       this.retainedHistory.observeMany(observations);
       // Reconcile only this provider. A failed or absent Codex inventory must
       // never close a previously retained Claude row, and vice versa.
-      if (this.providerDiscoveryAuthority.get(provider) !== "unavailable") {
+      if (!unavailable) {
         const activeIdentities = new Set(observations.flatMap((observation) => [
           observation.id,
           ...(observation.canonicalId ? [observation.canonicalId] : []),

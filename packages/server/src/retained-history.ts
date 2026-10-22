@@ -245,7 +245,7 @@ export class RetainedHistoryStore {
         ),
         schemaVersion: SCHEMA_VERSION,
         // A fresh verified observation means the conversation is open again.
-        closedAt: undefined,
+        ...(current !== false ? { closedAt: undefined } : (previous?.closedAt ? { closedAt: previous.closedAt } : {})),
       };
       const key = historyKey(next.provider, canonicalId);
       if (previousEntry && previousEntry[0] !== key) {
