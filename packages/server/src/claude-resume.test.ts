@@ -7,6 +7,7 @@ import type { RetainedHistoryRecord } from "./retained-history.js";
 import { ClaudeResumeAdapter } from "./providers/claude-resume.js";
 import type { ProviderEnvironment } from "./providers/environment.js";
 import { processInstanceToken } from "./providers/shared.js";
+import type { DiscoveredProviderSession } from "./sessions.js";
 
 describe("ClaudeResumeAdapter", () => {
   it("rejects a transcript file that is not the exact UUID and cwd project record", () => {
@@ -105,6 +106,91 @@ describe("ClaudeResumeAdapter", () => {
     });
 
     expect(result).toMatchObject({ state: "unknown" });
+  });
+
+  it("does not block a closed row for a different exactly bound Claude frontend", async () => {
+    const savedSessionID = "55555555-5555-4555-8555-555555555555";
+    const otherSessionID = "66666666-6666-4666-8666-666666666666";
+    const executableRef = "/usr/local/bin/claude";
+    const otherCWD = "/tmp/agent-visor-claude-other-frontend";
+    const observedAt = "2026-10-21T18:02:00.000Z";
+    const capability = {
+      version: 1 as const,
+      provider: "claude_code" as const,
+      host: "Ghostty" as const,
+      executableRef,
+      configRootRef: "/tmp/agent-visor-claude-config",
+      profileState: "verified_absent" as const,
+      overrideNames: [],
+      provenanceObservedAt: observedAt,
+    };
+    const record: RetainedHistoryRecord = {
+      schemaVersion: 1,
+      id: savedSessionID,
+      canonicalId: savedSessionID,
+      provider: "claude_code",
+      title: "Closed Claude row",
+      subtitle: "Closed conversation",
+      project: "project",
+      owner: "Ghostty",
+      host: "Ghostty",
+      cwd: "/tmp/agent-visor-claude-saved",
+      resume: capability,
+      updatedAt: observedAt,
+      observedAt,
+      closedAt: observedAt,
+    };
+    const other: DiscoveredProviderSession = {
+      id: otherSessionID,
+      provider: "claude_code",
+      title: "Other Claude frontend",
+      subtitle: "Current conversation",
+      project: "other-project",
+      cwd: otherCWD,
+      owner: "Ghostty",
+      section: "ready",
+      updatedAt: observedAt,
+      canOpenOwner: true,
+      canEnterChat: false,
+      conversationState: "open",
+      controlTarget: {
+        kind: "terminal",
+        target: {
+          application: "Ghostty",
+          pid: 5252,
+          processStartToken: "claude-other-start",
+          tty: "ttys-other",
+          cwd: otherCWD,
+        },
+      },
+      historyIdentity: {
+        verified: true,
+        current: true,
+        canonicalId: otherSessionID,
+        host: "Ghostty",
+        resume: capability,
+      },
+    };
+    const environment = {
+      home: "/tmp/agent-visor-claude-home",
+      now: () => new Date(observedAt),
+      processesFreshInventory: async () => ({
+        state: "authoritative" as const,
+        observedAt,
+        processes: [{
+          pid: 5252,
+          parentPID: 1,
+          processStartToken: "claude-other-start",
+          tty: "ttys-other",
+          command: executableRef,
+          arguments: `${executableRef} --resume ${otherSessionID}`,
+        }],
+      }),
+      cwd: async () => otherCWD,
+    } as unknown as ProviderEnvironment;
+    const adapter = new ClaudeResumeAdapter(environment, async () => [other], () => "authoritative");
+
+    await expect(adapter.resumeLiveness(record)).resolves.toMatchObject({ state: "stopped" });
   });
 
   it("links the exact dispatched surface when another Ghostty view shares its cwd", async () => {

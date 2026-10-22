@@ -58,7 +58,7 @@ export class ClaudeResumeAdapter implements ResumeProviderAdapter {
       && session.controlTarget.target.application === "Ghostty"
       && sameResumeProvenance(record.resume, session));
     if (live) return { state: "live", session: live };
-    if (await hasPossibleOwner(record, inventory.processes, this.environment)) {
+    if (await hasPossibleOwner(record, inventory.processes, this.environment, discovered)) {
       return { state: "unknown", reason: "A Claude process may still own this conversation." };
     }
     return { state: "stopped" };
@@ -109,6 +109,9 @@ export class ClaudeResumeAdapter implements ResumeProviderAdapter {
     }
     if (selection.profileFileRef) {
       return { state: "unavailable", reason: "Claude profile repair requires an explicit profile and settings file." };
+    }
+    if (selection.profileRef) {
+      return { state: "unavailable", reason: "Claude named profile repair has no supported native readback." };
     }
     const executableRef = selection.executableRef
       ? canonicalExecutableSelection(selection.executableRef)
@@ -366,8 +369,9 @@ function normalizedSettingSources(
 
 async function hasPossibleOwner(
   record: RetainedHistoryRecord,
-  processes: readonly { pid: number; command: string; arguments: string }[],
+  processes: readonly { pid: number; processStartToken?: string; command: string; arguments: string }[],
   environment: ProviderEnvironment,
+  discovered: readonly DiscoveredProviderSession[],
 ): Promise<boolean> {
   const expectedExecutable = record.resume?.executableRef;
   for (const process of processes) {
@@ -376,6 +380,20 @@ async function hasPossibleOwner(
       || /(?:^|\s)(?:claude|claude-code)(?:\s|$)/i.test(process.arguments);
     if (!isClaude) continue;
     if (process.arguments.includes(record.canonicalId) || process.arguments.includes(record.id)) return true;
+    const exactOtherFrontend = discovered.some((session) => {
+      if (session.provider !== "claude_code" || session.conversationState !== "open"
+        || session.id === record.id || session.id === record.canonicalId
+        || record.aliases?.includes(session.id) === true
+        || session.historyIdentity?.verified !== true || session.historyIdentity.current !== true) {
+        return false;
+      }
+      const target = session.controlTarget?.kind === "terminal" ? session.controlTarget.target : undefined;
+      return target?.application === "Ghostty"
+        && target.pid === process.pid
+        && target.processStartToken !== undefined
+        && target.processStartToken === process.processStartToken;
+    });
+    if (exactOtherFrontend) continue;
     if (expectedExecutable && command === expectedExecutable) return true;
     const cwd = await environment.cwd(process.pid).catch(() => undefined);
     if (cwd === record.cwd) return true;

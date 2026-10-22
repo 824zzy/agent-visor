@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@agent-visor/protocol": "*",
+    "smol-toml": "1.9.1",
     "ws": "8.21.3"
   },
   "devDependencies": {

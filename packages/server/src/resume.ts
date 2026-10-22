@@ -12,7 +12,7 @@ import type {
   RetainedHistoryRecord,
   RetainedHistoryResumeUnavailableReason,
 } from "./retained-history.js";
-import type { DiscoveredProviderSession } from "./sessions.js";
+import type { DiscoveredProviderSession, RetainedHistoryLifetime } from "./sessions.js";
 
 export type ResumeLiveness =
   | { state: "live"; session: DiscoveredProviderSession }
@@ -51,6 +51,8 @@ export interface ResumeProviderAdapter {
   /** Native helper discriminator; catalog and wire providers are different for Codex. */
   readonly nativeProvider?: ResumeNativeProvider;
   resumeLiveness(record: RetainedHistoryRecord): Promise<ResumeLiveness>;
+  /** Recheck provider lifetime before a cold launch; unknown never authorizes creation. */
+  historyLifetime?(sessionId: string): Promise<RetainedHistoryLifetime>;
   resumeTarget(record: RetainedHistoryRecord, attemptId: string, nonce: string): ResumeTargetResult;
   /** Validate one explicit provider repair without dispatching or mutating state. */
   validateRepair?(record: RetainedHistoryRecord, selection: HistoryRepairSelection): ResumeRepairValidation;
@@ -346,6 +348,15 @@ export class ResumeCoordinator {
     }
     if (liveness.state === "unknown") {
       return { state: "unavailable", sessionId: record.id, reason: liveness.reason };
+    }
+    const lifetime = provider.historyLifetime
+      ? await provider.historyLifetime(record.canonicalId).catch(() => "unknown" as const)
+      : undefined;
+    if (lifetime === "archived" || lifetime === "deleted") {
+      return { state: "unavailable", sessionId: record.id, reason: "The provider conversation is archived or deleted." };
+    }
+    if (lifetime === "unknown") {
+      return { state: "unavailable", sessionId: record.id, reason: "The provider conversation lifetime is unavailable." };
     }
     const outstanding = this.options.attempts.get(record.provider, record.canonicalId);
     const recovered = outstanding?.dispatch

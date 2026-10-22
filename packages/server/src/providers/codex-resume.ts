@@ -1,5 +1,6 @@
 import { closeSync, constants, fstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
+import { parse as parseToml } from "smol-toml";
 import type {
   HistoryRepairSelection,
   NativeHelperGhosttyResumeDispatch,
@@ -23,6 +24,7 @@ import type { ProcessProvenance } from "./process-provenance.js";
 import { codexInstanceID, codexThreadReference } from "./codex-instances.js";
 
 const fullThreadID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const codexProfileName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const pathLimit = 4_096;
 const transcriptPrefixLimit = 64 * 1_024;
 type CodexSourceRow = {
@@ -56,7 +58,7 @@ export class CodexResumeAdapter implements ResumeProviderAdapter {
     }
     const live = discovered.find((session) => this.isExactLiveSession(record, session));
     if (live) return { state: "live", session: live };
-    if (await hasPossibleCodexOwner(record, inventory.processes, this.environment)) {
+    if (await hasPossibleCodexOwner(record, inventory.processes, this.environment, discovered)) {
       return { state: "unknown", reason: "A Codex process may still own this conversation." };
     }
     return { state: "stopped" };
@@ -128,13 +130,18 @@ export class CodexResumeAdapter implements ResumeProviderAdapter {
       try { expectedRoot = realpathSync(configRootRef); } catch {
         return { state: "unavailable", reason: "The selected Codex configuration home is unavailable." };
       }
-      if (!match || !isCodexProfileFile(selected) || path.dirname(selected) !== expectedRoot) {
+      const selectedProfileName = match?.[1];
+      if (!selectedProfileName || !codexProfileName.test(selectedProfileName) || !isCodexProfileFile(selected)
+        || path.dirname(selected) !== expectedRoot) {
         return { state: "unavailable", reason: "The selected Codex profile is not in the selected configuration home." };
       }
-      profileRef = match[1];
+      profileRef = selectedProfileName;
       profileState = "present";
     }
     if (selection.profileRef) {
+      if (!codexProfileName.test(selection.profileRef)) {
+        return { state: "unavailable", reason: "The selected Codex profile name is unavailable." };
+      }
       profileRef = selection.profileRef;
       profileState = "present";
     }
@@ -475,9 +482,24 @@ async function hasPossibleCodexOwner(
   record: RetainedHistoryRecord,
   processes: readonly ProcessRecord[],
   environment: ProviderEnvironment,
+  discovered: readonly DiscoveredProviderSession[],
 ): Promise<boolean> {
   for (const process of processes) {
     if (path.basename(process.command) !== "codex") continue;
+    const exactOtherFrontend = discovered.some((session) => {
+      if (session.provider !== "codex" || session.conversationState !== "open"
+        || session.id === record.id || session.id === record.canonicalId
+        || record.aliases?.includes(session.id) === true
+        || session.historyIdentity?.verified !== true || session.historyIdentity.current !== true) {
+        return false;
+      }
+      const target = session.controlTarget?.kind === "terminal" ? session.controlTarget.target : undefined;
+      return target?.application === "Ghostty"
+        && target.pid === process.pid
+        && target.processStartToken !== undefined
+        && target.processStartToken === process.processStartToken;
+    });
+    if (exactOtherFrontend) continue;
     const modernServer = /\b(?:app|mcp|exec)-server\b/i.test(process.arguments);
     if (environment.codexProcessHome) {
       const home = await environment.codexProcessHome(process.pid).catch(() => undefined);
@@ -504,9 +526,11 @@ function isCodexProfileFile(value: string): boolean {
     const metadata = statSync(value);
     if (!metadata.isFile() || metadata.size === 0 || metadata.size > 256 * 1_024) return false;
     const content = readFileSync(value, "utf8");
-    // Profile files are TOML settings. Only inspect bounded key syntax; never
-    // retain or parse values that may contain credentials.
-    return /^\s*[A-Za-z][A-Za-z0-9_.-]*\s*=/m.test(content);
+    // Profile files are TOML settings. Parse only the bounded file and discard
+    // the result; values can contain credentials and must never enter resume
+    // state, logs, or error messages.
+    parseToml(content);
+    return true;
   } catch {
     return false;
   }

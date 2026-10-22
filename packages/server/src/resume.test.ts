@@ -1121,6 +1121,70 @@ describe("Claude provider repair validation", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("rejects a named Claude profile repair that native provenance cannot read back", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "agent-visor-claude-profile-repair-"));
+    const home = path.join(root, "home");
+    const cwd = path.join(root, "project");
+    const configRoot = path.join(home, ".claude");
+    const executable = path.join(home, ".local", "share", "claude", "versions", "2.1.296");
+    const sessionID = "88888888-8888-4888-8888-888888888888";
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(configRoot, { recursive: true });
+    mkdirSync(path.dirname(executable), { recursive: true });
+    writeFileSync(executable, "#!/bin/sh\n", { mode: 0o755 });
+    const canonicalCwd = realpathSync(cwd);
+    const canonicalConfigRoot = realpathSync(configRoot);
+    const project = canonicalCwd.replaceAll("/", "-").replaceAll(".", "-").replaceAll("_", "-");
+    const transcriptPath = path.join(canonicalConfigRoot, "projects", project, `${sessionID}.jsonl`);
+    const settingsFile = path.join(canonicalConfigRoot, "settings.json");
+    mkdirSync(path.dirname(transcriptPath), { recursive: true });
+    writeFileSync(settingsFile, "{}\n");
+    writeFileSync(transcriptPath, `${JSON.stringify({ sessionId: sessionID, cwd: canonicalCwd })}\n`);
+    const capability = {
+      version: 1 as const,
+      provider: "claude_code" as const,
+      host: "Ghostty" as const,
+      executableRef: realpathSync(executable),
+      configRootRef: canonicalConfigRoot,
+      profileState: "verified_absent" as const,
+      overrideNames: [],
+      provenanceObservedAt: "2026-10-21T18:08:00.000Z",
+    };
+    const record = {
+      id: sessionID,
+      canonicalId: sessionID,
+      provider: "claude_code" as const,
+      host: "Ghostty" as const,
+      cwd: canonicalCwd,
+      configHome: canonicalConfigRoot,
+      transcriptPath,
+      resume: capability,
+    } as RetainedHistoryRecord;
+    const environment = new RealClaudeResumeFixtureEnvironment(
+      realpathSync(home), canonicalCwd, canonicalConfigRoot, realpathSync(executable), sessionID,
+    );
+    environment.setProcessIdentity(5_101, 7_101);
+    const provider = new ClaudeProvider(environment);
+    const process = environment.processRows.find((candidate) => candidate.pid === environment.currentProviderPID);
+    try {
+      await expect(environment.processProvenance(
+        environment.currentProviderPID,
+        "claude_code",
+        process?.processStartToken,
+      )).resolves.toMatchObject({
+        state: "available",
+        value: { profileState: "verified_absent", argvState: "complete" },
+      });
+      expect(provider.validateRepair(record, {
+        kind: "provider",
+        settingsFileRef: settingsFile,
+        profileRef: "team",
+      })).toMatchObject({ state: "unavailable" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("ResumeReconciliation", () => {

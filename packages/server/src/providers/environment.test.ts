@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -38,6 +38,49 @@ describe("macOS process discovery", () => {
         try { expect(await exited).toEqual([0, null]); } finally { clearTimeout(timeout); }
       }
     } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform !== "darwin")("clears cached cwd facts at the explicit fresh inventory boundary", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-process-fresh-"));
+    const firstPath = path.join(directory, "first");
+    const secondPath = path.join(directory, "second");
+    mkdirSync(firstPath, { recursive: true });
+    mkdirSync(secondPath, { recursive: true });
+    const firstCWD = realpathSync(firstPath);
+    const secondCWD = realpathSync(secondPath);
+    const child = spawn("/usr/bin/python3", ["-c", [
+      "import os, sys",
+      "sys.stdout.write('ready\\n'); sys.stdout.flush()",
+      "os.read(0, 1)",
+      "os.chdir(sys.argv[2])",
+      "sys.stdout.write('changed\\n'); sys.stdout.flush()",
+      "os.read(0, 1)",
+    ].join(";"), firstCWD, secondCWD], {
+      cwd: firstCWD,
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const exited = once(child, "exit");
+    try {
+      const [ready] = await Promise.race([
+        once(child.stdout, "data"),
+        exited.then(() => { throw new Error("The cwd fixture exited before readiness."); }),
+      ]);
+      expect(String(ready)).toBe("ready\n");
+      const environment = new LiveProviderEnvironment(directory);
+      expect(await environment.cwd(child.pid!)).toBe(firstCWD);
+
+      child.stdin.write("2");
+      const [changed] = await once(child.stdout, "data");
+      expect(String(changed)).toBe("changed\n");
+      await environment.processesFreshInventory();
+
+      expect(await environment.cwd(child.pid!)).toBe(secondCWD);
+    } finally {
+      child.stdin.end();
+      const timeout = setTimeout(() => child.kill("SIGKILL"), 2_000);
+      try { expect(await exited).toEqual([0, null]); } finally { clearTimeout(timeout); }
       rmSync(directory, { recursive: true, force: true });
     }
   });

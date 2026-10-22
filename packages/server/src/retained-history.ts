@@ -17,7 +17,6 @@ const MAX_TITLE_LENGTH = 512;
 const MAX_PROFILE_LENGTH = 128;
 const MAX_CONFIG_HOME_LENGTH = 4_096;
 const MAX_CANONICAL_ID_LENGTH = 1_024;
-const MAX_ALIASES = 16;
 const HOSTS = new Set(["Ghostty", "cmux", "Herdr", "iTerm2", "Terminal"] as const);
 const HISTORY_STORAGE_WARNING = "Retained history storage is unavailable.";
 
@@ -684,9 +683,14 @@ function originFromRecord(record: RetainedHistoryRecord): {
 }
 
 function sameRecord(left: RetainedHistoryRecord, right: RetainedHistoryRecord): boolean {
-  const { observedAt: _leftObservedAt, ...leftFacts } = left;
-  const { observedAt: _rightObservedAt, ...rightFacts } = right;
-  return JSON.stringify(leftFacts) === JSON.stringify(rightFacts);
+  return JSON.stringify(durableRecordFacts(left)) === JSON.stringify(durableRecordFacts(right));
+}
+
+function durableRecordFacts(record: RetainedHistoryRecord): Record<string, unknown> {
+  const { observedAt: _observedAt, resume, ...facts } = record;
+  if (!resume) return facts;
+  const { provenanceObservedAt: _provenanceObservedAt, ...resumeFacts } = resume;
+  return { ...facts, resume: resumeFacts };
 }
 
 function matches(record: RetainedHistoryRecord, query: string): boolean {
@@ -698,7 +702,7 @@ function matches(record: RetainedHistoryRecord, query: string): boolean {
 
 function normalizeAliases(value: unknown, canonicalId: string, id: string): string[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.length > MAX_ALIASES) return undefined;
+  if (!Array.isArray(value)) return undefined;
   const aliases = value.flatMap((candidate) => {
     const alias = bounded(candidate, MAX_CANONICAL_ID_LENGTH);
     return alias && alias !== canonicalId && alias !== id ? [alias] : [];
