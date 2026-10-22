@@ -4278,6 +4278,34 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
     }
   }
 
+  // A provider may publish one verified interactive projection and one
+  // ordinary inventory projection for the same public ID.  Their identity
+  // keys are intentionally different so verified canonical aliases stay
+  // provider-scoped, but the renderer must still expose one row.  Collapse
+  // only mixed verified/unverified exact-ID collisions; two verified rows
+  // remain provider/canonical scoped, while ordinary collisions retain the
+  // historical authority selection above.
+  const publicIDKeys = new Map<string, string[]>();
+  for (const [identity, session] of byID) {
+    const keys = publicIDKeys.get(session.id) ?? [];
+    keys.push(identity);
+    publicIDKeys.set(session.id, keys);
+  }
+  for (const keys of publicIDKeys.values()) {
+    const hasVerified = keys.some((key) => byID.get(key)?.historyIdentity?.verified === true);
+    const hasOrdinary = keys.some((key) => byID.get(key)?.historyIdentity?.verified !== true);
+    if (!hasVerified || !hasOrdinary) continue;
+    const winner = keys.reduce((current, candidate) => {
+      const currentSession = byID.get(current)!;
+      const candidateSession = byID.get(candidate)!;
+      return (candidateSession.authority ?? 1) > (currentSession.authority ?? 1)
+        ? candidate : current;
+    });
+    for (const key of keys) {
+      if (key !== winner) byID.delete(key);
+    }
+  }
+
   return [...byID.values()]
     .map((session): SessionSummary => ({
       id: session.id,
