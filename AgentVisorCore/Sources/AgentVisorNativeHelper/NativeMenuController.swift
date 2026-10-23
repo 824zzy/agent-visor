@@ -1502,6 +1502,7 @@ final class NativeMenuController: NSObject {
             label,
             pill.phase.rawValue,
             pill.lifecycleStatus?.rawValue ?? "",
+            pill.inactive == true ? "inactive" : "",
             pill.attentionTier?.rawValue ?? "",
             pill.failureAlert == true ? "failure-alert" : "",
             pill.accessibilityLabel,

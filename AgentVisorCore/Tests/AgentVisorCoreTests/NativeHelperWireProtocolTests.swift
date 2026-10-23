@@ -2,6 +2,18 @@ import XCTest
 @testable import AgentVisorCore
 
 final class NativeHelperWireProtocolTests: XCTestCase {
+    func testDecodesInactiveReadyWithoutChangingLegacyPills() throws {
+        let json = #"{"version":1,"id":"inactive","method":"present_pills","params":{"pills":[{"id":"gc","title":"gc","phase":"history","lifecycleStatus":"ready","inactive":true,"priority":1,"accessibilityLabel":"gc, Ready, Inactive"},{"id":"legacy","title":"Legacy","phase":"ready","priority":2,"accessibilityLabel":"Legacy, Ready"}]}}"#
+        let request = try NativeHelperRequest.decode(Data(json.utf8))
+        guard case .presentPills(_, let pills, _, _, _, _, _, _, _) = request else {
+            return XCTFail("Expected pills")
+        }
+        XCTAssertEqual(pills.first?.inactive, true)
+        XCTAssertEqual(pills.first?.lifecycleStatus, .ready)
+        XCTAssertNil(pills.last?.inactive)
+        assertInvalid(json.replacingOccurrences(of: #""inactive":true"#, with: #""inactive":"yes""#))
+    }
+
     func testPillActivationCarriesItsNativeTimestamp() throws {
         let data = try NativeHelperEvent.activatePill(sessionId: "session", activatedAt: 1_792_518_000_123).encoded()
         let value = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])

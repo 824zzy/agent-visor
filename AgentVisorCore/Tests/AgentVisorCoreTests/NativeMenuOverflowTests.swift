@@ -4,6 +4,28 @@ import XCTest
 @testable import AgentVisorCore
 
 final class NativeMenuOverflowTests: XCTestCase {
+    func testInactiveReadyPillUsesGrayToneButKeepsReadyStatus() throws {
+        let json = #"{"id":"inactive","title":"gc","phase":"history","lifecycleStatus":"ready","inactive":true,"attentionTier":"history","priority":0,"accessibilityLabel":"gc, Ready, Inactive"}"#
+        let inactive = try JSONDecoder().decode(NativeHelperPill.self, from: Data(json.utf8))
+
+        XCTAssertEqual(NativeMenuStatusPresentation.status(for: inactive), "Ready")
+        XCTAssertEqual(NativeMenuStatusPresentation.tone(for: inactive), .history)
+    }
+
+    func testInactiveHintCannotGrayUnopenedReadyOrActiveWorkAndQuestions() {
+        let cases: [(NativeHelperLifecycleStatus, NativeHelperPillPhase, Bool?)] = [
+            (.ready, .ready, true), (.working, .working, nil), (.needsYou, .needsYou, nil),
+        ]
+        for (status, expectedTone, unseen) in cases {
+            let pill = NativeHelperPill(
+                id: "active", title: "Active", phase: expectedTone,
+                lifecycleStatus: status, inactive: true, completionUnseen: unseen,
+                priority: 0, accessibilityLabel: "Active"
+            )
+            XCTAssertEqual(NativeMenuStatusPresentation.tone(for: pill), expectedTone)
+        }
+    }
+
     func testHistoryAttentionUsesRecentOverflowDisplayWithoutChangingReadyWirePhase() {
         let stale = pill("stale", title: "Old Claude", project: "agent-visor")
             .with(phase: .ready, attentionTier: .history)

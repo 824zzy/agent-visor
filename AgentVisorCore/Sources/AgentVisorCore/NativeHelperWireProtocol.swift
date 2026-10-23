@@ -95,6 +95,8 @@ public struct NativeHelperPill: Codable, Equatable {
     public let inspector: NativeHelperSessionInspector?
     public let phase: NativeHelperPillPhase
     public let lifecycleStatus: NativeHelperLifecycleStatus?
+    /// Gray Ready presentation selected by the daemon's activity-age policy.
+    public let inactive: Bool?
     public let attentionTier: NativeHelperSessionAttentionTier?
     public let completionUnseen: Bool?
     /// Whether this needs-you pill represents a newly observed failure.
@@ -117,6 +119,7 @@ public struct NativeHelperPill: Codable, Equatable {
         inspector: NativeHelperSessionInspector? = nil,
         phase: NativeHelperPillPhase,
         lifecycleStatus: NativeHelperLifecycleStatus? = nil,
+        inactive: Bool? = nil,
         attentionTier: NativeHelperSessionAttentionTier? = nil,
         completionUnseen: Bool? = nil,
         failureAlert: Bool? = nil,
@@ -133,6 +136,7 @@ public struct NativeHelperPill: Codable, Equatable {
         self.inspector = inspector
         self.phase = phase
         self.lifecycleStatus = lifecycleStatus
+        self.inactive = inactive
         self.attentionTier = attentionTier
         self.completionUnseen = completionUnseen
         self.failureAlert = failureAlert
@@ -1238,7 +1242,7 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         ]
         let detailedPillKeys = legacyPillKeys.union([
             "subtitle", "source", "project", "owner", "inspector", "lifecycleStatus",
-            "attentionTier",
+            "attentionTier", "inactive",
             "failureAlert", "defaultOverflowEligible", "completionUnseen",
         ])
         return (pills + navigatorPills).allSatisfy {

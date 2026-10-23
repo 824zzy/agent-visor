@@ -82,7 +82,7 @@ const snapshot: SessionSnapshot = {
       owner: "Cursor",
       cwd: "/repo",
       section: "ready",
-      updatedAt: "2026-08-22T21:02:00.000Z",
+      updatedAt: "2026-08-22T21:42:00.000Z",
       canOpenOwner: true,
       canEnterChat: true,
     },
@@ -389,6 +389,76 @@ describe("menu presentation", () => {
     }).success).toBe(true);
   });
 
+  it("marks an inactive Ready pill gray without changing its lifecycle or hiding it", () => {
+    const sourceSnapshot: SessionSnapshot = {
+      ...snapshot,
+      sessions: [{
+        ...snapshot.sessions[4]!,
+        source: "Codex",
+        section: "history",
+        lifecycleStatus: "ready",
+        attentionTier: "history",
+        updatedAt: "2026-08-22T21:29:59.999Z",
+      }],
+    };
+    const before = structuredClone(sourceSnapshot);
+    const presentation = menuPresentation(sourceSnapshot, []);
+
+    for (const pills of [presentation.pills, presentation.navigatorPills]) {
+      expect(pills).toHaveLength(1);
+      expect(pills[0]).toMatchObject({
+        inactive: true,
+        lifecycleStatus: "ready",
+        attentionTier: "history",
+        inspector: { status: "Ready" },
+      });
+    }
+    expect(sourceSnapshot).toEqual(before);
+  });
+
+  it.each([
+    ["2026-08-22T21:30:00.001Z", false],
+    ["2026-08-22T21:30:00.000Z", false],
+    ["2026-08-22T21:29:59.999Z", true],
+  ] as const)("uses the 30-minute agent-activity boundary for %s", (updatedAt, inactive) => {
+    for (const source of ["Codex", "Claude Code", "Pi", "Paseo", "Cursor"]) {
+      const session = {
+        ...snapshot.sessions[4]!, source, updatedAt, attentionTier: "acknowledged_ready" as const,
+      };
+      const presentation = menuPresentation({ ...snapshot, sessions: [session] }, []);
+      expect(Boolean(presentation.pills[0]?.inactive)).toBe(inactive);
+      expect(presentation.pills[0]?.lifecycleStatus).toBe("ready");
+    }
+  });
+
+  it("preserves old unopened completions and active questions or work", () => {
+    const presentation = menuPresentation({
+      ...snapshot,
+      sessions: [
+        { ...snapshot.sessions[4]!, updatedAt: "2026-08-21T22:00:00.000Z", attentionTier: "ready", completionUnseen: true },
+        { ...snapshot.sessions[0]!, updatedAt: "2026-08-21T22:00:00.000Z", lifecycleStatus: "working" },
+        { ...snapshot.sessions[3]!, updatedAt: "2026-08-21T22:00:00.000Z", lifecycleStatus: "needs_you" },
+      ],
+    }, []);
+    expect(presentation.pills.map(pill => [pill.id, pill.lifecycleStatus, Boolean(pill.inactive)])).toEqual([
+      ["approval", "needs_you", false], ["ready", "ready", false], ["work", "working", false],
+    ]);
+    expect(presentation.pills[1]).toMatchObject({ completionUnseen: true, attentionTier: "ready" });
+  });
+
+  it("refreshes inactivity only after new agent activity or a genuine turn change", () => {
+    const session = {
+      ...snapshot.sessions[4]!, updatedAt: "2026-08-22T21:29:59.999Z", attentionTier: "acknowledged_ready" as const,
+    };
+    const project = (current: SessionSnapshot["sessions"][number]) => menuPresentation({ ...snapshot, sessions: [current] }, []).pills[0];
+    expect(project(session)).toMatchObject({ inactive: true, lifecycleStatus: "ready" });
+    expect(project({ ...session, section: "working", lifecycleStatus: "working" })?.inactive).toBeUndefined();
+    const fresh = project({ ...session, updatedAt: "2026-08-22T22:00:00.000Z" });
+    expect(fresh?.inactive).toBeUndefined();
+    expect(fresh?.lifecycleStatus).toBe("ready");
+    expect(session.updatedAt).toBe("2026-08-22T21:29:59.999Z");
+  });
+
   it("moves stale Claude Ready rows behind fresh completed work without changing turn evidence", () => {
     const now = Date.parse("2026-08-22T22:00:00.000Z");
     const sourceSnapshot = {
@@ -429,7 +499,7 @@ describe("menu presentation", () => {
     });
   });
 
-  it("keeps a stale acknowledged Ready session before newer neutral History", () => {
+  it("orders inactive Ready with gray History by recency without rewriting source state", () => {
     const now = Date.parse("2026-08-22T22:00:00.000Z");
     const staleClaude: SessionSnapshot["sessions"][number] = {
       ...snapshot.sessions[4]!,
@@ -454,16 +524,17 @@ describe("menu presentation", () => {
     const presentation = menuPresentation(sourceSnapshot, [], now);
 
     expect(presentation.pills.map(({ id }) => id)).toEqual([
-      "stale-claude", "newer-history",
+      "newer-history", "stale-claude",
     ]);
-    expect(presentation.pills[0]).toMatchObject({
+    expect(presentation.pills[1]).toMatchObject({
       id: "stale-claude",
       phase: "ready",
       lifecycleStatus: "ready",
+      inactive: true,
       attentionTier: "history",
       subtitle: "Ready to continue",
       inspector: { status: "Ready" },
-      accessibilityLabel: "Review result, Ready, Claude Code, agent-visor",
+      accessibilityLabel: "Review result, Ready, Inactive, Claude Code, agent-visor",
     });
     expect(sourceSnapshot).toEqual(before);
     expect(sourceSnapshot.sessions[0]).toMatchObject({
@@ -481,7 +552,7 @@ describe("menu presentation", () => {
         section: "history" as const,
         attentionTier: "history" as const,
         lifecycleStatus: "ready" as const,
-        updatedAt: "2026-08-22T20:00:00.000Z",
+        updatedAt: "2026-08-22T21:50:00.000Z",
       },
       {
         ...snapshot.sessions[4]!,
@@ -489,7 +560,7 @@ describe("menu presentation", () => {
         section: "history" as const,
         attentionTier: "history" as const,
         lifecycleStatus: "ready" as const,
-        updatedAt: "2026-08-22T21:00:00.000Z",
+        updatedAt: "2026-08-22T21:55:00.000Z",
       },
       {
         ...snapshot.sessions[1]!,
@@ -497,7 +568,7 @@ describe("menu presentation", () => {
         section: "history" as const,
         attentionTier: "history" as const,
         lifecycleStatus: "closed" as const,
-        updatedAt: "2026-08-22T21:30:00.000Z",
+        updatedAt: "2026-08-22T21:59:00.000Z",
       },
       {
         ...snapshot.sessions[1]!,
@@ -561,6 +632,7 @@ describe("menu presentation", () => {
     ]);
     const ready = {
       ...session,
+      updatedAt: "2026-08-22T22:00:00.000Z",
       lifecycleStatus: "ready" as const,
       sessionState: {
         conversation: "open" as const,

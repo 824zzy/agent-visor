@@ -4,8 +4,8 @@ import Foundation
 ///
 /// This menu-only projection does not define lifecycle status or tone;
 /// `NativeMenuStatusPresentation` keeps those meanings tied to explicit
-/// lifecycle evidence. A history attention tier may regroup an old Ready row
-/// without changing its Ready lifecycle status or semantic tone.
+/// lifecycle evidence. An inactive marker changes tone without changing
+/// the Ready lifecycle label.
 public enum NativeMenuDisplayPhase {
     public static func phase(for pill: NativeHelperPill) -> NativeHelperPillPhase {
         guard let attentionTier = pill.attentionTier else { return pill.phase }
@@ -19,8 +19,7 @@ public enum NativeMenuDisplayPhase {
 }
 
 /// Keeps native status meaning independent from the menu-only display tier.
-/// A known Ready pill may be grouped as Recent while its dot and status copy
-/// remain Ready.
+/// Inactive Ready pills use a neutral tone while retaining their Ready label.
 public enum NativeMenuStatusPresentation {
     public static func status(for pill: NativeHelperPill) -> String {
         if let lifecycleStatus = pill.lifecycleStatus {
@@ -31,6 +30,9 @@ public enum NativeMenuStatusPresentation {
 
     public static func tone(for pill: NativeHelperPill) -> NativeHelperPillPhase {
         if let lifecycleStatus = pill.lifecycleStatus {
+            if lifecycleStatus == .ready && pill.inactive == true && pill.completionUnseen != true {
+                return .history
+            }
             return tone(for: lifecycleStatus)
         }
         return legacyPresentation(for: pill.inspector?.status, phase: pill.phase).tone

@@ -17,6 +17,8 @@ const attentionOrder = {
   history: 4,
 } as const;
 
+type MenuSession = SessionSnapshot["sessions"][number] & { inactive?: boolean };
+
 /** Native clicks must report a rejected focus instead of silently dropping it. */
 export async function activateMenuPill(
   event: Extract<NativeHelperEvent, { event: "activate_pill" }>,
@@ -135,34 +137,29 @@ export function menuPresentation(
 }
 
 /**
- * A completed Claude turn is still openable after it goes quiet, but it is no
- * longer a fresh Ready shortcut. Keep the source snapshot's phase, subtitle,
- * turn, and route evidence unchanged; this projection only moves dormant rows
- * behind recent work on the native menu surfaces. The helper uses the tier for
- * Recent grouping without changing the resolved lifecycle status.
+ * Inactivity changes native presentation, never source lifecycle or routing.
+ * Unopened completions retain attention regardless of age.
  */
 function menuSession(
   session: SessionSnapshot["sessions"][number],
   now: number,
-): SessionSnapshot["sessions"][number] {
-  if (session.completionUnseen || session.source !== "Claude Code" || session.section !== "ready"
-    || (session.attentionTier !== undefined
-      && session.attentionTier !== "ready"
-      && session.attentionTier !== "acknowledged_ready")) return session;
+): MenuSession {
+  if (session.completionUnseen || sessionLifecyclePresentation(session).status !== "ready") return session;
   const updatedAt = Date.parse(session.updatedAt);
   if (!Number.isFinite(updatedAt) || now - updatedAt <= TRANSCRIPT_STALE_CEILING_MS) return session;
   return {
     ...session,
     attentionTier: "history",
+    inactive: true,
   };
 }
 
 function historyLifecycleOrder(
-  session: SessionSnapshot["sessions"][number],
+  session: MenuSession,
   attentionTier: keyof typeof attentionOrder,
 ): number {
   if (attentionTier !== "history") return 0;
-  return sessionLifecyclePresentation(session).tone === "ready" ? 0 : 1;
+  return sessionLifecyclePresentation(session).tone === "ready" && !session.inactive ? 0 : 1;
 }
 
 function isAmbientSession(session: SessionSnapshot["sessions"][number]): boolean {
@@ -171,7 +168,7 @@ function isAmbientSession(session: SessionSnapshot["sessions"][number]): boolean
 }
 
 function presentationPill(
-  session: SessionSnapshot["sessions"][number],
+  session: MenuSession,
   priority: number,
 ) {
   const title = (session.sessionClass === "automation"
@@ -193,6 +190,7 @@ function presentationPill(
     ...(session.completionUnseen ? { completionUnseen: true } : {}),
     ...(session.failureAlert !== undefined ? { failureAlert: session.failureAlert } : {}),
     lifecycleStatus: lifecycle.status,
+    ...(session.inactive ? { inactive: true } : {}),
     inspector: {
       status: lifecycle.label,
       runtimeItems: [runtimeSource(session.source, session.owner)],
@@ -206,6 +204,7 @@ function presentationPill(
     accessibilityLabel: [
       title,
       lifecycle.label,
+      ...(session.inactive ? ["Inactive"] : []),
       sourceLabel,
       session.project,
       ...(session.managedBy ? [`Managed by ${session.managedBy}`] : []),

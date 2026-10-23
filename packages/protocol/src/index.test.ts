@@ -36,6 +36,15 @@ import {
 } from "./index.js";
 
 describe("session snapshot protocol", () => {
+  it("accepts optional native inactivity without changing lifecycle or legacy pills", () => {
+    const pill = { id: "gc", title: "gc", phase: "history", lifecycleStatus: "ready", priority: 0, accessibilityLabel: "gc, Ready" };
+    const request = (value: object) => ({ version: 1, id: "menu", method: "present_pills", params: { pills: [value] } });
+    for (const value of [pill, { ...pill, inactive: true }, { ...pill, inactive: false }]) {
+      expect(nativeHelperRequestSchema.safeParse(request(value)).success).toBe(true);
+    }
+    expect(nativeHelperRequestSchema.safeParse(request({ ...pill, inactive: "yes" })).success).toBe(false);
+  });
+
   it("accepts an explicit per-record provider repair action and cancellation", () => {
     const selection = {
       kind: "provider" as const,

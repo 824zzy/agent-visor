@@ -1053,6 +1053,8 @@ export const nativeHelperPillSchema = z.object({
   phase: sessionSectionSchema,
   /** Explicit lifecycle meaning; native surfaces must prefer this over labels. */
   lifecycleStatus: sessionLifecycleStatusSchema.optional(),
+  /** Inactive Ready presentation; does not change the underlying lifecycle. */
+  inactive: z.boolean().optional(),
   attentionTier: sessionAttentionTierSchema.optional(),
   completionUnseen: z.boolean().optional(),
   /** Marks a needs-you pill that can be explicitly dismissed as a failure. */
