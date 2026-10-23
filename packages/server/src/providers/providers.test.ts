@@ -138,6 +138,148 @@ describe("Herdr hosted conversations", () => {
     }]);
   });
 
+  it("keeps idle Claude activity and gray pills stable across bookkeeping-only file touches", async () => {
+    const { environment, repository } = herdrFixture();
+    const transcript = `${home}/.claude/projects/-Users-me-Codes-agent-visor/herdr-conversation.jsonl`;
+    const activityAt = "2026-08-22T06:05:00.000Z";
+    const body = [
+      { type: "assistant", timestamp: "2026-08-22T06:00:00.000Z", message: { stop_reason: "end_turn" } },
+      { type: "user", timestamp: activityAt, message: { content: "<command-name>/status</command-name>" } },
+      { type: "system", subtype: "informational", timestamp: "2026-08-22T07:00:00.000Z" },
+    ].map(record => JSON.stringify(record)).join("\n");
+    environment.headTails.set(transcript, { head: body, tail: body });
+    environment.stamps.set(transcript, { modifiedAt: new Date(activityAt), size: body.length });
+    await repository.refresh();
+    const before = menuPresentation(repository.current(), [], now.valueOf()).pills[0];
+    expect(before).toMatchObject({ inactive: true, attentionTier: "history", inspector: { activityAt } });
+
+    // Cache invalidation is not a new turn: bytes and conversation events are unchanged.
+    environment.stamps.set(transcript, { modifiedAt: now, size: body.length });
+    await repository.refresh();
+    const after = menuPresentation(repository.current(), [], now.valueOf()).pills[0];
+    expect(after).toEqual(before);
+    expect(repository.current().sessions[0]).toMatchObject({
+      lifecycleStatus: "ready", updatedAt: activityAt,
+    });
+    expect(after?.completionUnseen).not.toBe(true);
+    const restarted = new SessionRepository([new ClaudeProvider(environment)], { now: () => now });
+    expect(menuPresentation(await restarted.refresh(), [], now.valueOf()).pills[0]).toEqual(before);
+  });
+
+  it("keeps fresh busy Claude evidence orange when the transcript still shows the previous completed turn", async () => {
+    const { environment, repository } = herdrFixture();
+    const transcript = `${home}/.claude/projects/-Users-me-Codes-agent-visor/herdr-conversation.jsonl`;
+    const body = JSON.stringify({ type: "assistant", timestamp: "2026-08-22T06:00:00.000Z", message: { stop_reason: "end_turn" } });
+    environment.headTails.set(transcript, { head: body, tail: body });
+    environment.stamps.set(transcript, { modifiedAt: now, size: body.length });
+    environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({
+      sessionId: "herdr-conversation", cwd, kind: "interactive", status: "busy", name: "codes-6e",
+    }));
+    expect((await repository.refresh()).sessions[0]).toMatchObject({
+      lifecycleStatus: "working", updatedAt: now.toISOString(),
+    });
+    expect(menuPresentation(repository.current(), [], now.valueOf()).pills[0]).toMatchObject({
+      phase: "working", attentionTier: "working",
+    });
+  });
+
+  it("does not use bookkeeping tail timestamps when a bounded transcript read loses the latest lifecycle", async () => {
+    const { environment, repository } = herdrFixture();
+    const transcript = `${home}/.claude/projects/-Users-me-Codes-agent-visor/herdr-conversation.jsonl`;
+    const activityAt = "2026-08-22T06:00:00.000Z";
+    environment.headTails.set(transcript, {
+      head: JSON.stringify({ type: "assistant", timestamp: activityAt, message: { stop_reason: "end_turn" } }),
+      // A 64 KiB tail can begin inside a long record, then contain only bookkeeping.
+      tail: 'partial record suffix\n' + JSON.stringify({ type: "system", subtype: "informational", timestamp: now.toISOString() }),
+    });
+    environment.stamps.set(transcript, { modifiedAt: now, size: 100_000 });
+    expect((await repository.refresh()).sessions[0]).toMatchObject({
+      lifecycleStatus: "ready", updatedAt: activityAt,
+    });
+    expect(menuPresentation(repository.current(), [], now.valueOf()).pills[0]).toMatchObject({
+      inactive: true, attentionTier: "history", inspector: { activityAt },
+    });
+    expect(repository.current().sessions[0]?.completionUnseen).not.toBe(true);
+  });
+
+  it("preserves completion acknowledgment through bookkeeping writes and restarts, but not a genuine new completion", async () => {
+    const { environment } = herdrFixture();
+    const directory = mkdtempSync(path.join(tmpdir(), "av-claude-attention-"));
+    const completionAttentionPath = path.join(directory, "completion-attention.json");
+    const transcript = `${home}/.claude/projects/-Users-me-Codes-agent-visor/herdr-conversation.jsonl`;
+    const options = { now: () => now, completionAttentionPath };
+    let revision = 0;
+    const setTranscript = (completedAt: string, bookkeeping: boolean) => {
+      const records: unknown[] = [{ type: "assistant", timestamp: completedAt, message: { stop_reason: "end_turn" } }];
+      if (bookkeeping) records.push({ type: "system", subtype: "informational", timestamp: now.toISOString() });
+      const body = records.map(record => JSON.stringify(record)).join("\n");
+      environment.headTails.set(transcript, { head: body, tail: body });
+      environment.stamps.set(transcript, { modifiedAt: new Date(now.valueOf() + revision++), size: body.length });
+    };
+    try {
+      setTranscript("2026-08-22T07:55:00.000Z", false);
+      const repository = new SessionRepository([new ClaudeProvider(environment)], options);
+      await repository.refresh();
+      expect(repository.current().sessions[0]?.completionUnseen).toBe(true);
+      repository.acknowledgeReady("herdr-conversation");
+      setTranscript("2026-08-22T07:55:00.000Z", true);
+      await repository.refresh();
+      expect(repository.current().sessions[0]).toMatchObject({ attentionTier: "acknowledged_ready", updatedAt: "2026-08-22T07:55:00.000Z" });
+      expect(repository.current().sessions[0]?.completionUnseen).not.toBe(true);
+      const restarted = new SessionRepository([new ClaudeProvider(environment)], options);
+      await restarted.refresh();
+      expect(restarted.current().sessions[0]?.completionUnseen).not.toBe(true);
+      setTranscript("2026-08-22T07:59:00.000Z", true);
+      await restarted.refresh();
+      expect(restarted.current().sessions[0]).toMatchObject({
+        completionUnseen: true, attentionTier: "ready", updatedAt: "2026-08-22T07:59:00.000Z",
+      });
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it.each([true, false])("uses stable session provenance for idle transcripts without event timestamps (metadata start: %s)", async (metadataStart) => {
+    const { environment, repository } = herdrFixture();
+    const processStartedAt = "2026-08-22T06:00:00.000Z";
+    const sessionStartedAt = "2026-08-22T06:05:00.000Z";
+    environment.starts.set(42, new Date(processStartedAt));
+    environment.files.set(`${home}/.claude/sessions/42.json`, JSON.stringify({
+      sessionId: "herdr-conversation", cwd, kind: "interactive", status: "idle", name: "codes-6e",
+      ...(metadataStart ? { startedAt: Date.parse(sessionStartedAt) } : {}),
+    }));
+    const transcript = `${home}/.claude/projects/-Users-me-Codes-agent-visor/herdr-conversation.jsonl`;
+    environment.headTails.set(transcript, { head: "", tail: JSON.stringify({ type: "system", subtype: "informational", timestamp: now.toISOString() }) });
+    environment.stamps.set(transcript, { modifiedAt: now, size: 100 });
+    expect((await repository.refresh()).sessions[0]).toMatchObject({
+      lifecycleStatus: "ready", updatedAt: metadataStart ? sessionStartedAt : processStartedAt,
+    });
+    expect(menuPresentation(repository.current(), [], now.valueOf()).pills[0]?.inactive).toBe(true);
+    expect(repository.current().sessions[0]?.completionUnseen).not.toBe(true);
+  });
+
+  it.each(["bookkeeping-only tail", "failed read"])("retains known idle activity when a later transcript read loses event timestamps: %s", async (read) => {
+    const { environment, repository } = herdrFixture();
+    const transcript = `${home}/.claude/projects/-Users-me-Codes-agent-visor/herdr-conversation.jsonl`;
+    const activityAt = "2026-08-22T06:00:00.000Z";
+    const body = JSON.stringify({ type: "assistant", timestamp: activityAt, message: { stop_reason: "end_turn" } });
+    environment.headTails.set(transcript, { head: body, tail: body });
+    environment.stamps.set(transcript, { modifiedAt: new Date(activityAt), size: body.length });
+    await repository.refresh();
+    const before = menuPresentation(repository.current(), [], now.valueOf()).pills[0];
+    if (read === "failed read") environment.headTails.delete(transcript);
+    else environment.headTails.set(transcript, { head: "", tail: JSON.stringify({ type: "system", subtype: "informational", timestamp: now.toISOString() }) });
+    environment.stamps.set(transcript, { modifiedAt: now, size: 100_000 });
+    await repository.refresh();
+    expect(menuPresentation(repository.current(), [], now.valueOf()).pills[0]).toEqual(before);
+    expect(repository.current().sessions[0]?.completionUnseen).not.toBe(true);
+    // Failure must remain recoverable; it must not cache a false completion or suppress new work.
+    const completedAt = "2026-08-22T07:59:00.000Z";
+    const recovered = JSON.stringify({ type: "assistant", timestamp: completedAt, message: { stop_reason: "end_turn" } });
+    environment.headTails.set(transcript, { head: recovered, tail: recovered });
+    if (read !== "failed read") environment.stamps.set(transcript, { modifiedAt: new Date(now.valueOf() + 1), size: recovered.length });
+    await repository.refresh();
+    expect(repository.current().sessions[0]).toMatchObject({ updatedAt: completedAt, completionUnseen: true });
+  });
+
   it("reports unavailable Herdr navigation without opening Chat or clearing attention", async () => {
     const { repository, helper } = herdrFixture();
     await repository.refresh();

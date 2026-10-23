@@ -87,6 +87,36 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
         )
     }
 
+    func testInactiveReadyRegroupingDoesNotInventACompletionPulse() {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000)
+        let inactive = pill(.ready, attentionTier: .history, activityAt: now.addingTimeInterval(-7_200))
+        let fresh = pill(.ready, attentionTier: .ready, activityAt: now)
+        var attention = NativeMenuReadyAttention()
+        attention.present(previousPhases: [:], pills: [inactive], now: now)
+        attention.present(
+            previousPhases: ["session": NativeMenuDisplayPhase.phase(for: inactive)],
+            pills: [fresh], now: now
+        )
+        XCTAssertFalse(attention.hasActivePulse(pills: [fresh], now: now))
+        XCTAssertFalse(attention.isUnopened(fresh))
+        XCTAssertEqual(attention.opacity(id: "session", phase: .ready,
+                                        attentionTier: .ready, now: now.addingTimeInterval(0.75)), 1)
+        XCTAssertEqual(attention.backgroundPulse(for: fresh, now: now), 0)
+    }
+
+    func testRemovingUnopenedEvidenceDoesNotLeaveALegacyTransitionPulse() {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000)
+        let unopened = pill(.ready, attentionTier: .ready, activityAt: now, completionUnseen: true)
+        let ready = pill(.ready, attentionTier: .ready, activityAt: now)
+        var attention = NativeMenuReadyAttention()
+        attention.present(previousPhases: ["session": .working], pills: [unopened], now: now)
+        XCTAssertTrue(attention.hasActivePulse(pills: [unopened], now: now))
+        attention.present(previousPhases: ["session": .ready], pills: [ready], now: now)
+        XCTAssertFalse(attention.hasActivePulse(pills: [ready], now: now))
+        XCTAssertEqual(attention.opacity(id: "session", phase: .ready,
+                                        attentionTier: .ready, now: now.addingTimeInterval(0.75)), 1)
+    }
+
     func testInitialReadySnapshotDoesNotInventACompletion() {
         let now = Date(timeIntervalSinceReferenceDate: 1_000)
         var attention = NativeMenuReadyAttention()
@@ -193,10 +223,10 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
         )
     }
 
-    func testHistoryDisplayToReadyAttentionTransitionPulsesAgain() {
+    func testNewUnopenedCompletionPulsesEvenWhenWorkingWasNotObserved() {
         let changedAt = Date(timeIntervalSinceReferenceDate: 1_000)
         let oldHistory = pill(.ready, attentionTier: .history)
-        let freshReady = pill(.ready, attentionTier: .ready)
+        let freshReady = pill(.ready, attentionTier: .ready, completionUnseen: true)
         var attention = NativeMenuReadyAttention()
 
         attention.present(

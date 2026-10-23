@@ -27,7 +27,14 @@ public struct NativeMenuReadyAttention {
         }
 
         for pill in pills where pill.phase == .ready {
-            guard let previousPhase = previousPhases[pill.id], previousPhase != .ready else {
+            // Modern pills carry authoritative completion attention. Placement
+            // changes (for example inactive History -> Ready) are not turns.
+            if pill.attentionTier != nil {
+                if !unopenedIDs.contains(pill.id) { phaseChangedAtByID.removeValue(forKey: pill.id) }
+                continue
+            }
+            guard let previousPhase = previousPhases[pill.id],
+                  previousPhase == .working || previousPhase == .needsYou else {
                 continue
             }
             phaseChangedAtByID[pill.id] = now

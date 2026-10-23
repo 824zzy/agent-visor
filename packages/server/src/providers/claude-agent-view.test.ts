@@ -557,6 +557,28 @@ describe("Claude agent-view integration", () => {
     expect(menuPresentation(source.current(), [], nowMs).pills).toEqual([]);
   });
 
+  it.each([true, false])("keeps completed background Claude pills gray after bookkeeping writes (semantic activity: %s)", async (semanticActivity) => {
+    const { environment, row, transcript, completedAt } = completedIdleFixture();
+    const startedAt = "2026-08-22T06:30:00.000Z";
+    environment.inventory = inventorySuccess([{ ...row, state: "done", startedAt: Date.parse(startedAt) }]);
+    environment.headTails.set(transcript, {
+      head: semanticActivity ? JSON.stringify({ type: "assistant", timestamp: completedAt, message: { stop_reason: "end_turn" } }) : "",
+      tail: JSON.stringify({ type: "system", subtype: "informational", timestamp: now.toISOString() }),
+    });
+    const source = repository(environment);
+    await source.refresh();
+    const before = menuPresentation(source.current(), [], nowMs).pills[0];
+    expect(before).toMatchObject({
+      id: ccID, inactive: true, attentionTier: "history",
+      inspector: { activityAt: semanticActivity ? completedAt : startedAt },
+    });
+    environment.stamps.set(transcript, { modifiedAt: now, size: 100 });
+    await source.refresh();
+    expect(menuPresentation(source.current(), [], nowMs).pills[0]).toEqual(before);
+    expect(source.current().sessions[0]?.completionUnseen).not.toBe(true);
+    expect(menuPresentation(await repository(environment).refresh(), [], nowMs).pills[0]).toEqual(before);
+  });
+
   it("shows a completed idle blocked conversation as Ready when no action is waiting", async () => {
     const { environment, row, completedAt } = completedIdleFixture();
     environment.inventory = inventorySuccess([{ ...row, state: "blocked" }]);

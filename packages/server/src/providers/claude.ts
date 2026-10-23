@@ -59,6 +59,7 @@ type TranscriptSummary = {
   customTitle: string;
   firstUser: string;
   completed: boolean;
+  activityAt?: string;
   lifecycle?: DiscoveredProviderSession["claudeLifecycle"];
 };
 const emptySummary: TranscriptSummary = { customTitle: "", firstUser: "", completed: false };
@@ -89,7 +90,10 @@ type FailureLifecycle = {
 
 export class ClaudeProvider implements ProviderAdapter {
   readonly id = "claude_code" as const;
-  private readonly summaries = new Map<string, { size: number; modifiedAt: number; summary: TranscriptSummary }>();
+  private readonly summaries = new Map<string, {
+    stamp?: { size: number; modifiedAt: number };
+    summary: TranscriptSummary;
+  }>();
   private readonly desktopSessions: ClaudeDesktopSessions;
   private hiddenSessionIdsForPublication: ReadonlySet<string> = new Set();
   /** In-memory lifecycle evidence keeps startup failures quiet and watched failures actionable. */
@@ -281,10 +285,8 @@ export class ClaudeProvider implements ProviderAdapter {
       let owner = process.tty
         ? ownerForProcess(pid, processes)
         : entrypoint.includes("vscode") ? "Cursor" : "Claude";
-      const processStartToken = processInstanceToken(
-        pid,
-        await this.environment.processStartedAt(pid),
-      );
+      const processStartedAt = await this.environment.processStartedAt(pid);
+      const processStartToken = processInstanceToken(pid, processStartedAt);
       const herdrTarget = kind === "interactive" && (owner === "Herdr" || owner === "Unknown")
         ? await this.environment.herdrSurface?.(pid, sessionID, cwd) : undefined;
       if (herdrTarget) owner = "Herdr";
@@ -324,6 +326,10 @@ export class ClaudeProvider implements ProviderAdapter {
         ? summary.lifecycle : undefined;
       const completionAt = turnState === "ready" && summary.lifecycle?.phase === "ready"
         ? summary.lifecycle.observedAt : undefined;
+      const metadataStartedAt = typeof metadata.startedAt === "number" ? new Date(metadata.startedAt) : undefined;
+      const idleActivityAt = summary.activityAt
+        ?? (metadataStartedAt && Number.isFinite(metadataStartedAt.valueOf())
+          ? metadataStartedAt.toISOString() : processStartedAt?.toISOString());
       const section = turnState === "unknown" ? "history" as const : turnState;
       const attached = backgroundTarget
         ? await attachedTerminalTarget(backgroundTarget.jobId, backgroundTarget.cwd, processes, this.environment)
@@ -355,7 +361,11 @@ export class ClaudeProvider implements ProviderAdapter {
         cwd,
         owner,
         section,
-        updatedAt: completionAt ?? claudeLifecycle?.observedAt
+        // Metadata can prove idle after local commands, while the transcript
+        // still ends with user input. Keep its activity time even when its
+        // lifecycle does not override the live metadata status.
+        updatedAt: completionAt
+          ?? (turnState === "ready" ? idleActivityAt : claudeLifecycle?.observedAt)
           ?? iso(transcriptStamp?.modifiedAt ?? metadataStamp?.modifiedAt ?? this.environment.now()),
         canOpenOwner: controlTarget !== undefined,
         canEnterChat: true,
@@ -668,7 +678,8 @@ export class ClaudeProvider implements ProviderAdapter {
       cwd: row.cwd,
       owner: unverifiedHost ? runtimeOwner : application,
       section: state === "unknown" || state === "history" ? "history" : state,
-      updatedAt,
+      updatedAt: state === "ready"
+        ? summary.activityAt ?? iso(new Date(row.startedAt)) : updatedAt,
       ...(state === "ready" && lifecycle?.phase === "ready" ? { completionAt: lifecycle.observedAt } : {}),
       canOpenOwner: target !== undefined,
       canEnterChat: true,
@@ -731,14 +742,22 @@ export class ClaudeProvider implements ProviderAdapter {
 
   private async transcriptSummary(file: string, stamp: FileStamp | undefined): Promise<TranscriptSummary> {
     const previous = this.summaries.get(file);
-    if (stamp && previous?.size === stamp.size && previous.modifiedAt === stamp.modifiedAt.valueOf()) {
+    if (stamp && previous?.stamp?.size === stamp.size && previous.stamp.modifiedAt === stamp.modifiedAt.valueOf()) {
       return previous.summary;
     }
-    const summary = await claudeTranscriptSummary(this.environment, file);
-    if (summary && stamp) {
-      // Re-read only changed transcripts and retain only active-session
-      // summaries. Do not cache read failures; they must be recoverable.
-      this.summaries.set(file, { size: stamp.size, modifiedAt: stamp.modifiedAt.valueOf(), summary });
+    const parsed = await claudeTranscriptSummary(this.environment, file);
+    const previousActivityAt = previous?.summary.activityAt;
+    const activityAt = previousActivityAt && (!parsed?.activityAt || previousActivityAt > parsed.activityAt)
+      ? previousActivityAt : parsed?.activityAt;
+    const summary = parsed || activityAt
+      ? { ...(parsed ?? emptySummary), ...(activityAt ? { activityAt } : {}) } : undefined;
+    if (summary) {
+      // Retain known activity, never old lifecycle proof, across partial/failed
+      // reads. A failed read has no cache stamp, so it remains retryable.
+      this.summaries.set(file, {
+        ...(parsed && stamp ? { stamp: { size: stamp.size, modifiedAt: stamp.modifiedAt.valueOf() } } : {}),
+        summary,
+      });
     } else {
       this.summaries.delete(file);
     }
@@ -881,6 +900,7 @@ async function claudeTranscriptSummary(
   let firstUser = "";
   let customTitle = "";
   let completed = false;
+  let activityAt: string | undefined;
   let lifecycle: TranscriptSummary["lifecycle"];
   for (const chunk of [content.head, content.tail]) {
     // The head may contain an old completed turn. Only the current tail can
@@ -913,12 +933,15 @@ async function claudeTranscriptSummary(
         continue;
       }
       const timestamp = Date.parse(string(value.timestamp));
+      if (Number.isFinite(timestamp) && (!activityAt || timestamp > Date.parse(activityAt))) {
+        activityAt = new Date(timestamp).toISOString();
+      }
       lifecycle = Number.isFinite(timestamp)
         ? { phase: completed ? "ready" : "working", observedAt: new Date(timestamp).toISOString() }
         : undefined;
     }
   }
-  return { customTitle, firstUser, completed, ...(lifecycle ? { lifecycle } : {}) };
+  return { customTitle, firstUser, completed, ...(activityAt ? { activityAt } : {}), ...(lifecycle ? { lifecycle } : {}) };
 }
 
 function claudeUserText(value: Record<string, unknown>): string {

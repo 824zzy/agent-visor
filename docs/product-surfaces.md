@@ -250,6 +250,8 @@ Ready sessions from every supported source become inactive after more than 30 mi
 ## Ready Completion Attention
 
 - A pulsing `Ready` indicator means the current completed turn is recent and has not yet been acknowledged.
+- Native pills with shared attention metadata animate only an explicit unopened completion. Regrouping an inactive Ready pill from History to Ready cannot invent a completed turn or restart its pulse. Legacy pills without shared attention metadata retain their observed active-turn completion animation.
+- Idle Claude sessions use timestamped conversation activity independently of their current live status. Bookkeeping records and file modification times can invalidate the transcript cache but do not refresh known conversation activity; session/process start provenance is the fallback when no conversation timestamp is available.
 - Opening the session through an Agent Visor navigation surface acknowledges that specific completion and stops its pulse. The session remains Ready; its native indicator is green while fresh and gray when inactive under the 30-minute rule. Acknowledgement does not reset authoritative activity age.
 - Attention or inactivity changes may reorder pills through the existing interaction hold and movement safeguards; acknowledgement does not promote the session as new activity.
 - The interaction hold defers geometry, never new status evidence or session phase.
