@@ -5,6 +5,7 @@ import {
 } from "@agent-visor/protocol";
 import { menuPresentation } from "./menu.js";
 import { SessionRepository, type DiscoveredProviderSession } from "./sessions.js";
+import { selectSessions } from "../../app/src/session-groups.js";
 
 const discovered = (
   id: string,
@@ -38,6 +39,72 @@ const discovered = (
 });
 
 describe("SessionRepository presence contract", () => {
+  it("feeds one exact identity through open, unavailable, and closed search placement", async () => {
+    let phase: "open" | "unknown" | "closed" = "open";
+    const provider = {
+      id: "claude_code" as const,
+      discover: async () => [
+        {
+          ...discovered("stable-fixture", {
+            state: phase,
+            evidence: phase === "open" ? "frontend"
+              : phase === "closed" ? "authoritative_inventory" : "unavailable",
+            observedAt: "2026-10-26T10:00:00.000Z",
+          }, "ready"),
+          title: "Stable fixture conversation",
+          sourceProfile: "fixture-profile",
+          subtitle: "Stable fixture result",
+          conversationState: phase === "closed" ? "archived" : phase === "unknown" ? "unknown" : "open",
+          canOpenOwner: phase !== "closed",
+          canEnterChat: true,
+        },
+        {
+          ...discovered("unknown-fixture", {
+            state: "unknown",
+            evidence: "unavailable",
+            observedAt: "2026-10-26T10:00:00.000Z",
+          }, "ready"),
+          title: "Unknown fixture conversation",
+          subtitle: "Unavailable fixture result",
+        },
+        {
+          ...discovered("closed-fixture", {
+            state: "closed",
+            evidence: "authoritative_inventory",
+            observedAt: "2026-10-26T10:00:00.000Z",
+          }, "ready"),
+          title: "Closed fixture conversation",
+          subtitle: "Closed fixture result",
+          conversationState: "archived",
+          canOpenOwner: false,
+        },
+      ] as DiscoveredProviderSession[],
+    };
+    const repository = new SessionRepository([provider]);
+
+    const open = await repository.refresh();
+    expect(selectSessions(open.sessions, "fixture").orderedSessions.map(({ id }) => id).sort())
+      .toEqual(["closed-fixture", "stable-fixture", "unknown-fixture"]);
+    expect(selectSessions(open.sessions, "").groups.map(({ id }) => id))
+      .toEqual(["ready", "unavailable", "history"]);
+
+    phase = "unknown";
+    const unknown = await repository.refresh();
+    expect(selectSessions(unknown.sessions, "stable fixture").orderedSessions.map(({ id }) => id))
+      .toEqual(["stable-fixture"]);
+    expect(selectSessions(unknown.sessions, "").groups.flatMap(({ sessions }) => sessions)
+      .filter(({ id }) => id === "stable-fixture").map(({ presence }) => presence?.state))
+      .toEqual(["unknown"]);
+
+    phase = "closed";
+    const closed = await repository.refresh();
+    expect(selectSessions(closed.sessions, "stable fixture").orderedSessions.map(({ id }) => id))
+      .toEqual(["stable-fixture"]);
+    expect(selectSessions(closed.sessions, "").groups.flatMap(({ sessions }) => sessions)
+      .filter(({ id }) => id === "stable-fixture").map(({ presence }) => presence?.state))
+      .toEqual(["closed"]);
+  });
+
   it("carries explicit Claude presence through the snapshot and native pill projection", async () => {
     const rows = [
       discovered("open", {

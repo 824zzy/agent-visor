@@ -207,7 +207,18 @@ export function relativeSessionAge(updatedAt: string, now = new Date()): string 
 function searchRank(session: SessionSummary, needle: string, now: Date): number {
   if (session.title.toLocaleLowerCase().includes(needle)) return 0;
   const presentation = sessionPresentation(session, now);
-  return [session.subtitle, presentation.subtitle, presentation.pillNotice ?? "", session.source, session.project, session.owner, session.cwd]
+  const lifecycle = sessionLifecyclePresentation(session);
+  return [
+    session.subtitle,
+    presentation.subtitle,
+    presentation.pillNotice ?? "",
+    lifecycle.label,
+    session.source,
+    session.sourceProfile ?? "",
+    session.project,
+    session.owner,
+    session.cwd,
+  ]
     .some((value) => value.toLocaleLowerCase().includes(needle)) ? 1 : 2;
 }
 

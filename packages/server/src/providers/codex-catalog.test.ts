@@ -49,7 +49,7 @@ describe("Codex unarchived catalog", () => {
       expect(snapshot.sessions).toHaveLength(206);
       expect(snapshot.sessions.some(({ id }) => id === "direct-204")).toBe(true);
       const menu = menuPresentation(snapshot, [], updated * 1_000);
-      expect(menu.navigatorPills.find(({ id }) => id === "direct-204")?.defaultOverflowEligible).toBe(true);
+      expect(menu.navigatorPills.find(({ id }) => id === "direct-204")?.defaultOverflowEligible).toBe(false);
       expect(menu.pills.every(({ id }) => id.startsWith("direct-"))).toBe(true);
       expect(menu.navigatorPills.find(({ id }) => id === "managed")?.defaultOverflowEligible).toBe(false);
       const scans = environment.scans;
@@ -75,6 +75,84 @@ describe("Codex unarchived catalog", () => {
       const environment = new LiveProviderEnvironment(home);
       expect(await environment.sqlite(database, "select * from example")).toEqual([]);
       await expect(environment.sqlite(database, "select * from missing_table")).rejects.toThrow();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("retains cached Codex rows as unavailable when the home database disappears", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "visor-codex-missing-database-"));
+    const database = path.join(home, ".codex/state_5.sqlite");
+    mkdirSync(path.dirname(database), { recursive: true });
+    const sql = (statement: string) => execFileSync("/usr/bin/sqlite3", [database, statement]);
+    const threadID = "missing-database";
+    const rollout = path.join(home, `${threadID}.jsonl`);
+    try {
+      sql("create table threads (id text primary key, rollout_path text, cwd text, title text, updated_at integer, archived integer, source text)");
+      const updated = Date.parse("2026-10-21T18:00:00Z") / 1_000;
+      writeFileSync(rollout, JSON.stringify({ type: "event_msg", timestamp: "2026-10-21T18:00:00Z",
+        payload: { type: "task_complete", turn_id: "done" } }) + "\n");
+      sql(`insert into threads values ('${threadID}', '${rollout}', '/project', 'Missing database', ${updated}, 0, 'vscode')`);
+      class Environment extends LiveProviderEnvironment {
+        override async processes() { return []; }
+        override async codexSettingsCatalog() { return undefined; }
+      }
+      const environment = new Environment(home);
+      const repository = new SessionRepository([new CodexProvider(environment)]);
+      expect(await repository.refresh()).toMatchObject({
+        sessions: [expect.objectContaining({
+          id: threadID,
+          presence: expect.objectContaining({ state: "unknown", evidence: "catalog" }),
+        })],
+      });
+
+      rmSync(database);
+      expect(await repository.refresh()).toMatchObject({
+        sessions: [expect.objectContaining({
+          id: threadID,
+          presence: expect.objectContaining({ state: "unknown", evidence: "unavailable" }),
+        })],
+      });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("retains cached Codex rows as unavailable when a catalog page is malformed", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "visor-codex-malformed-catalog-"));
+    const database = path.join(home, ".codex/state_5.sqlite");
+    mkdirSync(path.dirname(database), { recursive: true });
+    const sql = (statement: string) => execFileSync("/usr/bin/sqlite3", [database, statement]);
+    const threadID = "malformed-catalog";
+    const rollout = path.join(home, `${threadID}.jsonl`);
+    try {
+      sql("create table threads (id text primary key, rollout_path text, cwd text, title text, updated_at integer, archived integer, source text)");
+      const updated = Date.parse("2026-10-21T18:00:00Z") / 1_000;
+      writeFileSync(rollout, JSON.stringify({ type: "event_msg", timestamp: "2026-10-21T18:00:00Z",
+        payload: { type: "task_complete", turn_id: "done" } }) + "\n");
+      sql(`insert into threads values ('${threadID}', '${rollout}', '/project', 'Malformed catalog', ${updated}, 0, 'vscode')`);
+      class Environment extends LiveProviderEnvironment {
+        malformed = false;
+        override async processes() { return []; }
+        override async codexSettingsCatalog() { return undefined; }
+        override async sqlite(file: string, query: string) {
+          if (this.malformed && query.includes("from threads")) {
+            return [{ id: threadID, rollout_path: rollout, updated_at: updated, archived: 0, source: "vscode" }];
+          }
+          return super.sqlite(file, query);
+        }
+      }
+      const environment = new Environment(home);
+      const repository = new SessionRepository([new CodexProvider(environment)]);
+      await repository.refresh();
+      environment.malformed = true;
+
+      expect(await repository.refresh()).toMatchObject({
+        sessions: [expect.objectContaining({
+          id: threadID,
+          presence: expect.objectContaining({ state: "unknown", evidence: "unavailable" }),
+        })],
+      });
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
