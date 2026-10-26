@@ -284,6 +284,8 @@ describe("Codex unarchived catalog", () => {
     class Environment extends LiveProviderEnvironment {
       fail = false;
 
+      override async processes() { return []; }
+      override async codexSettingsCatalog() { return undefined; }
       override async sqlite(file: string, query: string) {
         if (this.fail) throw new Error("temporary database failure");
         return super.sqlite(file, query);
