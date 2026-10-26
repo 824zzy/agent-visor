@@ -197,6 +197,81 @@ describe("menu presentation", () => {
     ));
   });
 
+  it("uses explicit presence for pill eligibility and unavailable details", () => {
+    const rows = [
+      {
+        ...snapshot.sessions[4]!,
+        id: "open-claude",
+        source: "Claude Code",
+        owner: "Ghostty",
+        section: "history" as const,
+        lifecycleStatus: "closed" as const,
+        presence: {
+          state: "open" as const,
+          evidence: "frontend" as const,
+          observedAt: "2026-08-22T10:00:00.000Z",
+        },
+        sessionState: {
+          conversation: "archived" as const,
+          turn: "ready" as const,
+          route: "available" as const,
+        },
+        ambientEligible: true,
+        updatedAt: "2026-08-22T21:00:00.000Z",
+      },
+      {
+        ...snapshot.sessions[0]!,
+        id: "closed-claude",
+        source: "Claude Code",
+        owner: "Ghostty",
+        section: "working" as const,
+        lifecycleStatus: "working" as const,
+        presence: {
+          state: "closed" as const,
+          evidence: "authoritative_inventory" as const,
+          observedAt: "2026-08-22T21:59:00.000Z",
+        },
+        sessionState: {
+          conversation: "open" as const,
+          turn: "working" as const,
+          route: "waiting" as const,
+        },
+        ambientEligible: true,
+      },
+      {
+        ...snapshot.sessions[0]!,
+        id: "unknown-claude",
+        source: "Claude Code",
+        owner: "Ghostty",
+        section: "history" as const,
+        presence: {
+          state: "unknown" as const,
+          evidence: "unavailable" as const,
+          observedAt: "2026-08-22T21:59:00.000Z",
+        },
+        sessionState: {
+          conversation: "unknown" as const,
+          turn: "ready" as const,
+          route: "unavailable" as const,
+        },
+        ambientEligible: false,
+      },
+    ] satisfies SessionSnapshot["sessions"];
+
+    const presentation = menuPresentation({ ...snapshot, sessions: rows }, []);
+    expect(presentation.pills.map(({ id }) => id)).toContain("open-claude");
+    expect(presentation.pills.map(({ id }) => id)).not.toContain("closed-claude");
+    expect(presentation.navigatorPills.find(({ id }) => id === "closed-claude")).toMatchObject({
+      lifecycleStatus: "closed",
+      inspector: { status: "Closed" },
+    });
+    expect(presentation.navigatorPills.find(({ id }) => id === "unknown-claude")).toMatchObject({
+      lifecycleStatus: "unavailable",
+      inspector: { status: "Status unavailable" },
+      accessibilityLabel: expect.stringContaining(", Status unavailable,"),
+    });
+  });
+
   it.each(["needs_you", "working", "ready", "history"] as const)(
     "keeps retained %s jobs searchable without pills or default overflow", (section) => {
       const catalog: SessionSnapshot = {

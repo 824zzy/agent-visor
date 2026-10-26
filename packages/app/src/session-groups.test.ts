@@ -283,4 +283,111 @@ describe("groupSessions", () => {
     expect(selection.groups.map(({ title }) => title)).toEqual(["Results"]);
     expect(selection.orderedSessions.map(({ id }) => id)).toEqual(["title", "metadata"]);
   });
+
+  it("uses explicit presence for placement instead of age or retained lifecycle labels", () => {
+    const open = {
+      ...session("open-old", "history", "2026-08-12T10:00:00.000Z"),
+      lifecycleStatus: "closed" as const,
+      presence: {
+        state: "open" as const,
+        evidence: "frontend" as const,
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: { conversation: "archived" as const, turn: "ready" as const, route: "available" as const },
+    };
+    const closed = {
+      ...session("closed-now", "working", "2026-08-22T09:59:00.000Z"),
+      lifecycleStatus: "working" as const,
+      presence: {
+        state: "closed" as const,
+        evidence: "authoritative_inventory" as const,
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: { conversation: "open" as const, turn: "working" as const, route: "waiting" as const },
+    };
+    const unavailable = {
+      ...session("unknown", "history", "2026-08-22T09:58:00.000Z"),
+      presence: {
+        state: "unknown" as const,
+        evidence: "unavailable" as const,
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: { conversation: "unknown" as const, turn: "ready" as const, route: "unavailable" as const },
+    };
+
+    expect(sessionPresentation(open)).toEqual({
+      section: "ready", title: "Ready", subtitle: "",
+    });
+    expect(sessionPresentation(closed)).toEqual({
+      section: "history", title: "History", subtitle: "",
+    });
+    expect(sessionPresentation(unavailable)).toEqual({
+      section: "unavailable", title: "Status unavailable", subtitle: "",
+      pillNotice: "Status unavailable: Agent Visor could not verify whether this conversation is open.",
+    });
+    expect(groupSessions([closed, open, unavailable]).map(({ id, title }) => ({ id, title }))).toEqual([
+      { id: "ready", title: "Ready" },
+      { id: "unavailable", title: "Status unavailable" },
+      { id: "history", title: "History" },
+    ]);
+  });
+
+  it("keeps a confirmed-open row under Current when its turn is unknown", () => {
+    const openUnknownTurn = {
+      ...session("open-unknown-turn", "history", "2026-08-22T09:58:00.000Z"),
+      presence: {
+        state: "open" as const,
+        evidence: "runtime" as const,
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: {
+        conversation: "open" as const,
+        turn: "unknown" as const,
+        route: "available" as const,
+      },
+    };
+
+    expect(sessionPresentation(openUnknownTurn)).toEqual({
+      section: "current_unknown", title: "", subtitle: "",
+    });
+    expect(sessionPresentation(openUnknownTurn)).not.toHaveProperty("pillNotice");
+    expect(groupSessions([openUnknownTurn])).toEqual([{
+      id: "current_unknown",
+      title: "",
+      sessions: [openUnknownTurn],
+      parent: "current",
+    }]);
+  });
+
+  it("keeps unconverted rows readable but unavailable in a mixed snapshot", () => {
+    const open = {
+      ...session("open", "working", "2026-08-22T10:00:00.000Z"),
+      presence: {
+        state: "open" as const,
+        evidence: "frontend" as const,
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: { conversation: "open" as const, turn: "working" as const, route: "waiting" as const },
+    };
+    const legacy = session("legacy", "ready", "2026-08-22T09:00:00.000Z");
+    const groups = groupSessions([legacy, open]);
+
+    expect(groups.map(({ id, title }) => ({ id, title }))).toEqual([
+      { id: "working", title: "In progress" },
+      { id: "unavailable", title: "Status unavailable" },
+    ]);
+    expect(groups[1]?.sessions[0]).toMatchObject({
+      id: "legacy",
+      presence: { state: "unknown", evidence: "unavailable" },
+    });
+    expect(sessionPresentation(groups[1]!.sessions[0]!)).toMatchObject({
+      section: "unavailable",
+      pillNotice: "Status unavailable: Agent Visor could not verify whether this conversation is open.",
+    });
+    const searched = selectSessions([legacy, open], "legacy");
+    expect(searched.groups[0]?.sessions[0]).toMatchObject({
+      id: "legacy",
+      presence: { state: "unknown", evidence: "unavailable" },
+    });
+  });
 });

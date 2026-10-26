@@ -246,6 +246,73 @@ function SessionBrowser({
   const primaryFooterAction = cursorSession ? sessionAction(cursorSession) : "owner";
   const alternateFooterAction = cursorSession ? sessionAction(cursorSession, true) : "chat";
   const shortcutEducation = sessionShortcutEducation(shortcutModifierFamily);
+  const currentCount = selection.groups
+    .filter(({ parent }) => parent === "current")
+    .reduce((total, group) => total + group.sessions.length, 0);
+  let currentHeaderRendered = false;
+  const renderedGroups = selection.groups.flatMap((group) => {
+    const parentHeader = group.parent === "current" && !currentHeaderRendered
+      ? [
+        <View accessibilityLabel="Current" key="header:current" style={browserStyles.sectionHeader}>
+          <Text style={browserStyles.sectionTitle}>Current</Text>
+          <Text style={browserStyles.count}>{currentCount}</Text>
+        </View>,
+      ] : [];
+    if (group.parent === "current") currentHeaderRendered = true;
+    return [
+      ...parentHeader,
+      ...(group.title ? [
+        <View key={`header:${group.id}`} style={browserStyles.sectionHeader}>
+          <Text style={browserStyles.sectionTitle}>{group.title}</Text>
+          <Text style={browserStyles.count}>{group.sessions.length}</Text>
+        </View>,
+      ] : []),
+      ...group.sessions.map((session) => (
+        <SessionRow
+          active={active}
+          commandHeld={commandHeld}
+          compact={compact}
+          cursor={session.id === cursorId}
+          hotkeyPosition={visibleIds.indexOf(session.id)}
+          key={`session:${session.id}`}
+          now={now}
+          onActivate={(alternate) => activateSession(session, alternate, onOpenChat)}
+          onOpenChat={() => onOpenChat(session)}
+          resumeState={resumeStates[session.id] ?? session.resumeState}
+          onResume={session.resumeState === "eligible" || session.resumeState === "uncertain"
+            || resumeStates[session.id] !== undefined
+            ? async () => {
+              setResumeStates((current) => ({ ...current, [session.id]: "reopening" }));
+              const result = await onResume(session);
+              if (result.ok) {
+                setResumeStates((current) => {
+                  const next = { ...current };
+                  delete next[session.id];
+                  return next;
+                });
+              } else {
+                setResumeStates((current) => ({
+                  ...current,
+                  [session.id]: result.state === "joined" ? "reopening" : "uncertain",
+                }));
+              }
+            }
+            : undefined}
+          onRemoveHistory={session.canRemoveHistory === true
+            ? () => onRemoveHistory(session.id)
+            : undefined}
+          onRepair={session.repairKind === "provider" || session.repairKind === "working_directory"
+            ? () => void beginRepair(session)
+            : undefined}
+          repairing={historyState.repairingSessionID === session.id}
+          removing={historyState.removingSessionID === session.id}
+          palette={palette}
+          session={session}
+          styles={browserStyles}
+        />
+      )),
+    ];
+  });
 
   const beginRepair = async (session: SessionSummary): Promise<void> => {
     if (session.repairKind === "working_directory") {
@@ -411,56 +478,7 @@ function SessionBrowser({
               <Text style={browserStyles.historyWarningText}>{historyState.repairError}</Text>
             </View>
           ) : null}
-          {selection.groups.flatMap((group) => [
-              <View key={`header:${group.id}`} style={browserStyles.sectionHeader}>
-                <Text style={browserStyles.sectionTitle}>{group.title}</Text>
-                <Text style={browserStyles.count}>{group.sessions.length}</Text>
-              </View>,
-              ...group.sessions.map((session) => (
-                <SessionRow
-                  active={active}
-                  commandHeld={commandHeld}
-                  compact={compact}
-                  cursor={session.id === cursorId}
-                  hotkeyPosition={visibleIds.indexOf(session.id)}
-                  key={`session:${session.id}`}
-                  now={now}
-                  onActivate={(alternate) => activateSession(session, alternate, onOpenChat)}
-                  onOpenChat={() => onOpenChat(session)}
-                  resumeState={resumeStates[session.id] ?? session.resumeState}
-                  onResume={session.resumeState === "eligible" || session.resumeState === "uncertain"
-                    || resumeStates[session.id] !== undefined
-                    ? async () => {
-                      setResumeStates((current) => ({ ...current, [session.id]: "reopening" }));
-                      const result = await onResume(session);
-                      if (result.ok) {
-                        setResumeStates((current) => {
-                          const next = { ...current };
-                          delete next[session.id];
-                          return next;
-                        });
-                      } else {
-                        setResumeStates((current) => ({
-                          ...current,
-                          [session.id]: result.state === "joined" ? "reopening" : "uncertain",
-                        }));
-                      }
-                    }
-                    : undefined}
-                  onRemoveHistory={session.canRemoveHistory === true
-                    ? () => onRemoveHistory(session.id)
-                    : undefined}
-                  onRepair={session.repairKind === "provider" || session.repairKind === "working_directory"
-                    ? () => void beginRepair(session)
-                    : undefined}
-                  repairing={historyState.repairingSessionID === session.id}
-                  removing={historyState.removingSessionID === session.id}
-                  palette={palette}
-                  session={session}
-                  styles={browserStyles}
-                />
-              )),
-          ])}
+          {renderedGroups}
           {!visibleIds.length ? <EmptyState query={query} styles={browserStyles} /> : null}
           {historyState.page?.nextCursor ? (
             <Pressable

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionSummary } from "./index.js";
-import { sessionLifecyclePresentation } from "./index.js";
+import { sessionLifecyclePresentation, sessionPresencePresentation } from "./index.js";
 
 const session = (overrides: Partial<SessionSummary> = {}): SessionSummary => ({
   id: "ready-session",
@@ -18,6 +18,41 @@ const session = (overrides: Partial<SessionSummary> = {}): SessionSummary => ({
 });
 
 describe("session lifecycle presentation", () => {
+  it("uses explicit runtime presence and independent turn evidence for grouping", () => {
+    expect(sessionPresencePresentation(session({
+      section: "history",
+      lifecycleStatus: "closed",
+      presence: {
+        state: "open",
+        evidence: "frontend",
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: { conversation: "archived", turn: "ready", route: "available" },
+    }))).toEqual({
+      group: "current",
+      subgroup: "ready",
+      status: "ready",
+      label: "Ready",
+      tone: "ready",
+    });
+  });
+
+  it("keeps confirmed open location separate from unknown turn status", () => {
+    expect(sessionPresencePresentation(session({
+      presence: {
+        state: "open",
+        evidence: "runtime",
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: { conversation: "open", turn: "unknown", route: "available" },
+    }))).toEqual({
+      group: "current",
+      status: "unavailable",
+      label: "Status unavailable",
+      tone: "neutral",
+    });
+  });
+
   it.each([
     ["working during compaction", "ready", "working", "Working", "working"],
     ["unanswered async question", "working", "needs_you", "Needs you", "attention"],
