@@ -1,7 +1,9 @@
 import os from "node:os";
 import {
-  TRANSCRIPT_STALE_CEILING_MS,
   sessionLifecyclePresentation,
+  sessionIsInactive,
+  sessionPresenceProjection,
+  sessionPresencePresentation,
   type NativeHelperUsageGlance,
   type SessionSnapshot,
 } from "@agent-visor/protocol";
@@ -105,7 +107,8 @@ export function menuPresentation(
 ) {
   // Bound both native surfaces without truncating the full Sessions catalog.
   const cutoff = now - 7 * 24 * 60 * 60 * 1_000;
-  const ordered = snapshot.sessions
+  const { sessions: presentedSessions } = sessionPresenceProjection(snapshot.sessions);
+  const ordered = presentedSessions
     .map((session) => menuSession(session, now))
     .filter((session) => Date.parse(session.updatedAt) >= cutoff)
     .filter((session) => session.canOpenOwner || session.canEnterChat)
@@ -145,11 +148,15 @@ function menuSession(
   now: number,
 ): MenuSession {
   const lifecycle = sessionLifecyclePresentation(session);
+  const currentAttention = session.attention?.evidence === "current"
+    && lifecycle.status !== "closed";
   const retainedReady = session.presence?.state === "closed"
     && session.sessionState?.turn === "ready";
+  if (currentAttention && session.attentionTier !== "needs_you") {
+    return { ...session, attentionTier: "needs_you" };
+  }
   if (session.completionUnseen || (lifecycle.status !== "ready" && !retainedReady)) return session;
-  const updatedAt = Date.parse(session.updatedAt);
-  if (!Number.isFinite(updatedAt) || now - updatedAt <= TRANSCRIPT_STALE_CEILING_MS) return session;
+  if (!sessionIsInactive(session, now)) return session;
   return {
     ...session,
     attentionTier: "history",
@@ -183,10 +190,22 @@ function presentationPill(
   const sourceLabel = session.source === "Codex" && session.owner.startsWith("Codex ·")
     ? session.owner : session.source;
   const lifecycle = sessionLifecyclePresentation(session);
+  const presence = sessionPresencePresentation(session);
+  const detailRows = [
+    ...(session.sourceProfile ? [{ label: "Profile", value: session.sourceProfile }] : []),
+    ...(presence.group === "unavailable"
+      ? [{ label: "Presence", value: "Status unavailable" }]
+      : []),
+    ...(presence.attention?.evidence === "last_known"
+      ? [{ label: "Attention", value: presence.attention.label }]
+      : []),
+  ];
+  const subtitle = session.completionUnseen && session.section === "history"
+    ? "Unopened" : session.subtitle;
   return {
     id: session.id,
     title,
-    subtitle: session.subtitle,
+    subtitle,
     source: sourceLabel,
     project: session.project,
     ...(session.canOpenOwner ? { owner: session.owner } : {}),
@@ -198,7 +217,7 @@ function presentationPill(
     inspector: {
       status: lifecycle.label,
       runtimeItems: [runtimeSource(session.source, session.owner)],
-      detailRows: session.sourceProfile ? [{ label: "Profile", value: session.sourceProfile }] : [],
+      detailRows,
       projectPath: displayPath(session.cwd),
       activityAt: session.updatedAt,
     },
@@ -209,6 +228,9 @@ function presentationPill(
       title,
       lifecycle.label,
       ...(session.inactive ? ["Inactive"] : []),
+      ...(presence.group === "unavailable" ? ["Status unavailable"] : []),
+      ...(presence.attention?.evidence === "last_known" ? [presence.attention.label] : []),
+      ...(session.completionUnseen && session.section === "history" ? ["Unopened"] : []),
       sourceLabel,
       session.project,
       ...(session.managedBy ? [`Managed by ${session.managedBy}`] : []),

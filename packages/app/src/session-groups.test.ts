@@ -194,7 +194,7 @@ describe("groupSessions", () => {
     ).toEqual(["In progress"]);
   });
 
-  it("keeps one Ready group ordered by recent activity across seen and unseen completions", () => {
+  it("keeps one Ready group ordered by unopened, then reviewed activity", () => {
     const freshReady = {
       ...session("fresh-ready", "ready", "2026-08-22T10:00:00.000Z"),
       attentionTier: "ready" as const,
@@ -216,7 +216,7 @@ describe("groupSessions", () => {
       id,
       sessions: rows.map(({ id }) => id),
     }))).toEqual([
-      { id: "ready", sessions: ["acknowledged-ready", "older-seen", "fresh-ready", "older-unseen"] },
+      { id: "ready", sessions: ["fresh-ready", "older-unseen", "acknowledged-ready", "older-seen"] },
       { id: "working", sessions: ["working"] },
     ]);
     expect(groups.map(({ title }) => title)).toEqual(["Ready to continue", "In progress"]);
@@ -229,6 +229,27 @@ describe("groupSessions", () => {
     }]);
     expect(groups.map(({ id, title }) => ({ id, title })))
       .toEqual([{ id: "ready", title: "Ready to continue" }]);
+  });
+
+  it("ranks unopened Ready results before reviewed recent and inactive rows", () => {
+    const unopened = {
+      ...session("unopened", "ready", "2026-08-22T09:00:00.000Z"),
+      attentionTier: "ready" as const,
+      completionUnseen: true,
+    };
+    const reviewedRecent = {
+      ...session("reviewed-recent", "ready", "2026-08-22T09:59:00.000Z"),
+      attentionTier: "acknowledged_ready" as const,
+    };
+    const reviewedInactive = {
+      ...session("reviewed-inactive", "ready", "2026-08-22T09:29:59.999Z"),
+      attentionTier: "acknowledged_ready" as const,
+    };
+
+    const groups = groupSessions([reviewedInactive, reviewedRecent, unopened]);
+    expect(groups[0]?.sessions.map(({ id }) => id)).toEqual([
+      "unopened", "reviewed-recent", "reviewed-inactive",
+    ]);
   });
 
   it("preserves a Ready automation's History attention placement", () => {

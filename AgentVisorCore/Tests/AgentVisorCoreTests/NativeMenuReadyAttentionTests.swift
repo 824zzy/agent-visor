@@ -223,6 +223,28 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
         )
     }
 
+    func testUnavailableUnopenedCompletionRetainsAttentionButClosedHistoryDoesNot() {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000)
+        let unavailable = pill(
+            .history, attentionTier: .ready, activityAt: now,
+            completionUnseen: true, lifecycleStatus: .unavailable
+        )
+        let closed = pill(
+            .history, attentionTier: .ready, activityAt: now,
+            completionUnseen: true, lifecycleStatus: .closed
+        )
+        var attention = NativeMenuReadyAttention()
+
+        attention.present(previousPhases: [:], pills: [unavailable], now: now)
+        XCTAssertTrue(attention.isUnopened(unavailable))
+        XCTAssertEqual(attention.statusStaleness(pill: unavailable, now: now), 0)
+        XCTAssertTrue(attention.hasActivePulse(pills: [unavailable], now: now))
+        XCTAssertEqual(attention.backgroundPulse(for: unavailable, now: now), 0.30, accuracy: 0.001)
+
+        attention.present(previousPhases: [:], pills: [closed], now: now)
+        XCTAssertFalse(attention.isUnopened(closed))
+    }
+
     func testNewUnopenedCompletionPulsesEvenWhenWorkingWasNotObserved() {
         let changedAt = Date(timeIntervalSinceReferenceDate: 1_000)
         let oldHistory = pill(.ready, attentionTier: .history)
@@ -282,7 +304,8 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
         _ phase: NativeHelperPillPhase,
         attentionTier: NativeHelperSessionAttentionTier? = nil,
         activityAt: Date? = nil,
-        completionUnseen: Bool? = nil
+        completionUnseen: Bool? = nil,
+        lifecycleStatus: NativeHelperLifecycleStatus? = nil
     ) -> NativeHelperPill {
         NativeHelperPill(
             id: "session",
@@ -298,6 +321,7 @@ final class NativeMenuReadyAttentionTests: XCTestCase {
                 )
             },
             phase: phase,
+            lifecycleStatus: lifecycleStatus,
             attentionTier: attentionTier,
             completionUnseen: completionUnseen,
             priority: 0,

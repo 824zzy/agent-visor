@@ -272,6 +272,37 @@ describe("menu presentation", () => {
     });
   });
 
+  it("keeps an unconverted row unavailable across menu presentation in a mixed snapshot", () => {
+    const open = {
+      ...snapshot.sessions[0]!,
+      id: "explicit-open",
+      presence: {
+        state: "open" as const,
+        evidence: "frontend" as const,
+        observedAt: "2026-08-22T21:59:00.000Z",
+      },
+      sessionState: {
+        conversation: "open" as const,
+        turn: "working" as const,
+        route: "waiting" as const,
+      },
+    };
+    const legacy = {
+      ...snapshot.sessions[4]!,
+      id: "legacy-ready",
+      lifecycleStatus: "ready" as const,
+      attentionTier: "acknowledged_ready" as const,
+      presence: undefined,
+    };
+
+    const presentation = menuPresentation({ ...snapshot, sessions: [open, legacy] }, []);
+    expect(presentation.navigatorPills.find(({ id }) => id === "legacy-ready")).toMatchObject({
+      lifecycleStatus: "unavailable",
+      inspector: { status: "Status unavailable" },
+      accessibilityLabel: expect.stringContaining(", Status unavailable,"),
+    });
+  });
+
   it.each(["needs_you", "working", "ready", "history"] as const)(
     "keeps retained %s jobs searchable without pills or default overflow", (section) => {
       const catalog: SessionSnapshot = {

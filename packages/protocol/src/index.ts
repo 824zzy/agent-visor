@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRANSCRIPT_STALE_CEILING_MS } from "./transcript-phase.js";
 
 export const PROTOCOL_VERSION = 1 as const;
 
@@ -89,6 +90,13 @@ export const sessionPresenceEvidenceSchema = z.enum([
 export const sessionPresenceSchema = z.object({
   state: sessionPresenceStateSchema,
   evidence: sessionPresenceEvidenceSchema,
+  observedAt: z.iso.datetime(),
+}).strict();
+
+/** Independent unanswered input evidence; it does not change presence. */
+export const sessionAttentionSchema = z.object({
+  kind: z.enum(["question", "permission"]),
+  evidence: z.enum(["current", "last_known"]),
   observedAt: z.iso.datetime(),
 }).strict();
 
@@ -188,6 +196,8 @@ export const sessionSummarySchema = z.object({
   lifecycleStatus: sessionLifecycleStatusSchema.optional(),
   /** Verified runtime/frontend presence, separate from provider record lifetime. */
   presence: sessionPresenceSchema.optional(),
+  /** Current or last-known unanswered input, independent from presence and turn. */
+  attention: sessionAttentionSchema.optional(),
   sessionClass: sessionClassSchema.optional(),
   /** Provider-confirmed ambient presence; false keeps resumable rows searchable only. */
   ambientEligible: z.boolean().optional(),
@@ -1606,11 +1616,66 @@ export type SessionLifecycleTone = z.infer<typeof sessionLifecycleToneSchema>;
 export type SessionPresence = z.infer<typeof sessionPresenceSchema>;
 export type SessionPresenceState = z.infer<typeof sessionPresenceStateSchema>;
 export type SessionPresenceEvidence = z.infer<typeof sessionPresenceEvidenceSchema>;
+export type SessionAttention = z.infer<typeof sessionAttentionSchema>;
+export type SessionAttentionPresentation = {
+  kind: SessionAttention["kind"];
+  evidence: SessionAttention["evidence"];
+  label: string;
+  tone: SessionLifecycleTone;
+};
 export type SessionLifecyclePresentation = {
   status: SessionLifecycleStatus;
   label: string;
   tone: SessionLifecycleTone;
+  attention?: SessionAttentionPresentation;
 };
+
+export type SessionPresenceProjection = {
+  hasExplicitPresence: boolean;
+  sessions: SessionSummary[];
+};
+
+/**
+ * Keep a mixed snapshot truthful at presentation boundaries while adapters
+ * migrate to explicit presence. A snapshot with no presence remains legacy;
+ * once any row is explicit, an unconverted row is unavailable rather than
+ * inheriting a possibly stale lifecycle section.
+ */
+export function sessionPresenceProjection(
+  sessions: readonly SessionSummary[],
+): SessionPresenceProjection {
+  const hasExplicitPresence = sessions.some(({ presence }) => presence !== undefined);
+  return {
+    hasExplicitPresence,
+    sessions: hasExplicitPresence
+      ? sessions.map((session) => session.presence ? session : {
+        ...session,
+        presence: {
+          state: "unknown" as const,
+          evidence: "unavailable" as const,
+          observedAt: session.updatedAt,
+        },
+      })
+      : [...sessions],
+  };
+}
+
+/**
+ * A reviewed Ready conversation becomes inactive only after the shared
+ * semantic inactivity ceiling. Placement and unopened completion attention
+ * remain independent from this presentation-only tone change.
+ */
+export function sessionIsInactive(
+  session: Pick<SessionSummary, "section" | "sessionState" | "lifecycleStatus" | "presence" | "completionUnseen" | "updatedAt">,
+  now: Date | number = Date.now(),
+): boolean {
+  if (session.completionUnseen === true
+    || sessionLifecyclePresentation(session).status !== "ready") return false;
+  const activityAt = Date.parse(session.updatedAt);
+  const nowMs = typeof now === "number" ? now : now.valueOf();
+  return Number.isFinite(activityAt) && Number.isFinite(nowMs)
+    && nowMs - activityAt > TRANSCRIPT_STALE_CEILING_MS;
+}
 
 /**
  * Resolve lifecycle meaning once for every presentation surface.
@@ -1620,59 +1685,83 @@ export type SessionLifecyclePresentation = {
  * when an older completion is placed in History.
  */
 export function sessionLifecyclePresentation(
-  session: Pick<SessionSummary, "section" | "sessionState" | "lifecycleStatus" | "presence">,
+  session: Pick<SessionSummary, "section" | "sessionState" | "lifecycleStatus" | "presence" | "attention">,
 ): SessionLifecyclePresentation {
+  const attention = sessionAttentionPresentation(session.attention);
+  const hasLastKnownAttention = attention?.evidence === "last_known";
+  const withAttention = (
+    presentation: SessionLifecyclePresentation,
+  ): SessionLifecyclePresentation => attention ? { ...presentation, attention } : presentation;
   // Presence is authoritative for placement, but turn evidence remains an
   // independent status. A temporary unavailable read must not erase a known
   // turn from the retained record; callers use the neutral unavailable status
   // here while keeping the underlying turn in sessionState.
   if (session.presence) {
     if (session.presence.state === "unknown") {
-      return lifecycle("unavailable", "Status unavailable", "neutral");
+      return withAttention(attention?.evidence === "current"
+        ? lifecycle("needs_you", "Needs you", "attention")
+        : lifecycle("unavailable", "Status unavailable", "neutral"));
     }
     if (session.presence.state === "closed") {
       // A stale turn cannot make a confirmed closed conversation look live.
       // History may still retain that turn as last-known attention context.
-      return lifecycle("closed", "Closed", "neutral");
+      return withAttention(lifecycle("closed", "Closed", "neutral"));
     }
     const turn = session.sessionState?.turn;
-    if (turn === "needs_you") return lifecycle("needs_you", "Needs you", "attention");
-    if (turn === "working") return lifecycle("working", "Working", "working");
-    if (turn === "ready") return lifecycle("ready", "Ready", "ready");
+    if (attention?.evidence === "current") {
+      return withAttention(lifecycle("needs_you", "Needs you", "attention"));
+    }
+    if (turn === "needs_you" && !hasLastKnownAttention) {
+      return withAttention(lifecycle("needs_you", "Needs you", "attention"));
+    }
+    if (turn === "working") return withAttention(lifecycle("working", "Working", "working"));
+    if (turn === "ready") return withAttention(lifecycle("ready", "Ready", "ready"));
     // A migrated provider may have explicit presence before it has supplied
     // turn evidence. Do not manufacture Working or Ready from presence.
-    return lifecycle("unavailable", "Status unavailable", "neutral");
+    return withAttention(lifecycle("unavailable", "Status unavailable", "neutral"));
+  }
+
+  if (attention?.evidence === "current") {
+    return withAttention(lifecycle("needs_you", "Needs you", "attention"));
   }
 
   if (session.lifecycleStatus) {
     switch (session.lifecycleStatus) {
-      case "needs_you": return lifecycle("needs_you", "Needs you", "attention");
-      case "ready": return lifecycle("ready", "Ready", "ready");
-      case "working": return lifecycle("working", "Working", "working");
-      case "closed": return lifecycle("closed", "Closed", "neutral");
-      case "unavailable": return lifecycle("unavailable", "Status unavailable", "neutral");
-      case "historical": return lifecycle("historical", "Historical", "neutral");
+      case "needs_you":
+        return withAttention(hasLastKnownAttention
+          ? lifecycle("unavailable", "Status unavailable", "neutral")
+          : lifecycle("needs_you", "Needs you", "attention"));
+      case "ready": return withAttention(lifecycle("ready", "Ready", "ready"));
+      case "working": return withAttention(lifecycle("working", "Working", "working"));
+      case "closed": return withAttention(lifecycle("closed", "Closed", "neutral"));
+      case "unavailable": return withAttention(lifecycle("unavailable", "Status unavailable", "neutral"));
+      case "historical": return withAttention(lifecycle("historical", "Historical", "neutral"));
     }
   }
 
   const state = session.sessionState;
   if (state) {
-    if (state.conversation === "archived") return lifecycle("closed", "Closed", "neutral");
-    if (state.turn === "needs_you") return lifecycle("needs_you", "Needs you", "attention");
-    if (state.turn === "working") return lifecycle("working", "Working", "working");
+    if (state.conversation === "archived") return withAttention(lifecycle("closed", "Closed", "neutral"));
+    if (state.turn === "needs_you" && !hasLastKnownAttention) {
+      return withAttention(lifecycle("needs_you", "Needs you", "attention"));
+    }
+    if (state.turn === "working") return withAttention(lifecycle("working", "Working", "working"));
     if (state.conversation === "open" && state.turn === "ready") {
-      return lifecycle("ready", "Ready", "ready");
+      return withAttention(lifecycle("ready", "Ready", "ready"));
     }
     if (state.conversation === "unknown" || state.turn === "unknown") {
-      return lifecycle("unavailable", "Status unavailable", "neutral");
+      return withAttention(lifecycle("unavailable", "Status unavailable", "neutral"));
     }
   }
 
   switch (session.section) {
-    case "needs_you": return lifecycle("needs_you", "Needs you", "attention");
-    case "working": return lifecycle("working", "Working", "working");
-    case "ready": return lifecycle("ready", "Ready", "ready");
-    case "history": return lifecycle("historical", "Historical", "neutral");
+    case "needs_you":
+      return withAttention(hasLastKnownAttention
+        ? lifecycle("unavailable", "Status unavailable", "neutral")
+        : lifecycle("needs_you", "Needs you", "attention"));
+    case "working": return withAttention(lifecycle("working", "Working", "working"));
+    case "ready": return withAttention(lifecycle("ready", "Ready", "ready"));
+    case "history": return withAttention(lifecycle("historical", "Historical", "neutral"));
   }
 }
 
@@ -1684,6 +1773,7 @@ export type SessionPresencePresentation = {
   status: SessionLifecycleStatus;
   label: string;
   tone: SessionLifecycleTone;
+  attention?: SessionAttentionPresentation;
 };
 
 /**
@@ -1692,13 +1782,15 @@ export type SessionPresencePresentation = {
  * section/lifecycle projection until their adapter is migrated.
  */
 export function sessionPresencePresentation(
-  session: Pick<SessionSummary, "section" | "sessionState" | "lifecycleStatus" | "presence">,
+  session: Pick<SessionSummary, "section" | "sessionState" | "lifecycleStatus" | "presence" | "attention">,
 ): SessionPresencePresentation {
   const lifecycle = sessionLifecyclePresentation(session);
   const turn = session.sessionState?.turn;
   const subgroup: SessionPresenceSubgroup | undefined = session.presence?.state === "closed"
-    ? undefined : turn === "needs_you"
-    || turn === "working" || turn === "ready" ? turn
+    ? undefined : lifecycle.attention?.evidence === "current"
+      ? "needs_you" : turn === "needs_you"
+    && lifecycle.attention?.evidence !== "last_known" ? "needs_you"
+    : turn === "working" || turn === "ready" ? turn
     : lifecycle.status === "needs_you" || lifecycle.status === "working" || lifecycle.status === "ready"
       ? lifecycle.status : undefined;
 
@@ -1710,6 +1802,7 @@ export function sessionPresencePresentation(
         status: lifecycle.status,
         label: lifecycle.label,
         tone: lifecycle.tone,
+        ...(lifecycle.attention ? { attention: lifecycle.attention } : {}),
       };
     case "closed":
       return {
@@ -1717,14 +1810,16 @@ export function sessionPresencePresentation(
         status: lifecycle.status,
         label: lifecycle.label,
         tone: lifecycle.tone,
+        ...(lifecycle.attention ? { attention: lifecycle.attention } : {}),
       };
     case "unknown":
       return {
         group: "unavailable",
         ...(subgroup ? { subgroup } : {}),
-        status: "unavailable",
-        label: "Status unavailable",
-        tone: "neutral",
+        status: lifecycle.status,
+        label: lifecycle.label,
+        tone: lifecycle.tone,
+        ...(lifecycle.attention ? { attention: lifecycle.attention } : {}),
       };
     default:
       return {
@@ -1735,8 +1830,22 @@ export function sessionPresencePresentation(
         status: lifecycle.status,
         label: lifecycle.label,
         tone: lifecycle.tone,
+        ...(lifecycle.attention ? { attention: lifecycle.attention } : {}),
       };
   }
+}
+
+function sessionAttentionPresentation(
+  attention: SessionAttention | undefined,
+): SessionAttentionPresentation | undefined {
+  if (!attention) return undefined;
+  const current = attention.evidence === "current";
+  return {
+    kind: attention.kind,
+    evidence: attention.evidence,
+    label: current ? "Needs you" : "Last known: Needs you",
+    tone: current ? "attention" : "neutral",
+  };
 }
 
 function lifecycle(

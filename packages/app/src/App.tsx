@@ -576,7 +576,11 @@ function SessionRow({
   const presentation = sessionPresentation(session, now);
   const lifecycle = sessionLifecyclePresentation(session);
   const statusLabel = lifecycle.label;
-  const statusColor = lifecycleColor(lifecycle.tone, palette);
+  const statusColor = presentation.inactive ? palette.history : lifecycleColor(lifecycle.tone, palette);
+  const presentationNotice = [
+    ...(presentation.inactive ? ["Inactive"] : []),
+    ...(presentation.pillNotice ? [presentation.pillNotice] : []),
+  ].join(" · ");
   const logo = agentImage(session.source);
   const sourceLabel = session.source === "Codex" && session.owner.startsWith("Codex ·")
     ? session.owner : session.source;
@@ -585,7 +589,7 @@ function SessionRow({
     <View nativeID={rowId(session.id)} style={rowStyles.row}>
       <View style={rowStyles.rowMain}>
         <Pressable
-          accessibilityLabel={`${session.title}, ${statusLabel}, ${sourceLabel}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}${presentation.pillNotice ? `, ${presentation.pillNotice}` : ""}`}
+          accessibilityLabel={`${session.title}, ${statusLabel}${presentation.inactive ? ", Inactive" : ""}, ${sourceLabel}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}${presentationNotice ? `, ${presentationNotice}` : ""}`}
           accessibilityRole="button"
           accessibilityState={{ selected: cursor }}
           disabled={!primary}
@@ -612,7 +616,7 @@ function SessionRow({
               {!compact ? <Chip label={session.project} styles={rowStyles} /> : null}
             </View>
             <Text numberOfLines={1} style={rowStyles.subtitle}>{presentation.subtitle || session.cwd}</Text>
-            {presentation.pillNotice ? <Text style={rowStyles.pillNotice}>{presentation.pillNotice}</Text> : null}
+            {presentationNotice ? <Text style={rowStyles.pillNotice}>{presentationNotice}</Text> : null}
           </View>
           <Text style={rowStyles.age}>{relativeSessionAge(session.updatedAt, now)}</Text>
           <View style={rowStyles.hotkeySlot}>
