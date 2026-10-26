@@ -1,9 +1,15 @@
-import { transcriptPhase, type HistoryRepairSelection, type NativeHelperTerminalTarget } from "@agent-visor/protocol";
+import {
+  transcriptPhase,
+  type HistoryRepairSelection,
+  type NativeHelperTerminalTarget,
+  type SessionPresence,
+} from "@agent-visor/protocol";
 import path from "node:path";
 import type {
   DiscoveredProviderSession,
   HookSessionEvent,
   ProviderAdapter,
+  ProviderDiscoveryAuthority,
   RetainedHistoryLifetime,
   RetainedHistoryOriginLookup,
 } from "../sessions.js";
@@ -105,6 +111,10 @@ export class CodexProvider implements ProviderAdapter {
       return undefined;
     }
     return this.discover(inventory.processes);
+  }
+
+  discoveryAuthority(): ProviderDiscoveryAuthority {
+    return this.lastDiscoveryAuthority;
   }
 
   resumeLiveness(record: RetainedHistoryRecord): Promise<ResumeLiveness> {
@@ -323,31 +333,44 @@ export class CodexProvider implements ProviderAdapter {
         const database = await codexDatabase(this.environment, instance.path);
         if (!database) {
           authority = "unavailable";
-          this.lastSessionsByInstance.delete(instance.id);
-          continue;
+          found = this.lastSessionsByInstance.get(instance.id) ?? [];
+          retained.push(...found.map((session) => session.id));
+        } else {
+          const candidates: CodexRow[] = [];
+          for (let offset = 0; ; offset += catalogPageSize) {
+            const page = await this.environment.sqlite(database, threadsSQL(offset, automationCutoff));
+            const parsed = parseRows(page);
+            if (!parsed.complete) throw new Error("Incomplete provider database response");
+            candidates.push(...parsed.rows.filter((thread) => !thread.archived));
+            if (page.length < catalogPageSize) break;
+          }
+          const bindings = await this.cliBindings(instance, processes);
+          const candidateIDs = new Set(candidates.map((thread) => thread.id));
+          const liveBindingOmitted = [...bindings.entries()].some(([id, values]) =>
+            values.some(binding => binding.observed === true && binding.proven === true)
+              && !candidateIDs.has(id));
+          if (liveBindingOmitted) {
+            authority = "unavailable";
+            found = this.lastSessionsByInstance.get(instance.id) ?? [];
+            retained.push(...found.map((session) => session.id));
+          } else {
+            retained.push(...candidates.map((thread) => codexSessionID(instance.id, thread.id)));
+            this.transcriptReader.retain(retained);
+            const indexTitles = await codexIndexTitles(this.environment, instance.path);
+            const cache = this.modelCatalogCache.get(instance.id) ?? {};
+            this.modelCatalogCache.set(instance.id, cache);
+            const modelCatalog = await codexModelCatalog(this.environment, instance.path, cache);
+            for (const thread of candidates) {
+              if (!["vscode", "cli", "exec"].includes(thread.source)) continue;
+              if (thread.cwd.includes(".claude-mem") || thread.cwd.includes("observer-sessions")) continue;
+              const rollout = await this.environment.stamp(thread.rolloutPath);
+              if (!rollout) continue;
+              if (thread.source === "exec" && thread.updatedAt < automationCutoff) continue;
+              found.push(await this.boundSession(instance, thread, indexTitles, modelCatalog, bindings));
+            }
+            this.lastSessionsByInstance.set(instance.id, found);
+          }
         }
-        const candidates: CodexRow[] = [];
-        for (let offset = 0; ; offset += catalogPageSize) {
-          const page = await this.environment.sqlite(database, threadsSQL(offset, automationCutoff));
-          candidates.push(...rows(page).filter((thread) => !thread.archived));
-          if (page.length < catalogPageSize) break;
-        }
-        retained.push(...candidates.map((thread) => codexSessionID(instance.id, thread.id)));
-        this.transcriptReader.retain(retained);
-        const indexTitles = await codexIndexTitles(this.environment, instance.path);
-        const cache = this.modelCatalogCache.get(instance.id) ?? {};
-        this.modelCatalogCache.set(instance.id, cache);
-        const modelCatalog = await codexModelCatalog(this.environment, instance.path, cache);
-        const bindings = await this.cliBindings(instance, processes);
-        for (const thread of candidates) {
-          if (!["vscode", "cli", "exec"].includes(thread.source)) continue;
-          if (thread.cwd.includes(".claude-mem") || thread.cwd.includes("observer-sessions")) continue;
-          const rollout = await this.environment.stamp(thread.rolloutPath);
-          if (!rollout) continue;
-          if (thread.source === "exec" && thread.updatedAt < automationCutoff) continue;
-          found.push(await this.boundSession(instance, thread, indexTitles, modelCatalog, bindings));
-        }
-        this.lastSessionsByInstance.set(instance.id, found);
       } catch {
         authority = "unavailable";
         // One unreadable home must not hide the others. Keep its last good
@@ -423,6 +446,9 @@ export class CodexProvider implements ProviderAdapter {
     resume?: RetainedHistoryResumeCapability,
   ): Promise<DiscoveredProviderSession> {
     const sessionID = codexSessionID(instance.id, thread.id);
+    const presence: SessionPresence = cliObserved && cliProven
+      ? { state: "open", evidence: "frontend", observedAt: this.environment.now().toISOString() }
+      : { state: "unknown", evidence: "catalog", observedAt: this.environment.now().toISOString() };
     // Keep the public native UUID separate from the durable home-qualified
     // identity. Custom homes already carry their hash in `sessionID`; native
     // history retains the explicit `native` home discriminator for old rows.
@@ -506,6 +532,7 @@ export class CodexProvider implements ProviderAdapter {
         : codexLifecycle?.observedAt ?? iso(thread.updatedAt * 1_000),
       ...(codexLifecycle ? { codexLifecycle } : {}),
       conversationState: thread.archived ? "archived" : "open",
+      presence,
       ...(codexLifecycle ? { turnState: section === "needs_you" ? "needs_you" as const : codexLifecycle.phase === "working" ? "working" as const : "ready" as const } : {}),
       ...(codexLifecycle?.turnId ? { turnId: codexLifecycle.turnId } : {}),
       ...(rolloutStamp
@@ -524,7 +551,8 @@ export class CodexProvider implements ProviderAdapter {
         : {}),
       ...(modelCatalog ? { modelCatalog } : {}),
       ...(controlTarget ? { controlTarget } : {}),
-      ...(sessionClass === "terminal" && !controlTarget ? { ambientEligible: false } : {}),
+      ...(presence.state === "unknown" || (sessionClass === "terminal" && !controlTarget)
+        ? { ambientEligible: false } : {}),
       ...(provenCli ? {
         historyIdentity: {
           verified: true,
@@ -580,24 +608,36 @@ async function codexDatabase(environment: ProviderEnvironment, home: string): Pr
   return best?.path;
 }
 
+function parseRows(values: unknown[]): { rows: CodexRow[]; complete: boolean } {
+  const parsed = values.map(parseRow);
+  return {
+    rows: parsed.flatMap((row) => row ? [row] : []),
+    complete: parsed.every((row) => row !== undefined),
+  };
+}
+
 function rows(values: unknown[]): CodexRow[] {
-  return values.flatMap((value) => {
-    if (!isRecord(value)) return [];
-    const id = string(value.id);
-    const rolloutPath = string(value.rollout_path);
-    const cwd = string(value.cwd);
-    const updatedAt = number(value.updated_at);
-    if (!id || !rolloutPath || !cwd || updatedAt === undefined) return [];
-    return [{
-      id,
-      rolloutPath,
-      cwd,
-      title: string(value.title),
-      updatedAt,
-      archived: number(value.archived) === 1,
-      source: string(value.source),
-    }];
-  });
+  return parseRows(values).rows;
+}
+
+function parseRow(value: unknown): CodexRow | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = string(value.id);
+  const rolloutPath = string(value.rollout_path);
+  const cwd = string(value.cwd);
+  const updatedAt = number(value.updated_at);
+  const archived = number(value.archived);
+  const source = string(value.source);
+  if (!id || !rolloutPath || !cwd || updatedAt === undefined || archived === undefined || !source) return undefined;
+  return {
+    id,
+    rolloutPath,
+    cwd,
+    title: string(value.title),
+    updatedAt,
+    archived: archived === 1,
+    source,
+  };
 }
 
 async function codexModelCatalog(
