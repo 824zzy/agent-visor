@@ -414,6 +414,29 @@ describe("groupSessions", () => {
     expect(sessionAction(unavailable, true)).toBe("chat");
   });
 
+  it("keeps a retained-only unavailable row out of History and exposes Retry", () => {
+    const retained = {
+      ...session("retained-unavailable", "history", "2026-08-22T09:58:00.000Z"),
+      subtitle: "Terminal state unavailable",
+      presence: {
+        state: "unknown" as const,
+        evidence: "unavailable" as const,
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      lifecycleStatus: "unavailable" as const,
+      sessionState: {
+        conversation: "unknown" as const,
+        turn: "unknown" as const,
+        route: "unavailable" as const,
+      },
+      canOpenOwner: false,
+      canEnterChat: false,
+    };
+
+    expect(selectSessions([retained], "").groups.map(({ id }) => id)).toEqual(["unavailable"]);
+    expect(sessionAction(retained)).toBe("retry");
+  });
+
   it("keeps a confirmed-open row under Current when its turn is unknown", () => {
     const openUnknownTurn = {
       ...session("open-unknown-turn", "history", "2026-08-22T09:58:00.000Z"),

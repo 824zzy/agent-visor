@@ -98,6 +98,22 @@ describe("session history controller", () => {
     controller.close();
   });
 
+  it("refreshes retained History after a successful detection retry", () => {
+    const fake = fakeConnection();
+    const controller = createSessionHistoryController(() => undefined, fake.connect);
+    fake.open();
+    fake.message(page(["unavailable"]));
+
+    controller.refresh();
+
+    expect(fake.sent).toHaveLength(2);
+    expect(JSON.parse(fake.sent[1]!)).toMatchObject({
+      type: "get_session_history",
+      limit: 100,
+    });
+    controller.close();
+  });
+
   it("removes a retained row and refreshes only after the daemon confirms success", () => {
     const fake = fakeConnection();
     const states: Array<{ removingSessionID?: string; removeError?: string }> = [];

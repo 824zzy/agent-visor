@@ -3083,14 +3083,22 @@ export class SessionRepository {
       // record readable, but mark every action route unavailable until the
       // provider confirms the conversation again.
       let record = fallback;
+      let hasAmbientEvidence = false;
       if (fallbackProvider?.resolve) {
         record = markResolutionUnavailable(fallback);
       } else if (fallback.provider === "claude_code") {
         const discovered = this.lastByProvider.get(fallback.provider)
           ?.find((session) => session.id === sessionId);
-        if (discovered) record = applyHooks([discovered], this.hookBySession)[0] ?? discovered;
+        if (discovered) {
+          // Claude's ordinary Chat observer does not expose a generic
+          // resolver. The last provider snapshot is still affirmative
+          // frontend/runtime evidence; do not turn it into Status unavailable
+          // merely because Chat was opened.
+          record = applyHooks([discovered], this.hookBySession)[0] ?? discovered;
+          hasAmbientEvidence = record.presence?.state === "open";
+        }
       }
-      record = presenceUnavailable(record, this.now().toISOString());
+      if (!hasAmbientEvidence) record = presenceUnavailable(record, this.now().toISOString());
       const copy = structuredClone(record);
       this.rememberOpenedSession(copy);
       this.chatBySession.set(sessionId, copy);
@@ -3209,7 +3217,20 @@ export class SessionRepository {
   async retryDetection(sessionId: string): Promise<string | undefined> {
     const session = sessionPresenceProjection(this.snapshotValue.sessions).sessions
       .find(({ id }) => id === sessionId);
-    if (!session || session.presence?.state !== "unknown") {
+    if (!session) {
+      // A provider outage can leave a previously verified open record only in
+      // retained History. The Sessions renderer projects that exact row to
+      // unavailable and offers Retry; accept it here without inventing a
+      // route or treating a closed/authoritative History record as live.
+      const retained = this.retainedHistory?.get(sessionId);
+      if (!retained || retained.closedAt !== undefined
+        || !this.providerInventoryUnavailable.has(retained.provider)) {
+        return "Detection retry is only available while this session's status is unavailable.";
+      }
+      await this.refresh();
+      return undefined;
+    }
+    if (session.presence?.state !== "unknown") {
       return "Detection retry is only available while this session's status is unavailable.";
     }
     await this.refresh();
@@ -3679,7 +3700,13 @@ export class SessionRepository {
       && owner.nativeSessionAlias.id.toLowerCase() === session.id.toLowerCase()
       && owner.cwd === session.cwd;
     // An idle catalog copy is provenance, not ownership of another live frontend.
-    const historicalPaseoIDs = new Set(paseoOwners.filter(owner => owner.section === "history"
+    const historicalPaseoIDs = new Set(paseoOwners.filter(owner =>
+      (owner.section === "history"
+        // A retained unavailable owner is not authoritative over an
+        // independently verified live Claude terminal. Treat it like a
+        // historical alias for this deduplication decision only; if no live
+        // binding exists, keep the unavailable Paseo row visible.
+        || owner.presence?.state === "unknown")
       && discovered.some(session => matchesPaseoAlias(owner, session)
         && session.conversationState === "open"
         && session.ambientEligible !== false && session.canOpenOwner
@@ -5021,6 +5048,19 @@ function retainedHistorySession(
     sessionClass: record.provider === "paseo" ? "interactive" : "terminal",
     ambientEligible: false,
     lifecycleStatus: record.closedAt ? "closed" : unknownLiveness ? "unavailable" : "historical",
+    ...(record.closedAt ? {
+      presence: {
+        state: "closed" as const,
+        evidence: "authoritative_inventory" as const,
+        observedAt: record.closedAt,
+      },
+    } : unknownLiveness ? {
+      presence: {
+        state: "unknown" as const,
+        evidence: "unavailable" as const,
+        observedAt: record.observedAt,
+      },
+    } : {}),
     conversationState: "open",
     turnState: "unknown",
     updatedAt: record.updatedAt,

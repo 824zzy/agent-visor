@@ -1170,12 +1170,17 @@ describe("SessionRepository", () => {
         section: "history",
         lifecycleStatus: "unavailable",
         canOpenOwner: false,
+        presence: expect.objectContaining({ state: "unknown", evidence: "unavailable" }),
       }));
       expect(unavailable.historyPage("outage").sessions).not.toContainEqual(expect.objectContaining({
         id: record.id,
         completionUnseen: true,
       }));
       expect(unavailable.current().sessions).not.toContainEqual(expect.objectContaining({ id: record.id }));
+      // A retained-only row is projected as unavailable in the mixed
+      // Sessions view. Retry must accept that exact retained identity even
+      // though it is not present in the live snapshot.
+      await expect(unavailable.retryDetection(record.id)).resolves.toBeUndefined();
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -1230,6 +1235,7 @@ describe("SessionRepository", () => {
           section: "history",
           ambientEligible: false,
           canOpenOwner: false,
+          presence: expect.objectContaining({ state: "closed", evidence: "authoritative_inventory" }),
         })],
       });
       const persisted = JSON.parse(readFileSync(historyPath, "utf8")) as {
@@ -1645,11 +1651,13 @@ describe("SessionRepository", () => {
       updatedAt: "2026-10-21T18:00:00.000Z",
       canOpenOwner: true,
       canEnterChat: true,
+      messageTransport: "terminal",
       ambientEligible: true,
       presence: { state: "open", evidence: "frontend", observedAt: "2026-10-21T18:00:00.000Z" },
       historyIdentity: { verified: true, current: true, canonicalId: nativeAlias, host: "Ghostty" },
       controlTarget: { kind: "terminal", target: {
-        application: "Ghostty", pid: 9402, processStartToken: "paseo-duplicate",
+        application: "Ghostty", pid: 9402,
+        processStartToken: processInstanceToken(9402, "2026-10-21T18:00:00.000Z"),
         tty: "ttys9402", cwd: directory,
       } },
     };
@@ -1694,20 +1702,32 @@ describe("SessionRepository", () => {
     try {
       await first.refresh();
       outage = true;
+      // Same-process outages retain Paseo's last route, but its presence is
+      // explicitly unknown. A fresh exact Claude route still wins ownership;
+      // stale Paseo route capability must not make it authoritative.
+      const sameProcess = await first.refresh();
+      expect(sameProcess.sessions).toContainEqual(expect.objectContaining({
+        id: nativeAlias,
+        owner: "Ghostty",
+        presence: expect.objectContaining({ state: "open", evidence: "frontend" }),
+        canOpenOwner: true,
+      }));
+      expect(sameProcess.sessions).not.toContainEqual(expect.objectContaining({ id }));
+
       const openURL = vi.fn(async () => undefined);
       const restarted = new SessionRepository([provider, duplicateProvider], options);
       restarted.setControls(new NativeSessionControls(new FakeNativeHelper(), undefined, undefined, openURL));
       const recovered = await restarted.refresh();
+      // The restored Paseo row is unavailable and cannot retain ownership of
+      // a separately verified live Claude terminal with the same alias.
       expect(recovered.sessions).toContainEqual(expect.objectContaining({
-        id,
+        id: nativeAlias,
         sourceProfile: "claude-copilot",
-        owner: "Paseo",
-        presence: expect.objectContaining({ state: "unknown", evidence: "unavailable" }),
-        ambientEligible: true,
+        owner: "Ghostty",
+        presence: expect.objectContaining({ state: "open", evidence: "frontend" }),
+        canOpenOwner: true,
       }));
-      const row = recovered.sessions.find((session) => session.id === id)!;
-      expect(row.canOpenOwner).toBe(false);
-      expect(row.sessionState?.conversation).toBe("unknown");
+      expect(recovered.sessions).not.toContainEqual(expect.objectContaining({ id }));
 
       outage = false;
       const live = await restarted.refresh();

@@ -84,7 +84,10 @@ it("shows the confirmed Claude profile in hover details without changing the Pas
     title: "Work", source: "Paseo", owner: "Paseo", phase: "history",
     inspector: {
       runtimeItems: ["Claude Code · Paseo"],
-      detailRows: [{ label: "Profile", value: "claude-copilot" }],
+      detailRows: [
+        { label: "Profile", value: "claude-copilot" },
+        { label: "Presence", value: "Status unavailable: Agent Visor could not verify whether this conversation is open." },
+      ],
     },
   });
   expect(nativeHelperRequestSchema.safeParse({
