@@ -80,7 +80,7 @@ it("shows the confirmed Claude profile in hover details without changing the Pas
   const snapshot = sessionSnapshotSchema.parse(await repository.refresh());
   const presentation = menuPresentation(snapshot, [], now.valueOf());
 
-  expect(presentation.pills[0]).toMatchObject({
+  expect(presentation.navigatorPills[0]).toMatchObject({
     title: "Work", source: "Paseo", owner: "Paseo", phase: "history",
     inspector: {
       runtimeItems: ["Claude Code · Paseo"],

@@ -87,9 +87,10 @@ describe("Paseo session pills", () => {
     expect(snapshot.sessions).toMatchObject([
       { id: `paseo:srv_local:${agentId}`, owner: "Paseo", sourceProfile: "claude-copilot" },
     ]);
-    expect(menuPresentation(snapshot, [], now.valueOf()).pills).toMatchObject([
-      { id: `paseo:srv_local:${agentId}`, phase: state === "permission" || state === "failure" ? "needs_you"
-        : state === "finished" ? "ready" : "working" },
+    const pills = menuPresentation(snapshot, [], now.valueOf()).pills;
+    if (state === "finished" || state === "permission" || state === "failure") expect(pills).toEqual([]);
+    else expect(pills).toMatchObject([
+      { id: `paseo:srv_local:${agentId}`, phase: state === "permission" || state === "failure" ? "needs_you" : "working" },
     ]);
     const hooked = repository.applyHook({ sessionId, provider: "claude_code", cwd: environment.metadata.cwd,
       event: "Stop", status: "idle", receivedAt: now.toISOString(), tty: "ttys023" });
@@ -176,6 +177,115 @@ describe("Paseo session pills", () => {
     });
   });
 
+  it("keeps a fresh Paseo runtime Current while a saved idle record stays unavailable", async () => {
+    const running = agent();
+    const saved = { ...agent(), id: "saved-id", status: "idle", runtimeInfo: undefined,
+      persistence: { sessionId } };
+    const provider = new PaseoProvider({ read: async () => ({
+      serverId: "srv_local", providers: { "claude-copilot": "claude" }, agents: [running, saved],
+    }) });
+    const snapshot = await new SessionRepository([provider], { now: () => now }).refresh();
+
+    expect(snapshot.sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: `paseo:srv_local:${agentId}`,
+        section: "working",
+        presence: expect.objectContaining({ state: "open", evidence: "runtime" }),
+      }),
+      expect.objectContaining({
+        id: "paseo:srv_local:saved-id",
+        section: "history",
+        presence: expect.objectContaining({ state: "unknown", evidence: "catalog" }),
+        ambientEligible: false,
+      }),
+    ]));
+    expect(menuPresentation(snapshot, [], now.valueOf()).pills.map(({ id }) => id))
+      .toEqual([`paseo:srv_local:${agentId}`]);
+  });
+
+  it("retains a saved result through an unavailable read and recovers without a new pulse", async () => {
+    let phase: "healthy" | "failure" | "empty" = "healthy";
+    const row = { ...agent(), status: "idle", runtimeInfo: undefined,
+      persistence: { sessionId }, requiresAttention: true,
+      attentionReason: "finished" as string | null, attentionTimestamp: now.toISOString() as string | null };
+    const provider = new PaseoProvider({ read: async () => {
+      if (phase === "failure") return undefined;
+      return { serverId: "srv_local", providers: { "claude-copilot": "claude" },
+        agents: phase === "empty" ? [] : [row] };
+    } }, () => now);
+    const repository = new SessionRepository([provider], { now: () => now });
+
+    const healthy = await repository.refresh();
+    expect(healthy.sessions).toMatchObject([{
+      id: `paseo:srv_local:${agentId}`,
+      sourceProfile: "claude-copilot",
+      presence: { state: "unknown", evidence: "catalog" },
+      completionUnseen: true,
+    }]);
+    expect(await provider.discover()).toMatchObject([{
+      id: `paseo:srv_local:${agentId}`,
+      nativeSessionAlias: { provider: "claude_code", id: sessionId },
+      controlTarget: { kind: "url", url: "paseo://h/srv_local/agent/28a801ab-3b50-46ca-829c-783c202b79c4" },
+    }]);
+
+    phase = "failure";
+    const failed = await repository.refresh();
+    expect(failed.sessions).toMatchObject([{
+      id: `paseo:srv_local:${agentId}`,
+      sourceProfile: "claude-copilot",
+      presence: { state: "unknown", evidence: "unavailable" },
+      completionUnseen: true,
+    }]);
+    expect(menuPresentation(failed, [], now.valueOf()).pills).toEqual([]);
+    expect(menuPresentation(failed, [], now.valueOf()).navigatorPills).toMatchObject([{
+      id: `paseo:srv_local:${agentId}`,
+      lifecycleStatus: "unavailable",
+    }]);
+
+    phase = "healthy";
+    const recovered = await repository.refresh();
+    expect(recovered.sessions).toMatchObject([{
+      id: `paseo:srv_local:${agentId}`,
+      sourceProfile: "claude-copilot",
+      presence: { state: "unknown", evidence: "catalog" },
+      completionUnseen: true,
+    }]);
+
+    phase = "empty";
+    expect((await repository.refresh()).sessions).toEqual([]);
+    expect(provider.discoveryAuthority()).toBe("authoritative");
+  });
+
+  it("keeps archived rows closed unless the same row has contradictory live runtime evidence", async () => {
+    const archivedLive = { ...agent(), id: "archived-live", status: "running", archivedAt: now.toISOString() };
+    const archivedClosed = { ...agent(), id: "archived-idle", status: "idle", runtimeInfo: undefined,
+      persistence: { sessionId }, archivedAt: now.toISOString(), requiresAttention: false };
+    const provider = new PaseoProvider({ read: async () => ({
+      serverId: "srv_local", providers: { "claude-copilot": "claude" },
+      agents: [archivedLive, archivedClosed],
+    }) }, () => now);
+    const repository = new SessionRepository([provider], { now: () => now });
+    const snapshot = await repository.refresh();
+
+    expect(snapshot.sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "paseo:srv_local:archived-live",
+        section: "working",
+        presence: expect.objectContaining({ state: "open", evidence: "runtime" }),
+      }),
+      expect.objectContaining({
+        id: "paseo:srv_local:archived-idle",
+        section: "history",
+        lifecycleStatus: "closed",
+        presence: expect.objectContaining({ state: "closed", evidence: "authoritative_inventory" }),
+        ambientEligible: false,
+      }),
+    ]));
+    expect(menuPresentation(snapshot, [], now.valueOf()).pills.map(({ id }) => id))
+      .toEqual(["paseo:srv_local:archived-live"]);
+    expect(await provider.resolveForFocus("paseo:srv_local:archived-idle")).toBeUndefined();
+  });
+
   it("puts a running conversation awaiting a permission or question ahead of ordinary working pills", async () => {
     const row = { ...agent(), pendingPermissions: [{ toolName: "AskUserQuestion" }] };
     const provider = new PaseoProvider({ read: async () => ({
@@ -210,7 +320,8 @@ describe("Paseo session pills", () => {
 
   it("excludes archives, internal helpers, child agents and unrelated providers from ambient pills", async () => {
     const rows = [agent(),
-      { ...agent(), id: "archived", archivedAt: now.toISOString() },
+      { ...agent(), id: "archived", status: "idle", runtimeInfo: undefined,
+        archivedAt: now.toISOString() },
       { ...agent(), id: "internal", internal: true },
       { ...agent(), id: "child", parentAgentId: agentId },
       { ...agent(), id: "pi", provider: "pi" },
@@ -235,6 +346,8 @@ describe("Paseo session pills", () => {
     const id = (await source.refresh()).sessions[0]!.id;
     expect(await source.focusSession(id)).toBeUndefined();
     expect(opened).toEqual(["paseo://h/srv_local/agent/28a801ab-3b50-46ca-829c-783c202b79c4"]);
+    row.status = "idle";
+    row.runtimeInfo = undefined;
     row.archivedAt = now.toISOString();
     expect(await source.focusSession(id)).toBe("Exact session focus is unavailable.");
     expect(opened).toHaveLength(1);
