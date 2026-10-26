@@ -74,7 +74,7 @@ describe("Paseo session pills", () => {
     ]);
   });
 
-  it.each(["running", "initializing", "permission", "finished", "failure"])("preserves active Paseo ownership and its profile (%s)", async (state) => {
+  it.each(["running", "initializing", "permission", "finished", "failure"])("uses independently verified live ownership for Paseo and Claude (%s)", async (state) => {
     const { environment, row, repository } = mixedSources();
     environment.metadata.status = "busy";
     row.status = state === "running" || state === "initializing" ? state : state === "failure" ? "error" : "idle";
@@ -84,17 +84,56 @@ describe("Paseo session pills", () => {
     }
     if (state === "failure") row.requiresAttention = true;
     const snapshot = await repository.refresh();
-    expect(snapshot.sessions).toMatchObject([
-      { id: `paseo:srv_local:${agentId}`, owner: "Paseo", sourceProfile: "claude-copilot" },
-    ]);
+    const paseoIsLive = state === "running" || state === "initializing";
+    const ownerID = paseoIsLive ? `paseo:srv_local:${agentId}` : sessionId;
+    expect(snapshot.sessions).toContainEqual(expect.objectContaining({
+      id: ownerID,
+      owner: paseoIsLive ? "Paseo" : "Ghostty",
+      ...(paseoIsLive ? { sourceProfile: "claude-copilot" } : {}),
+    }));
+    if (!paseoIsLive) {
+      expect(snapshot.sessions).not.toContainEqual(expect.objectContaining({ id: `paseo:srv_local:${agentId}` }));
+      expect(snapshot.sessions.find(({ id }) => id === sessionId)).not.toHaveProperty("sourceProfile");
+    }
     const pills = menuPresentation(snapshot, [], now.valueOf()).pills;
-    if (state === "finished" || state === "permission" || state === "failure") expect(pills).toEqual([]);
-    else expect(pills).toMatchObject([
-      { id: `paseo:srv_local:${agentId}`, phase: state === "permission" || state === "failure" ? "needs_you" : "working" },
-    ]);
+    expect(pills).toMatchObject([{
+      id: ownerID,
+      phase: "working",
+    }]);
     const hooked = repository.applyHook({ sessionId, provider: "claude_code", cwd: environment.metadata.cwd,
       event: "Stop", status: "idle", receivedAt: now.toISOString(), tty: "ttys023" });
-    expect(hooked.sessions.map(session => session.id)).toEqual([`paseo:srv_local:${agentId}`]);
+    expect(hooked.sessions.map(session => session.id)).toEqual([ownerID]);
+  });
+
+  it("keeps an unknown Paseo owner when the matching Claude route is only cached", async () => {
+    const environment = new TerminalClaudeEnvironment();
+    const row: PaseoAgent = { ...agent(), status: "running" };
+    const paseoProvider = new PaseoProvider({ read: async () => ({
+      serverId: "srv_local", providers: { "claude-copilot": "claude" }, agents: [row],
+    }) });
+    const claudeProvider = new ClaudeProvider(environment);
+    let unavailable = false;
+    const flakyClaude = {
+      id: "claude_code" as const,
+      discover: async () => {
+        if (unavailable) throw new Error("fixture Claude outage");
+        return claudeProvider.discover();
+      },
+    };
+    const repository = new SessionRepository([paseoProvider, flakyClaude], { now: () => now });
+    await repository.refresh();
+    row.status = "idle";
+    environment.metadata.status = "busy";
+    unavailable = true;
+    const snapshot = await repository.refresh();
+
+    expect(snapshot.sessions).toContainEqual(expect.objectContaining({
+      id: `paseo:srv_local:${agentId}`,
+      owner: "Paseo",
+      sourceProfile: "claude-copilot",
+      presence: expect.objectContaining({ state: "unknown" }),
+    }));
+    expect(snapshot.sessions).not.toContainEqual(expect.objectContaining({ id: sessionId }));
   });
 
   it("reconciles ownership on refresh without reviving a parked overview from hooks", async () => {
