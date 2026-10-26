@@ -284,6 +284,27 @@ describe("groupSessions", () => {
     expect(selection.orderedSessions.map(({ id }) => id)).toEqual(["title", "metadata"]);
   });
 
+  it("searches explicit presence rows by their user-facing state label", () => {
+    const closed = {
+      ...session("closed-result", "history", "2026-08-22T09:00:00.000Z"),
+      title: "Release report",
+      subtitle: "Transcript available",
+      presence: {
+        state: "closed" as const,
+        evidence: "authoritative_inventory" as const,
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: {
+        conversation: "archived" as const,
+        turn: "ready" as const,
+        route: "unavailable" as const,
+      },
+    };
+
+    expect(selectSessions([closed], "closed").orderedSessions.map(({ id }) => id))
+      .toEqual(["closed-result"]);
+  });
+
   it("uses explicit presence for placement instead of age or retained lifecycle labels", () => {
     const open = {
       ...session("open-old", "history", "2026-08-12T10:00:00.000Z"),
