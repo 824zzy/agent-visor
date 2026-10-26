@@ -99,7 +99,11 @@ export function sessionPresentation(session: SessionSummary, now = new Date()) {
     : section === "history" && (completed || knownOpenReady)
     ? `${session.managedBy ? `Managed by ${session.managedBy} · ` : ""}${knownOpenReady ? "Ready" : "Completed"}`
     : session.subtitle;
-  const pillNotice = session.claudePresence ? pillNotices[session.claudePresence] : undefined;
+  const legacyNotices = [
+    session.claudePresence ? pillNotices[session.claudePresence] : undefined,
+    lifecycle.attention?.evidence === "last_known" ? lifecycle.attention.label : undefined,
+  ].filter(Boolean);
+  const pillNotice = legacyNotices.length ? legacyNotices.join(" · ") : undefined;
   return { section, title: legacySections.find(({ id }) => id === section)!.title, subtitle,
     ...(inactive ? { inactive: true } : {}),
     ...(pillNotice ? { pillNotice } : {}) };

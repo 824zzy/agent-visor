@@ -71,6 +71,25 @@ describe("groupSessions", () => {
     }
   });
 
+  it("shows last-known attention on legacy rows without hiding an existing notice", () => {
+    const row = {
+      ...session("legacy-last-known", "needs_you", "2026-08-22T09:59:00.000Z"),
+      claudePresence: "read_failed" as const,
+      attention: {
+        kind: "question" as const,
+        evidence: "last_known" as const,
+        observedAt: "2026-08-22T09:59:00.000Z",
+      },
+    };
+
+    expect(sessionPresentation(row)).toEqual({
+      section: "needs_you",
+      title: "Needs you",
+      subtitle: "",
+      pillNotice: "Pill hidden: terminal could not be checked. Agent Visor will retry. · Last known: Needs you",
+    });
+  });
+
   it("reclassifies the same snapshot as time passes without changing its completion acknowledgment", () => {
     const row = {
       ...session("seen", "ready", "2026-08-15T10:00:00.000Z"),
@@ -107,7 +126,7 @@ describe("groupSessions", () => {
       attentionTier: "acknowledged_ready" as const,
     };
     expect(sessionPresentation(old)).toEqual({
-      section: "history", title: "History", subtitle: "Managed by Agent Room · Completed",
+      section: "history", title: "History", subtitle: "Managed by Agent Room · Completed", inactive: true,
     });
     expect(selectSessions([old], "completed").orderedSessions).toEqual([old]);
     expect(selectSessions([old], "ready to continue").orderedSessions).toEqual([old]);
@@ -161,7 +180,7 @@ describe("groupSessions", () => {
     };
 
     expect(sessionPresentation(old)).toEqual({
-      section: "history", title: "History", subtitle: "Ready",
+      section: "history", title: "History", subtitle: "Ready", inactive: true,
     });
   });
 
@@ -358,7 +377,7 @@ describe("groupSessions", () => {
     };
 
     expect(sessionPresentation(open)).toEqual({
-      section: "ready", title: "Ready", subtitle: "",
+      section: "ready", title: "Ready", subtitle: "", inactive: true,
     });
     expect(sessionPresentation(closed)).toEqual({
       section: "history", title: "History", subtitle: "",
