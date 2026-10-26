@@ -66,11 +66,18 @@ describe("Codex Desktop instances", () => {
         title: "Copilot task", phase: "ready",
         inspector: {
           runtimeItems: ["Codex Desktop"],
-          detailRows: [{ label: "Profile", value: "Copilot" }],
+          detailRows: [
+            { label: "Profile", value: "Copilot" },
+            { label: "Presence", value: "Status unavailable: Agent Visor could not verify whether this conversation is open." },
+          ],
         },
       });
       expect(presentation.navigatorPills.find(pill => pill.title === "Native task")?.inspector).toMatchObject({
-        runtimeItems: ["Codex Desktop"], detailRows: [],
+        runtimeItems: ["Codex Desktop"],
+        detailRows: [{
+          label: "Presence",
+          value: "Status unavailable: Agent Visor could not verify whether this conversation is open.",
+        }],
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

@@ -37,6 +37,7 @@ export function createSessionHistoryController(
   connect: HistoryConnector = connectDaemon,
 ): {
   setQuery(query: string): void;
+  refresh(): void;
   loadMore(): void;
   remove(sessionId: string): void;
   repair(sessionId: string, selection: HistoryRepairSelection | null): void;
@@ -199,6 +200,9 @@ export function createSessionHistoryController(
       publish({ status: "loading", page: undefined, loadingMore: false });
       requestCurrent({ query, append: false });
     },
+    refresh(): void {
+      requestCurrent({ query, append: false });
+    },
     loadMore(): void {
       if (state.loadingMore || !state.page?.nextCursor) return;
       requestCurrent({ query, cursor: state.page.nextCursor, append: true });
@@ -227,6 +231,7 @@ export function useSessionHistory(
   liveSessionIDs: readonly string[],
 ): SessionHistoryState & {
   loadMore(): void;
+  refresh(): void;
   remove(sessionId: string): void;
   repair(sessionId: string, selection: HistoryRepairSelection | null): void;
 } {
@@ -252,12 +257,13 @@ export function useSessionHistory(
   }, [liveKey]);
 
   const loadMore = useCallback(() => controller.current?.loadMore(), []);
+  const refresh = useCallback(() => controller.current?.refresh(), []);
   const remove = useCallback((sessionId: string) => controller.current?.remove(sessionId), []);
   const repair = useCallback(
     (sessionId: string, selection: HistoryRepairSelection | null) => controller.current?.repair(sessionId, selection),
     [],
   );
-  return { ...state, loadMore, remove, repair };
+  return { ...state, loadMore, refresh, remove, repair };
 }
 
 function mergeHistoryRows(

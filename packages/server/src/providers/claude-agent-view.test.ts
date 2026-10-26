@@ -221,7 +221,7 @@ describe("Claude agent-view integration", () => {
     expect(menuPresentation(closed, [], fixture.environment.clock.valueOf()).pills).toEqual([]);
   });
 
-  it("keeps retained History unknown when real Claude discovery returns empty during an inventory outage", async () => {
+  it("keeps a retained unavailable row when real Claude discovery returns empty during an inventory outage", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-claude-inventory-outage-"));
     const historyPath = path.join(directory, "retained-history.json");
     const environment = new FixtureEnvironment();
@@ -241,7 +241,12 @@ describe("Claude agent-view integration", () => {
       expect((await afterRestart.refresh()).sessions).toContainEqual(expect.objectContaining({ id: ccID }));
 
       environment.processRows = [];
-      expect((await afterRestart.refresh()).sessions).not.toContainEqual(expect.objectContaining({ id: ccID }));
+      expect((await afterRestart.refresh()).sessions).toContainEqual(expect.objectContaining({
+        id: ccID,
+        presence: expect.objectContaining({ state: "unknown", evidence: "unavailable" }),
+        lifecycleStatus: "unavailable",
+        ambientEligible: true,
+      }));
       expect(afterRestart.historyPage()).toMatchObject({
         total: 1,
         sessions: [expect.objectContaining({
@@ -737,8 +742,17 @@ describe("Claude agent-view integration", () => {
     await source.refresh();
     environment.inventory = inventoryFailure(inventorySuccess([{ ...row, state }], false, nowMs + 31_000));
     environment.clock = new Date(nowMs + 31_000);
-    expect((await source.refresh()).sessions).toMatchObject([{ id: ccID, section: "history" }]);
-    expect(menuPresentation(source.current(), [], environment.clock.valueOf()).pills).toEqual([]);
+    expect((await source.refresh()).sessions).toMatchObject([{
+      id: ccID,
+      section: "history",
+      presence: { state: "unknown", evidence: "unavailable" },
+      lifecycleStatus: "unavailable",
+    }]);
+    expect(menuPresentation(source.current(), [], environment.clock.valueOf()).pills).toMatchObject([{
+      id: ccID,
+      lifecycleStatus: "unavailable",
+      inspector: { status: "Status unavailable" },
+    }]);
   });
 
   it.each(["working", "blocked"])("keeps an idle completed %s conversation out of pills when its surface returns to overview", async (state) => {
@@ -894,7 +908,14 @@ describe("Claude agent-view integration", () => {
     view.titleUpdatesEnabled = true;
     expect(menuPresentation(await source.refresh(), [], nowMs).pills.map(({ id }) => id)).toEqual([ccID]);
     delete view.titleUpdatesEnabled;
-    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toEqual([]);
+    // A previously verified eligible pill survives title-read uncertainty as a
+    // neutral unavailable result; revoked title trust must not erase it or
+    // claim the conversation is closed.
+    expect(menuPresentation(await source.refresh(), [], nowMs).pills).toMatchObject([{
+      id: ccID,
+      lifecycleStatus: "unavailable",
+      inspector: { status: "Status unavailable" },
+    }]);
   });
 
   it("never guesses between duplicate plain-title jobs in a title-enabled terminal", async () => {
@@ -956,7 +977,7 @@ describe("Claude agent-view integration", () => {
   });
 
   it.each([executable, home + "/.local/share/claude/versions/2.1.296"])(
-    "keeps one canonical pill across multiple terminals and clears its evidence when inventory authority expires (%s)", async (command) => {
+    "keeps one canonical unavailable pill across multiple terminals when inventory authority expires (%s)", async (command) => {
     const environment = new FixtureEnvironment();
     addProcess(environment, 900, command);
     addMetadata(environment, 900, {
@@ -978,12 +999,20 @@ describe("Claude agent-view integration", () => {
     }
     environment.inventory = inventoryFailure(inventorySuccess(inventory.rows, false));
     const stale = await source.refresh();
-    expect(menuPresentation(stale, [], nowMs).pills).toEqual([]);
+    expect(menuPresentation(stale, [], nowMs).pills).toMatchObject([{
+      id: ccID,
+      lifecycleStatus: "unavailable",
+      inspector: { status: "Status unavailable" },
+    }]);
     expect(stale.sessions[0]?.claudePresence).toBe("inventory_unavailable");
     environment.inventory = inventory;
     environment.ghosttyTerminalViews = undefined;
     const unavailable = await source.refresh();
-    expect(menuPresentation(unavailable, [], nowMs).pills).toEqual([]);
+    expect(menuPresentation(unavailable, [], nowMs).pills).toMatchObject([{
+      id: ccID,
+      lifecycleStatus: "unavailable",
+      inspector: { status: "Status unavailable" },
+    }]);
     expect(unavailable.sessions[0]?.claudePresence).toBe("reader_unavailable");
   });
 
@@ -1569,7 +1598,7 @@ describe("Claude agent-view integration", () => {
     ]));
   });
 
-  it("demotes an old no-PID done job in the native menu while retaining Ready turn evidence", async () => {
+  it("retains Ready turn evidence for an old no-PID done job when presence is unavailable", async () => {
     const environment = new FixtureEnvironment();
     const old = backgroundRow("0a0b0c0d", "0a0b0c0d-cd3b-4140-a8da-4614085a3536", "done", {
       startedAt: nowMs - 2 * 60 * 60 * 1_000,
@@ -1593,7 +1622,9 @@ describe("Claude agent-view integration", () => {
       id, phase, attentionTier,
     }))).toEqual([
       { id: recent.sessionId, phase: "ready", attentionTier: "ready" },
-      { id: old.sessionId, phase: "ready", attentionTier: "history" },
+      // Missing PID/frontend evidence is Status unavailable, not affirmative
+      // History. Keep the provider's explicit Ready turn fact intact.
+      { id: old.sessionId, phase: "ready", attentionTier: "ready" },
     ]);
   });
 

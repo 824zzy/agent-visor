@@ -153,6 +153,7 @@ export function App() {
           onRetryDetection={async (session) => {
             const result = await retryDetection(session.id);
             if (!result.ok && result.error) window.alert(result.error);
+            if (result.ok) history.refresh();
             return result;
           }}
           onRemoveHistory={history.remove}

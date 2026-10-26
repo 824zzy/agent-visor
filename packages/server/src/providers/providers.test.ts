@@ -1157,7 +1157,7 @@ describe("live provider adapters", () => {
           canSendText: false, canSendImages: false, canCancel: false,
           canApprove: false, canAnswer: false,
           unavailableReason: "provider_unavailable",
-          readOnlyReason: "The provider route is temporarily unavailable.",
+          readOnlyReason: "The conversation status is unavailable. Chat is read only until detection recovers.",
         });
         expect((await repository.refresh()).sessions).toEqual(snapshot.sessions);
 

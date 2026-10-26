@@ -573,7 +573,7 @@ describe("menu presentation", () => {
 
   it.each([
     ["2026-08-22T21:30:00.001Z", false],
-    ["2026-08-22T21:30:00.000Z", false],
+    ["2026-08-22T21:30:00.000Z", true],
     ["2026-08-22T21:29:59.999Z", true],
   ] as const)("uses the 30-minute agent-activity boundary for %s", (updatedAt, inactive) => {
     for (const source of ["Codex", "Claude Code", "Pi", "Paseo", "Cursor"]) {
