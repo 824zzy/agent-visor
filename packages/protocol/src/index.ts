@@ -1679,7 +1679,7 @@ export function sessionIsInactive(
   const activityAt = Date.parse(session.updatedAt);
   const nowMs = typeof now === "number" ? now : now.valueOf();
   return Number.isFinite(activityAt) && Number.isFinite(nowMs)
-    && nowMs - activityAt > TRANSCRIPT_STALE_CEILING_MS;
+    && nowMs - activityAt >= TRANSCRIPT_STALE_CEILING_MS;
 }
 
 /**

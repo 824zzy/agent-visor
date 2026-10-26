@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionSummary } from "./index.js";
-import { sessionLifecyclePresentation, sessionPresencePresentation } from "./index.js";
+import { sessionIsInactive, sessionLifecyclePresentation, sessionPresencePresentation } from "./index.js";
 
 const session = (overrides: Partial<SessionSummary> = {}): SessionSummary => ({
   id: "ready-session",
@@ -18,6 +18,16 @@ const session = (overrides: Partial<SessionSummary> = {}): SessionSummary => ({
 });
 
 describe("session lifecycle presentation", () => {
+  it("marks reviewed Ready exactly at the thirty-minute inactivity boundary", () => {
+    const updatedAt = Date.parse("2026-08-22T09:30:00.000Z");
+    const ready = session({
+      updatedAt: new Date(updatedAt).toISOString(),
+      sessionState: { conversation: "open", turn: "ready", route: "available" },
+    });
+    expect(sessionIsInactive(ready, updatedAt + 30 * 60 * 1_000 - 1)).toBe(false);
+    expect(sessionIsInactive(ready, updatedAt + 30 * 60 * 1_000)).toBe(true);
+  });
+
   it("uses explicit runtime presence and independent turn evidence for grouping", () => {
     expect(sessionPresencePresentation(session({
       section: "history",

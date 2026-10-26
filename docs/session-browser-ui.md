@@ -91,9 +91,10 @@ With an empty query, show no aggregate state counts. They duplicate the section 
 
 - Order and user-facing labels:
   1. `Needs you` for structured approvals or questions.
-  2. `Ready to continue` for a completed turn or normal user input.
-  3. `In progress` for processing or compacting.
-  4. `History` for idle sessions retained for navigation.
+  2. `In progress` for processing or compacting.
+  3. `Ready` for a completed turn that remains Current.
+  4. `Status unavailable` when current presence cannot be verified.
+  5. `History` for conversations confirmed closed.
 - Label: 12-point semibold secondary text.
 - Count: 10-point semibold rounded text in a quiet capsule.
 - Horizontal inset relative to the result column: 10 points.
@@ -166,7 +167,7 @@ The fixed Chat accessory prevents rows from moving when Cmd shortcuts appear or 
 | State | Semantic token | Visual use |
 | --- | --- | --- |
 | Needs you | `ChatTheme.statusPending` | State mark |
-| Ready to continue | `ChatTheme.statusSuccess` | State mark |
+| Ready | `ChatTheme.statusSuccess` | State mark |
 | In progress | `ChatTheme.statusRunning` | State mark |
 | Closed | `ChatTheme.tertiary` | Neutral state mark |
 | Status unavailable | `ChatTheme.tertiary` | Neutral state mark |
@@ -174,11 +175,11 @@ The fixed Chat accessory prevents rows from moving when Cmd shortcuts appear or 
 
 Color never carries state alone. Section placement and accessibility text provide the same meaning. Chips use brand or metadata tints only as quiet identification, not status.
 
-A freshly completed, unacknowledged `Ready` turn may pulse for at most seven minutes. Opening that session through Agent Visor acknowledges the current completion and makes the mark static without changing its color, browser section, or browser row position. The menu-bar pill may move below Working according to the product-surface attention order. A later Ready transition may pulse and return to the higher menu-bar tier again.
+A freshly completed, unacknowledged `Ready` turn may pulse for at most seven minutes. Opening that session through Agent Visor acknowledges the current completion and makes the mark static without changing its color, presence, or browser row position. The menu-bar pill may move according to the product-surface attention order. A later Ready transition may pulse and return to the higher menu-bar tier again.
 
-The menu's stale-session grouping is a placement projection, not a lifecycle rewrite. When a known open conversation remains Ready but moves into the native Recent/History tier after the stale ceiling, its status dot, overflow status text, hover status, and accessibility label remain Ready and green. The seven-day Sessions grouping continues to use its own placement boundary.
+Reviewed idle conversations become inactive at exactly thirty minutes of semantic agent inactivity. Inactive is a presentation treatment, not closure: a verified open conversation remains Current and Ready, with a gray inactive mark after the boundary. Busy turns stay orange and verified unanswered questions or permissions stay yellow regardless of age.
 
-History placement has the same separation in the Sessions browser. Closed retained records say `Closed`, records with unverified current liveness say `Status unavailable`, and source records without stronger lifecycle evidence say `Historical`; all three use the neutral state mark. A known open Ready row keeps `Ready` and the green state mark wherever it is shown.
+History placement has the same separation in the Sessions browser. Closed retained records say `Closed`, records with unverified current liveness say `Status unavailable`, and source records without stronger lifecycle evidence say `Historical`; all three use the neutral state mark. Age alone never changes Current into History.
 
 ## Row States
 

@@ -45,6 +45,7 @@ export type ResumeReconciliation =
 /** Provider-specific evidence and launch strategy used only by explicit Resume. */
 export type ResumeProviderID = "claude_code" | "codex";
 export type ResumeNativeProvider = "claude_code" | "codex_cli";
+type ResumableHistoryRecord = RetainedHistoryRecord & { provider: ResumeProviderID };
 
 export interface ResumeProviderAdapter {
   readonly id: ResumeProviderID;
@@ -302,6 +303,13 @@ export class ResumeCoordinator {
     if (!record || !record.closedAt) {
       return Promise.resolve({ state: "unavailable", sessionId, reason: "This conversation is not closed History." });
     }
+    // Paseo retains provenance for discovery and exact source display, but it
+    // has no Ghostty cold-resume adapter. Keep that boundary explicit rather
+    // than widening the resume journal/native helper contracts for a provider
+    // that must remain history-only here.
+    if (!isResumableHistoryRecord(record)) {
+      return Promise.resolve({ state: "unavailable", sessionId, reason: "Paseo resume is unavailable." });
+    }
     const provider = this.providerFor(record.provider);
     if (!provider) {
       return Promise.resolve({ state: "unavailable", sessionId, reason: "This provider is not supported for Ghostty resume." });
@@ -322,7 +330,7 @@ export class ResumeCoordinator {
   }
 
   private async perform(
-    record: RetainedHistoryRecord,
+    record: ResumableHistoryRecord,
     provider: ResumeProviderAdapter,
     completionIdentity?: string,
   ): Promise<ResumeResult> {
@@ -425,7 +433,7 @@ export class ResumeCoordinator {
 
   /** Reconcile a durable receipt after restart or an explicit retry without launching again. */
   private async reconcileOutstandingAttempt(
-    record: RetainedHistoryRecord,
+    record: ResumableHistoryRecord,
     provider: ResumeProviderAdapter,
     attempt: ResumeAttempt,
     liveNavigationEpoch: number,
@@ -455,7 +463,7 @@ export class ResumeCoordinator {
   }
 
   private reconciliationFailure(
-    record: RetainedHistoryRecord,
+    record: ResumableHistoryRecord,
     attempt: ResumeAttempt,
     reconciliation: ResumeReconciliation,
   ): ResumeResult {
@@ -478,7 +486,7 @@ export class ResumeCoordinator {
   }
 
   private async finishMatched(
-    record: RetainedHistoryRecord,
+    record: ResumableHistoryRecord,
     reconciliation: Extract<ResumeReconciliation, { state: "matched" }>,
     attempt: ResumeAttempt,
     liveNavigationEpoch: number,
@@ -541,7 +549,7 @@ export class ResumeCoordinator {
    * queue, and no poll may create or dispatch another frontend.
    */
   private async reconcileAfterDispatch(
-    record: RetainedHistoryRecord,
+    record: ResumableHistoryRecord,
     dispatch: NativeHelperGhosttyResumeDispatch,
     provider: ResumeProviderAdapter,
     expectedAttemptId: string,
@@ -562,7 +570,7 @@ export class ResumeCoordinator {
   }
 
   private reconciliationAuthority(
-    record: RetainedHistoryRecord,
+    record: ResumableHistoryRecord,
     expectedAttemptId: string,
   ): ResumeReconciliation | undefined {
     const currentAttempt = this.options.attempts.get(record.provider, record.canonicalId);
@@ -576,7 +584,7 @@ export class ResumeCoordinator {
     return undefined;
   }
 
-  private historyStillAuthorizes(record: RetainedHistoryRecord): boolean {
+  private historyStillAuthorizes(record: ResumableHistoryRecord): boolean {
     const ids = [record.id, record.canonicalId, ...(record.aliases ?? [])];
     if (this.options.history.isSuppressed(record.provider, ids)) return false;
     const current = this.currentHistoryRecord(record);
@@ -585,7 +593,7 @@ export class ResumeCoordinator {
       && current.closedAt !== undefined;
   }
 
-  private currentHistoryRecord(record: RetainedHistoryRecord): RetainedHistoryRecord | undefined {
+  private currentHistoryRecord(record: ResumableHistoryRecord): RetainedHistoryRecord | undefined {
     const getCurrent = this.options.history.getForProvider
       ? (id: string) => this.options.history.getForProvider!(record.provider, id)
       : (id: string) => this.options.history.get(id);
@@ -657,6 +665,10 @@ function resumeProviderName(provider: ResumeProviderID): string {
 
 function isMissingFile(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";
+}
+
+function isResumableHistoryRecord(record: RetainedHistoryRecord): record is ResumableHistoryRecord {
+  return record.provider === "claude_code" || record.provider === "codex";
 }
 
 function randomNonce(): string {

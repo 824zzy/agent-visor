@@ -69,6 +69,7 @@ import {
   type RetainedHistoryObservation,
   type RetainedHistoryHost,
   type RetainedHistoryProvider,
+  type RetainedHistoryRecord,
   type RetainedHistoryResumeCapability,
   type RetainedHistoryResumeUnavailableReason,
 } from "./retained-history.js";
@@ -91,6 +92,7 @@ export type RetainedHistoryOrigin = {
   id: string;
   canonicalId: string;
   aliases?: string[];
+  nativeSessionAlias?: string;
   host?: RetainedHistoryHost;
   configHome?: string;
 };
@@ -161,6 +163,10 @@ export type DiscoveredProviderSession = {
   completionAcknowledged?: boolean;
   /** True only for a newly observed Claude background failure. */
   failureAlert?: boolean;
+  /** Durable completion attention projected into a retained-history row. */
+  completionUnseen?: boolean;
+  /** Public attention placement projected into a retained-history row. */
+  attentionTier?: SessionSummary["attentionTier"];
   /**
    * Claude's bounded agent inventory is authoritative for background state
    * while its snapshot is fresh. This is provider-internal evidence and is
@@ -193,6 +199,8 @@ export type DiscoveredProviderSession = {
   resolutionUnavailable?: boolean;
   /** Identity-only row loaded from retained history; never a live control target. */
   retainedHistory?: boolean;
+  /** Attention provenance retained across restart; never a turn or liveness proof. */
+  retainedCompletionIdentity?: string;
   /** True only for a closed retained row removable from Agent Visor History. */
   canRemoveHistory?: boolean;
   /** Verified provider identity/provenance used only for durable History. */
@@ -1084,17 +1092,25 @@ export class SessionRepository {
     // They are never merged into the ambient snapshot or made launchable.
     const includeOpenProviders = new Set<RetainedHistoryProvider>(
       [...this.providerInventoryUnavailable].filter((provider): provider is RetainedHistoryProvider =>
-        provider === "claude_code" || provider === "codex"),
+        provider === "claude_code" || provider === "codex" || provider === "paseo"),
     );
     const includeOpen = includeOpenProviders.size > 0;
     const page = this.retainedHistory?.page(query, cursor, limit, false, includeOpenProviders) ?? {
       records: [],
       total: 0,
     };
-    const sessions = normalize(page.records.map((record) => retainedHistorySession(
-      record,
-      includeOpen && !record.closedAt,
-    )));
+    const sessions = normalize(page.records.map((record) => {
+      const session = retainedHistorySession(record, includeOpen && !record.closedAt);
+      const completion = record.completionIdentity
+        ? this.completionAttention.get(`${record.provider}:${record.id}`, record.completionIdentity)
+          ?? this.completionAttention.get(`${record.provider}:${record.canonicalId}`, record.completionIdentity)
+        : undefined;
+      if (record.completionUnseen === true || (record.completionUnseen === undefined && completion && !completion.seen)) {
+        session.completionUnseen = true;
+        session.attentionTier = "ready";
+      }
+      return session;
+    }));
     return {
       type: "session_history_page",
       sessions,
@@ -2040,6 +2056,7 @@ export class SessionRepository {
     record: import("./retained-history.js").RetainedHistoryRecord,
     attempt: Pick<ResumeAttempt, "attemptId" | "completionIdentity">,
   ): void {
+    if (record.provider === "paseo") return;
     const completion = attempt.completionIdentity;
     if (!completion) return;
     const currentAttempt = this.resumeAttempts?.get(record.provider, record.canonicalId);
@@ -2049,6 +2066,7 @@ export class SessionRepository {
       ?? this.completionAttention.get(`${record.provider}:${record.canonicalId}`, completion);
     if (!attention || attention.seen) return;
     this.completionAttention.acknowledge(key, completion, record.updatedAt);
+    this.retainedHistory?.updateCompletionAttention(record.provider, record.id, completion, false);
     this.completionAttention.save();
   }
 
@@ -2067,6 +2085,34 @@ export class SessionRepository {
     this.liveNavigationGeneration += 1;
   }
 
+  private retainedRecordForSession(session: DiscoveredProviderSession): RetainedHistoryRecord | undefined {
+    if (!this.retainedHistory
+      || (session.provider !== "claude_code" && session.provider !== "codex" && session.provider !== "paseo")) {
+      return undefined;
+    }
+    const canonicalId = session.historyIdentity?.canonicalId;
+    return this.retainedHistory.getForProvider(session.provider, session.id)
+      ?? (canonicalId ? this.retainedHistory.getForProvider(session.provider, canonicalId) : undefined);
+  }
+
+  private retainedCompletionState(
+    session: DiscoveredProviderSession,
+    completion: string,
+  ): boolean | undefined {
+    const record = this.retainedRecordForSession(session);
+    return record?.completionIdentity === completion ? record.completionUnseen : undefined;
+  }
+
+  private persistRetainedCompletionState(
+    session: DiscoveredProviderSession,
+    completion: string,
+    unseen: boolean,
+  ): void {
+    const record = this.retainedRecordForSession(session);
+    if (!record) return;
+    this.retainedHistory?.updateCompletionAttention(record.provider, record.id, completion, unseen);
+  }
+
   acknowledgeReady(sessionId: string): void {
     const completion = this.readyCompletionIdentity(sessionId);
     if (completion === undefined || this.acknowledgedReadyBySession.get(sessionId) === completion) return;
@@ -2075,6 +2121,7 @@ export class SessionRepository {
     if (source) this.completionAttention.acknowledge(
       `${source.provider}:${sessionId}`, completion, source.updatedAt,
     );
+    if (source) this.persistRetainedCompletionState(source, completion, false);
     this.publish([...this.lastByProvider.values()].flat());
   }
 
@@ -3194,9 +3241,19 @@ export class SessionRepository {
         return current;
       }
     }));
-    const allDiscovered = discovered.flat();
-    this.updateRetainedHistory(allDiscovered);
+    const providerDiscovered = discovered.flat();
+    // Persist provider identity changes before applying the unavailable
+    // presentation overlay. The overlay may intentionally make conversation
+    // and turn state unknown, while retention still needs the provider's
+    // verified public ID to update the existing record.
+    this.updateRetainedHistory(providerDiscovered);
     await this.reconcileRetainedHistoryLifetimes();
+    // Overlay durable unavailable evidence onto a provider's stale projection
+    // when it still exposes the same identity. This keeps the provider's
+    // current public ID while removing stale route authority and preserving
+    // the prior positive admission/attention proof.
+    const restored = this.restoreUnavailableRetainedSessions();
+    const allDiscovered = this.overlayUnavailableRetainedSessions(providerDiscovered, restored);
     const visibleDiscovered = this.filteredDiscoveredSessions(allDiscovered);
     for (const [index, provider] of this.providers.entries()) {
       // Keep the adapter-owned bucket keyed by the adapter, not by the
@@ -3224,7 +3281,7 @@ export class SessionRepository {
   private updateRetainedHistory(discovered: DiscoveredProviderSession[]): void {
     if (!this.retainedHistory) return;
     const observedAt = this.now().toISOString();
-    for (const provider of ["claude_code", "codex"] as const) {
+    for (const provider of ["claude_code", "codex", "paseo"] as const) {
       // An initial provider failure is not evidence that a terminal closed.
       // Only reconcile absence after a discovery that explicitly establishes
       // provider-scoped authority, including an authoritative empty inventory.
@@ -3237,7 +3294,18 @@ export class SessionRepository {
       const observations = current
         .map((session) => retainedHistoryObservation(session, observedAt))
         .filter((observation): observation is RetainedHistoryObservation => observation !== undefined)
-        .map((observation) => unavailable ? { ...observation, current: false } : observation);
+        .map((observation) => {
+          if (!unavailable) return observation;
+          // An unavailable read is not a definitive visibility exclusion. Do
+          // not let a stale provider projection with ambientEligible=false or
+          // completionUnseen=false erase previously verified durable proof.
+          const {
+            ambientEligible: _ambientEligible,
+            completionUnseen: _completionUnseen,
+            ...withoutUnavailableFacts
+          } = observation;
+          return { ...withoutUnavailableFacts, current: false };
+        });
       this.retainedHistory.observeMany(observations);
       // Reconcile only this provider. A failed or absent Codex inventory must
       // never close a previously retained Claude row, and vice versa.
@@ -3252,18 +3320,110 @@ export class SessionRepository {
     }
   }
 
+  /**
+   * Rehydrate only previously verified eligible records when a provider read
+   * is unavailable after restart. This preserves access/attention continuity
+   * without reviving a stale frontend, runtime, turn, or route.
+   */
+  private restoreUnavailableRetainedSessions(): DiscoveredProviderSession[] {
+    if (!this.retainedHistory || !this.providerInventoryUnavailable.size) return [];
+    const providers = new Set<RetainedHistoryProvider>(
+      [...this.providerInventoryUnavailable].filter((provider): provider is RetainedHistoryProvider =>
+        provider === "claude_code" || provider === "codex" || provider === "paseo"),
+    );
+    if (!providers.size) return [];
+    const observedAt = this.now().toISOString();
+    const records = this.retainedHistory.page(undefined, undefined, 1_000, false, providers).records;
+    return records
+      .filter((record) => record.closedAt === undefined && record.ambientEligible === true)
+      .map((record) => {
+        const retained = retainedHistorySession(record, true);
+        return {
+          ...retained,
+          section: "ready" as const,
+          subtitle: "Status unavailable",
+          conversationState: "unknown" as const,
+          turnState: "unknown" as const,
+          lifecycleStatus: "unavailable" as const,
+          presence: { state: "unknown" as const, evidence: "unavailable" as const, observedAt },
+          ambientEligible: true,
+          canOpenOwner: false,
+          ...(record.nativeSessionAlias ? {
+            nativeSessionAlias: { provider: "claude_code" as const, id: record.nativeSessionAlias },
+          } : {}),
+          retainedCompletionIdentity: record.completionIdentity,
+          historyIdentity: {
+            verified: true,
+            current: false,
+            canonicalId: record.canonicalId,
+            ...(record.aliases?.length ? { aliases: record.aliases } : {}),
+            ...(record.host ? { host: record.host } : {}),
+            ...(record.configHome ? { configHome: record.configHome } : {}),
+            ...(record.resume ? { resume: record.resume } : {}),
+            ...(record.resumeUnavailableReason
+              ? { resumeUnavailableReason: record.resumeUnavailableReason } : {}),
+          },
+        };
+      });
+  }
+
+  private overlayUnavailableRetainedSessions(
+    discovered: DiscoveredProviderSession[],
+    restored: DiscoveredProviderSession[],
+  ): DiscoveredProviderSession[] {
+    if (!restored.length) return discovered;
+    const matched = new Set<number>();
+    const projected = discovered.map((session) => {
+      const restoredIndex = restored.findIndex((candidate, index) =>
+        !matched.has(index) && sameProviderIdentity(session, candidate));
+      if (restoredIndex < 0) return session;
+      matched.add(restoredIndex);
+      const retained = restored[restoredIndex]!;
+      const {
+        controlTarget: _controlTarget,
+        routeState: _routeState,
+        routeOwnership: _routeOwnership,
+        routeUnavailableReason: _routeUnavailableReason,
+        canOpenOwner: _canOpenOwner,
+        ambientEligible: _ambientEligible,
+        completionUnseen: _completionUnseen,
+        retainedCompletionIdentity: _retainedCompletionIdentity,
+        ...withoutStaleRoute
+      } = session;
+      return {
+        ...withoutStaleRoute,
+        section: retained.section,
+        subtitle: retained.subtitle,
+        conversationState: retained.conversationState,
+        turnState: retained.turnState,
+        lifecycleStatus: retained.lifecycleStatus,
+        presence: retained.presence,
+        ambientEligible: retained.ambientEligible,
+        canOpenOwner: false,
+        canEnterChat: retained.canEnterChat,
+        ...(retained.completionUnseen !== undefined
+          ? { completionUnseen: retained.completionUnseen } : {}),
+        ...(retained.retainedCompletionIdentity
+          ? { retainedCompletionIdentity: retained.retainedCompletionIdentity } : {}),
+        retainedHistory: true,
+      };
+    });
+    return [...projected, ...restored.filter((_, index) => !matched.has(index))];
+  }
+
   /** Hide only provider identities with durable AV removal intent. */
   private isHistorySuppressedID(sessionId: string): boolean {
     const store = this.retainedHistory;
     if (!store) return false;
     return store.isSuppressed("claude_code", [sessionId])
-      || store.isSuppressed("codex", [sessionId]);
+      || store.isSuppressed("codex", [sessionId])
+      || store.isSuppressed("paseo", [sessionId]);
   }
 
   private isHistorySuppressedSession(session: DiscoveredProviderSession): boolean {
     const store = this.retainedHistory;
     if (!store
-      || (session.provider !== "claude_code" && session.provider !== "codex")) return false;
+      || (session.provider !== "claude_code" && session.provider !== "codex" && session.provider !== "paseo")) return false;
     const history = session.historyIdentity;
     return store.isSuppressed(session.provider, [
       session.id,
@@ -3276,7 +3436,7 @@ export class SessionRepository {
     const store = this.retainedHistory;
     if (!store) return discovered;
     return discovered.filter((session) => {
-      if (session.provider !== "claude_code" && session.provider !== "codex") return true;
+      if (session.provider !== "claude_code" && session.provider !== "codex" && session.provider !== "paseo") return true;
       const history = session.historyIdentity;
       const identities = [
         session.id,
@@ -3677,6 +3837,9 @@ export class SessionRepository {
       const source = mergedByID.get(session.id);
       const completion = completionIdentity(source ?? session);
       const key = `${source?.provider}:${session.id}`;
+      const durableCompletionUnseen = source
+        ? this.retainedCompletionState(source, completion)
+        : undefined;
       if (session.section === "working" || session.section === "needs_you") {
         this.completionAttention.forget(key);
       }
@@ -3688,13 +3851,20 @@ export class SessionRepository {
       if (session.section === "ready" && session.sessionClass !== "automation"
         && completed
         && Number.isFinite(age) && age >= 0 && age <= TRANSCRIPT_STALE_CEILING_MS) {
-        this.completionAttention.observe(key, completion, session.updatedAt);
+        if (durableCompletionUnseen === false) {
+          this.completionAttention.acknowledge(key, completion, session.updatedAt);
+        } else {
+          this.completionAttention.observe(key, completion, session.updatedAt);
+        }
       }
       if (source?.completionAcknowledged === true) {
         this.completionAttention.acknowledge(key, completion, session.updatedAt);
       }
       const attention = this.completionAttention.get(key, completion);
-      if (attention && !attention.seen) session.completionUnseen = true;
+      if (durableCompletionUnseen === true || (attention && !attention.seen)) session.completionUnseen = true;
+      if (source && attention) {
+        this.persistRetainedCompletionState(source, completion, !attention.seen);
+      }
       if (attention && !attention.seen && session.section === "history"
         && source?.turnState === "ready") {
         session.section = "ready";
@@ -3778,7 +3948,8 @@ export class SessionRepository {
 
 /** Prefer provider turn identity; transcript-only providers use activity evidence. */
 function completionIdentity(session: { turnId?: string; updatedAt: string }): string {
-  return session.turnId ? `turn:${session.turnId}` : `activity:${session.updatedAt}`;
+  const retained = (session as { retainedCompletionIdentity?: string }).retainedCompletionIdentity;
+  return retained ?? (session.turnId ? `turn:${session.turnId}` : `activity:${session.updatedAt}`);
 }
 
 function retainedCompletionIdentity(session: { completionAt?: string; turnId?: string }): string {
@@ -3787,14 +3958,14 @@ function retainedCompletionIdentity(session: { completionAt?: string; turnId?: s
 
 function resumeReasonText(
   reason: RetainedHistoryResumeUnavailableReason | undefined,
-  provider: "claude_code" | "codex" = "claude_code",
+  provider: RetainedHistoryProvider = "claude_code",
   host?: RetainedHistoryHost,
 ): string | undefined {
   if (host && host !== "Ghostty"
     && (reason === "host_not_supported" || reason === "missing_provenance")) {
     return `Automatic resume for ${host} isn’t supported yet. Resume this session manually in ${host}.`;
   }
-  const name = provider === "codex" ? "Codex" : "Claude Code";
+  const name = provider === "codex" ? "Codex" : provider === "paseo" ? "Paseo" : "Claude Code";
   switch (reason) {
     case "missing_provenance": return "Agent Visor didn’t record how this session was started. Resume it manually in its terminal.";
     case "unsupported_profile": return `Agent Visor can’t restore this ${name} profile. Resume this session manually in its terminal.`;
@@ -3839,7 +4010,7 @@ function currentResumeUnavailableReason(
     } else if (resume.profileRef) {
       return "unsupported_profile";
     }
-  } else {
+  } else if (record.provider === "claude_code") {
     if (resume.provider !== "claude_code") return "missing_provenance";
     if (resume.configRootRef && !isExistingDirectory(resume.configRootRef)) {
       return "unsupported_profile";
@@ -4652,6 +4823,8 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
       ...(session.ambientEligible !== undefined ? { ambientEligible: session.ambientEligible } : {}),
       ...(session.claudePresence ? { claudePresence: session.claudePresence } : {}),
       ...(session.managedBy ? { managedBy: session.managedBy } : {}),
+      ...(session.attentionTier ? { attentionTier: session.attentionTier } : {}),
+      ...(session.completionUnseen ? { completionUnseen: true } : {}),
       ...(session.failureAlert !== undefined ? { failureAlert: session.failureAlert } : {}),
       ...(session.resumeState ? { resumeState: session.resumeState } : {}),
       ...(session.resumeReason ? { resumeReason: session.resumeReason } : {}),
@@ -4746,11 +4919,29 @@ function sessionIdentityKeys(session: DiscoveredProviderSession): string[] {
   return sessionIdentityValues(session).map((identity) => `${session.provider}\u0000${identity}`);
 }
 
+function sameProviderIdentity(
+  left: DiscoveredProviderSession,
+  right: DiscoveredProviderSession,
+): boolean {
+  if (left.provider !== right.provider) return false;
+  const leftIDs = new Set([
+    left.id,
+    ...(left.historyIdentity?.canonicalId ? [left.historyIdentity.canonicalId] : []),
+    ...(left.historyIdentity?.aliases ?? []),
+  ]);
+  const rightIDs = [
+    right.id,
+    ...(right.historyIdentity?.canonicalId ? [right.historyIdentity.canonicalId] : []),
+    ...(right.historyIdentity?.aliases ?? []),
+  ];
+  return rightIDs.some((id) => leftIDs.has(id));
+}
+
 function retainedHistoryObservation(
   session: DiscoveredProviderSession,
   observedAt: string,
 ): RetainedHistoryObservation | undefined {
-  if ((session.provider !== "claude_code" && session.provider !== "codex")
+  if ((session.provider !== "claude_code" && session.provider !== "codex" && session.provider !== "paseo")
     || session.conversationState !== "open") return undefined;
   const history = session.historyIdentity;
   const targetHost = history?.host ?? retainedHistoryHost(session);
@@ -4762,14 +4953,23 @@ function retainedHistoryObservation(
     && (session.controlTarget?.kind === "terminal"
       || session.controlTarget?.kind === "herdr_surface"
       || session.controlTarget?.kind === "cmux_surface");
-  if (!isClaudeObserved && !isCodexObserved) return undefined;
+  const isPaseoObserved = session.provider === "paseo"
+    && session.presence?.state === "open"
+    && session.controlTarget?.kind === "url";
+  if (!isClaudeObserved && !isCodexObserved && !isPaseoObserved) return undefined;
   const title = sessionDisplayTitle(session.title) || `${providerNames[session.provider]} session`;
   const project = session.project?.trim() || path.basename(session.cwd) || session.cwd;
+  const ambientEligible = session.ambientEligible === false
+    ? false
+    : (isClaudeObserved && history?.verified === true) || isCodexObserved || isPaseoObserved
+    ? true : undefined;
   return {
     id: session.id,
     provider: session.provider,
     ...(history?.canonicalId ? { canonicalId: history.canonicalId } : {}),
     ...(history?.aliases?.length ? { aliases: history.aliases } : {}),
+    ...(session.nativeSessionAlias?.provider === "claude_code"
+      ? { nativeSessionAlias: session.nativeSessionAlias.id } : {}),
     title,
     subtitle: session.subtitle ?? "",
     ...(session.sourceProfile ? { sourceProfile: session.sourceProfile } : {}),
@@ -4784,6 +4984,8 @@ function retainedHistoryObservation(
       ? { resumeUnavailableReason: history.resumeUnavailableReason } : {}),
     ...(session.completionAt || session.turnId
       ? { completionIdentity: retainedCompletionIdentity(session) } : {}),
+    ...(session.completionUnseen !== undefined ? { completionUnseen: session.completionUnseen } : {}),
+    ...(ambientEligible !== undefined ? { ambientEligible } : {}),
     updatedAt: session.updatedAt,
     observedAt,
     current: true,
@@ -4816,7 +5018,7 @@ function retainedHistorySession(
     owner: record.owner,
     sourceProfile: record.sourceProfile,
     section: "history",
-    sessionClass: "terminal",
+    sessionClass: record.provider === "paseo" ? "interactive" : "terminal",
     ambientEligible: false,
     lifecycleStatus: record.closedAt ? "closed" : unknownLiveness ? "unavailable" : "historical",
     conversationState: "open",
@@ -4832,8 +5034,13 @@ function retainedHistorySession(
     ...(repairFields ? { repairFields } : {}),
     ...(resumeReason ? { resumeReason } : {}),
     ...(record.transcriptPath ? { chatPath: record.transcriptPath } : {}),
+    ...(record.completionIdentity ? { retainedCompletionIdentity: record.completionIdentity } : {}),
+    ...(record.completionUnseen !== undefined ? { completionUnseen: record.completionUnseen } : {}),
+    ...(record.nativeSessionAlias ? {
+      nativeSessionAlias: { provider: "claude_code" as const, id: record.nativeSessionAlias },
+    } : {}),
     ...(record.provider === "codex" ? { messageTransport: "terminal" as const } : {}),
-    ...(record.provider === "codex" ? {
+    ...((record.provider === "codex" || record.provider === "claude_code" || record.provider === "paseo") ? {
       historyIdentity: {
         verified: true,
         current: false,

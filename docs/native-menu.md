@@ -17,8 +17,9 @@ An unavailable or invalid snapshot removes its ambient rows until a successful r
 Paseo supplies titles, running state, pending permission/question counts, and
 explicit completion attention. Idle alone does not create unopened-completion
 attention. Paseo clearing `requiresAttention` acknowledges its completion even
-when activity timestamps do not change. The usual attention ordering and seven-day
-menu cap still apply. Archived, internal, and child agents do not occupy pills.
+when activity timestamps do not change. The usual attention ordering and bounded
+menu packing still apply; the shared thirty-minute inactive treatment does not
+imply closure. Archived, internal, and child agents do not occupy pills.
 
 Paseo IDs include both server and agent identity. A verified native Claude UUID
 in the same working directory replaces the native ambient alias, including late
@@ -104,11 +105,11 @@ Needs you items come first, then unopened Ready completions, In progress, opened
 
 Codex completion freshness uses the recorded completion time. Running freshness uses start and actual turn-progress records, including bounded headers of large answer/tool rows. File modification times, settings, client metadata, and context records do not refresh either claim. Opening an old conversation cannot turn History into unopened Ready or revive a dormant start marker. Transcript revisions still track file changes so Chat refreshes normally.
 
-Claude Code rows that remain Ready without activity for the shared 30-minute transcript stale ceiling keep their Ready wire phase and true turn/route state, but receive a History attention tier on native surfaces. That tier moves them behind newer work and makes the overflow show them as Recent; it does not replace the Ready status or green semantic mark. Their full Sessions-browser row remains unchanged.
+Claude Code rows that remain Ready without semantic agent activity become inactive at the shared 30-minute boundary. They keep their Ready wire phase and true turn/route state, but receive the muted gray inactive treatment after newer green Ready work. This is presentation only: a verified open conversation remains Current and its lifecycle is unchanged. Busy turns and verified unanswered questions or permissions retain their orange or yellow treatment.
 
 ### Pill-surface selection contract
 
-Codex direct conversations remain in the full Sessions browser until archived, including idle and unloaded conversations. Discovery pages through the unarchived catalog and requires an existing rollout; age never removes a direct conversation. Cursor, Zed, and Codex automation still use the configured observed-agent window, which defaults to 42 hours. The native menu selector applies a seven-day activity window to both physical pills and the More Sessions catalog, including search, before the existing 64/512 bounds. This applies to every phase, using authoritative `updatedAt`; invalid activity timestamps are excluded. Older conversations remain in the full Sessions browser and re-enter the menu after fresh activity. A minute timer rechecks the cutoff even when the catalog is unchanged.
+Codex direct conversations remain in the full Sessions browser until archived, including idle and unloaded conversations. Discovery pages through the unarchived catalog and requires an existing rollout; age never removes a direct conversation. Cursor, Zed, and Codex automation still use the configured observed-agent window, which defaults to 42 hours. Native pill and More Sessions packing may retain bounded seven-day visibility for responsiveness, but that bound never reclassifies a conversation as closed or changes its lifecycle status. Older conversations remain in the full Sessions browser and re-enter the bounded menu after fresh activity. A minute timer rechecks the visibility cutoff even when the catalog is unchanged.
 
 Needs you, Ready, and Working rows with ambient presence are active pill candidates. A History row with an available source action is a recent-shortcut candidate. A History row that has only Chat remains navigator-only because it has no safe physical-pill action.
 
@@ -152,7 +153,7 @@ The rendered layout determines click targets, visible shortcut numbers, and over
 
 Unopened completions stay ahead of In progress once the layout settles. Opening a completion lets running work move ahead of it after the interaction hold. Activity-only refreshes adopt the new recency order after the interaction hold, even when every session keeps the same phase.
 
-An authoritative unopened completion keeps a gentle green status-dot pulse until that exact completion is opened. Its three-second cycle varies opacity from 0.65 to 1. Reduce Motion keeps its green marker static, and hidden strips stop the animation timer. Completion attention is stored separately from lifecycle age and restored after app/helper restarts. Old catalog entries, empty idle conversations, and settings writes do not invent unopened completions. The seven-day menu cap and ambient eligibility still apply.
+An authoritative unopened completion keeps a gentle green status-dot pulse until that exact completion is opened. Its three-second cycle varies opacity from 0.65 to 1. Reduce Motion keeps its green marker static, and hidden strips stop the animation timer. Completion attention is stored separately from lifecycle age and restored after app/helper restarts. Old catalog entries, empty idle conversations, and settings writes do not invent unopened completions. Bounded menu packing and ambient eligibility still apply without changing lifecycle meaning.
 
 Unopened completions stay green. Opening marks that completion seen and stops its pulse without changing its Ready status or semantic color. A later completion receives a new identity and starts attention again. Hover, overflow browsing, elapsed time, metadata writes, and failed opens never mark it seen.
 
@@ -201,7 +202,7 @@ Activity, phase, and membership changes adopt the daemon's new priority order. E
 The status colors match the released sRGB roles:
 
 - `#f4c114` means Needs you.
-- `#a6e3a1` means Ready at every age. History placement may use muted surrounding treatment, while the lifecycle mark remains green.
+- `#a6e3a1` means recently active Ready. Reviewed Ready conversations become the muted gray inactive role at exactly thirty minutes of semantic inactivity while remaining Current and Ready; unopened completion attention remains green.
 - `#d97857` means In progress.
 - Recent History uses the muted `#7f849c` role and lighter capsule treatment.
 
