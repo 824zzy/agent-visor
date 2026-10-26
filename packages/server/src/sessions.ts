@@ -3708,6 +3708,7 @@ export class SessionRepository {
         // binding exists, keep the unavailable Paseo row visible.
         || owner.presence?.state === "unknown")
       && discovered.some(session => matchesPaseoAlias(owner, session)
+        && session.presence?.state === "open"
         && session.conversationState === "open"
         && session.ambientEligible !== false && session.canOpenOwner
         && (session.controlTarget?.kind === "herdr_surface"
