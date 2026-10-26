@@ -55,6 +55,16 @@ class Environment extends LiveProviderEnvironment {
   }
 }
 
+class ModernEnvironment extends Environment {
+  override readonly readCodexTuiBinding = async (pid: number) => pid === 42 ? {
+    sessionIds: [first],
+    origin: "http://127.0.0.1:43123",
+    socketPath: "/fixture/app-server-control.sock",
+    socketIdentity: "1:2:501",
+    inventory: { loaded: [first], roots: [{ id: first, path: null }] },
+  } : undefined;
+}
+
 it("uses exact CLI hook identities for two terminals in one cwd without stealing a Desktop session", async () => {
   const environment = new Environment();
   const repository = new SessionRepository([new CodexProvider(environment)], { now: () => now });
@@ -73,6 +83,88 @@ it("uses exact CLI hook identities for two terminals in one cwd without stealing
   expect(helper.codexThreadRequests).toEqual([]);
   expect(repository.chatRecord(desktop)?.controlTarget).toEqual({ kind: "url", url: `codex://threads/${desktop}` });
   expect(effects).toEqual([]);
+});
+
+it("projects exact live CLI ownership as open while catalog-only Desktop rows stay unavailable", async () => {
+  const environment = new Environment();
+  const provider = new CodexProvider(environment);
+  provider.noteHook({ provider: "codex", sessionId: first, cwd, pid: 42, tty: "/dev/ttys001",
+    event: "SessionStart", status: "idle", receivedAt: now.toISOString() });
+  const repository = new SessionRepository([provider], { now: () => now });
+
+  const snapshot = await repository.refresh();
+
+  expect(snapshot.sessions.find(session => session.id === first)).toMatchObject({
+    owner: "Ghostty",
+    presence: { state: "open", evidence: "frontend" },
+  });
+  expect(repository.chatRecord(first)).toMatchObject({
+    presence: { state: "open", evidence: "frontend" },
+    controlTarget: { kind: "terminal", target: { pid: 42, cwd } },
+  });
+  expect(snapshot.sessions.find(session => session.id === desktop)).toMatchObject({
+    presence: { state: "unknown", evidence: "catalog" },
+  });
+  expect(repository.chatRecord(desktop)).toMatchObject({
+    presence: { state: "unknown", evidence: "catalog" },
+    controlTarget: { kind: "url", url: `codex://threads/${desktop}` },
+  });
+});
+
+it("uses the exact modern TUI binding as CLI ownership beside a background app-server", async () => {
+  const environment = new ModernEnvironment();
+  environment.running.push({ pid: 44, parentPID: 7, command: "/bin/codex",
+    arguments: "codex app-server --managed-daemon" });
+  const repository = new SessionRepository([new CodexProvider(environment)], { now: () => now });
+
+  const snapshot = await repository.refresh();
+
+  expect(snapshot.sessions.find(session => session.id === first)).toMatchObject({
+    owner: "Ghostty",
+    presence: { state: "open", evidence: "frontend" },
+  });
+  expect(repository.chatRecord(first)?.controlTarget).toMatchObject({
+    kind: "terminal", target: { pid: 42, cwd },
+  });
+  expect(snapshot.sessions.find(session => session.id === desktop)).toMatchObject({
+    presence: { state: "unknown", evidence: "catalog" },
+  });
+});
+
+it("does not admit a catalog-only Desktop row into ambient pills", async () => {
+  const environment = new Environment();
+  const snapshot = await new SessionRepository([new CodexProvider(environment)], { now: () => now }).refresh();
+
+  expect(snapshot.sessions.find(session => session.id === desktop)).toMatchObject({
+    presence: { state: "unknown", evidence: "catalog" },
+    ambientEligible: false,
+  });
+  expect(menuPresentation(snapshot, [], now.valueOf()).pills)
+    .not.toContainEqual(expect.objectContaining({ id: desktop }));
+});
+
+it("keeps an exact live CLI identity unavailable when its catalog row is omitted", async () => {
+  const environment = new Environment();
+  const provider = new CodexProvider(environment);
+  provider.noteHook({ provider: "codex", sessionId: first, cwd, pid: 42, tty: "/dev/ttys001",
+    event: "SessionStart", status: "idle", receivedAt: now.toISOString() });
+  const repository = new SessionRepository([provider], { now: () => now });
+  await repository.refresh();
+
+  environment.rows = environment.rows.filter(row => row.id !== first);
+  const snapshot = await repository.refresh();
+
+  expect(snapshot.sessions).toContainEqual(expect.objectContaining({
+    id: first,
+    presence: expect.objectContaining({ state: "unknown", evidence: "unavailable" }),
+  }));
+  expect(repository.chatRecord(first)).toMatchObject({
+    controlTarget: { kind: "terminal", target: { pid: 42, cwd } },
+  });
+  expect(snapshot.sessions).toContainEqual(expect.objectContaining({
+    id: desktop,
+    presence: expect.objectContaining({ state: "unknown", evidence: "unavailable" }),
+  }));
 });
 
 it.each(["stale-pid", "wrong-tty", "wrong-home", "ambiguous"])("does not guess a CLI destination when identity is %s", async change => {
