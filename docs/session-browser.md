@@ -19,24 +19,25 @@ The `+N` popover is not a compact copy of this browser. It shows only sessions o
 
 ## Data And Ordering
 
-With an empty query, the browser shows four sections:
+With an empty query, the browser shows the shared presence sections:
 
 1. `Needs you` (`needsAttention`)
-2. `Ready to continue` (`ready`)
-3. `In progress` (`working`)
-4. `History` (`recent`)
+2. `In progress` (`working`)
+3. `Ready` (`ready`)
+4. `Status unavailable` (`unavailable`)
+5. `History` (`history`)
 
-Ready sessions with activity in the last seven days share one section and one combined count, ordered by activity newest first regardless of acknowledgment. Opening a Ready row marks it as acknowledged without changing its rank or lifecycle state. The menu-bar pill priority order remains independent of browser section grouping.
+Current membership is evidence-based: an exact open frontend or confirmed live per-conversation runtime remains Current regardless of age. A saved catalog record or an old timestamp does not establish Current, and insufficient evidence belongs in `Status unavailable`. Confirmed closure with no surviving runtime belongs in `History`. Opening a Ready row marks its completion acknowledged without changing presence or lifecycle state. The menu-bar pill priority order remains independent of browser section grouping.
 
-Lifecycle status is derived separately from placement. A known open conversation whose latest turn is Ready remains `Ready` (green) in the row, inspector, accessibility label, and native overflow even when the menu-only stale-session projection places it in the Recent/History tier. The native 30-minute projection changes attention ordering and grouping only; it does not archive the conversation or change its lifecycle evidence. The browser's seven-day History boundary remains an independent placement rule.
+Lifecycle status is derived separately from placement. A known open conversation whose latest turn is Ready remains Ready (green) in the row, inspector, accessibility label, and native overflow. A reviewed idle Ready conversation becomes inactive at exactly thirty minutes of semantic inactivity, while remaining Current; busy turns stay orange and verified unanswered questions or permissions stay yellow. This presentation never archives a conversation or changes its lifecycle evidence.
 
-Completed conversations older than seven days appear in History, but History does not replace the row's lifecycle status. A verified closed record is labeled `Closed` with a neutral gray mark; an open record whose current liveness is unknown is labeled `Status unavailable`; and a retained source row without stronger lifecycle evidence is labeled `Historical`. A known open Ready conversation remains `Ready` with a green mark even when it is placed in History. Grouping, row text, status color, and accessibility labels use the same browser presentation, including search results. Agent Room records retain their management label. Working turns and pending approvals do not become closed or historical merely because they are old.
+Closed retained records are labeled `Closed` with a neutral gray mark; records whose current liveness is unknown are labeled `Status unavailable`; and retained source rows without stronger lifecycle evidence are labeled `Historical`. Grouping, row text, status color, and accessibility labels use the same browser presentation, including search results. Agent Room records retain their management label. Working turns and pending approvals do not become closed or historical merely because they are old.
 
-Claude background jobs can remain in the catalog after their worker disappears. A retained `blocked` or `working` value moves to History once its activity is older than the observed-session window and no current worker, known worker status, displayed conversation, or waiting reason corroborates it. Its subtitle states the last reported state; its exact open and Chat actions remain available. Refreshing the catalog does not renew its activity time.
+Claude background jobs can remain in the catalog after their worker disappears. A retained `blocked` or `working` value remains unavailable until current evidence confirms liveness or closure; age alone never moves it to History. Its subtitle states the last reported state and safe actions remain available.
 
 Real unanswered questions and permissions remain `Needs you` regardless of the underlying job's age. Current Busy status, including matching live worker metadata when the catalog omits that field, keeps a turn `In progress`. These status rules do not make an agent overview into a conversation pill.
 
-Freshness is recalculated every minute and on window focus, visibility changes, and return to Sessions, even if the provider snapshot has not changed. Regrouping preserves the top visible session and its offset, subject to the scroll bounds, plus the keyboard target and query. This presentation does not archive conversations or change source/Chat capabilities, turn state, route ownership, or open drafts.
+Freshness is recalculated every minute and on window focus, visibility changes, and return to Sessions, even if the provider snapshot has not changed. Regrouping preserves the top visible session and its offset, subject to the scroll bounds, plus the keyboard target and query. Restart and reclassification preserve identity, source/profile, saved completion attention, and safe route provenance without restoring stale open/working proof or creating new flashes, notifications, navigation, or acknowledgments.
 
 Rows sort by activity date descending within each group, then by stable session ID. A newer lower-priority row never jumps above a higher-priority group.
 

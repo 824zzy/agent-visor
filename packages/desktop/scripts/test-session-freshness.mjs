@@ -132,7 +132,7 @@ try {
   const yellow = ["rgb(160, 90, 0)", "rgb(244, 193, 20)"];
   const neutral = ["rgb(124, 127, 147)", "rgb(147, 153, 178)"];
   assert(renderedStatuses.ready.label?.startsWith("Expired completion, Ready,"), "aged Ready status is accessible in History placement");
-  assert(green.includes(renderedStatuses.ready.color), `aged Ready stays green (${renderedStatuses.ready.color})`);
+  assert(neutral.includes(renderedStatuses.ready.color), `aged reviewed Ready is inactive gray (${renderedStatuses.ready.color})`);
   assert(renderedStatuses.working.label?.startsWith("Working 29, Working,"), "working status is accessible");
   assert(orange.includes(renderedStatuses.working.color), `working stays orange (${renderedStatuses.working.color})`);
   assert(renderedStatuses.needsYou.label?.startsWith("Pending approval, Needs you,"), "pending status is accessible");
@@ -182,7 +182,7 @@ try {
   assert(await evaluate(`document.querySelector('[aria-label^="Expired completion, Ready,"]')`),
     "search keeps the same Ready status in History placement");
   const color = await evaluate(`getComputedStyle(document.querySelector('[aria-label^="Expired completion, Ready,"]').firstElementChild).backgroundColor`);
-  assert(["rgb(47, 125, 32)", "rgb(166, 227, 161)"].includes(color), `Ready has a green status dot in History (${color})`);
+  assert(neutral.includes(color), `aged reviewed Ready has an inactive gray status dot in History (${color})`);
   await evaluate(`document.querySelector('[aria-label="Open Chat for Expired completion"]').click()`);
   await waitFor(`document.querySelector('[aria-label="Conversation status: Ready"]')`);
   await waitFor(`document.querySelector('[aria-label="Chat message"]')`);
@@ -196,6 +196,29 @@ try {
   assert.equal(await evaluate(`document.querySelector('[aria-label="Search sessions"]').value`), "Expired completion");
   await evaluate(`window.fixtureNow += ${day}; document.dispatchEvent(new Event('visibilitychange'))`);
   await waitFor(`document.getElementById('session-row-Expired%20completion').textContent.includes('11d')`);
+  // Modern explicit-presence rows stay Current while their reviewed idle
+  // treatment changes at exactly the shared thirty-minute boundary.
+  await setSearch("");
+  await waitFor(`document.querySelector('[aria-label="Search sessions"]').value === ''`);
+  const modernUpdatedAt = now - 29 * 60 * 1_000;
+  await evaluate(`window.fixtureNow = ${now}`);
+  snapshot.revision += 1;
+  snapshot.sessions = [{
+    ...makeSession("Modern idle", "ready", 29 * 60 * 1_000),
+    updatedAt: new Date(modernUpdatedAt).toISOString(),
+    presence: { state: "open", evidence: "frontend", observedAt: new Date(modernUpdatedAt).toISOString() },
+    lifecycleStatus: "ready",
+    sessionState: { conversation: "open", turn: "ready", route: "available" },
+  }];
+  for (const subscriber of subscribers) subscriber(snapshot);
+  await evaluate(`window.dispatchEvent(new Event('focus'))`);
+  await waitFor(`document.querySelector('[aria-label^="Modern idle, Ready,"]')`);
+  const modernReadyColor = await evaluate(`getComputedStyle(document.querySelector('[aria-label^="Modern idle, Ready,"]').firstElementChild).backgroundColor`);
+  assert(green.includes(modernReadyColor), `recent explicit Ready stays green (${modernReadyColor})`);
+  await evaluate(`window.fixtureNow = ${modernUpdatedAt + 30 * 60 * 1_000}; window.dispatchEvent(new Event('focus'))`);
+  await waitFor(`getComputedStyle(document.querySelector('[aria-label^="Modern idle, Ready,"]').firstElementChild).backgroundColor !== ${JSON.stringify(modernReadyColor)}`);
+  const modernInactiveColor = await evaluate(`getComputedStyle(document.querySelector('[aria-label^="Modern idle, Ready,"]').firstElementChild).backgroundColor`);
+  assert(neutral.includes(modernInactiveColor), `exactly-thirty-minute explicit Ready becomes gray (${modernInactiveColor})`);
   console.log("Session freshness PASS: consistent rows/search, time-only expiry, reading position, keyboard target, wake/focus and Chat draft/capabilities.");
 } catch (error) {
   console.error(error);

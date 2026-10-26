@@ -104,6 +104,9 @@ describe("RetainedHistoryStore", () => {
     const first = new RetainedHistoryStore({ path: pathName });
     first.observe(fixture("claude-safe", {
       sourceProfile: "claude-copilot",
+      ambientEligible: true,
+      completionIdentity: "turn:claude-safe-completion",
+      completionUnseen: true,
       secret: "must-not-persist",
       environment: { ANTHROPIC_API_KEY: "secret" },
     } as RetainedHistoryObservation & { secret: string; environment: object }));
@@ -113,11 +116,46 @@ describe("RetainedHistoryStore", () => {
 
     expect(second.page()).toMatchObject({
       total: 1,
-      records: [{ id: "claude-safe", sourceProfile: "claude-copilot", cwd: "/Users/me/Codes/agent-visor" }],
+      records: [{
+        id: "claude-safe", sourceProfile: "claude-copilot", cwd: "/Users/me/Codes/agent-visor",
+        ambientEligible: true, completionIdentity: "turn:claude-safe-completion",
+        completionUnseen: true,
+      }],
     });
     const serialized = readFileSync(pathName, "utf8");
     expect(serialized).not.toContain("must-not-persist");
     expect(serialized).not.toContain("ANTHROPIC_API_KEY");
+  });
+
+  it("records an explicit current eligibility exclusion without erasing identity", () => {
+    const store = new RetainedHistoryStore({ path: storePath() });
+    store.observe(fixture("claude-visibility", { ambientEligible: true }));
+    store.observe(fixture("claude-visibility", { ambientEligible: false, current: true }));
+
+    expect(store.getForProvider("claude_code", "claude-visibility")).toMatchObject({
+      id: "claude-visibility",
+      ambientEligible: false,
+    });
+  });
+
+  it("updates retained completion review state without changing the saved identity", () => {
+    const store = new RetainedHistoryStore({ path: storePath() });
+    store.observe(fixture("completion-review", {
+      completionIdentity: "turn:completion-review",
+      completionUnseen: true,
+      current: true,
+    }));
+
+    expect(store.updateCompletionAttention(
+      "claude_code", "completion-review", "turn:completion-review", false,
+    )).toBe("updated");
+    expect(store.getForProvider("claude_code", "completion-review")).toMatchObject({
+      completionIdentity: "turn:completion-review",
+      completionUnseen: false,
+    });
+    expect(store.updateCompletionAttention(
+      "claude_code", "completion-review", "turn:another-completion", true,
+    )).toBe("conflict");
   });
 
   it("searches and pages every retained record without an implicit cap", () => {

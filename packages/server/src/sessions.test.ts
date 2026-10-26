@@ -1135,6 +1135,8 @@ describe("SessionRepository", () => {
       sessionClass: "terminal",
       conversationState: "open",
       turnState: "ready",
+      turnId: "legacy-turn",
+      completionAt: "2026-10-21T18:00:00.000Z",
       updatedAt: "2026-10-21T18:00:00.000Z",
       canOpenOwner: true,
       canEnterChat: false,
@@ -1168,6 +1170,10 @@ describe("SessionRepository", () => {
         section: "history",
         lifecycleStatus: "unavailable",
         canOpenOwner: false,
+      }));
+      expect(unavailable.historyPage("outage").sessions).not.toContainEqual(expect.objectContaining({
+        id: record.id,
+        completionUnseen: true,
       }));
       expect(unavailable.current().sessions).not.toContainEqual(expect.objectContaining({ id: record.id }));
     } finally {
@@ -1523,6 +1529,266 @@ describe("SessionRepository", () => {
         lifecycleStatus: "historical",
         subtitle: "Historical provider record",
       });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("restores a previously verified eligible row as unavailable after restart without reviving liveness", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-restart-provenance-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const attentionPath = path.join(directory, "completion-attention.json");
+    const id = "claude:restart-provenance";
+    const completedAt = "2026-10-01T18:00:00.000Z";
+    let outage = false;
+    const observed: DiscoveredProviderSession = {
+      id,
+      provider: "claude_code",
+      title: "Restart provenance",
+      subtitle: "Ready to continue",
+      project: "agent-visor",
+      cwd: directory,
+      owner: "Ghostty",
+      sourceProfile: "claude-copilot",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      turnId: "restart-turn",
+      completionAt: completedAt,
+      completionUnseen: true,
+      updatedAt: completedAt,
+      canOpenOwner: true,
+      canEnterChat: true,
+      presence: { state: "open", evidence: "frontend", observedAt: completedAt },
+      historyIdentity: { verified: true, current: true, canonicalId: id, host: "Ghostty" },
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty", pid: 9401, processStartToken: "restart-provenance",
+        tty: "ttys9401", cwd: directory,
+      } },
+    };
+    const provider: ProviderAdapter & { discoveryAuthority(): "authoritative" | "unavailable" } = {
+      id: "claude_code",
+      discoveryAuthority: () => outage ? "unavailable" : "authoritative",
+      discover: async () => {
+        if (outage) return [{
+          ...structuredClone(observed),
+          ambientEligible: false,
+          completionUnseen: false,
+          presence: { state: "unknown" as const, evidence: "unavailable" as const, observedAt: completedAt },
+        }];
+        return [structuredClone(observed)];
+      },
+    };
+    const options = { retainedHistoryPath: historyPath, completionAttentionPath: attentionPath,
+      now: () => new Date("2026-10-21T18:03:00.000Z") };
+    const first = new SessionRepository([provider], options);
+    try {
+      const initial = await first.refresh();
+      expect(initial.sessions[0]).toMatchObject({ id, completionUnseen: true });
+
+      outage = true;
+      const restarted = new SessionRepository([provider], options);
+      const recovered = await restarted.refresh();
+      expect(recovered.sessions).toContainEqual(expect.objectContaining({
+        id,
+        sourceProfile: "claude-copilot",
+        ambientEligible: true,
+        completionUnseen: true,
+        presence: expect.objectContaining({ state: "unknown", evidence: "unavailable" }),
+        lifecycleStatus: "unavailable",
+        canOpenOwner: false,
+      }));
+      const row = recovered.sessions.find((session) => session.id === id)!;
+      expect(row.sessionState?.conversation).toBe("unknown");
+      expect(row.sessionState?.turn).toBe("unknown");
+      expect(row.owner).toBe("Ghostty");
+      expect(row.sourceProfile).toBe("claude-copilot");
+      expect(row.controlTarget).toBeUndefined();
+      expect(restarted.historyPage("Restart provenance").sessions).toContainEqual(expect.objectContaining({
+        id,
+        completionUnseen: true,
+        attentionTier: "ready",
+      }));
+      await expect(restarted.retryDetection(id)).resolves.toBeUndefined();
+
+      outage = false;
+      const recoveredLive = await restarted.refresh();
+      expect(recoveredLive.sessions.find((session) => session.id === id)).toMatchObject({
+        id,
+        presence: { state: "open" },
+        sourceProfile: "claude-copilot",
+        completionUnseen: true,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("retains exact Paseo identity, profile, and native alias through an outage after restart", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-paseo-restart-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const id = "paseo:server-7:agent-42";
+    const nativeAlias = "11111111-1111-4111-8111-111111111111";
+    const duplicate: DiscoveredProviderSession = {
+      id: nativeAlias,
+      provider: "claude_code",
+      title: "Paseo restart profile",
+      project: "agent-visor",
+      cwd: directory,
+      owner: "Ghostty",
+      sourceProfile: "claude-copilot",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: true,
+      ambientEligible: true,
+      presence: { state: "open", evidence: "frontend", observedAt: "2026-10-21T18:00:00.000Z" },
+      historyIdentity: { verified: true, current: true, canonicalId: nativeAlias, host: "Ghostty" },
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty", pid: 9402, processStartToken: "paseo-duplicate",
+        tty: "ttys9402", cwd: directory,
+      } },
+    };
+    let outage = false;
+    const observed: DiscoveredProviderSession = {
+      id,
+      provider: "paseo",
+      title: "Paseo restart profile",
+      project: "agent-visor",
+      cwd: directory,
+      owner: "Paseo",
+      sourceProfile: "claude-copilot",
+      section: "ready",
+      sessionClass: "interactive",
+      conversationState: "open",
+      turnState: "ready",
+      completionAt: "2026-10-21T18:00:00.000Z",
+      updatedAt: "2026-10-21T18:00:00.000Z",
+      canOpenOwner: true,
+      canEnterChat: false,
+      ambientEligible: true,
+      presence: { state: "open", evidence: "runtime", observedAt: "2026-10-21T18:00:00.000Z" },
+      nativeSessionAlias: { provider: "claude_code", id: nativeAlias },
+      controlTarget: { kind: "url", url: "paseo://h/server-7/agent/agent-42" },
+    };
+    const provider: ProviderAdapter & { discoveryAuthority(): "authoritative" | "unavailable" } = {
+      id: "paseo",
+      discoveryAuthority: () => outage ? "unavailable" : "authoritative",
+      discover: async () => {
+        if (outage) throw new Error("fixture Paseo outage");
+        return [structuredClone(observed)];
+      },
+      resolveForFocus: async () => outage ? undefined : structuredClone(observed),
+    };
+    const duplicateProvider: ProviderAdapter = {
+      id: "claude_code",
+      discover: async () => [structuredClone(duplicate)],
+    };
+    const options = { retainedHistoryPath: historyPath,
+      now: () => new Date("2026-10-21T18:03:00.000Z") };
+    const first = new SessionRepository([provider, duplicateProvider], options);
+    try {
+      await first.refresh();
+      outage = true;
+      const openURL = vi.fn(async () => undefined);
+      const restarted = new SessionRepository([provider, duplicateProvider], options);
+      restarted.setControls(new NativeSessionControls(new FakeNativeHelper(), undefined, undefined, openURL));
+      const recovered = await restarted.refresh();
+      expect(recovered.sessions).toContainEqual(expect.objectContaining({
+        id,
+        sourceProfile: "claude-copilot",
+        owner: "Paseo",
+        presence: expect.objectContaining({ state: "unknown", evidence: "unavailable" }),
+        ambientEligible: true,
+      }));
+      const row = recovered.sessions.find((session) => session.id === id)!;
+      expect(row.canOpenOwner).toBe(false);
+      expect(row.sessionState?.conversation).toBe("unknown");
+
+      outage = false;
+      const live = await restarted.refresh();
+      expect(live.sessions.map((session) => session.id)).toEqual([id]);
+      expect(live.sessions[0]).toMatchObject({
+        id,
+        sourceProfile: "claude-copilot",
+        owner: "Paseo",
+        presence: { state: "open", evidence: "runtime" },
+      });
+      await expect(restarted.focusSession(id)).resolves.toBeUndefined();
+      expect(openURL).toHaveBeenCalledExactlyOnceWith("paseo://h/server-7/agent/agent-42");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an explicit reviewed completion across fresh and retained rows after cache expiry", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-completion-reviewed-"));
+    const historyPath = path.join(directory, "retained-history.json");
+    const id = "claude:reviewed-completion";
+    const completedAt = "2026-10-01T18:00:00.000Z";
+    let outage = false;
+    let includeCompletionState = true;
+    const observed: DiscoveredProviderSession = {
+      id,
+      provider: "claude_code",
+      title: "Reviewed completion",
+      subtitle: "Ready to continue",
+      project: "agent-visor",
+      cwd: directory,
+      owner: "Ghostty",
+      sourceProfile: "claude-copilot",
+      section: "ready",
+      sessionClass: "terminal",
+      conversationState: "open",
+      turnState: "ready",
+      turnId: "reviewed-turn",
+      completionAt: completedAt,
+      completionUnseen: false,
+      updatedAt: completedAt,
+      canOpenOwner: true,
+      canEnterChat: false,
+      presence: { state: "open", evidence: "frontend", observedAt: completedAt },
+      historyIdentity: { verified: true, current: true, canonicalId: id, host: "Ghostty" },
+      controlTarget: { kind: "terminal", target: {
+        application: "Ghostty", pid: 9403, processStartToken: "reviewed-completion",
+        tty: "ttys9403", cwd: directory,
+      } },
+    };
+    const provider: ProviderAdapter & { discoveryAuthority(): "authoritative" | "unavailable" } = {
+      id: "claude_code",
+      discoveryAuthority: () => outage ? "unavailable" : "authoritative",
+      discover: async () => {
+        if (outage) throw new Error("fixture Claude outage");
+        const next = structuredClone(observed);
+        if (!includeCompletionState) delete next.completionUnseen;
+        return [next];
+      },
+    };
+    const options = { retainedHistoryPath: historyPath,
+      now: () => new Date("2026-10-21T18:03:00.000Z") };
+    const first = new SessionRepository([provider], options);
+    try {
+      await first.refresh();
+      includeCompletionState = false;
+      const restarted = new SessionRepository([provider], options);
+      const fresh = await restarted.refresh();
+      expect(fresh.sessions).toContainEqual(expect.objectContaining({ id }));
+      const freshRow = fresh.sessions.find((session) => session.id === id);
+      expect(freshRow).toBeDefined();
+      expect(freshRow).not.toHaveProperty("completionUnseen");
+
+      outage = true;
+      await restarted.refresh();
+      const unavailableRow = restarted.current().sessions.find((session) => session.id === id);
+      expect(unavailableRow).toBeDefined();
+      expect(unavailableRow).not.toHaveProperty("completionUnseen");
+      const retainedRow = restarted.historyPage("Reviewed completion").sessions.find((session) => session.id === id);
+      expect(retainedRow).toBeDefined();
+      expect(retainedRow).not.toHaveProperty("completionUnseen");
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

@@ -20,7 +20,7 @@ const MAX_CANONICAL_ID_LENGTH = 1_024;
 const HOSTS = new Set(["Ghostty", "cmux", "Herdr", "iTerm2", "Terminal"] as const);
 const HISTORY_STORAGE_WARNING = "Retained history storage is unavailable.";
 
-export type RetainedHistoryProvider = "claude_code" | "codex";
+export type RetainedHistoryProvider = "claude_code" | "codex" | "paseo";
 export type RetainedHistoryHost = "Ghostty" | "cmux" | "Herdr" | "iTerm2" | "Terminal";
 export type RetainedHistoryRemovalReason = "agent_visor" | "provider_archived";
 export type RetainedHistoryRemovalResult = "removed" | "not_found" | "storage_unavailable";
@@ -79,6 +79,8 @@ export type RetainedHistoryObservation = {
   canonicalId?: string;
   /** Explicitly verified provider aliases, never title/cwd-derived matches. */
   aliases?: string[];
+  /** Verified native Claude identity associated with a Paseo agent. */
+  nativeSessionAlias?: string;
   title?: string;
   subtitle?: string;
   sourceProfile?: string;
@@ -95,6 +97,10 @@ export type RetainedHistoryObservation = {
   resumeUnavailableReason?: RetainedHistoryResumeUnavailableReason;
   /** Provider completion identity, separate from retained updatedAt. */
   completionIdentity?: string;
+  /** Explicitly known unopened/reviewed state; absent means legacy unknown. */
+  completionUnseen?: boolean;
+  /** Prior positive ambient eligibility; never implies current liveness. */
+  ambientEligible?: boolean;
   updatedAt: string;
   observedAt: string;
   /** Explicit current frontend/process observation; never inferred by the store. */
@@ -265,7 +271,7 @@ export class RetainedHistoryStore {
   /** Remove one exact retained identity while preserving durable origin facts. */
   remove(id: string, reason: RetainedHistoryRemovalReason): RetainedHistoryRemovalResult {
     const providers: RetainedHistoryProvider[] = id.startsWith("codex:")
-      ? ["codex"] : ["claude_code", "codex"];
+      ? ["codex"] : ["claude_code", "codex", "paseo"];
     for (const provider of providers) {
       const key = this.keyByIdentity.get(historyKey(provider, id));
       const record = key ? this.recordsByKey.get(key) : undefined;
@@ -339,7 +345,7 @@ export class RetainedHistoryStore {
   /** Return an identity record for read-only History Chat reconstruction. */
   get(id: string): RetainedHistoryRecord | undefined {
     const providers: RetainedHistoryProvider[] = id.startsWith("codex:")
-      ? ["codex"] : ["claude_code", "codex"];
+      ? ["codex"] : ["claude_code", "codex", "paseo"];
     let found: RetainedHistoryRecord | undefined;
     for (const provider of providers) {
       const record = this.getForProvider(provider, id);
@@ -408,12 +414,37 @@ export class RetainedHistoryStore {
     return "storage_unavailable";
   }
 
+  /** Persist attention state without changing semantic activity or liveness. */
+  updateCompletionAttention(
+    provider: RetainedHistoryProvider,
+    id: string,
+    identity: string,
+    unseen: boolean,
+  ): RetainedHistoryRepairResult {
+    const key = this.keyByIdentity.get(historyKey(provider, id));
+    const record = key ? this.recordsByKey.get(key) : undefined;
+    if (!key || !record) return "not_found";
+    if (record.completionIdentity !== undefined && record.completionIdentity !== identity) {
+      return "conflict";
+    }
+    const next: RetainedHistoryRecord = {
+      ...record,
+      completionIdentity: identity,
+      completionUnseen: unseen,
+    };
+    this.recordsByKey.set(key, next);
+    if (this.persist()) return "updated";
+    this.recordsByKey.set(key, record);
+    return "storage_unavailable";
+  }
+
   /** Return provider-qualified origin even after AV removal suppressed the row. */
   getOriginForProvider(provider: RetainedHistoryProvider, id: string): {
     provider: RetainedHistoryProvider;
     id: string;
     canonicalId: string;
     aliases?: string[];
+    nativeSessionAlias?: string;
     host?: RetainedHistoryHost;
     configHome?: string;
   } | undefined {
@@ -563,15 +594,16 @@ export class RetainedHistoryStore {
 }
 
 function normalizeObservation(value: RetainedHistoryObservation): NormalizedHistoryObservation | undefined {
-  if (!isRecord(value) || (value.provider !== "claude_code" && value.provider !== "codex")) return undefined;
+  if (!isRecord(value) || (value.provider !== "claude_code" && value.provider !== "codex"
+    && value.provider !== "paseo")) return undefined;
   const id = bounded(value.id, MAX_ID_LENGTH);
   const canonicalId = bounded(value.canonicalId, MAX_CANONICAL_ID_LENGTH) ?? id;
-  const title = bounded(value.title, MAX_TITLE_LENGTH) ?? `${value.provider === "codex" ? "Codex" : "Claude Code"} session`;
+  const title = bounded(value.title, MAX_TITLE_LENGTH) ?? `${value.provider === "codex" ? "Codex" : value.provider === "paseo" ? "Paseo" : "Claude Code"} session`;
   const subtitle = bounded(value.subtitle, MAX_TEXT_LENGTH) ?? "";
   const project = bounded(value.project, MAX_TEXT_LENGTH);
   const cwd = absolutePath(value.cwd, MAX_TEXT_LENGTH);
   const fallbackProject = cwd ? path.basename(cwd) || cwd : undefined;
-  const owner = bounded(value.owner, 128) ?? (value.provider === "codex" ? "Codex" : "Claude");
+  const owner = bounded(value.owner, 128) ?? (value.provider === "codex" ? "Codex" : value.provider === "paseo" ? "Paseo" : "Claude");
   const hostValue = value.host;
   const host = typeof hostValue === "string" && HOSTS.has(hostValue as RetainedHistoryHost)
     ? hostValue as RetainedHistoryHost : undefined;
@@ -584,6 +616,9 @@ function normalizeObservation(value: RetainedHistoryObservation): NormalizedHist
   if (value.configHome !== undefined && !configHome) return undefined;
   const aliases = normalizeAliases(value.aliases, canonicalId, id);
   if (value.aliases !== undefined && !aliases) return undefined;
+  const nativeSessionAlias = value.nativeSessionAlias === undefined
+    ? undefined : bounded(value.nativeSessionAlias, MAX_ID_LENGTH);
+  if (value.nativeSessionAlias !== undefined && !nativeSessionAlias) return undefined;
   const transcriptPath = value.transcriptPath === undefined
     ? undefined : absolutePath(value.transcriptPath, MAX_TEXT_LENGTH);
   if (value.transcriptPath !== undefined && !transcriptPath) return undefined;
@@ -593,7 +628,7 @@ function normalizeObservation(value: RetainedHistoryObservation): NormalizedHist
       || (configHome !== undefined && "configRootRef" in resume
         && resume.configRootRef !== undefined && resume.configRootRef !== configHome));
   const resumeDetailsInvalid = value.resume !== undefined
-    && (!resume || (value.provider === "claude_code"
+    && (!resume || value.provider === "paseo" || (value.provider === "claude_code"
       ? resume.provider !== "claude_code" : resume.provider !== "codex_cli") || resumeContextInvalid);
   const parsedResumeUnavailableReason = value.resumeUnavailableReason === undefined
     ? undefined : normalizeResumeUnavailableReason(value.resumeUnavailableReason);
@@ -606,11 +641,18 @@ function normalizeObservation(value: RetainedHistoryObservation): NormalizedHist
   const completionIdentity = value.completionIdentity === undefined
     ? undefined : bounded(value.completionIdentity, MAX_ID_LENGTH);
   if (value.completionIdentity !== undefined && !completionIdentity) return undefined;
+  const completionUnseen = value.completionUnseen === undefined
+    ? undefined : value.completionUnseen;
+  if (value.completionUnseen !== undefined && typeof completionUnseen !== "boolean") return undefined;
+  const ambientEligible = value.ambientEligible === undefined
+    ? undefined : value.ambientEligible;
+  if (value.ambientEligible !== undefined && typeof ambientEligible !== "boolean") return undefined;
   return {
     id,
     provider: value.provider,
     canonicalId,
     ...(aliases?.length ? { aliases } : {}),
+    ...(nativeSessionAlias ? { nativeSessionAlias } : {}),
     title,
     subtitle,
     ...(sourceProfile ? { sourceProfile } : {}),
@@ -623,6 +665,8 @@ function normalizeObservation(value: RetainedHistoryObservation): NormalizedHist
     ...(!resumeDetailsInvalid && resume ? { resume } : {}),
     ...(resumeUnavailableReason ? { resumeUnavailableReason } : {}),
     ...(completionIdentity ? { completionIdentity } : {}),
+    ...(completionUnseen !== undefined ? { completionUnseen } : {}),
+    ...(ambientEligible !== undefined ? { ambientEligible } : {}),
     updatedAt,
     observedAt,
   };
@@ -639,7 +683,8 @@ function normalizeRecord(value: unknown): RetainedHistoryRecord | undefined {
 }
 
 function normalizeTombstone(value: unknown): RetainedHistoryTombstone | undefined {
-  if (!isRecord(value) || (value.provider !== "claude_code" && value.provider !== "codex")) return undefined;
+  if (!isRecord(value) || (value.provider !== "claude_code" && value.provider !== "codex"
+    && value.provider !== "paseo")) return undefined;
   const id = bounded(value.id, MAX_ID_LENGTH);
   const canonicalId = bounded(value.canonicalId, MAX_CANONICAL_ID_LENGTH);
   const removedAt = iso(value.removedAt);
@@ -669,6 +714,7 @@ function originFromRecord(record: RetainedHistoryRecord): {
   id: string;
   canonicalId: string;
   aliases?: string[];
+  nativeSessionAlias?: string;
   host?: RetainedHistoryHost;
   configHome?: string;
 } {
@@ -677,6 +723,7 @@ function originFromRecord(record: RetainedHistoryRecord): {
     id: record.id,
     canonicalId: record.canonicalId,
     ...(record.aliases?.length ? { aliases: [...record.aliases] } : {}),
+    ...(record.nativeSessionAlias ? { nativeSessionAlias: record.nativeSessionAlias } : {}),
     ...(record.host ? { host: record.host } : {}),
     ...(record.configHome ? { configHome: record.configHome } : {}),
   };
@@ -734,6 +781,8 @@ function sameRepairRecord(current: RetainedHistoryRecord, expected: RetainedHist
     resume: current.resume,
     resumeUnavailableReason: current.resumeUnavailableReason,
     completionIdentity: current.completionIdentity,
+    completionUnseen: current.completionUnseen,
+    ambientEligible: current.ambientEligible,
     closedAt: current.closedAt,
     updatedAt: current.updatedAt,
     observedAt: current.observedAt,
@@ -749,6 +798,8 @@ function sameRepairRecord(current: RetainedHistoryRecord, expected: RetainedHist
     resume: expected.resume,
     resumeUnavailableReason: expected.resumeUnavailableReason,
     completionIdentity: expected.completionIdentity,
+    completionUnseen: expected.completionUnseen,
+    ambientEligible: expected.ambientEligible,
     closedAt: expected.closedAt,
     updatedAt: expected.updatedAt,
     observedAt: expected.observedAt,
