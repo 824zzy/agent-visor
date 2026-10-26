@@ -579,7 +579,8 @@ function SessionRow({
   const statusColor = lifecycleColor(lifecycle.tone, palette);
   const logo = agentImage(session.source);
   const sourceLabel = session.source === "Codex" && session.owner.startsWith("Codex ·")
-    ? session.owner : session.source;
+    ? session.owner
+    : session.sourceProfile ? `${session.source} · ${session.sourceProfile}` : session.source;
 
   return (
     <View nativeID={rowId(session.id)} style={rowStyles.row}>

@@ -12,6 +12,7 @@ const sessions = Array.from({ length: 30 }, (_, index) => ({
   subtitle: index === 0 ? "Managed by Agent Room · Agent is working" : "Accessibility test row",
   managedBy: index === 0 ? "Agent Room" : undefined,
   source: index % 2 ? "Codex" : "Pi",
+  sourceProfile: index === 0 ? "fixture-profile" : undefined,
   project: "agent-visor",
   owner: index % 2 ? "Codex" : "Ghostty",
   cwd: "/tmp/agent-visor",
@@ -143,6 +144,12 @@ async function run() {
   assert(frames.disjoint, "owner and Chat actions do not overlap");
   assert(await window.webContents.executeJavaScript(`Boolean(document.querySelector('[aria-label*="Managed by Agent Room"]'))`),
     "managed-session ownership is accessible on its row");
+  const sourceActionLabel = await window.webContents.executeJavaScript(
+    `document.querySelector('[aria-label^="Agent session 0,"]')?.getAttribute('aria-label')`,
+  );
+  assert((sourceActionLabel ?? "").includes("Pi · fixture-profile")
+    && (sourceActionLabel ?? "").includes("Open in Ghostty"),
+  "search rows expose the original source profile and available owner action");
 
   await window.webContents.executeJavaScript(`window.__focusError = null;
     window.alert = (message) => { window.__focusError = message; };
