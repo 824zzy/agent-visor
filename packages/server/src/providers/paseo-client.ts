@@ -50,7 +50,7 @@ export class PaseoClient implements PaseoSource {
         };
         const timer = setTimeout(() => finish(), 2_000);
         const request = (cursor?: string) => socket.send(JSON.stringify({ type: "session", message: {
-          type: "fetch_agents_request", requestId, filter: { includeArchived: false },
+          type: "fetch_agents_request", requestId, filter: { includeArchived: true },
           page: { limit: 200, ...(cursor ? { cursor } : {}) },
         } }));
         socket.on("error", () => finish());
