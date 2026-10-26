@@ -3502,7 +3502,10 @@ export class SessionRepository {
         // that drive the ambient view.
         const hooked = applyHooks([session], this.hookBySession)[0] ?? session;
         const copy = structuredClone(this.projectAcknowledgedFailure(hooked));
-        this.openedSessionBySession.set(sessionId, copy);
+        // The merged record receives presentation-only section/lifecycle and
+        // attention overlays below. Keep the exact cache isolated so those
+        // derived facts cannot become the next publish's provider evidence.
+        this.openedSessionBySession.set(sessionId, structuredClone(copy));
         return copy;
       });
     const openedIDs = new Set(openedRecords.map((session) => session.id));
