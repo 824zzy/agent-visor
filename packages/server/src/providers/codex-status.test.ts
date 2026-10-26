@@ -116,7 +116,7 @@ describe("Codex desktop lifecycle status", () => {
       environment.append(event, "owning-turn");
       const snapshot = await repository.refresh();
       expect(snapshot.sessions[0]?.section).toBe("ready");
-      expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("ready");
+      expect(menuPresentation(snapshot, [], environment.clock).navigatorPills[0]?.phase).toBe("ready");
     },
   );
 
@@ -137,7 +137,7 @@ describe("Codex desktop lifecycle status", () => {
     environment.append("turn_aborted", "turn-1");
     const snapshot = await repository.refresh();
     expect(snapshot.sessions[0]?.section).toBe("needs_you");
-    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("needs_you");
+    expect(menuPresentation(snapshot, [], environment.clock).navigatorPills[0]?.phase).toBe("needs_you");
     environment.append("task_complete", "turn-2");
     expect((await repository.refresh()).sessions[0]?.section).toBe("ready");
   });
@@ -175,7 +175,7 @@ describe("Codex desktop lifecycle status", () => {
     const questionAt = environment.now().toISOString();
     const snapshot = await repository.refresh();
     expect(snapshot.sessions[0]).toMatchObject({ section: "needs_you", updatedAt: questionAt });
-    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("needs_you");
+    expect(menuPresentation(snapshot, [], environment.clock).navigatorPills[0]?.phase).toBe("needs_you");
     const cold = new SessionRepository([new CodexProvider(environment)], { now: () => environment.now() });
     expect((await cold.refresh()).sessions[0]).toMatchObject({ section: "needs_you", updatedAt: questionAt });
   });
@@ -189,7 +189,7 @@ describe("Codex desktop lifecycle status", () => {
       environment.response({ type: "function_call_output", call_id: "async-question", output: '{"accepted":true}' });
       const snapshot = await repository.refresh();
       expect(snapshot.sessions[0]).toMatchObject({ section: "needs_you", subtitle: "Answer required in Codex" });
-      expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("needs_you");
+      expect(menuPresentation(snapshot, [], environment.clock).navigatorPills[0]?.phase).toBe("needs_you");
     },
   );
 
@@ -205,7 +205,7 @@ describe("Codex desktop lifecycle status", () => {
     environment.clock += 2 * 60 * 60_000;
     let snapshot = await repository.refresh();
     expect(snapshot.sessions[0]).toMatchObject({ section: "needs_you", updatedAt: questionAt });
-    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("needs_you");
+    expect(menuPresentation(snapshot, [], environment.clock).navigatorPills[0]?.phase).toBe("needs_you");
     expect(hook("PostToolUse", "processing").sessions[0]?.section).toBe("needs_you");
     const reply = (callId: string) => environment.response({ type: "message", role: "user", content: [{
       type: "input_text", text: `<send_user_message_question_reply>${JSON.stringify([{
@@ -220,7 +220,7 @@ describe("Codex desktop lifecycle status", () => {
     environment.response({ type: "function_call_output", call_id: "resumed-work", output: "working" });
     snapshot = await repository.refresh();
     expect(snapshot.sessions[0]?.section).toBe("working");
-    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("working");
+    expect(menuPresentation(snapshot, [], environment.clock).navigatorPills[0]?.phase).toBe("working");
   });
 
   it("does not leave yellow attention for an async question whose delivery was rejected", async () => {
@@ -252,7 +252,7 @@ describe("Codex desktop lifecycle status", () => {
     environment.append("task_complete", "turn-1");
     const snapshot = await repository.refresh();
     expect(snapshot.sessions[0]?.section).toBe("ready");
-    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("ready");
+    expect(menuPresentation(snapshot, [], environment.clock).navigatorPills[0]?.phase).toBe("ready");
   });
 
   it.each(["not-json", JSON.stringify({ questions: [] }), JSON.stringify({ questions: [null] }),
@@ -416,7 +416,7 @@ describe("Codex desktop lifecycle status", () => {
     expect(await new CodexProvider(environment).resolve(sessionId)).toMatchObject({ managedBy: "Agent Room" });
   });
 
-  it("restores pill visibility when a later client record identifies direct Codex use", async () => {
+  it("restores navigator visibility when a later client record identifies direct Codex use", async () => {
     const { environment, repository } = setup();
     environment.content = metadata("Agent Room");
     environment.append("task_started", "turn-1");
@@ -426,7 +426,7 @@ describe("Codex desktop lifecycle status", () => {
     const snapshot = await repository.refresh();
     expect(snapshot.sessions[0]?.managedBy).toBeUndefined();
     expect(snapshot.sessions[0]?.subtitle).toBe("Agent is working");
-    expect(menuPresentation(snapshot, [], environment.clock).pills.map(({ id }) => id)).toEqual([sessionId]);
+    expect(menuPresentation(snapshot, [], environment.clock).navigatorPills.map(({ id }) => id)).toEqual([sessionId]);
   });
 
   it.each([
@@ -440,7 +440,7 @@ describe("Codex desktop lifecycle status", () => {
     environment.append("task_started", "turn-1");
     const snapshot = await repository.refresh();
     expect(snapshot.sessions[0]?.managedBy).toBeUndefined();
-    expect(menuPresentation(snapshot, [], environment.clock).pills.map(({ id }) => id)).toEqual([sessionId]);
+    expect(menuPresentation(snapshot, [], environment.clock).navigatorPills.map(({ id }) => id)).toEqual([sessionId]);
   });
 
   it("classifies metadata-only sessions and waits for complete client records", async () => {
@@ -457,7 +457,7 @@ describe("Codex desktop lifecycle status", () => {
     // Replacing/truncating the transcript must not reuse the old client identity.
     environment.content = "";
     environment.append("task_started", "new-turn");
-    expect(menuPresentation(await repository.refresh(), [], environment.clock).pills.map(({ id }) => id)).toEqual([sessionId]);
+    expect(menuPresentation(await repository.refresh(), [], environment.clock).navigatorPills.map(({ id }) => id)).toEqual([sessionId]);
   });
 
   it("reads real UTF-8 transcript deltas across oversized content and partial writes", async () => {
@@ -617,7 +617,7 @@ describe("Codex desktop lifecycle status", () => {
       sessionState: { conversation: "open", turn: "ready" },
       canEnterChat: true,
     }]);
-    expect(menuPresentation(snapshot, [], environment.clock).pills).toMatchObject([{
+    expect(menuPresentation(snapshot, [], environment.clock).navigatorPills).toMatchObject([{
       id: sessionId,
       phase: "ready",
     }]);
@@ -647,7 +647,7 @@ describe("Codex desktop lifecycle status", () => {
       sessionState: { conversation: "open", turn: "ready" },
       canOpenOwner: true, canEnterChat: true,
     });
-    expect(menuPresentation(snapshot, [], environment.clock).pills).toMatchObject([{
+    expect(menuPresentation(snapshot, [], environment.clock).navigatorPills).toMatchObject([{
       id: sessionId, phase: "history", attentionTier: "history",
     }]);
     const restarted = new SessionRepository([new CodexProvider(environment)]);
@@ -656,7 +656,7 @@ describe("Codex desktop lifecycle status", () => {
     environment.append("task_started", "new-turn");
     expect((await repository.refresh()).sessions[0]?.section).toBe("working");
     environment.append("task_complete", "new-turn");
-    expect(menuPresentation(await repository.refresh(), [], environment.clock).pills).toMatchObject([{
+    expect(menuPresentation(await repository.refresh(), [], environment.clock).navigatorPills).toMatchObject([{
       id: sessionId, phase: "ready", attentionTier: "ready", inspector: { activityAt: environment.now().toISOString() },
     }]);
   });
@@ -694,7 +694,7 @@ describe("Codex desktop lifecycle status", () => {
     const snapshot = await repository.refresh();
     expect(snapshot.sessions[0]?.section).toBe("history");
     expect(snapshot.sessions[0]?.sessionState?.turn).not.toBe("working");
-    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("history");
+    expect(menuPresentation(snapshot, [], environment.clock).navigatorPills[0]?.phase).toBe("history");
   });
 
   it("keeps an opened completion seen across settings writes and observes a later completion", async () => {
@@ -706,13 +706,13 @@ describe("Codex desktop lifecycle status", () => {
     const completionAt = environment.now().toISOString();
     environment.clock += 10 * 60_000;
     environment.append("thread_settings_applied");
-    expect(menuPresentation(await repository.refresh(), [], environment.clock).pills).toMatchObject([{
+    expect(menuPresentation(await repository.refresh(), [], environment.clock).navigatorPills).toMatchObject([{
       id: sessionId, phase: "ready", attentionTier: "acknowledged_ready", inspector: { activityAt: completionAt },
     }]);
 
     environment.append("task_started", "turn-2");
     environment.append("task_complete", "turn-2");
-    expect(menuPresentation(await repository.refresh(), [], environment.clock).pills).toMatchObject([{
+    expect(menuPresentation(await repository.refresh(), [], environment.clock).navigatorPills).toMatchObject([{
       id: sessionId, phase: "ready", attentionTier: "ready", inspector: { activityAt: environment.now().toISOString() },
     }]);
   });
@@ -809,7 +809,7 @@ describe("Codex desktop lifecycle status", () => {
     const snapshot = await repository.refresh();
 
     expect(snapshot.sessions[0]?.section).toBe("working");
-    expect(menuPresentation(snapshot, [], environment.clock).pills[0]?.phase).toBe("working");
+    expect(menuPresentation(snapshot, [], environment.clock).navigatorPills[0]?.phase).toBe("working");
   });
 
   it("clears Running after Codex records an interrupted turn without a Stop hook", async () => {
@@ -823,6 +823,6 @@ describe("Codex desktop lifecycle status", () => {
 
     expect(snapshot.sessions).toMatchObject([{ id: sessionId, section: "ready",
       canOpenOwner: true, canEnterChat: true }]);
-    expect(menuPresentation(snapshot, [], environment.clock).pills).toMatchObject([{ id: sessionId, phase: "ready" }]);
+    expect(menuPresentation(snapshot, [], environment.clock).navigatorPills).toMatchObject([{ id: sessionId, phase: "ready" }]);
   });
 });
