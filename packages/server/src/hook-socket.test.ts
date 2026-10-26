@@ -4,6 +4,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { sessionLifecyclePresentation } from "@agent-visor/protocol";
 import { startHookSocket, type RunningHookSocket } from "./hook-socket.js";
 import { SessionRepository } from "./sessions.js";
 
@@ -21,6 +22,41 @@ afterEach(async () => {
 });
 
 describe("hook socket", () => {
+  it("downgrades a disconnected hook question to last-known attention", () => {
+    const repository = new SessionRepository([]);
+    const receivedAt = new Date().toISOString();
+    repository.applyHook({
+      sessionId: "claude-question-disconnected",
+      cwd: "/Users/me/Codes/agent-visor",
+      provider: "claude_code",
+      tty: "/dev/ttys001",
+      event: "PreToolUse",
+      status: "waiting_for_approval",
+      expectsResponse: true,
+      receivedAt,
+      tool: "AskUserQuestion",
+      toolUseId: "question-1",
+      toolInput: { questions: [{ question: "Continue?" }] },
+    });
+
+    expect(repository.current().sessions[0]).toMatchObject({
+      attention: { kind: "question", evidence: "current", observedAt: receivedAt },
+    });
+    const unregister = repository.registerHookResponder(
+      "claude-question-disconnected", "question-1", () => undefined,
+    );
+    unregister();
+
+    const snapshot = repository.current();
+    expect(snapshot.sessions[0]).toMatchObject({
+      attention: { kind: "question", evidence: "last_known", observedAt: receivedAt },
+    });
+    expect(sessionLifecyclePresentation(snapshot.sessions[0]!)).toMatchObject({
+      status: "unavailable", label: "Status unavailable", tone: "neutral",
+      attention: { evidence: "last_known", label: "Last known: Needs you", tone: "neutral" },
+    });
+  });
+
   it("answers the real Claude PreToolUse question in bypass mode after sibling activity", async () => {
     root = await mkdtemp(path.join(os.tmpdir(), "agent-visor-hooks-"));
     const socketPath = path.join(root, "hooks.sock");

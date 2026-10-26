@@ -13,11 +13,15 @@ public struct NativeMenuReadyAttention {
         now: Date
     ) {
         let readyIDs = Set(pills.filter { $0.phase == .ready }.map(\.id))
+        let presentedUnopenedIDs = Set(pills.filter(isUnopenedCompletion).map(\.id))
         acknowledgedReadyIDs = Set(acknowledgedReadyIDs.filter { readyIDs.contains($0) })
-        phaseChangedAtByID = phaseChangedAtByID.filter { readyIDs.contains($0.key) }
-        unopenedIDs = Set(pills.filter {
-            $0.phase == .ready && $0.attentionTier == .ready && $0.completionUnseen == true
-        }.map(\.id))
+        // An unavailable row can retain an explicit completion cue even while
+        // its placement phase is History. Keep that cue's timing alongside
+        // Ready rows; confirmed closed rows are excluded by the predicate.
+        phaseChangedAtByID = phaseChangedAtByID.filter {
+            readyIDs.contains($0.key) || presentedUnopenedIDs.contains($0.key)
+        }
+        unopenedIDs = presentedUnopenedIDs
         for pill in pills where unopenedIDs.contains(pill.id) {
             // Shared completion attention survives a helper restart. Its date
             // is the completion date, not this presentation or a settings write.
@@ -70,8 +74,7 @@ public struct NativeMenuReadyAttention {
     }
 
     public func isUnopened(_ pill: NativeHelperPill) -> Bool {
-        pill.phase == .ready && pill.attentionTier == .ready
-            && unopenedIDs.contains(pill.id) && !isAcknowledged(pill)
+        unopenedIDs.contains(pill.id) && !isAcknowledged(pill)
     }
 
     /// Blend green into the background; the outline and status dot stay steady.
@@ -120,12 +123,25 @@ public struct NativeMenuReadyAttention {
 
     private func shouldPulse(id: String, phase: NativeHelperPillPhase, now: Date) -> Bool {
         guard let phaseChangedAt = phaseChangedAtByID[id] else { return false }
+        let unopened = unopenedIDs.contains(id)
         return ReadyAttentionPolicy.shouldPulse(
-            isReady: phase == .ready,
+            // An explicit unopened completion is attention-bearing even when
+            // an unavailable row is retained in History placement. Legacy
+            // rows still require the normal Ready phase transition.
+            isReady: phase == .ready || unopened,
             phaseChangedAt: phaseChangedAt,
             acknowledgedAt: acknowledgedReadyIDs.contains(id) ? phaseChangedAt : nil,
             now: now,
-            pulseWindow: unopenedIDs.contains(id) ? .infinity : ReadyAttentionPolicy.defaultPulseWindow
+            pulseWindow: unopened ? .infinity : ReadyAttentionPolicy.defaultPulseWindow
         )
+    }
+
+    /// Completion attention is an explicit modern signal, independent of
+    /// placement. A confirmed closed row keeps its History mark but cannot
+    /// produce a live unopened cue.
+    private func isUnopenedCompletion(_ pill: NativeHelperPill) -> Bool {
+        pill.attentionTier == .ready
+            && pill.completionUnseen == true
+            && pill.lifecycleStatus != .closed
     }
 }

@@ -121,4 +121,81 @@ describe("session lifecycle presentation", () => {
       status: "ready", label: "Ready", tone: "ready",
     });
   });
+
+  it("keeps verified attention yellow through unavailable location but labels last-known attention", () => {
+    const current = Object.assign(session({
+      presence: {
+        state: "unknown" as const,
+        evidence: "unavailable" as const,
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: {
+        conversation: "open" as const,
+        turn: "working" as const,
+        route: "unavailable" as const,
+      },
+    }), {
+      attention: {
+        kind: "question" as const,
+        evidence: "current" as const,
+        observedAt: "2026-08-22T09:59:00.000Z",
+      },
+    });
+    expect(sessionLifecyclePresentation(current)).toMatchObject({
+      status: "needs_you", label: "Needs you", tone: "attention",
+      attention: { kind: "question", evidence: "current", label: "Needs you", tone: "attention" },
+    });
+    expect(sessionPresencePresentation(current)).toMatchObject({
+      group: "unavailable", subgroup: "needs_you", status: "needs_you", tone: "attention",
+      attention: { kind: "question", evidence: "current", label: "Needs you", tone: "attention" },
+    });
+
+    const lastKnown = Object.assign(current, {
+      attention: {
+        kind: "question" as const,
+        evidence: "last_known" as const,
+        observedAt: "2026-08-22T09:59:00.000Z",
+      },
+    });
+    expect(sessionLifecyclePresentation(lastKnown)).toMatchObject({
+      status: "unavailable", label: "Status unavailable", tone: "neutral",
+    });
+    expect(sessionPresencePresentation(lastKnown)).toMatchObject({
+      group: "unavailable", subgroup: "working", status: "unavailable", tone: "neutral",
+      attention: {
+        kind: "question", evidence: "last_known", label: "Last known: Needs you", tone: "neutral",
+      },
+    });
+  });
+
+  it("does not promote stale needs-you turn evidence after an open question becomes last-known", () => {
+    const lastKnown = session({
+      section: "needs_you",
+      presence: {
+        state: "open",
+        evidence: "frontend",
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: {
+        conversation: "open",
+        turn: "needs_you",
+        route: "unavailable",
+      },
+      attention: {
+        kind: "question",
+        evidence: "last_known",
+        observedAt: "2026-08-22T09:59:00.000Z",
+      },
+    });
+
+    expect(sessionLifecyclePresentation(lastKnown)).toMatchObject({
+      status: "unavailable", label: "Status unavailable", tone: "neutral",
+      attention: { evidence: "last_known", label: "Last known: Needs you", tone: "neutral" },
+    });
+    expect(sessionPresencePresentation(lastKnown)).toMatchObject({
+      group: "current", status: "unavailable", tone: "neutral",
+      attention: { evidence: "last_known", label: "Last known: Needs you", tone: "neutral" },
+    });
+    expect(sessionPresencePresentation(lastKnown)).not.toHaveProperty("subgroup");
+  });
 });

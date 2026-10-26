@@ -1,5 +1,7 @@
 import {
   sessionLifecyclePresentation,
+  sessionIsInactive,
+  sessionPresenceProjection,
   sessionPresencePresentation,
   type SessionSection,
   type SessionSummary,
@@ -55,19 +57,26 @@ const pillNotices: Partial<Record<NonNullable<SessionSummary["claudePresence"]>,
 
 /** Browser presentation never changes the provider state or action capabilities. */
 export function sessionPresentation(session: SessionSummary, now = new Date()) {
+  const inactive = sessionIsInactive(session, now);
   if (session.presence) {
     const resolved = sessionPresencePresentation(session);
     const section: BrowserSection = resolved.group === "current"
       ? resolved.subgroup ?? "current_unknown"
       : resolved.group;
     const title = presenceSections.find(({ id }) => id === section)!.title;
-    const pillNotice = resolved.group === "unavailable"
+    const unavailableNotice = resolved.group === "unavailable"
       ? "Status unavailable: Agent Visor could not verify whether this conversation is open."
       : undefined;
+    const lastKnownNotice = resolved.attention?.evidence === "last_known"
+      ? resolved.attention.label : undefined;
+    const pillNotice = [unavailableNotice, lastKnownNotice].filter(Boolean).join(" · ") || undefined;
+    const subtitle = resolved.group === "history" && session.completionUnseen === true
+      ? "Unopened" : session.subtitle;
     return {
       section,
       title,
-      subtitle: session.subtitle,
+      subtitle,
+      ...(inactive ? { inactive: true } : {}),
       ...(pillNotice ? { pillNotice } : {}),
     };
   }
@@ -85,23 +94,29 @@ export function sessionPresentation(session: SessionSummary, now = new Date()) {
     && Date.parse(session.updatedAt) < now.valueOf() - 7 * 24 * 60 * 60 * 1_000) {
     section = "history";
   }
-  const subtitle = section === "history" && (completed || knownOpenReady)
+  const subtitle = section === "history" && session.completionUnseen === true
+    ? "Unopened"
+    : section === "history" && (completed || knownOpenReady)
     ? `${session.managedBy ? `Managed by ${session.managedBy} · ` : ""}${knownOpenReady ? "Ready" : "Completed"}`
     : session.subtitle;
-  const pillNotice = session.claudePresence ? pillNotices[session.claudePresence] : undefined;
+  const legacyNotices = [
+    session.claudePresence ? pillNotices[session.claudePresence] : undefined,
+    lifecycle.attention?.evidence === "last_known" ? lifecycle.attention.label : undefined,
+  ].filter(Boolean);
+  const pillNotice = legacyNotices.length ? legacyNotices.join(" · ") : undefined;
   return { section, title: legacySections.find(({ id }) => id === section)!.title, subtitle,
+    ...(inactive ? { inactive: true } : {}),
     ...(pillNotice ? { pillNotice } : {}) };
 }
 
 export function groupSessions(sessions: SessionSummary[], now = new Date()): SessionGroup[] {
-  const hasPresence = sessions.some(({ presence }) => presence !== undefined);
-  const presentedSessions = hasPresence ? sessions.map((session) => compatibilityPresence(session)) : sessions;
-  const sections = hasPresence
+  const { hasExplicitPresence, sessions: presentedSessions } = sessionPresenceProjection(sessions);
+  const sections = hasExplicitPresence
     ? presenceSections : legacySections;
   return sections.flatMap((section) => {
     const matching = presentedSessions
       .filter((session) => sessionPresentation(session, now).section === section.id)
-      .sort(compareSessions);
+      .sort((left, right) => compareSessions(left, right, now));
 
     if (!matching.length) return [];
     return [{
@@ -121,12 +136,12 @@ export function selectSessions(sessions: SessionSummary[], query: string, now = 
     return { groups, orderedSessions: groups.flatMap(({ sessions }) => sessions) };
   }
 
-  const hasPresence = sessions.some(({ presence }) => presence !== undefined);
-  const presentedSessions = hasPresence ? sessions.map((session) => compatibilityPresence(session)) : sessions;
+  const { sessions: presentedSessions } = sessionPresenceProjection(sessions);
   const matches = presentedSessions
     .map((session) => ({ session, rank: searchRank(session, needle, now) }))
     .filter(({ rank }) => rank < 2)
-    .sort((left, right) => left.rank - right.rank || compareSessions(left.session, right.session))
+    .sort((left, right) => left.rank - right.rank
+      || compareSessions(left.session, right.session, now))
     .map(({ session }) => session);
   return {
     groups: matches.length ? [{ id: "results", title: "Results", sessions: matches }] : [],
@@ -211,24 +226,18 @@ function searchRank(session: SessionSummary, needle: string, now: Date): number 
     .some((value) => value.toLocaleLowerCase().includes(needle)) ? 1 : 2;
 }
 
-function compareSessions(left: SessionSummary, right: SessionSummary): number {
-  return right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id);
+function compareSessions(left: SessionSummary, right: SessionSummary, now: Date): number {
+  const leftTier = readyOrderingTier(left, now);
+  const rightTier = readyOrderingTier(right, now);
+  return leftTier - rightTier
+    || right.updatedAt.localeCompare(left.updatedAt)
+    || left.id.localeCompare(right.id);
 }
 
-/**
- * During incremental adapter adoption, a mixed snapshot must not make an
- * unconverted row look Current or Closed merely because its legacy section
- * says so. Keep it readable while projecting the explicit unavailable state
- * only at this presentation boundary; the repository snapshot stays intact.
- */
-function compatibilityPresence(session: SessionSummary): SessionSummary {
-  if (session.presence) return session;
-  return {
-    ...session,
-    presence: {
-      state: "unknown",
-      evidence: "unavailable",
-      observedAt: session.updatedAt,
-    },
-  };
+function readyOrderingTier(session: SessionSummary, now: Date): number {
+  const section = sessionPresentation(session, now).section;
+  if (section !== "ready" && section !== "history") return 0;
+  if (session.completionUnseen === true || session.attentionTier === "ready") return 0;
+  if (section === "ready" && sessionIsInactive(session, now)) return 2;
+  return 1;
 }

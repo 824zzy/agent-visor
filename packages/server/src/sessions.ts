@@ -28,6 +28,7 @@ import {
   type SessionTurnState,
   type SessionUnavailableReason,
   type SessionPresence,
+  type SessionAttention,
   type SessionSnapshot,
   type SessionHistoryPage,
   type SessionSummary,
@@ -137,6 +138,8 @@ export type DiscoveredProviderSession = {
   ambientEligible?: boolean;
   /** Verified frontend/runtime presence, independent of provider lifetime. */
   presence?: SessionPresence;
+  /** Current or last-known unanswered input, independent from presence/turn. */
+  attention?: SessionAttention;
   claudePresence?: SessionSummary["claudePresence"];
   managedBy?: SessionSummary["managedBy"];
   authority?: number;
@@ -530,6 +533,10 @@ type ExternalApprovalRecord = {
   expiryTimer?: ReturnType<typeof setTimeout>;
 };
 
+type RememberedSessionAttention = SessionAttention & {
+  sourceKey: string;
+};
+
 // ponytail: completed approval results are retained briefly so a lost
 // response can be replayed without invoking the provider twice. Keep this
 // cap coordinated with the provider action queue and evict only terminal
@@ -624,6 +631,8 @@ export class SessionRepository {
   private readonly controlBySession = new Map<string, DiscoveredProviderSession>();
   private readonly externalActions = new Map<string, Map<string, ExternalApprovalRecord>>();
   private readonly hookRequests = new Map<string, HookSessionEvent>();
+  /** Last-known unanswered input retained after its exact response route is lost. */
+  private readonly lastKnownAttentionBySession = new Map<string, RememberedSessionAttention>();
   private controls: SessionControls | undefined;
   private readonly now: () => Date;
   private readonly chatPageReader: NonNullable<SessionRepositoryOptions["chatPageReader"]>;
@@ -808,6 +817,7 @@ export class SessionRepository {
         if (action.pending.type === "question" && action.pending.turnId === event.turnId) {
           if (action.expiryTimer) clearTimeout(action.expiryTimer);
           this.externalActions.get(event.threadId)?.delete(id);
+          this.clearRememberedAttention(event.threadId, `external:${id}`);
         }
       }
     }
@@ -1290,6 +1300,76 @@ export class SessionRepository {
     };
   }
 
+  private sessionAttention(session: DiscoveredProviderSession): SessionAttention | undefined {
+    const remembered = this.lastKnownAttentionBySession.get(session.id);
+    const candidates: Array<SessionAttention & { sourceKey?: string }> = [];
+    if (session.attention) candidates.push(session.attention);
+    if (remembered) candidates.push(remembered);
+
+    for (const record of this.externalActions.get(session.id)?.values() ?? []) {
+      const sourceKey = `external:${record.approvalId}`;
+      const observedAt = record.receivedAt;
+      if (record.state === "pending" || record.state === "responding") {
+        candidates.push({ kind: sessionAttentionKind(record.pending.type), evidence: "current", observedAt, sourceKey });
+      } else if (record.state === "uncertain") {
+        candidates.push({ kind: sessionAttentionKind(record.pending.type), evidence: "last_known", observedAt, sourceKey });
+      }
+    }
+    for (const [key, request] of this.hookRequests) {
+      if (request.sessionId !== session.id) continue;
+      const action = pendingChatAction(request);
+      if (!action) continue;
+      const sourceKey = `hook:${key}`;
+      const rememberedForHook = remembered?.sourceKey === sourceKey
+        && Date.parse(remembered.observedAt) >= Date.parse(request.activityAt ?? request.receivedAt);
+      if (!rememberedForHook) {
+        candidates.push({
+          kind: sessionAttentionKind(action.type),
+          evidence: "current",
+          observedAt: request.activityAt ?? request.receivedAt,
+          sourceKey,
+        });
+      }
+    }
+
+    const winner = candidates
+      .filter((candidate) => Number.isFinite(Date.parse(candidate.observedAt)))
+      .sort((left, right) => {
+        const dateDifference = Date.parse(right.observedAt) - Date.parse(left.observedAt);
+        if (dateDifference !== 0) return dateDifference;
+        return left.evidence === right.evidence ? 0 : left.evidence === "current" ? -1 : 1;
+      })[0];
+    return winner ? {
+      kind: winner.kind,
+      evidence: winner.evidence,
+      observedAt: winner.observedAt,
+    } : undefined;
+  }
+
+  private rememberLastKnownAttention(
+    sessionId: string,
+    kind: SessionAttention["kind"],
+    observedAt: string,
+    sourceKey: string,
+  ): void {
+    if (!Number.isFinite(Date.parse(observedAt))) return;
+    const previous = this.lastKnownAttentionBySession.get(sessionId);
+    if (previous && Date.parse(previous.observedAt) > Date.parse(observedAt)) return;
+    this.lastKnownAttentionBySession.set(sessionId, {
+      kind,
+      evidence: "last_known",
+      observedAt,
+      sourceKey,
+    });
+  }
+
+  private clearRememberedAttention(sessionId: string, sourceKey?: string): void {
+    const remembered = this.lastKnownAttentionBySession.get(sessionId);
+    if (!remembered || sourceKey === undefined || remembered.sourceKey === sourceKey) {
+      this.lastKnownAttentionBySession.delete(sessionId);
+    }
+  }
+
   pendingAction(sessionId: string): ChatPendingAction | undefined {
     return this.pendingActions(sessionId)[0];
   }
@@ -1368,10 +1448,16 @@ export class SessionRepository {
           current.state = "uncertain";
           current.result = "This question must be answered in its owning app.";
           current.expiresAt = Infinity;
+          this.rememberLastKnownAttention(
+            sessionId, sessionAttentionKind(current.pending.type), current.receivedAt, `external:${approvalId}`,
+          );
           this.publish([...this.lastByProvider.values()].flat());
           return;
         }
         if (current.expiryTimer) clearTimeout(current.expiryTimer);
+        this.rememberLastKnownAttention(
+          sessionId, sessionAttentionKind(current.pending.type), current.receivedAt, `external:${approvalId}`,
+        );
         const currentRecords = this.externalActions.get(sessionId);
         currentRecords?.delete(approvalId);
         if (currentRecords?.size === 0) this.externalActions.delete(sessionId);
@@ -1398,6 +1484,7 @@ export class SessionRepository {
         if (record.expiresAt > now) continue;
         if (record.expiryTimer) clearTimeout(record.expiryTimer);
         records.delete(approvalId);
+        this.clearRememberedAttention(id, `external:${approvalId}`);
       }
       if (records.size === 0) this.externalActions.delete(id);
     }
@@ -1417,11 +1504,15 @@ export class SessionRepository {
         EXTERNAL_APPROVAL_TTL_MS,
       );
       record.expiryTimer.unref?.();
+      this.rememberLastKnownAttention(
+        sessionId, sessionAttentionKind(record.pending.type), record.receivedAt, `external:${approvalId}`,
+      );
       this.publish([...this.lastByProvider.values()].flat());
       return;
     }
     const records = this.externalActions.get(sessionId);
     records?.delete(approvalId);
+    this.clearRememberedAttention(sessionId, `external:${approvalId}`);
     if (records?.size === 0) this.externalActions.delete(sessionId);
   }
 
@@ -1442,6 +1533,9 @@ export class SessionRepository {
         EXTERNAL_APPROVAL_TTL_MS,
       );
       record.expiryTimer.unref?.();
+      this.rememberLastKnownAttention(
+        sessionId, sessionAttentionKind(record.pending.type), record.receivedAt, `external:${record.approvalId}`,
+      );
     }
   }
 
@@ -1506,6 +1600,13 @@ export class SessionRepository {
     record.inFlight = undefined;
     record.result = result;
     record.state = result === undefined ? "completed" : "uncertain";
+    if (result === undefined) {
+      this.clearRememberedAttention(sessionId, `external:${record.approvalId}`);
+    } else {
+      this.rememberLastKnownAttention(
+        sessionId, sessionAttentionKind(record.pending.type), record.receivedAt, `external:${record.approvalId}`,
+      );
+    }
     if (record.pending.type === "question" && result !== undefined) {
       record.expiresAt = Infinity;
       return result;
@@ -1542,8 +1643,23 @@ export class SessionRepository {
       if (current?.respond !== respond) return;
       this.hookResponders.delete(key);
       if (this.hookRequests.get(key)?.tool === "AskUserQuestion") {
+        const request = this.hookRequests.get(key);
+        if (request) {
+          this.rememberLastKnownAttention(
+            sessionId, "question", request.activityAt ?? request.receivedAt, `hook:${key}`,
+          );
+        }
         this.publish([...this.lastByProvider.values()].flat());
         return;
+      }
+      const request = this.hookRequests.get(key);
+      if (request) {
+        const action = pendingChatAction(request);
+        if (action) {
+          this.rememberLastKnownAttention(
+            sessionId, sessionAttentionKind(action.type), request.activityAt ?? request.receivedAt, `hook:${key}`,
+          );
+        }
       }
       this.hookRequests.delete(key);
       const hook = this.hookBySession.get(sessionId);
@@ -2215,6 +2331,7 @@ export class SessionRepository {
     pending.respond(response);
     this.hookResponders.delete(hookKey);
     this.hookRequests.delete(hookKey);
+    this.clearRememberedAttention(message.sessionId, `hook:${hookKey}`);
     if (this.hookBySession.get(message.sessionId)?.toolUseId === message.toolUseId) this.hookBySession.delete(message.sessionId);
     this.publish([...this.lastByProvider.values()].flat());
     return undefined;
@@ -2723,14 +2840,17 @@ export class SessionRepository {
     for (const [key, request] of this.hookRequests) {
       if (request.sessionId !== sessionId) continue;
       this.hookRequests.delete(key);
+      this.clearRememberedAttention(sessionId, `hook:${key}`);
       const responder = this.hookResponders.get(key);
       this.hookResponders.delete(key);
       responder?.respond({ decision: "ask" });
     }
+    this.clearRememberedAttention(sessionId);
   }
 
   private forgetChatState(sessionId: string): void {
     this.clearHookRequests(sessionId);
+    this.clearRememberedAttention(sessionId);
     if ((this.chatOpenReferencesBySession.get(sessionId) ?? 0) <= 0) {
       this.chatOpenReferencesBySession.delete(sessionId);
       this.chatLeasesBySession.delete(sessionId);
@@ -2827,6 +2947,7 @@ export class SessionRepository {
       transcriptRevision: session.transcriptRevision,
       codexEventRevision: this.codexEventRevisionBySession.get(session.id) ?? 0,
       pending,
+      attention: session.attention,
     });
     const previous = this.stateFingerprintBySession.get(session.id);
     let revision = this.stateRevisionBySession.get(session.id) ?? 0;
@@ -3174,14 +3295,19 @@ export class SessionRepository {
           if (["Stop", "StopFailure", "SessionEnd", "SessionStart", "UserPromptSubmit"].includes(event.event)
             || (["PostToolUse", "PostToolUseFailure"].includes(event.event) && request.toolUseId === event.toolUseId)) {
             this.hookRequests.delete(key);
+            this.clearRememberedAttention(event.sessionId, `hook:${key}`);
             const responder = this.hookResponders.get(key);
             this.hookResponders.delete(key);
             responder?.respond({ decision: "ask" });
           }
         }
+        if (["Stop", "StopFailure", "SessionEnd", "SessionStart", "UserPromptSubmit"].includes(event.event)) {
+          this.clearRememberedAttention(event.sessionId);
+        }
         if (event.expectsResponse && event.toolUseId && this.hookRequests.size < MAX_EXTERNAL_APPROVAL_RECORDS) {
           const key = JSON.stringify([event.sessionId, event.toolUseId]);
           if (!this.hookRequests.has(key)) this.hookRequests.set(key, structuredClone(event));
+          this.clearRememberedAttention(event.sessionId, `hook:${key}`);
         }
       }
       refreshClaudeFailure = this.shouldRefreshClaudeFailure(event);
@@ -3398,18 +3524,21 @@ export class SessionRepository {
           }
         }
       }
+      const attention = this.sessionAttention(record);
+      if (attention) record.attention = attention;
       const pendingActions = this.pendingActions(record.id);
       const hasPendingQuestion = pendingActions.some((action) => action.type === "question");
       const needsYouTurn = pendingActions.some((action) =>
         action.type === "approval" || action.blocking !== false);
-      if (needsYouTurn || hasPendingQuestion) {
+      if (attention?.evidence !== "last_known" && (needsYouTurn || hasPendingQuestion)) {
         record.section = "needs_you";
         record.lifecycleStatus = "needs_you";
         // A blocking action owns the provider turn. A nonblocking question
         // only overlays the display status and preserves the provider's
         // working evidence for state, routing, and subsequent refreshes.
         if (needsYouTurn) record.turnState = "needs_you";
-        record.subtitle = hasPendingQuestion ? "Answer required" : "Approval required";
+        record.subtitle = hasPendingQuestion || attention?.kind === "question"
+          ? "Answer required" : "Approval required";
         const latestApproval = [...(this.externalActions.get(record.id)?.values() ?? [])]
           .find((action) => action.state === "pending");
         const hookRequest = [...this.hookRequests.values()].find((request) => request.sessionId === record.id);
@@ -3522,8 +3651,12 @@ export class SessionRepository {
         || this.acknowledgedReadyBySession.get(session.id) !== completion) {
         this.acknowledgedReadyBySession.delete(session.id);
       }
+      const currentAttention = session.attention?.evidence === "current"
+        && sessionLifecyclePresentation(session).status !== "closed";
       session.attentionTier = session.sessionClass === "automation"
         ? "history"
+        : currentAttention
+        ? "needs_you"
         : session.section === "ready" && (attention?.seen || this.acknowledgedReadyBySession.has(session.id))
         ? "acknowledged_ready"
         : session.section;
@@ -4277,6 +4410,12 @@ function pendingChatAction(hook: HookSessionEvent | undefined): ChatPage["pendin
   };
 }
 
+function sessionAttentionKind(
+  action: NonNullable<ChatPage["pendingAction"]>["type"],
+): SessionAttention["kind"] {
+  return action === "question" ? "question" : "permission";
+}
+
 function hookResponse(
   message: Extract<ClientMessage, { type: "respond_chat" }>,
   hook: HookSessionEvent,
@@ -4423,6 +4562,7 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
       canEnterChat: session.canEnterChat,
       lifecycleStatus: lifecycleStatusFor(session),
       ...(session.presence ? { presence: session.presence } : {}),
+      ...(session.attention ? { attention: session.attention } : {}),
       ...(session.canRemoveHistory !== undefined ? { canRemoveHistory: session.canRemoveHistory } : {}),
       ...(session.sessionClass ? { sessionClass: session.sessionClass } : {}),
       ...(session.ambientEligible !== undefined ? { ambientEligible: session.ambientEligible } : {}),
@@ -4456,14 +4596,19 @@ function lifecycleStatusFor(session: DiscoveredProviderSession): SessionLifecycl
       ...(session.conversationState || session.turnState
         ? { sessionState: resolveSessionState(session) } : {}),
       presence: session.presence,
+      ...(session.attention ? { attention: session.attention } : {}),
     }).status;
   }
-  if (session.lifecycleStatus) return session.lifecycleStatus;
+  if (session.lifecycleStatus
+    && !(session.lifecycleStatus === "needs_you" && session.attention?.evidence === "last_known")) {
+    return session.lifecycleStatus;
+  }
   return sessionLifecyclePresentation({
     section: session.section,
     ...(session.conversationState || session.turnState
       ? { sessionState: resolveSessionState(session) } : {}),
     ...(session.presence ? { presence: session.presence } : {}),
+    ...(session.attention ? { attention: session.attention } : {}),
   }).status;
 }
 
