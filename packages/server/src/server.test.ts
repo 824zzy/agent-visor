@@ -40,6 +40,37 @@ describe("Agent Visor daemon", () => {
       expect(text).not.toContain("private");
     } finally { socket.close(); await rm(root, { recursive: true, force: true }); }
   });
+
+  it("routes explicit detection retry to the snapshot source without focusing", async () => {
+    const retried: string[] = [];
+    const source = {
+      current: () => fixtureSnapshot,
+      subscribe: () => () => undefined,
+      retryDetection: async (sessionId: string) => {
+        retried.push(sessionId);
+        return undefined;
+      },
+      focusSession: async () => { throw new Error("Unexpected owner focus"); },
+    };
+    running = await startServer({ port: 0, source, token });
+    const socket = new WebSocket(running.url);
+    const messages: unknown[] = [];
+    socket.on("message", (data) => messages.push(serverMessageSchema.parse(JSON.parse(data.toString()))));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+
+    socket.send(JSON.stringify({
+      type: "retry_detection", id: "retry-detection-1", sessionId: "unavailable-session",
+    }));
+    await expect.poll(() => messages).toContainEqual({
+      type: "native_action_result", id: "retry-detection-1", ok: true,
+    });
+    expect(retried).toEqual(["unavailable-session"]);
+    socket.close();
+  });
+
   it("delivers health and one validated session snapshot", async () => {
     running = await startServer({ port: 0, snapshot: fixtureSnapshot, token });
     const socket = new WebSocket(running.url);

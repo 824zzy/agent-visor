@@ -19,6 +19,8 @@ const attentionOrder = {
   history: 4,
 } as const;
 
+const unavailablePresenceNotice = "Status unavailable: Agent Visor could not verify whether this conversation is open.";
+
 type MenuSession = SessionSnapshot["sessions"][number] & { inactive?: boolean };
 
 /** Native clicks must report a rejected focus instead of silently dropping it. */
@@ -36,8 +38,8 @@ export async function activateMenuPill(
     return;
   }
   const action = nativeActionFor(event, source.current());
-  if (action?.action === "open_chat") {
-    navigationStep("chat");
+  if (action) {
+    navigationStep(action.action === "open_chat" ? "chat" : "completed");
     dispatch(action);
     return;
   }
@@ -91,6 +93,12 @@ export function nativeActionFor(event: NativeHelperEvent, snapshot: SessionSnaps
       ? { type: "native_action", action: "open_chat", sessionId: session.id } as const
       : undefined;
   }
+  // An unavailable row without an exact owner route must stay on the safe
+  // Sessions surface, where the user can explicitly retry detection. Never
+  // turn a cached owner label into a focus request or guessed destination.
+  if (session.presence?.state === "unknown" && !session.canOpenOwner) {
+    return { type: "native_action", action: "open_sessions" } as const;
+  }
   // Owner-first remains the normal path for source-backed sessions: bin.ts
   // resolves focus asynchronously when an owner route exists. A Chat-capable
   // row without that route needs an authoritative primary action instead of
@@ -111,7 +119,8 @@ export function menuPresentation(
   const ordered = presentedSessions
     .map((session) => menuSession(session, now))
     .filter((session) => Date.parse(session.updatedAt) >= cutoff)
-    .filter((session) => session.canOpenOwner || session.canEnterChat)
+    .filter((session) => session.canOpenOwner || session.canEnterChat
+      || (session.presence?.state === "unknown" && session.ambientEligible === true))
     .sort((left, right) => {
       const leftTier = left.attentionTier ?? left.section;
       const rightTier = right.attentionTier ?? right.section;
@@ -132,7 +141,8 @@ export function menuPresentation(
     // a newly observed failure may occupy ambient menu-bar attention.
     .filter((session) => session.failureAlert !== false)
     .filter((session) => session.canOpenOwner
-      || (session.section !== "history" && session.canEnterChat))
+      || (session.section !== "history" && session.canEnterChat)
+      || (session.presence?.state === "unknown" && session.ambientEligible === true))
     .slice(0, 64)
     .map(presentationPill);
 
@@ -173,6 +183,7 @@ function historyLifecycleOrder(
 }
 
 function isAmbientSession(session: SessionSnapshot["sessions"][number]): boolean {
+  if (session.presence?.state === "unknown" && session.ambientEligible !== true) return false;
   return session.sessionClass !== "automation" && !session.managedBy
     && session.presence?.state !== "closed"
     && session.ambientEligible !== false;
@@ -194,7 +205,7 @@ function presentationPill(
   const detailRows = [
     ...(session.sourceProfile ? [{ label: "Profile", value: session.sourceProfile }] : []),
     ...(presence.group === "unavailable"
-      ? [{ label: "Presence", value: "Status unavailable" }]
+      ? [{ label: "Presence", value: unavailablePresenceNotice }]
       : []),
     ...(presence.attention?.evidence === "last_known"
       ? [{ label: "Attention", value: presence.attention.label }]
@@ -228,7 +239,7 @@ function presentationPill(
       title,
       lifecycle.label,
       ...(session.inactive ? ["Inactive"] : []),
-      ...(presence.group === "unavailable" ? ["Status unavailable"] : []),
+      ...(presence.group === "unavailable" ? [unavailablePresenceNotice] : []),
       ...(presence.attention?.evidence === "last_known" ? [presence.attention.label] : []),
       ...(session.completionUnseen && session.section === "history" ? ["Unopened"] : []),
       sourceLabel,

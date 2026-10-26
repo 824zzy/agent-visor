@@ -13,7 +13,7 @@ import {
   type ProviderAdapter,
   type SessionRouteProbeResult,
 } from "./sessions.js";
-import type { ChatPage, NativeHelperGhosttyResumeDispatch } from "@agent-visor/protocol";
+import { sessionPresenceProjection, type ChatPage, type NativeHelperGhosttyResumeDispatch } from "@agent-visor/protocol";
 import { processInstanceToken } from "./providers/shared.js";
 import { FakeNativeHelper } from "./native-helper.js";
 import { NativeSessionControls } from "./session-controls.js";
@@ -2990,6 +2990,89 @@ describe("SessionRepository", () => {
       toolUseId: "codex-command-1", decision: "allow_always",
     })).toBeUndefined();
     expect(decision).toBe("allow_always");
+  });
+
+  it("keeps an unavailable Chat question read only until presence recovers", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{
+      ...live,
+      presence: {
+        state: "unknown",
+        evidence: "unavailable",
+        observedAt: "2026-08-22T08:00:00.000Z",
+      },
+      conversationState: "open",
+      turnState: "needs_you",
+      chatPath: "/tmp/unknown-presence-chat.jsonl",
+    }];
+    const repository = new SessionRepository([provider]);
+    await repository.refresh();
+    let answerCalls = 0;
+    repository.registerExternalAction("pi-1", {
+      type: "question", toolUseId: "unknown-question", blocking: false,
+      questions: [{ id: "continue", question: "Continue?", choices: ["Yes"], multiple: false }],
+    }, async () => { answerCalls += 1; });
+
+    expect(repository.pendingAction("pi-1")).toMatchObject({ type: "question", toolUseId: "unknown-question" });
+    const page = await repository.chatPage("pi-1");
+    expect(page.pendingAction).toMatchObject({ type: "question", toolUseId: "unknown-question" });
+    expect(page.capabilities).toMatchObject({
+      canSendText: false,
+      canAnswer: false,
+      readOnlyReason: "The conversation status is unavailable. Chat is read only until detection recovers.",
+    });
+    await expect(repository.chatAction({
+      type: "respond_chat", id: "unknown-answer", sessionId: "pi-1",
+      toolUseId: "unknown-question", decision: "answer", answers: { continue: "Yes" },
+    })).resolves.toBe("Chat is read only while detection is unavailable.");
+    expect(answerCalls).toBe(0);
+  });
+
+  it("applies unavailable Chat guards to a legacy row projected by a mixed snapshot", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [
+      {
+        ...live,
+        id: "explicit-presence",
+        presence: { state: "open", evidence: "frontend", observedAt: "2026-08-22T08:00:00.000Z" },
+      },
+      {
+        ...live,
+        id: "legacy-visible",
+        chatPath: "/tmp/legacy-visible-chat.jsonl",
+        presence: undefined,
+      },
+    ];
+    const repository = new SessionRepository([provider], {
+      chatPageReader: async (session) => ({
+        type: "chat_page",
+        sessionId: session.id,
+        items: [],
+        hasMoreBefore: false,
+        capabilities: { canSendText: true, canSendImages: true, canCancel: false, canApprove: false, canAnswer: false },
+        pendingAction: null,
+      }),
+    });
+    await repository.refresh();
+    repository.registerExternalAction("legacy-visible", {
+      type: "question", toolUseId: "legacy-question", blocking: false,
+      questions: [{ id: "continue", question: "Continue?", choices: ["Yes"], multiple: false }],
+    }, async () => undefined);
+
+    const projected = sessionPresenceProjection(repository.current().sessions).sessions;
+    expect(projected.find(({ id }) => id === "legacy-visible")?.presence)
+      .toMatchObject({ state: "unknown", evidence: "unavailable" });
+    const page = await repository.chatPage("legacy-visible");
+    expect(page.capabilities).toMatchObject({
+      canSendText: false,
+      canSendImages: false,
+      canAnswer: false,
+      readOnlyReason: "The conversation status is unavailable. Chat is read only until detection recovers.",
+    });
+    await expect(repository.chatAction({
+      type: "respond_chat", id: "legacy-answer", sessionId: "legacy-visible",
+      toolUseId: "legacy-question", decision: "answer", answers: { continue: "Yes" },
+    })).resolves.toBe("Chat is read only while detection is unavailable.");
   });
 
   it("keeps an unanswered nonblocking question in Needs you while work continues", async () => {

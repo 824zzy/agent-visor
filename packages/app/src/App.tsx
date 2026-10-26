@@ -594,8 +594,14 @@ function SessionRow({
     }
   }, [active]);
   const primary = sessionAction(session);
-  const hasSeparateChat = session.canOpenOwner && session.canEnterChat;
-  const actionLabel = primary === "owner" ? `Open in ${session.owner}` : "Open Chat";
+  const unavailable = session.presence?.state === "unknown";
+  const hasSeparateChat = session.canEnterChat && (session.canOpenOwner || unavailable);
+  const chatLabel = unavailable ? "Open Chat (read-only)" : "Open Chat";
+  const actionLabel = primary === "owner"
+    ? `Open in ${session.owner}`
+    : primary === "retry"
+    ? retryingDetection ? "Retrying detection…" : "Retry detection"
+    : "Open Chat";
   const resumeState = resumeStateOverride === "eligible"
     || resumeStateOverride === "uncertain" || resumeStateOverride === "reopening"
     ? resumeStateOverride : undefined;
@@ -621,7 +627,7 @@ function SessionRow({
           accessibilityLabel={`${session.title}, ${statusLabel}${presentation.inactive ? ", Inactive" : ""}, ${sourceLabel}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}${presentationNotice ? `, ${presentationNotice}` : ""}`}
           accessibilityRole="button"
           accessibilityState={{ selected: cursor }}
-          disabled={!primary}
+          disabled={!primary || (primary === "retry" && retryingDetection)}
           onHoverIn={() => setPrimaryHovered(true)}
           onHoverOut={() => setPrimaryHovered(false)}
           onPress={() => onActivate(false)}
@@ -655,7 +661,11 @@ function SessionRow({
           </View>
           <View style={rowStyles.ownerColumn}>
             <Text numberOfLines={1} style={[rowStyles.actionText, primaryHovered && rowStyles.linkText]}>
-              {primary === "owner" ? `↗ ${compact ? session.owner : `Open in ${session.owner}`}` : "▢ Open Chat"}
+              {primary === "owner"
+                ? `↗ ${compact ? session.owner : `Open in ${session.owner}`}`
+                : primary === "retry"
+                ? actionLabel
+                : "▢ Open Chat"}
             </Text>
           </View>
         </Pressable>
@@ -681,7 +691,7 @@ function SessionRow({
           ) : null}
           {hasSeparateChat ? (
             <Pressable
-              accessibilityLabel={`Open Chat for ${session.title}`}
+              accessibilityLabel={`Open Chat for ${session.title}${unavailable ? " (read-only)" : ""}`}
               accessibilityRole="button"
               onHoverIn={() => setChatHovered(true)}
               onHoverOut={() => setChatHovered(false)}
@@ -693,7 +703,26 @@ function SessionRow({
               ]}
             >
               <Text style={[rowStyles.chatText, chatHovered && rowStyles.linkText]}>
-                ▢ {compact ? "Chat" : "Open Chat"}
+                ▢ {compact && !unavailable ? "Chat" : chatLabel}
+              </Text>
+            </Pressable>
+          ) : null}
+          {unavailable && primary === "owner" ? (
+            <Pressable
+              accessibilityLabel={retryingDetection
+                ? `Retrying detection for ${session.title}`
+                : `Retry detection for ${session.title}`}
+              accessibilityRole="button"
+              disabled={retryingDetection}
+              onPress={onRetryDetection}
+              style={({ pressed }) => [
+                rowStyles.chatAction,
+                !retryingDetection && rowStyles.chatHovered,
+                pressed && rowStyles.pressed,
+              ]}
+            >
+              <Text style={[rowStyles.chatText, rowStyles.linkText]}>
+                {retryingDetection ? "Retrying detection…" : "Retry detection"}
               </Text>
             </Pressable>
           ) : null}
@@ -786,10 +815,12 @@ function activateSession(
   session: SessionSummary,
   alternate: boolean,
   onOpenChat: (session: SessionSummary) => void,
+  onRetryDetection: () => void,
 ): void {
   const action = sessionAction(session, alternate);
   if (action === "owner") void openOwner(session);
   if (action === "chat") onOpenChat(session);
+  if (action === "retry") onRetryDetection();
 }
 
 async function openOwner(session: SessionSummary): Promise<void> {
@@ -799,7 +830,8 @@ async function openOwner(session: SessionSummary): Promise<void> {
   window.alert(result.error ?? `Could not open this session in ${session.owner}.`);
 }
 
-function footerLabel(action: "owner" | "chat"): string {
+function footerLabel(action: "owner" | "chat" | "retry"): string {
+  if (action === "retry") return "Retry detection";
   return action === "owner" ? "Open source app" : "Open Chat";
 }
 

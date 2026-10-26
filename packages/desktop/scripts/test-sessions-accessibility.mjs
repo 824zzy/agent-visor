@@ -6,32 +6,50 @@ import { startServer } from "../../server/dist/server.js";
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const token = "sessions-accessibility-test-token-00000000000000000000";
 const now = Date.now();
-const sessions = Array.from({ length: 30 }, (_, index) => ({
-  id: `session-${index}`,
-  title: `Agent session ${index}`,
-  subtitle: index === 0 ? "Managed by Agent Room · Agent is working" : "Accessibility test row",
-  managedBy: index === 0 ? "Agent Room" : undefined,
-  source: index % 2 ? "Codex" : "Pi",
-  sourceProfile: index === 0 ? "fixture-profile" : undefined,
-  project: "agent-visor",
-  owner: index % 2 ? "Codex" : "Ghostty",
-  cwd: "/tmp/agent-visor",
-  section: ["needs_you", "ready", "working", "history"][index % 4],
-  presence: index === 3
-    ? { state: "unknown", evidence: "unavailable", observedAt: new Date(now).toISOString() }
-    : index % 4 === 3
-      ? { state: "closed", evidence: "authoritative_inventory", observedAt: new Date(now).toISOString() }
-      : { state: "open", evidence: index % 4 === 2 ? "runtime" : "frontend", observedAt: new Date(now).toISOString() },
-  sessionState: {
-    conversation: "open",
-    turn: index === 3 ? "unknown" : index % 4 === 0 ? "needs_you" : index % 4 === 1 ? "ready" : "working",
-    route: index % 4 === 0 || index % 4 === 1 ? "available" : "waiting",
+const sessions = [
+  ...Array.from({ length: 30 }, (_, index) => ({
+    id: `session-${index}`,
+    title: `Agent session ${index}`,
+    subtitle: index === 0 ? "Managed by Agent Room · Agent is working" : "Accessibility test row",
+    managedBy: index === 0 ? "Agent Room" : undefined,
+    source: index % 2 ? "Codex" : "Pi",
+    sourceProfile: index === 0 ? "fixture-profile" : undefined,
+    project: "agent-visor",
+    owner: index % 2 ? "Codex" : "Ghostty",
+    cwd: "/tmp/agent-visor",
+    section: ["needs_you", "ready", "working", "history"][index % 4],
+    presence: index === 3
+      ? { state: "unknown", evidence: "unavailable", observedAt: new Date(now).toISOString() }
+      : index % 4 === 3
+        ? { state: "closed", evidence: "authoritative_inventory", observedAt: new Date(now).toISOString() }
+        : { state: "open", evidence: index % 4 === 2 ? "runtime" : "frontend", observedAt: new Date(now).toISOString() },
+    sessionState: {
+      conversation: "open",
+      turn: index === 3 ? "unknown" : index % 4 === 0 ? "needs_you" : index % 4 === 1 ? "ready" : "working",
+      route: index % 4 === 0 || index % 4 === 1 ? "available" : "waiting",
+    },
+    attentionTier: index % 8 === 1 ? "acknowledged_ready" : undefined,
+    updatedAt: new Date(now - index * 60_000).toISOString(),
+    canOpenOwner: true,
+    canEnterChat: index !== 5 && index !== 29,
+  })),
+  {
+    id: "unavailable-retry",
+    title: "Agent retryable",
+    subtitle: "Detection could not be verified",
+    source: "Claude Code",
+    project: "agent-visor",
+    owner: "Ghostty",
+    cwd: "/tmp/agent-visor",
+    section: "history",
+    presence: { state: "unknown", evidence: "unavailable", observedAt: new Date(now).toISOString() },
+    sessionState: { conversation: "unknown", turn: "ready", route: "unavailable" },
+    updatedAt: new Date(now - 31 * 60_000).toISOString(),
+    canOpenOwner: false,
+    canEnterChat: true,
+    ambientEligible: true,
   },
-  attentionTier: index % 8 === 1 ? "acknowledged_ready" : undefined,
-  updatedAt: new Date(now - index * 60_000).toISOString(),
-  canOpenOwner: true,
-  canEnterChat: index !== 5 && index !== 29,
-}));
+];
 
 void app.whenReady()
   .then(run)
@@ -45,11 +63,36 @@ async function run() {
   nativeTheme.themeSource = "light";
   let snapshot = { type: "session_snapshot", revision: 1, sessions };
   const subscribers = new Set();
+  let focusActions = 0;
+  let acknowledgements = 0;
   const source = {
     current: () => structuredClone(snapshot),
     subscribe: (listener) => {
       subscribers.add(listener);
       return () => subscribers.delete(listener);
+    },
+    focusSession: async () => {
+      focusActions += 1;
+      return "Exact session focus is unavailable.";
+    },
+    acknowledgeReady: () => { acknowledgements += 1; },
+    retryDetection: async (sessionId) => {
+      if (sessionId !== "unavailable-retry") return "Unknown fixture session.";
+      const observedAt = new Date().toISOString();
+      snapshot = {
+        ...snapshot,
+        revision: snapshot.revision + 1,
+        sessions: snapshot.sessions.map((session) => session.id === sessionId
+          ? {
+            ...session,
+            presence: { state: "open", evidence: "frontend", observedAt },
+            sessionState: { conversation: "open", turn: "ready", route: "available" },
+            updatedAt: observedAt,
+          }
+          : session),
+      };
+      for (const subscriber of subscribers) subscriber(snapshot);
+      return undefined;
     },
   };
   const server = await startServer({ port: 0, token, source });
@@ -138,7 +181,7 @@ async function run() {
     };
   })()`);
   assert(frames.primaryCount === 30, "all rows expose their primary owner action");
-  assert(frames.chatCount === 28, "only Chat-capable rows expose Open Chat");
+  assert(frames.chatCount === 29, "Chat-capable rows, including unavailable read-only Chat, expose Open Chat");
   assert(new Set(frames.primaryWidths).size === 1, "owner rows keep one fixed frame");
   assert(new Set(frames.chatLefts).size === 1, "Chat actions keep one aligned column");
   assert(frames.disjoint, "owner and Chat actions do not overlap");
@@ -150,6 +193,27 @@ async function run() {
   assert((sourceActionLabel ?? "").includes("Pi · fixture-profile")
     && (sourceActionLabel ?? "").includes("Open in Ghostty"),
   "search rows expose the original source profile and available owner action");
+
+  const retryRow = `[aria-label^="Agent retryable,"]`;
+  const retryChat = `[aria-label^="Open Chat for Agent retryable"]`;
+  assert(await window.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(retryRow)})?.getAttribute('aria-label')
+    .includes('Retry detection')`),
+  "unavailable no-route rows expose an explicit Retry detection action");
+  assert(await window.webContents.executeJavaScript(
+    `document.querySelector(${JSON.stringify(retryChat)})?.getAttribute('aria-label')
+      .includes('(read-only)')`,
+  ), "unavailable Chat access is clearly labelled read-only");
+  await window.webContents.executeJavaScript(`window.alert = () => {};
+    document.querySelector(${JSON.stringify(retryRow)})?.click()`);
+  await waitFor(window, `document.querySelector(${JSON.stringify(retryRow)})?.getAttribute('aria-label').includes(', Ready,')`);
+  const recoveredRetry = await window.webContents.executeJavaScript(`(() => {
+    const element = document.querySelector(${JSON.stringify(retryRow)});
+    return { sameRow: Boolean(document.getElementById('session-row-unavailable-retry')), label: element?.getAttribute('aria-label') };
+  })()`);
+  assert(recoveredRetry.sameRow && recoveredRetry.label?.includes(", Ready,"),
+    "Retry detection recovers the exact unavailable session identity");
+  assert(focusActions === 0 && acknowledgements === 0,
+    "detection retry never focuses or acknowledges the recovered session");
 
   await window.webContents.executeJavaScript(`window.__focusError = null;
     window.alert = (message) => { window.__focusError = message; };
@@ -182,7 +246,7 @@ async function run() {
     setter.call(input, 'Agent');
     input.dispatchEvent(new Event('input', { bubbles: true }));
   })()`);
-  await waitFor(window, `Boolean(document.querySelector('[aria-label="30 search results"]'))`);
+  await waitFor(window, `Boolean(document.querySelector('[aria-label="31 search results"]'))`);
   await window.webContents.executeJavaScript(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))`);
   await new Promise((resolve) => setTimeout(resolve, 100));
   const before = await window.webContents.executeJavaScript(`(() => {

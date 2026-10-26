@@ -272,6 +272,54 @@ describe("menu presentation", () => {
     });
   });
 
+  it("explains unavailable presence and opens Sessions instead of focusing without a route", async () => {
+    const unknown = {
+      ...snapshot.sessions[0]!,
+      id: "unknown-no-route",
+      source: "Claude Code",
+      presence: {
+        state: "unknown" as const,
+        evidence: "unavailable" as const,
+        observedAt: "2026-08-22T21:59:00.000Z",
+      },
+      sessionState: {
+        conversation: "unknown" as const,
+        turn: "ready" as const,
+        route: "unavailable" as const,
+      },
+      canOpenOwner: false,
+      canEnterChat: false,
+      ambientEligible: true,
+    } satisfies SessionSnapshot["sessions"][number];
+    const presented = menuPresentation({ ...snapshot, sessions: [unknown] }, []);
+    expect(presented.navigatorPills[0]).toMatchObject({
+      lifecycleStatus: "unavailable",
+      inspector: {
+        detailRows: [{
+          label: "Presence",
+          value: "Status unavailable: Agent Visor could not verify whether this conversation is open.",
+        }],
+      },
+      accessibilityLabel: expect.stringContaining(
+        "Status unavailable: Agent Visor could not verify whether this conversation is open.",
+      ),
+    });
+
+    const focused: string[] = [];
+    const dispatched: unknown[] = [];
+    await activateMenuPill({
+      version: 1,
+      type: "event",
+      event: "activate_pill",
+      sessionId: unknown.id,
+    }, {
+      current: () => ({ ...snapshot, sessions: [unknown] }),
+      focusSession: async (id) => { focused.push(id); return undefined; },
+    }, (message) => dispatched.push(message));
+    expect(focused).toEqual([]);
+    expect(dispatched).toEqual([{ type: "native_action", action: "open_sessions" }]);
+  });
+
   it("keeps an unconverted row unavailable across menu presentation in a mixed snapshot", () => {
     const open = {
       ...snapshot.sessions[0]!,
@@ -301,6 +349,7 @@ describe("menu presentation", () => {
       inspector: { status: "Status unavailable" },
       accessibilityLabel: expect.stringContaining(", Status unavailable,"),
     });
+    expect(presentation.pills.map(({ id }) => id)).not.toContain("legacy-ready");
   });
 
   it.each(["needs_you", "working", "ready", "history"] as const)(
