@@ -67,6 +67,32 @@ export const sessionRouteStateSchema = z.enum([
 ]);
 
 /**
+ * Evidence-backed conversation presence, independent from provider record
+ * lifetime, turn state, attention, and route capability.
+ */
+export const sessionPresenceStateSchema = z.enum([
+  "open",
+  "closed",
+  "unknown",
+]);
+
+/** Authority of the observation that produced a presence state. */
+export const sessionPresenceEvidenceSchema = z.enum([
+  "frontend",
+  "runtime",
+  "catalog",
+  "authoritative_inventory",
+  "authoritative_absence",
+  "unavailable",
+]);
+
+export const sessionPresenceSchema = z.object({
+  state: sessionPresenceStateSchema,
+  evidence: sessionPresenceEvidenceSchema,
+  observedAt: z.iso.datetime(),
+}).strict();
+
+/**
  * Route availability says whether a send may be attempted. It does not by
  * itself prove that Agent Visor owns the provider's exclusive writer.
  */
@@ -160,6 +186,8 @@ export const sessionSummarySchema = z.object({
   section: sessionSectionSchema,
   /** Explicit provider evidence resolved before section/normalization. */
   lifecycleStatus: sessionLifecycleStatusSchema.optional(),
+  /** Verified runtime/frontend presence, separate from provider record lifetime. */
+  presence: sessionPresenceSchema.optional(),
   sessionClass: sessionClassSchema.optional(),
   /** Provider-confirmed ambient presence; false keeps resumable rows searchable only. */
   ambientEligible: z.boolean().optional(),
@@ -1575,6 +1603,9 @@ export type SessionUnavailableReason = z.infer<typeof sessionUnavailableReasonSc
 export type SessionState = z.infer<typeof sessionStateSchema>;
 export type SessionLifecycleStatus = z.infer<typeof sessionLifecycleStatusSchema>;
 export type SessionLifecycleTone = z.infer<typeof sessionLifecycleToneSchema>;
+export type SessionPresence = z.infer<typeof sessionPresenceSchema>;
+export type SessionPresenceState = z.infer<typeof sessionPresenceStateSchema>;
+export type SessionPresenceEvidence = z.infer<typeof sessionPresenceEvidenceSchema>;
 export type SessionLifecyclePresentation = {
   status: SessionLifecycleStatus;
   label: string;
@@ -1589,8 +1620,30 @@ export type SessionLifecyclePresentation = {
  * when an older completion is placed in History.
  */
 export function sessionLifecyclePresentation(
-  session: Pick<SessionSummary, "section" | "sessionState" | "lifecycleStatus">,
+  session: Pick<SessionSummary, "section" | "sessionState" | "lifecycleStatus" | "presence">,
 ): SessionLifecyclePresentation {
+  // Presence is authoritative for placement, but turn evidence remains an
+  // independent status. A temporary unavailable read must not erase a known
+  // turn from the retained record; callers use the neutral unavailable status
+  // here while keeping the underlying turn in sessionState.
+  if (session.presence) {
+    if (session.presence.state === "unknown") {
+      return lifecycle("unavailable", "Status unavailable", "neutral");
+    }
+    if (session.presence.state === "closed") {
+      // A stale turn cannot make a confirmed closed conversation look live.
+      // History may still retain that turn as last-known attention context.
+      return lifecycle("closed", "Closed", "neutral");
+    }
+    const turn = session.sessionState?.turn;
+    if (turn === "needs_you") return lifecycle("needs_you", "Needs you", "attention");
+    if (turn === "working") return lifecycle("working", "Working", "working");
+    if (turn === "ready") return lifecycle("ready", "Ready", "ready");
+    // A migrated provider may have explicit presence before it has supplied
+    // turn evidence. Do not manufacture Working or Ready from presence.
+    return lifecycle("unavailable", "Status unavailable", "neutral");
+  }
+
   if (session.lifecycleStatus) {
     switch (session.lifecycleStatus) {
       case "needs_you": return lifecycle("needs_you", "Needs you", "attention");
@@ -1620,6 +1673,69 @@ export function sessionLifecyclePresentation(
     case "working": return lifecycle("working", "Working", "working");
     case "ready": return lifecycle("ready", "Ready", "ready");
     case "history": return lifecycle("historical", "Historical", "neutral");
+  }
+}
+
+export type SessionPresenceGroup = "current" | "unavailable" | "history";
+export type SessionPresenceSubgroup = Extract<SessionSection, "needs_you" | "working" | "ready">;
+export type SessionPresencePresentation = {
+  group: SessionPresenceGroup;
+  subgroup?: SessionPresenceSubgroup;
+  status: SessionLifecycleStatus;
+  label: string;
+  tone: SessionLifecycleTone;
+};
+
+/**
+ * Resolve Sessions placement from explicit runtime presence while preserving
+ * turn meaning as a separate fact. Rows without presence use the historical
+ * section/lifecycle projection until their adapter is migrated.
+ */
+export function sessionPresencePresentation(
+  session: Pick<SessionSummary, "section" | "sessionState" | "lifecycleStatus" | "presence">,
+): SessionPresencePresentation {
+  const lifecycle = sessionLifecyclePresentation(session);
+  const turn = session.sessionState?.turn;
+  const subgroup: SessionPresenceSubgroup | undefined = session.presence?.state === "closed"
+    ? undefined : turn === "needs_you"
+    || turn === "working" || turn === "ready" ? turn
+    : lifecycle.status === "needs_you" || lifecycle.status === "working" || lifecycle.status === "ready"
+      ? lifecycle.status : undefined;
+
+  switch (session.presence?.state) {
+    case "open":
+      return {
+        group: "current",
+        ...(subgroup ? { subgroup } : {}),
+        status: lifecycle.status,
+        label: lifecycle.label,
+        tone: lifecycle.tone,
+      };
+    case "closed":
+      return {
+        group: "history",
+        status: lifecycle.status,
+        label: lifecycle.label,
+        tone: lifecycle.tone,
+      };
+    case "unknown":
+      return {
+        group: "unavailable",
+        ...(subgroup ? { subgroup } : {}),
+        status: "unavailable",
+        label: "Status unavailable",
+        tone: "neutral",
+      };
+    default:
+      return {
+        group: session.section === "history" ? "history" : "current",
+        ...(session.section === "history"
+          ? {}
+          : { subgroup: subgroup ?? session.section }),
+        status: lifecycle.status,
+        label: lifecycle.label,
+        tone: lifecycle.tone,
+      };
   }
 }
 

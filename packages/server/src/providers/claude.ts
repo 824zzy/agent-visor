@@ -371,6 +371,14 @@ export class ClaudeProvider implements ProviderAdapter {
         canEnterChat: true,
         sessionClass: terminalTarget || backgroundTarget || owner === "Herdr" ? "terminal" : "interactive",
         ...(kind === "bg" ? { ambientEligible: false } : {}),
+        // The interactive metadata/process binding is exact conversation
+        // frontend evidence. It is intentionally separate from provider
+        // lifetime and from the current turn/route projection.
+        presence: {
+          state: "open",
+          evidence: "frontend",
+          observedAt: this.environment.now().toISOString(),
+        },
         conversationState: "open",
         turnState,
         ...(claudeLifecycle ? { claudeLifecycle } : {}),
@@ -456,11 +464,25 @@ export class ClaudeProvider implements ProviderAdapter {
         const session = await this.backgroundSession(
           row, metadata, summary, transcript, transcriptStamp, processes, claudeExecutable,
           inventory.authoritative, inventory.observedAt, this.environment.now().valueOf(),
+          !inventoryRead.outage,
           interactiveSessionIds.has(transcriptSessionID.toLowerCase()) || presenceByJob.get(row.id!)?.reason === "conversation",
           interactive?.turnState,
         );
         if (session) {
           const evidence = presenceByJob.get(row.id!);
+          if (evidence && (evidence.reason === "read_failed"
+            || evidence.reason === "reader_unavailable"
+            || evidence.reason === "process_changed")
+            && session.presence?.state === "unknown") {
+            // A failed/changed terminal observation is an unavailable
+            // presence read, not authoritative closure. Keep any separately
+            // discovered runtime evidence intact; only annotate the unknown
+            // projection with the stronger failure reason.
+            session.presence = {
+              ...session.presence,
+              evidence: "unavailable",
+            };
+          }
           session.claudePresence = interactiveSessionIds.has(transcriptSessionID.toLowerCase())
             ? "interactive" : evidence?.reason;
           const displayed = evidence?.displayed;
@@ -618,6 +640,7 @@ export class ClaudeProvider implements ProviderAdapter {
     authoritative: boolean,
     observedAt: number,
     checkedAt: number,
+    inventoryAvailable: boolean,
     ambientEligible: boolean,
     interactiveTurnState?: DiscoveredProviderSession["turnState"],
   ): Promise<DiscoveredProviderSession | undefined> {
@@ -666,6 +689,30 @@ export class ClaudeProvider implements ProviderAdapter {
     const inventoryName = meaningfulInventoryName(row.name, jobId);
     const title = inventoryName || summary.customTitle
       || summary.firstUser || `Claude Code · ${jobId}`;
+    const terminalJobState = jobState === "done" || jobState === "failed" || jobState === "stopped";
+    const presence = ambientEligible
+      ? {
+        state: "open" as const,
+        evidence: "frontend" as const,
+        observedAt: new Date(checkedAt).toISOString(),
+      }
+      : hasRuntime
+        ? {
+          state: "open" as const,
+          evidence: "runtime" as const,
+          observedAt: new Date(checkedAt).toISOString(),
+        }
+        : inventoryAvailable && authoritative && terminalJobState
+          ? {
+            state: "closed" as const,
+            evidence: "authoritative_inventory" as const,
+            observedAt: new Date(checkedAt).toISOString(),
+          }
+          : {
+            state: "unknown" as const,
+            evidence: inventoryAvailable ? "authoritative_inventory" as const : "unavailable" as const,
+            observedAt: new Date(checkedAt).toISOString(),
+          };
     return {
       id: sessionID,
       provider: "claude_code",
@@ -688,6 +735,7 @@ export class ClaudeProvider implements ProviderAdapter {
       // Current interactive metadata or a unique current Ghostty conversation
       // title establishes presence; ownership and parked IDs alone do not.
       ambientEligible,
+      presence,
       conversationState: "open",
       turnState: state === "history" ? "unknown" : state,
       chatPath: transcript,

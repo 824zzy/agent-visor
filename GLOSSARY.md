@@ -13,11 +13,31 @@ A session whose current turn is complete and which can be continued. Ready descr
 _Avoid_: Needs you, unread
 
 **Unopened completion**:
-A finished turn whose result has not yet been reviewed by the user.
+A finished turn whose result has not yet been reviewed by the user, whether its conversation remains open or has closed.
 _Avoid_: Unread message, pending question
 
+**Open conversation**:
+A conversation confirmed to remain open in an application or terminal, or to have a live agent runtime, whether working or idle. A visible frontend is not required, and a saved catalog entry alone does not establish that it is open.
+_Avoid_: Recent conversation, foreground conversation
+
+**History**:
+Saved conversations confirmed to be no longer open. An old conversation that remains open, or one whose current state cannot be verified, is not closed merely because of its age.
+_Avoid_: Old sessions, inactive sessions
+
+**Current**:
+Conversations confirmed to remain open, including working, idle, and live background conversations. Inactivity or closing one frontend alone does not remove a still-open conversation from Current.
+_Avoid_: Recent sessions, running turns
+
+**Inactive**:
+An idle conversation without recent agent activity whose latest completion has already been reviewed. Inactive describes recency, not closure.
+_Avoid_: Closed, stopped
+
+**Status unavailable**:
+Conversations whose current open or closed state cannot be verified. Missing evidence does not establish closure, resolve an unanswered question, or erase review attention.
+_Avoid_: Closed, deleted
+
 **Closed terminal conversation**:
-A conversation whose terminal frontend has closed, while its saved conversation remains available to continue. A completed turn alone does not make a conversation closed.
+A saved terminal conversation confirmed to be no longer open in a frontend or live agent runtime. Completing a turn or closing one frontend while the conversation continues elsewhere does not establish closure.
 _Avoid_: Finished session, deleted conversation
 
 **Retained history record**:

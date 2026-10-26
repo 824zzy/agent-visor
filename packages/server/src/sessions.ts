@@ -27,6 +27,7 @@ import {
   type SessionRouteState,
   type SessionTurnState,
   type SessionUnavailableReason,
+  type SessionPresence,
   type SessionSnapshot,
   type SessionHistoryPage,
   type SessionSummary,
@@ -134,6 +135,8 @@ export type DiscoveredProviderSession = {
   sessionClass?: SessionClass;
   /** Current user-facing presence, independent of lifecycle and resume capability. */
   ambientEligible?: boolean;
+  /** Verified frontend/runtime presence, independent of provider lifetime. */
+  presence?: SessionPresence;
   claudePresence?: SessionSummary["claudePresence"];
   managedBy?: SessionSummary["managedBy"];
   authority?: number;
@@ -2886,6 +2889,7 @@ export class SessionRepository {
           ?.find((session) => session.id === sessionId);
         if (discovered) record = applyHooks([discovered], this.hookBySession)[0] ?? discovered;
       }
+      record = presenceUnavailable(record, this.now().toISOString());
       const copy = structuredClone(record);
       this.rememberOpenedSession(copy);
       this.chatBySession.set(sessionId, copy);
@@ -2999,18 +3003,24 @@ export class SessionRepository {
       try {
         const sessions = await provider.discover();
         const authority = provider.discoveryAuthority?.() ?? "authoritative";
+        const current = authority === "unavailable"
+          ? sessions.map((session) => presenceUnavailable(session, this.now().toISOString()))
+          : sessions;
         const generation = (this.providerDiscoveryGeneration.get(provider.id) ?? 0) + 1;
         this.providerDiscoveryGeneration.set(provider.id, generation);
-        this.lastByProvider.set(provider.id, structuredClone(sessions));
+        this.lastByProvider.set(provider.id, structuredClone(current));
         this.providerDiscoveryAuthority.set(provider.id, authority);
         if (authority === "unavailable") this.providerInventoryUnavailable.add(provider.id);
         else this.providerInventoryUnavailable.delete(provider.id);
         if (provider.id === "pi") this.piDiscoveryGeneration += 1;
-        return sessions;
+        return current;
       } catch {
         this.providerDiscoveryAuthority.set(provider.id, "unavailable");
         this.providerInventoryUnavailable.add(provider.id);
-        return this.lastByProvider.get(provider.id) ?? [];
+        const current = (this.lastByProvider.get(provider.id) ?? [])
+          .map((session) => presenceUnavailable(session, this.now().toISOString()));
+        this.lastByProvider.set(provider.id, structuredClone(current));
+        return current;
       }
     }));
     const allDiscovered = discovered.flat();
@@ -4332,6 +4342,27 @@ function ownerForPublicDestination(session: DiscoveredProviderSession): string {
   }
 }
 
+/**
+ * A failed or non-authoritative provider read can retain the row for
+ * continuity, but it cannot retain the prior open/closed proof. Preserve
+ * identity, turn, attention, and route fields while making presence explicit
+ * and neutral until a later authoritative observation replaces it.
+ */
+function presenceUnavailable(
+  session: DiscoveredProviderSession,
+  observedAt: string,
+): DiscoveredProviderSession {
+  if (!session.presence) return session;
+  return {
+    ...session,
+    presence: {
+      state: "unknown",
+      evidence: "unavailable",
+      observedAt,
+    },
+  };
+}
+
 function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
   const byID = new Map<string, DiscoveredProviderSession>();
   for (const session of deduplicateSessions(discovered)) {
@@ -4391,6 +4422,7 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
       canOpenOwner: session.canOpenOwner,
       canEnterChat: session.canEnterChat,
       lifecycleStatus: lifecycleStatusFor(session),
+      ...(session.presence ? { presence: session.presence } : {}),
       ...(session.canRemoveHistory !== undefined ? { canRemoveHistory: session.canRemoveHistory } : {}),
       ...(session.sessionClass ? { sessionClass: session.sessionClass } : {}),
       ...(session.ambientEligible !== undefined ? { ambientEligible: session.ambientEligible } : {}),
@@ -4415,11 +4447,23 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
  * compatibility fallback for older provider projections without state facts.
  */
 function lifecycleStatusFor(session: DiscoveredProviderSession): SessionLifecycleStatus {
+  // Explicit presence owns the public liveness projection. A retained
+  // lifecycle label may still describe the last known turn, but it cannot
+  // make a confirmed closed or unavailable conversation look live.
+  if (session.presence) {
+    return sessionLifecyclePresentation({
+      section: session.section,
+      ...(session.conversationState || session.turnState
+        ? { sessionState: resolveSessionState(session) } : {}),
+      presence: session.presence,
+    }).status;
+  }
   if (session.lifecycleStatus) return session.lifecycleStatus;
   return sessionLifecyclePresentation({
     section: session.section,
     ...(session.conversationState || session.turnState
       ? { sessionState: resolveSessionState(session) } : {}),
+    ...(session.presence ? { presence: session.presence } : {}),
   }).status;
 }
 

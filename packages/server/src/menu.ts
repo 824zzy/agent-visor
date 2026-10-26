@@ -144,7 +144,10 @@ function menuSession(
   session: SessionSnapshot["sessions"][number],
   now: number,
 ): MenuSession {
-  if (session.completionUnseen || sessionLifecyclePresentation(session).status !== "ready") return session;
+  const lifecycle = sessionLifecyclePresentation(session);
+  const retainedReady = session.presence?.state === "closed"
+    && session.sessionState?.turn === "ready";
+  if (session.completionUnseen || (lifecycle.status !== "ready" && !retainedReady)) return session;
   const updatedAt = Date.parse(session.updatedAt);
   if (!Number.isFinite(updatedAt) || now - updatedAt <= TRANSCRIPT_STALE_CEILING_MS) return session;
   return {
@@ -164,6 +167,7 @@ function historyLifecycleOrder(
 
 function isAmbientSession(session: SessionSnapshot["sessions"][number]): boolean {
   return session.sessionClass !== "automation" && !session.managedBy
+    && session.presence?.state !== "closed"
     && session.ambientEligible !== false;
 }
 

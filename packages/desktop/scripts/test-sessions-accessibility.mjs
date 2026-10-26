@@ -16,6 +16,16 @@ const sessions = Array.from({ length: 30 }, (_, index) => ({
   owner: index % 2 ? "Codex" : "Ghostty",
   cwd: "/tmp/agent-visor",
   section: ["needs_you", "ready", "working", "history"][index % 4],
+  presence: index === 3
+    ? { state: "unknown", evidence: "unavailable", observedAt: new Date(now).toISOString() }
+    : index % 4 === 3
+      ? { state: "closed", evidence: "authoritative_inventory", observedAt: new Date(now).toISOString() }
+      : { state: "open", evidence: index % 4 === 2 ? "runtime" : "frontend", observedAt: new Date(now).toISOString() },
+  sessionState: {
+    conversation: "open",
+    turn: index === 3 ? "unknown" : index % 4 === 0 ? "needs_you" : index % 4 === 1 ? "ready" : "working",
+    route: index % 4 === 0 || index % 4 === 1 ? "available" : "waiting",
+  },
   attentionTier: index % 8 === 1 ? "acknowledged_ready" : undefined,
   updatedAt: new Date(now - index * 60_000).toISOString(),
   canOpenOwner: true,
@@ -64,7 +74,7 @@ async function run() {
   await waitFor(window, `document.querySelectorAll('[aria-label*="Open in"]').length >= 30`);
   const readyGroups = await window.webContents.executeJavaScript(`(() => ({
     headings: [...document.querySelectorAll('#sessions-canvas *')]
-      .filter((element) => !element.children.length && element.textContent === 'Ready to continue').length,
+      .filter((element) => !element.children.length && element.textContent === 'Ready').length,
     rows: [...document.querySelectorAll('[aria-label*="Open in"]')]
       .map((element) => element.getAttribute('aria-label'))
       .filter((label) => label.includes(', Ready,'))
@@ -74,6 +84,14 @@ async function run() {
   assert(JSON.stringify(readyGroups.rows) === JSON.stringify(
     [1, 5, 9, 13, 17, 21, 25, 29].map((index) => `Agent session ${index}`),
   ), "the merged Ready section lists all completions by recency regardless of acknowledgment");
+  const sectionHeadings = await window.webContents.executeJavaScript(`[
+    ...document.querySelectorAll('#sessions-canvas *')
+  ].filter((element) => !element.children.length)
+    .map((element) => element.textContent)
+    .filter((text) => ['Current', 'Needs you', 'In progress', 'Ready', 'Status unavailable', 'History'].includes(text))`);
+  assert(JSON.stringify(sectionHeadings.slice(0, 6)) === JSON.stringify(
+    ['Current', 'Needs you', 'In progress', 'Ready', 'Status unavailable', 'History'],
+  ), "presence sections expose Current, Status unavailable, and History in order");
   const readyLabels = `[...document.querySelectorAll('[aria-label*="Open in"]')]
     .map(element => element.getAttribute('aria-label')).filter(label => label.includes(', Ready,'))`;
   snapshot = {
@@ -300,6 +318,8 @@ async function run() {
     sessions: [{
       ...sessions[0], id: "unavailable-resume", title: "Agent unavailable resume",
       source: "Claude Code", owner: "Herdr", section: "history", managedBy: undefined,
+      presence: { state: "closed", evidence: "authoritative_inventory", observedAt: new Date(now).toISOString() },
+      sessionState: { conversation: "archived", turn: "unknown", route: "unavailable" },
       subtitle: "Closed terminal conversation", lifecycleStatus: "closed",
       canOpenOwner: false, canEnterChat: true, canRemoveHistory: true,
       resumeState: "unavailable",

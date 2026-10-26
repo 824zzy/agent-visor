@@ -192,6 +192,35 @@ function cachedResumeFixture() {
 }
 
 describe("Claude agent-view integration", () => {
+  it("publishes frontend presence for a uniquely matched Claude terminal and closed presence for an authoritative stop", async () => {
+    const fixture = completedIdleFixture();
+    const source = repository(fixture.environment);
+    const live = await source.refresh();
+    expect(live.sessions[0]).toMatchObject({
+      id: ccID,
+      presence: {
+        state: "open",
+        evidence: "frontend",
+      },
+      sessionState: { conversation: "open", turn: "ready" },
+    });
+
+    fixture.environment.processRows = [];
+    fixture.environment.directories.set(path.join(home, ".claude", "sessions"), []);
+    fixture.environment.inventory = inventorySuccess([
+      backgroundRow("8e45ed2c", ccID, "stopped", { name: "ccx-thinking-block-sneha" }),
+    ]);
+    const closed = await source.refresh();
+    expect(closed.sessions[0]).toMatchObject({
+      id: ccID,
+      presence: {
+        state: "closed",
+        evidence: "authoritative_inventory",
+      },
+    });
+    expect(menuPresentation(closed, [], fixture.environment.clock.valueOf()).pills).toEqual([]);
+  });
+
   it("keeps retained History unknown when real Claude discovery returns empty during an inventory outage", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-claude-inventory-outage-"));
     const historyPath = path.join(directory, "retained-history.json");

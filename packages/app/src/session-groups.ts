@@ -1,6 +1,13 @@
-import { sessionLifecyclePresentation, type SessionSection, type SessionSummary } from "@agent-visor/protocol";
+import {
+  sessionLifecyclePresentation,
+  sessionPresencePresentation,
+  type SessionSection,
+  type SessionSummary,
+} from "@agent-visor/protocol";
 
-const sections: ReadonlyArray<{
+type BrowserSection = SessionSection | "current_unknown" | "unavailable";
+
+const legacySections: ReadonlyArray<{
   id: SessionSection;
   title: string;
 }> = [
@@ -10,10 +17,26 @@ const sections: ReadonlyArray<{
   { id: "history", title: "History" },
 ];
 
+const presenceSections: ReadonlyArray<{
+  id: BrowserSection;
+  title: string;
+}> = [
+  { id: "needs_you", title: "Needs you" },
+  { id: "working", title: "In progress" },
+  { id: "ready", title: "Ready" },
+  // A confirmed-open row with no current turn evidence still belongs under
+  // Current. Keep this subgroup headingless so Status unavailable remains
+  // reserved for unknown open/closed presence rather than unknown turn.
+  { id: "current_unknown", title: "" },
+  { id: "unavailable", title: "Status unavailable" },
+  { id: "history", title: "History" },
+];
+
 export type SessionGroup = {
-  id: SessionSection | "results";
+  id: BrowserSection | "results";
   title: string;
   sessions: SessionSummary[];
+  parent?: "current";
 };
 
 export type SessionSelection = {
@@ -32,6 +55,23 @@ const pillNotices: Partial<Record<NonNullable<SessionSummary["claudePresence"]>,
 
 /** Browser presentation never changes the provider state or action capabilities. */
 export function sessionPresentation(session: SessionSummary, now = new Date()) {
+  if (session.presence) {
+    const resolved = sessionPresencePresentation(session);
+    const section: BrowserSection = resolved.group === "current"
+      ? resolved.subgroup ?? "current_unknown"
+      : resolved.group;
+    const title = presenceSections.find(({ id }) => id === section)!.title;
+    const pillNotice = resolved.group === "unavailable"
+      ? "Status unavailable: Agent Visor could not verify whether this conversation is open."
+      : undefined;
+    return {
+      section,
+      title,
+      subtitle: session.subtitle,
+      ...(pillNotice ? { pillNotice } : {}),
+    };
+  }
+
   const tier = session.attentionTier ?? session.section;
   let section: SessionSection = tier === "acknowledged_ready" ? "ready" : tier;
   const lifecycle = sessionLifecyclePresentation(session);
@@ -49,17 +89,28 @@ export function sessionPresentation(session: SessionSummary, now = new Date()) {
     ? `${session.managedBy ? `Managed by ${session.managedBy} · ` : ""}${knownOpenReady ? "Ready" : "Completed"}`
     : session.subtitle;
   const pillNotice = session.claudePresence ? pillNotices[session.claudePresence] : undefined;
-  return { section, title: sections.find(({ id }) => id === section)!.title, subtitle,
+  return { section, title: legacySections.find(({ id }) => id === section)!.title, subtitle,
     ...(pillNotice ? { pillNotice } : {}) };
 }
 
 export function groupSessions(sessions: SessionSummary[], now = new Date()): SessionGroup[] {
+  const hasPresence = sessions.some(({ presence }) => presence !== undefined);
+  const presentedSessions = hasPresence ? sessions.map((session) => compatibilityPresence(session)) : sessions;
+  const sections = hasPresence
+    ? presenceSections : legacySections;
   return sections.flatMap((section) => {
-    const matching = sessions
+    const matching = presentedSessions
       .filter((session) => sessionPresentation(session, now).section === section.id)
       .sort(compareSessions);
 
-    return matching.length === 0 ? [] : [{ ...section, sessions: matching }];
+    if (!matching.length) return [];
+    return [{
+      ...section,
+      sessions: matching,
+      ...(section.id === "needs_you" || section.id === "working" || section.id === "ready"
+        || section.id === "current_unknown"
+        ? { parent: "current" as const } : {}),
+    }];
   });
 }
 
@@ -70,7 +121,9 @@ export function selectSessions(sessions: SessionSummary[], query: string, now = 
     return { groups, orderedSessions: groups.flatMap(({ sessions }) => sessions) };
   }
 
-  const matches = sessions
+  const hasPresence = sessions.some(({ presence }) => presence !== undefined);
+  const presentedSessions = hasPresence ? sessions.map((session) => compatibilityPresence(session)) : sessions;
+  const matches = presentedSessions
     .map((session) => ({ session, rank: searchRank(session, needle, now) }))
     .filter(({ rank }) => rank < 2)
     .sort((left, right) => left.rank - right.rank || compareSessions(left.session, right.session))
@@ -149,4 +202,22 @@ function searchRank(session: SessionSummary, needle: string, now: Date): number 
 
 function compareSessions(left: SessionSummary, right: SessionSummary): number {
   return right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id);
+}
+
+/**
+ * During incremental adapter adoption, a mixed snapshot must not make an
+ * unconverted row look Current or Closed merely because its legacy section
+ * says so. Keep it readable while projecting the explicit unavailable state
+ * only at this presentation boundary; the repository snapshot stays intact.
+ */
+function compatibilityPresence(session: SessionSummary): SessionSummary {
+  if (session.presence) return session;
+  return {
+    ...session,
+    presence: {
+      state: "unknown",
+      evidence: "unavailable",
+      observedAt: session.updatedAt,
+    },
+  };
 }
