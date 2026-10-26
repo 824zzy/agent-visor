@@ -191,7 +191,18 @@ export function moveSessionCursor(
 export function sessionAction(
   session: SessionSummary,
   alternate = false,
-): "owner" | "chat" | undefined {
+): "owner" | "chat" | "retry" | undefined {
+  // Unavailable presence never implies a live owner route. Keep an existing
+  // exact owner action when one is still advertised; otherwise make the
+  // primary action an explicit detection retry and leave supported Chat as
+  // the clearly labelled alternate.
+  if (session.presence?.state === "unknown") {
+    if (alternate) {
+      if (session.canEnterChat) return "chat";
+      return session.canOpenOwner ? "owner" : "retry";
+    }
+    return session.canOpenOwner ? "owner" : "retry";
+  }
   if (alternate) {
     if (session.canEnterChat) return "chat";
     return session.canOpenOwner ? "owner" : undefined;

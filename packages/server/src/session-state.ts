@@ -157,7 +157,8 @@ export function chatCapabilitiesForState(
   options: SessionStateOptions = {},
 ): ChatCapabilities {
   const state = resolveSessionState(session, options);
-  const canSendText = state.route === "available";
+  const presenceUnavailable = session.presence?.state === "unknown";
+  const canSendText = !presenceUnavailable && state.route === "available";
   const terminal = verifiedTerminalRoute(session);
   // Cancellation is independent from next-turn sendability. A known busy
   // Codex turn is intentionally waiting for input, but its exact owned turn
@@ -166,9 +167,12 @@ export function chatCapabilitiesForState(
     && session.messageTransport === "codex_app_server"
     && session.routeState === "available"
     && state.turn === "working";
-  const canCancel = (codexWorking || (
+  const canCancel = !presenceUnavailable && (codexWorking || (
     terminal && state.route !== "unavailable" && state.turn === "working"
   ));
+  const readOnlyReason = presenceUnavailable
+    ? "The conversation status is unavailable. Chat is read only until detection recovers."
+    : unavailableMessage(state.unavailableReason);
   return {
     canSendText,
     canSendImages: canSendText && (
@@ -186,7 +190,7 @@ export function chatCapabilitiesForState(
       ? { canCyclePermissionMode: canSendText } : {}),
     ...(terminal ? { maxTextBytes: NATIVE_HELPER_MAX_TEXT_BYTES } : {}),
     ...(state.unavailableReason ? { unavailableReason: state.unavailableReason } : {}),
-    ...(canSendText ? {} : { readOnlyReason: unavailableMessage(state.unavailableReason) }),
+    ...(canSendText ? {} : { readOnlyReason }),
   };
 }
 

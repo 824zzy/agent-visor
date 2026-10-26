@@ -393,6 +393,27 @@ describe("groupSessions", () => {
     ]);
   });
 
+  it("makes unavailable rows retryable while preserving supported Chat as the alternate", () => {
+    const unavailable = {
+      ...session("unavailable-action", "history", "2026-08-22T09:58:00.000Z"),
+      presence: {
+        state: "unknown" as const,
+        evidence: "unavailable" as const,
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: {
+        conversation: "unknown" as const,
+        turn: "ready" as const,
+        route: "unavailable" as const,
+      },
+      canOpenOwner: false,
+      canEnterChat: true,
+    };
+
+    expect(sessionAction(unavailable)).toBe("retry");
+    expect(sessionAction(unavailable, true)).toBe("chat");
+  });
+
   it("keeps a confirmed-open row under Current when its turn is unknown", () => {
     const openUnknownTurn = {
       ...session("open-unknown-turn", "history", "2026-08-22T09:58:00.000Z"),

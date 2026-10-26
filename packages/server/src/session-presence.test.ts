@@ -235,4 +235,129 @@ describe("SessionRepository presence contract", () => {
       sessionState: { conversation: "open", turn: "ready" },
     });
   });
+
+  it.each(["overview", "not_displayed"] as const)(
+    "does not restore a prior ambient pill for an authoritative Claude %s exclusion",
+    async (claudePresence) => {
+      let phase: "conversation" | "excluded" = "conversation";
+      const row = discovered("claude-excluded", {
+        state: "open",
+        evidence: "frontend",
+        observedAt: "2026-10-26T10:00:00.000Z",
+      }, "ready");
+      const provider = {
+        id: "claude_code" as const,
+        discover: async () => [{
+          ...structuredClone(row),
+          claudePresence: phase === "conversation" ? "conversation" : claudePresence,
+          ambientEligible: phase === "conversation",
+          presence: {
+            state: phase === "conversation" ? "open" : "unknown",
+            evidence: phase === "conversation" ? "frontend" : "unavailable",
+            observedAt: "2026-10-26T10:00:00.000Z",
+          },
+        }] as DiscoveredProviderSession[],
+        discoveryAuthority: () => "authoritative" as const,
+      };
+      const repository = new SessionRepository([provider]);
+
+      const open = await repository.refresh();
+      expect(open.sessions[0]).toMatchObject({
+        id: "claude-excluded",
+        claudePresence: "conversation",
+        ambientEligible: true,
+        presence: { state: "open" },
+      });
+      expect(menuPresentation(open, []).pills.some(({ id }) => id === "claude-excluded")).toBe(true);
+
+      phase = "excluded";
+      const excluded = await repository.refresh();
+      expect(excluded.sessions[0]).toMatchObject({
+        id: "claude-excluded",
+        claudePresence,
+        ambientEligible: false,
+        presence: { state: "unknown", evidence: "unavailable" },
+      });
+      expect(menuPresentation(excluded, []).pills.some(({ id }) => id === "claude-excluded")).toBe(false);
+    },
+  );
+
+  it("only retries detection explicitly and publishes the recovered exact identity", async () => {
+    let phase: "unknown" | "open" = "unknown";
+    let discoveryCalls = 0;
+    const row = discovered("retryable", {
+      state: phase,
+      evidence: phase === "open" ? "frontend" : "unavailable",
+      observedAt: "2026-10-26T10:00:00.000Z",
+    }, "ready");
+    const provider = {
+      id: "claude_code" as const,
+      discover: async () => {
+        discoveryCalls += 1;
+        return [{ ...structuredClone(row), presence: {
+          state: phase,
+          evidence: phase === "open" ? "frontend" : "unavailable",
+          observedAt: "2026-10-26T10:00:00.000Z",
+        } } as DiscoveredProviderSession];
+      },
+      discoveryAuthority: () => "authoritative" as const,
+    };
+    const repository = new SessionRepository([provider]);
+
+    await repository.refresh();
+    expect(repository.current().sessions[0]).toMatchObject({
+      id: "retryable",
+      presence: { state: "unknown", evidence: "unavailable" },
+    });
+    expect(discoveryCalls).toBe(1);
+
+    phase = "open";
+    await expect(repository.retryDetection("retryable")).resolves.toBeUndefined();
+    expect(discoveryCalls).toBe(2);
+    expect(repository.current().sessions[0]).toMatchObject({
+      id: "retryable",
+      presence: { state: "open", evidence: "frontend" },
+    });
+  });
+
+  it("allows Retry detection for a legacy row projected unavailable in a mixed snapshot", async () => {
+    let recovered = false;
+    let discoveryCalls = 0;
+    const provider = {
+      id: "claude_code" as const,
+      discover: async () => {
+        discoveryCalls += 1;
+        return [
+          discovered("explicit-open", {
+            state: "open",
+            evidence: "frontend",
+            observedAt: "2026-10-26T10:00:00.000Z",
+          }, "ready"),
+          {
+            ...discovered("legacy-retry", {
+              state: "open",
+              evidence: "frontend",
+              observedAt: "2026-10-26T10:00:00.000Z",
+            }, "ready"),
+            ...(recovered ? {} : { presence: undefined }),
+          },
+        ] as DiscoveredProviderSession[];
+      },
+      discoveryAuthority: () => "authoritative" as const,
+    };
+    const repository = new SessionRepository([provider]);
+
+    await repository.refresh();
+    const visible = selectSessions(repository.current().sessions, "").orderedSessions;
+    expect(visible.find(({ id }) => id === "legacy-retry")?.presence).toMatchObject({
+      state: "unknown",
+      evidence: "unavailable",
+    });
+
+    recovered = true;
+    await expect(repository.retryDetection("legacy-retry")).resolves.toBeUndefined();
+    expect(discoveryCalls).toBe(2);
+    expect(repository.current().sessions.find(({ id }) => id === "legacy-retry")?.presence)
+      .toMatchObject({ state: "open", evidence: "frontend" });
+  });
 });

@@ -42,6 +42,7 @@ import { useSessionHistory, type SessionHistoryState } from "./use-session-histo
 import {
   focusSession,
   mergeSessionHistory,
+  retryDetection,
   resumeSession as requestResumeSession,
   useSessionSnapshot,
   type ResumeActionState,
@@ -149,6 +150,11 @@ export function App() {
           contentScale={contentScale}
           onContentScaleChange={adjustContentScale}
           onOpenChat={(session) => setChatSelection((selection) => reduceChatSelection(selection, { type: "open", session }))}
+          onRetryDetection={async (session) => {
+            const result = await retryDetection(session.id);
+            if (!result.ok && result.error) window.alert(result.error);
+            return result;
+          }}
           onRemoveHistory={history.remove}
           onRepair={history.repair}
           onResume={async (session) => {
@@ -199,6 +205,7 @@ function SessionBrowser({
   onContentScaleChange,
   onLoadMoreHistory,
   onOpenChat,
+  onRetryDetection,
   onRemoveHistory,
   onRepair,
   onResume,
@@ -215,6 +222,7 @@ function SessionBrowser({
   onContentScaleChange(delta: -0.1 | 0 | 0.1): void;
   onLoadMoreHistory(): void;
   onOpenChat(session: SessionSummary): void;
+  onRetryDetection(session: SessionSummary): Promise<{ ok: boolean; error?: string }>;
   onRemoveHistory(sessionId: string): void;
   onRepair(sessionId: string, selection: HistoryRepairSelection | null): void;
   onResume(session: SessionSummary): Promise<{ ok: boolean; state: ResumeActionState; error?: string }>;
@@ -229,6 +237,7 @@ function SessionBrowser({
   const [cursorId, setCursorId] = useState<string>();
   const [revealRequest, setRevealRequest] = useState<{ id: string; serial: number }>();
   const [resumeStates, setResumeStates] = useState<Record<string, "reopening" | "uncertain">>({});
+  const [retryingDetection, setRetryingDetection] = useState<Set<string>>(() => new Set());
   const [commandHeld, setCommandHeld] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const searchRef = useRef<TextInput>(null);
@@ -249,6 +258,19 @@ function SessionBrowser({
   const currentCount = selection.groups
     .filter(({ parent }) => parent === "current")
     .reduce((total, group) => total + group.sessions.length, 0);
+  const retrySessionDetection = async (session: SessionSummary): Promise<void> => {
+    if (retryingDetection.has(session.id)) return;
+    setRetryingDetection((current) => new Set(current).add(session.id));
+    try {
+      await onRetryDetection(session);
+    } finally {
+      setRetryingDetection((current) => {
+        const next = new Set(current);
+        next.delete(session.id);
+        return next;
+      });
+    }
+  };
   let currentHeaderRendered = false;
   const renderedGroups = selection.groups.flatMap((group) => {
     const parentHeader = group.parent === "current" && !currentHeaderRendered
@@ -276,8 +298,10 @@ function SessionBrowser({
           hotkeyPosition={visibleIds.indexOf(session.id)}
           key={`session:${session.id}`}
           now={now}
-          onActivate={(alternate) => activateSession(session, alternate, onOpenChat)}
+          onActivate={(alternate) => activateSession(session, alternate, onOpenChat, () => void retrySessionDetection(session))}
           onOpenChat={() => onOpenChat(session)}
+          onRetryDetection={() => retrySessionDetection(session)}
+          retryingDetection={retryingDetection.has(session.id)}
           resumeState={resumeStates[session.id] ?? session.resumeState}
           onResume={session.resumeState === "eligible" || session.resumeState === "uncertain"
             || resumeStates[session.id] !== undefined
@@ -400,11 +424,11 @@ function SessionBrowser({
       }
       if (command.type === "activate") {
         const session = selection.orderedSessions.find(({ id }) => id === cursorId);
-        if (session) activateSession(session, command.alternate, onOpenChat);
+        if (session) activateSession(session, command.alternate, onOpenChat, () => void retrySessionDetection(session));
       }
       if (command.type === "hotkey") {
         const session = selection.orderedSessions[command.position];
-        if (session) activateSession(session, false, onOpenChat);
+        if (session) activateSession(session, false, onOpenChat, () => void retrySessionDetection(session));
       }
     };
     const keyUp = (event: KeyboardEvent) => setCommandHeld(event.metaKey);
@@ -527,6 +551,7 @@ function SessionRow({
   now,
   onActivate,
   onOpenChat,
+  onRetryDetection,
   onResume,
   resumeState: resumeStateOverride,
   onRemoveHistory,
@@ -534,6 +559,7 @@ function SessionRow({
   palette,
   repairing,
   removing,
+  retryingDetection,
   session,
   styles: rowStyles,
 }: {
@@ -545,6 +571,7 @@ function SessionRow({
   now: Date;
   onActivate(alternate: boolean): void;
   onOpenChat(): void;
+  onRetryDetection(): void;
   onResume?: () => Promise<void>;
   resumeState?: SessionSummary["resumeState"];
   onRemoveHistory?: () => void;
@@ -552,6 +579,7 @@ function SessionRow({
   palette: Palette;
   repairing: boolean;
   removing: boolean;
+  retryingDetection: boolean;
   session: SessionSummary;
   styles: BrowserStyles;
 }) {
@@ -566,8 +594,14 @@ function SessionRow({
     }
   }, [active]);
   const primary = sessionAction(session);
-  const hasSeparateChat = session.canOpenOwner && session.canEnterChat;
-  const actionLabel = primary === "owner" ? `Open in ${session.owner}` : "Open Chat";
+  const unavailable = session.presence?.state === "unknown";
+  const hasSeparateChat = session.canEnterChat && (session.canOpenOwner || unavailable);
+  const chatLabel = unavailable ? "Open Chat (read-only)" : "Open Chat";
+  const actionLabel = primary === "owner"
+    ? `Open in ${session.owner}`
+    : primary === "retry"
+    ? retryingDetection ? "Retrying detection…" : "Retry detection"
+    : "Open Chat";
   const resumeState = resumeStateOverride === "eligible"
     || resumeStateOverride === "uncertain" || resumeStateOverride === "reopening"
     ? resumeStateOverride : undefined;
@@ -593,7 +627,7 @@ function SessionRow({
           accessibilityLabel={`${session.title}, ${statusLabel}${presentation.inactive ? ", Inactive" : ""}, ${sourceLabel}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}${presentationNotice ? `, ${presentationNotice}` : ""}`}
           accessibilityRole="button"
           accessibilityState={{ selected: cursor }}
-          disabled={!primary}
+          disabled={!primary || (primary === "retry" && retryingDetection)}
           onHoverIn={() => setPrimaryHovered(true)}
           onHoverOut={() => setPrimaryHovered(false)}
           onPress={() => onActivate(false)}
@@ -627,7 +661,11 @@ function SessionRow({
           </View>
           <View style={rowStyles.ownerColumn}>
             <Text numberOfLines={1} style={[rowStyles.actionText, primaryHovered && rowStyles.linkText]}>
-              {primary === "owner" ? `↗ ${compact ? session.owner : `Open in ${session.owner}`}` : "▢ Open Chat"}
+              {primary === "owner"
+                ? `↗ ${compact ? session.owner : `Open in ${session.owner}`}`
+                : primary === "retry"
+                ? actionLabel
+                : "▢ Open Chat"}
             </Text>
           </View>
         </Pressable>
@@ -653,7 +691,7 @@ function SessionRow({
           ) : null}
           {hasSeparateChat ? (
             <Pressable
-              accessibilityLabel={`Open Chat for ${session.title}`}
+              accessibilityLabel={`Open Chat for ${session.title}${unavailable ? " (read-only)" : ""}`}
               accessibilityRole="button"
               onHoverIn={() => setChatHovered(true)}
               onHoverOut={() => setChatHovered(false)}
@@ -665,7 +703,26 @@ function SessionRow({
               ]}
             >
               <Text style={[rowStyles.chatText, chatHovered && rowStyles.linkText]}>
-                ▢ {compact ? "Chat" : "Open Chat"}
+                ▢ {compact && !unavailable ? "Chat" : chatLabel}
+              </Text>
+            </Pressable>
+          ) : null}
+          {unavailable && primary === "owner" ? (
+            <Pressable
+              accessibilityLabel={retryingDetection
+                ? `Retrying detection for ${session.title}`
+                : `Retry detection for ${session.title}`}
+              accessibilityRole="button"
+              disabled={retryingDetection}
+              onPress={onRetryDetection}
+              style={({ pressed }) => [
+                rowStyles.chatAction,
+                !retryingDetection && rowStyles.chatHovered,
+                pressed && rowStyles.pressed,
+              ]}
+            >
+              <Text style={[rowStyles.chatText, rowStyles.linkText]}>
+                {retryingDetection ? "Retrying detection…" : "Retry detection"}
               </Text>
             </Pressable>
           ) : null}
@@ -758,10 +815,12 @@ function activateSession(
   session: SessionSummary,
   alternate: boolean,
   onOpenChat: (session: SessionSummary) => void,
+  onRetryDetection: () => void,
 ): void {
   const action = sessionAction(session, alternate);
   if (action === "owner") void openOwner(session);
   if (action === "chat") onOpenChat(session);
+  if (action === "retry") onRetryDetection();
 }
 
 async function openOwner(session: SessionSummary): Promise<void> {
@@ -771,7 +830,8 @@ async function openOwner(session: SessionSummary): Promise<void> {
   window.alert(result.error ?? `Could not open this session in ${session.owner}.`);
 }
 
-function footerLabel(action: "owner" | "chat"): string {
+function footerLabel(action: "owner" | "chat" | "retry"): string {
+  if (action === "retry") return "Retry detection";
   return action === "owner" ? "Open source app" : "Open Chat";
 }
 

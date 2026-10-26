@@ -1,6 +1,7 @@
 import {
   sessionSnapshotSchema,
   sessionLifecyclePresentation,
+  sessionPresenceProjection,
   validateQuestionAnswers,
   type ChatPage,
   type ChatCommands,
@@ -332,6 +333,8 @@ export interface SessionSnapshotSource {
   chatAction?(message: Extract<ClientMessage, {
     type: "send_chat" | "cancel_chat" | "respond_chat" | "cycle_permission_mode";
   }>): Promise<string | undefined>;
+  /** Explicitly refresh detection for one currently unavailable row. */
+  retryDetection?(sessionId: string): Promise<string | undefined>;
   focusSession?(sessionId: string): Promise<string | undefined>;
   resumeSession?(sessionId: string): Promise<ResumeResult>;
   /** A websocket opened a read lease; this never acquires a native writer. */
@@ -428,11 +431,14 @@ export const MAX_CHAT_ACTIONS_PER_SESSION = 32;
 // Give the normal app-server handshake a short chance to populate the
 // composer without making transcript loading wait on a stalled provider.
 const codexSettingsFirstOpenWaitMs = 750;
+const unavailablePresenceChatReadOnlyReason = "The conversation status is unavailable. Chat is read only until detection recovers.";
+const unavailablePresenceChatActionReason = "Chat is read only while detection is unavailable.";
 const codexSettingsCatalogTtlMs = 60_000;
 // Open chats are retained independently from the bounded ambient catalog so
 // pagination and refreshes cannot invalidate an exact route. Evict only
 // released records; active websocket references are always retained.
 const maxOpenedSessionRecords = 128;
+const maxPreviouslyAmbientEligible = 512;
 
 type SessionRepositoryOptions = {
   completionAttentionPath?: string;
@@ -569,6 +575,15 @@ export class SessionRepository {
   /** Providers whose latest discovery cannot establish absence for History. */
   private readonly providerInventoryUnavailable = new Set<ProviderID>();
   private readonly providerDiscoveryAuthority = new Map<ProviderID, ProviderDiscoveryAuthority>();
+  /**
+   * In-memory provenance for ambient admission. A provider may downgrade a
+   * previously verified live identity to unknown/catalog while its current
+   * route is being rechecked; that uncertainty must not admit a new catalog
+   * row, nor should it erase an already eligible pill. This is deliberately
+   * non-durable; restart/recovery provenance belongs to the retained-state
+   * follow-up.
+   */
+  private readonly previouslyAmbientEligible = new Set<string>();
   private refreshInFlight: Promise<SessionSnapshot> | undefined;
   private readonly latestHookAtBySession = new Map<string, string>();
   private readonly hookBySession = new Map<string, HookSessionEvent>();
@@ -1706,6 +1721,8 @@ export class SessionRepository {
       record,
     );
     let chatRecord = this.withFreshChatSettingsCatalog(sessionId, record);
+    const presenceUnavailable = this.isPresenceUnavailable(sessionId)
+      || chatRecord.presence?.state === "unknown";
     const settingsProvider = this.providers.find((provider) => provider.id === record.provider);
     let initialPageMetadata: ChatPage["metadata"];
     let initialPageReturned = false;
@@ -1832,8 +1849,10 @@ export class SessionRepository {
       if (pendingActions.length) {
         page.pendingAction = pendingActions[0] ?? null;
         page.pendingActions = pendingActions;
-        page.capabilities.canApprove = pendingActions.some((action) => action.type === "approval");
-        page.capabilities.canAnswer = pendingActions.some((action) => action.type === "question" && action.responseAvailable !== false);
+        page.capabilities.canApprove = !presenceUnavailable
+          && pendingActions.some((action) => action.type === "approval");
+        page.capabilities.canAnswer = !presenceUnavailable
+          && pendingActions.some((action) => action.type === "question" && action.responseAvailable !== false);
       }
       if (chatRecord.sessionClass === "automation") {
         // Automation may expose pending provider state for inspection, but it
@@ -1847,6 +1866,17 @@ export class SessionRepository {
         delete page.capabilities.canCyclePermissionMode;
         delete page.capabilities.maxTextBytes;
         page.capabilities.readOnlyReason = automationChatReadOnlyReason;
+      }
+      if (presenceUnavailable) {
+        page.capabilities.canSendText = false;
+        page.capabilities.canSendImages = false;
+        page.capabilities.canCancel = false;
+        page.capabilities.canApprove = false;
+        page.capabilities.canAnswer = false;
+        delete page.capabilities.cancelDeliveryId;
+        delete page.capabilities.canCyclePermissionMode;
+        delete page.capabilities.maxTextBytes;
+        page.capabilities.readOnlyReason = unavailablePresenceChatReadOnlyReason;
       }
       // The catalog may have completed while optional usage/reconciliation
       // awaits were in flight. Attach it before returning the first page so
@@ -2070,6 +2100,9 @@ export class SessionRepository {
   ): Promise<string | undefined> {
     if (this.isHistorySuppressedID(message.sessionId)) {
       return "This session was removed from Agent Visor History.";
+    }
+    if (this.isPresenceUnavailable(message.sessionId)) {
+      return unavailablePresenceChatActionReason;
     }
     if (message.type === "cycle_permission_mode") {
       const stateEpoch = this.chatStateEpoch(message.sessionId);
@@ -3119,6 +3152,23 @@ export class SessionRepository {
     return operation;
   }
 
+  private isPresenceUnavailable(sessionId: string): boolean {
+    const projected = sessionPresenceProjection(this.snapshotValue.sessions).sessions
+      .find(({ id }) => id === sessionId);
+    return projected?.presence?.state === "unknown"
+      || this.chatBySession.get(sessionId)?.presence?.state === "unknown";
+  }
+
+  async retryDetection(sessionId: string): Promise<string | undefined> {
+    const session = sessionPresenceProjection(this.snapshotValue.sessions).sessions
+      .find(({ id }) => id === sessionId);
+    if (!session || session.presence?.state !== "unknown") {
+      return "Detection retry is only available while this session's status is unavailable.";
+    }
+    await this.refresh();
+    return undefined;
+  }
+
   private async refreshProviders(): Promise<SessionSnapshot> {
     const discovered = await Promise.all(this.providers.map(async (provider) => {
       try {
@@ -3479,7 +3529,7 @@ export class SessionRepository {
     const suppressedSource = (session: DiscoveredProviderSession) => historicalPaseoIDs.has(session.id)
       || paseoOwners.some(owner => !historicalPaseoIDs.has(owner.id) && matchesPaseoAlias(owner, session));
     const effectiveDiscovered = discovered.filter(session => !suppressedSource(session))
-      .map((session) => this.projectAcknowledgedFailure(session));
+      .map((session) => this.projectAmbientEligibility(this.projectAcknowledgedFailure(session)));
     this.reconcileTerminalNextTurns(effectiveDiscovered);
     const canonicalDiscovered = deduplicateSessions(effectiveDiscovered);
     const authoritative = new Map<string, DiscoveredProviderSession>();
@@ -3692,6 +3742,37 @@ export class SessionRepository {
       turnState: "unknown",
       failureAlert: false,
     };
+  }
+
+  private projectAmbientEligibility(
+    session: DiscoveredProviderSession,
+  ): DiscoveredProviderSession {
+    const key = `${session.provider}\u0000${session.id}`;
+    const definitiveVisibilityExclusion = session.presence?.state === "closed"
+      || session.sessionClass === "automation"
+      || session.managedBy !== undefined
+      || session.claudePresence === "overview"
+      || session.claudePresence === "not_displayed";
+    if (definitiveVisibilityExclusion) {
+      this.previouslyAmbientEligible.delete(key);
+      return session;
+    }
+    const eligibleNow = session.presence?.state === "open"
+      && session.ambientEligible !== false
+      && session.sessionClass !== "automation"
+      && !session.managedBy;
+    if (eligibleNow && !this.previouslyAmbientEligible.has(key)) {
+      this.previouslyAmbientEligible.add(key);
+      while (this.previouslyAmbientEligible.size > maxPreviouslyAmbientEligible) {
+        const oldest = this.previouslyAmbientEligible.values().next().value;
+        if (oldest === undefined) break;
+        this.previouslyAmbientEligible.delete(oldest);
+      }
+    }
+    if (session.presence?.state === "unknown" && this.previouslyAmbientEligible.has(key)) {
+      return { ...session, ambientEligible: true };
+    }
+    return session;
   }
 }
 

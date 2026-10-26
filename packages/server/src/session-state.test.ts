@@ -96,6 +96,23 @@ describe("session state policy", () => {
     });
   });
 
+  it("keeps Chat read only when presence is unavailable despite a cached route", () => {
+    const capabilities = chatCapabilitiesForState(codex({
+      presence: {
+        state: "unknown",
+        evidence: "unavailable",
+        observedAt: "2026-09-05T00:00:00.000Z",
+      },
+    }));
+    expect(capabilities).toMatchObject({
+      canSendText: false,
+      canSendImages: false,
+      canCancel: false,
+      readOnlyReason: "The conversation status is unavailable. Chat is read only until detection recovers.",
+    });
+    expect(capabilities.canCyclePermissionMode).not.toBe(true);
+  });
+
   it("treats provider archival as different from an old or unavailable route", () => {
     const capabilities = chatCapabilitiesForState(codex({
       conversationState: "archived",

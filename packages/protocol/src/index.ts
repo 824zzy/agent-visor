@@ -897,6 +897,11 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
   }).strict(),
   z.object({
     ...requestEnvelope,
+    type: z.literal("retry_detection"),
+    sessionId: z.string().min(1).max(512),
+  }).strict(),
+  z.object({
+    ...requestEnvelope,
     type: z.literal("resume_session"),
     sessionId: z.string().min(1).max(512),
   }).strict(),

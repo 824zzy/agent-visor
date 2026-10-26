@@ -203,6 +203,66 @@ describe("Paseo session pills", () => {
       .toEqual([`paseo:srv_local:${agentId}`]);
   });
 
+  it("retains a previously verified eligible identity through repeated Paseo uncertainty without admitting a new catalog row", async () => {
+    let phase: "running" | "idle" = "running";
+    const provenID = "proven-runtime";
+    const catalogID = "catalog-only";
+    const provenSession = "11111111-1111-4111-8111-111111111111";
+    const source = {
+      read: async () => ({
+        serverId: "srv_local",
+        providers: { "claude-copilot": "claude" },
+        agents: phase === "running"
+          ? [{ ...agent(), id: provenID, runtimeInfo: { sessionId: provenSession } }]
+          : [
+            { ...agent(), id: provenID, status: "idle", runtimeInfo: undefined,
+              persistence: { sessionId: provenSession } },
+            { ...agent(), id: catalogID, status: "idle", runtimeInfo: undefined,
+              persistence: { sessionId: "22222222-2222-4222-8222-222222222222" } },
+          ],
+      }),
+    };
+    const provider = new PaseoProvider(source, () => now);
+    const repository = new SessionRepository([provider], { now: () => now });
+
+    const open = await repository.refresh();
+    expect(menuPresentation(open, [], now.valueOf()).pills.map(({ id }) => id))
+      .toEqual([`paseo:srv_local:${provenID}`]);
+
+    phase = "idle";
+    const rawUnknown = await provider.discover();
+    expect(rawUnknown).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: `paseo:srv_local:${provenID}`,
+        presence: { state: "unknown", evidence: "catalog", observedAt: now.toISOString() },
+        ambientEligible: false,
+      }),
+      expect.objectContaining({
+        id: `paseo:srv_local:${catalogID}`,
+        presence: { state: "unknown", evidence: "catalog", observedAt: now.toISOString() },
+        ambientEligible: false,
+      }),
+    ]));
+    const unknown = await repository.refresh();
+    expect(menuPresentation(unknown, [], now.valueOf()).pills.map(({ id }) => id))
+      .toEqual([`paseo:srv_local:${provenID}`]);
+    expect(unknown.sessions.find(({ id }) => id === `paseo:srv_local:${provenID}`))
+      .toMatchObject({ presence: { state: "unknown" }, ambientEligible: true });
+
+    const repeatedUnknown = await repository.refresh();
+    expect(menuPresentation(repeatedUnknown, [], now.valueOf()).pills.map(({ id }) => id))
+      .toEqual([`paseo:srv_local:${provenID}`]);
+    expect(menuPresentation(repeatedUnknown, [], now.valueOf()).pills)
+      .not.toEqual(expect.arrayContaining([{ id: `paseo:srv_local:${catalogID}` }]));
+
+    phase = "running";
+    const recovered = await repository.refresh();
+    expect(recovered.sessions.find(({ id }) => id === `paseo:srv_local:${provenID}`))
+      .toMatchObject({ presence: { state: "open", evidence: "runtime" } });
+    expect(menuPresentation(recovered, [], now.valueOf()).pills.map(({ id }) => id))
+      .toEqual([`paseo:srv_local:${provenID}`]);
+  });
+
   it("retains a saved result through an unavailable read and recovers without a new pulse", async () => {
     let phase: "healthy" | "failure" | "empty" = "healthy";
     const row = { ...agent(), status: "idle", runtimeInfo: undefined,
