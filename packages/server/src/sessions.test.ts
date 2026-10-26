@@ -3062,6 +3062,56 @@ describe("SessionRepository", () => {
     });
   });
 
+  it("does not re-ingest derived question attention after an exact cached conversation answers", async () => {
+    const provider = new FakeProvider();
+    provider.sessions = [{
+      ...live,
+      chatPath: "/tmp/pi-question-cache.jsonl",
+      conversationState: "open",
+      section: "working",
+      turnState: "working",
+    }];
+    const repository = new SessionRepository([provider]);
+    await repository.refresh();
+    await expect(repository.chatOpened("pi-1", "question-cache-lease")).resolves.toBeUndefined();
+
+    let answerCalls = 0;
+    repository.registerExternalAction("pi-1", {
+      type: "question", toolUseId: "question-cache", blocking: false,
+      questions: [{ id: "continue", question: "Continue?", choices: ["Yes"], multiple: false }],
+    }, async () => { answerCalls += 1; });
+
+    expect(repository.current().sessions[0]).toMatchObject({
+      section: "needs_you",
+      attention: { kind: "question", evidence: "current" },
+      attentionTier: "needs_you",
+      sessionState: { turn: "working" },
+    });
+
+    await expect(repository.chatAction({
+      type: "respond_chat", id: "answer-cache", sessionId: "pi-1",
+      toolUseId: "question-cache", decision: "answer", answers: { continue: "Yes" },
+    })).resolves.toBeUndefined();
+    expect(answerCalls).toBe(1);
+    expect(repository.current().sessions[0]).toMatchObject({
+      section: "working",
+      lifecycleStatus: "working",
+      attentionTier: "working",
+      sessionState: { turn: "working" },
+    });
+    expect(repository.current().sessions[0]).not.toHaveProperty("attention");
+
+    await repository.refresh();
+    expect(repository.current().sessions[0]).toMatchObject({
+      section: "working",
+      lifecycleStatus: "working",
+      attentionTier: "working",
+      sessionState: { turn: "working" },
+    });
+    expect(repository.current().sessions[0]).not.toHaveProperty("attention");
+    repository.chatClosed("pi-1", "question-cache-lease");
+  });
+
   it("rejects automation cancellation and approval/question responses", async () => {
     const provider = new FakeProvider();
     provider.sessions = [{
