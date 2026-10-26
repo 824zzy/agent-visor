@@ -205,6 +205,34 @@ export async function startServer(options: {
           requestId: parsed.data.id,
           sessionId: parsed.data.sessionId,
         });
+      } else if (parsed.data.type === "retry_detection") {
+        try {
+          const error = source.retryDetection
+            ? await source.retryDetection(parsed.data.sessionId)
+            : "Session detection retry is unavailable.";
+          sendDaemonMessage(socket, {
+            type: "native_action_result",
+            id: parsed.data.id,
+            ok: !error,
+            ...(error ? { error } : {}),
+          }, {
+            requestType: parsed.data.type,
+            requestId: parsed.data.id,
+            sessionId: parsed.data.sessionId,
+          });
+        } catch (error) {
+          reportRequestFailure(error);
+          sendDaemonMessage(socket, {
+            type: "native_action_result",
+            id: parsed.data.id,
+            ok: false,
+            error: requestFailureMessage(error),
+          }, {
+            requestType: parsed.data.type,
+            requestId: parsed.data.id,
+            sessionId: parsed.data.sessionId,
+          });
+        }
       } else if (parsed.data.type === "resume_session") {
         try {
           const result = source.resumeSession

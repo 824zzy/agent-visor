@@ -70,6 +70,33 @@ export async function focusSession(sessionId: string): Promise<{ ok: boolean; er
   });
 }
 
+/** Retry only the explicit detection action; this never focuses or acknowledges a session. */
+export async function retryDetection(sessionId: string): Promise<{ ok: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    const socket = new WebSocket(daemonUrl());
+    const id = `retry-detection-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const deadline = setTimeout(() => finish({ ok: false }), 5_000);
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({ type: "retry_detection", id, sessionId }));
+    });
+    socket.addEventListener("message", (event) => {
+      try {
+        const parsed = serverMessageSchema.safeParse(JSON.parse(String(event.data)));
+        if (parsed.success && parsed.data.type === "native_action_result" && parsed.data.id === id) {
+          finish({ ok: parsed.data.ok, ...(parsed.data.error ? { error: parsed.data.error } : {}) });
+        }
+      } catch { /* wait for a valid result */ }
+    });
+    socket.addEventListener("error", () => finish({ ok: false }));
+
+    function finish(result: { ok: boolean; error?: string }): void {
+      clearTimeout(deadline);
+      socket.close();
+      resolve(result);
+    }
+  });
+}
+
 export type ResumeActionState = "focused" | "matched" | "joined" | "reopening" | "unavailable" | "uncertain";
 
 export async function resumeSession(sessionId: string): Promise<{

@@ -192,6 +192,12 @@ export function sessionAction(
   session: SessionSummary,
   alternate = false,
 ): "owner" | "chat" | undefined {
+  // An unavailable presence has no freshly validated owner route. Keep the
+  // read-only Chat action available as an explicit alternate, while the
+  // browser row exposes Retry detection instead of guessing a destination.
+  if (session.presence?.state === "unknown") {
+    return alternate && session.canEnterChat ? "chat" : undefined;
+  }
   if (alternate) {
     if (session.canEnterChat) return "chat";
     return session.canOpenOwner ? "owner" : undefined;

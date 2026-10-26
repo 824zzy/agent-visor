@@ -332,6 +332,8 @@ export interface SessionSnapshotSource {
   chatAction?(message: Extract<ClientMessage, {
     type: "send_chat" | "cancel_chat" | "respond_chat" | "cycle_permission_mode";
   }>): Promise<string | undefined>;
+  /** Explicitly refresh detection for one currently unavailable row. */
+  retryDetection?(sessionId: string): Promise<string | undefined>;
   focusSession?(sessionId: string): Promise<string | undefined>;
   resumeSession?(sessionId: string): Promise<ResumeResult>;
   /** A websocket opened a read lease; this never acquires a native writer. */
@@ -3117,6 +3119,15 @@ export class SessionRepository {
     };
     void operation.then(clear, clear);
     return operation;
+  }
+
+  async retryDetection(sessionId: string): Promise<string | undefined> {
+    const session = this.snapshotValue.sessions.find(({ id }) => id === sessionId);
+    if (!session || session.presence?.state !== "unknown") {
+      return "Detection retry is only available while this session's status is unavailable.";
+    }
+    await this.refresh();
+    return undefined;
   }
 
   private async refreshProviders(): Promise<SessionSnapshot> {
