@@ -276,6 +276,13 @@ async function run() {
     const chat = retry?.closest('[id^="session-row-"]')?.querySelector('[aria-label^="Read chat for"]');
     return Boolean(retry && chat) && retry.getBoundingClientRect().right <= chat.getBoundingClientRect().left;
   })()`), "Retry detection occupies the source slot before fixed Chat");
+  assert(await window.webContents.executeJavaScript(`(() => {
+    const row = document.querySelector('[aria-label^="Agent session 3,"]')?.closest('[id^="session-row-"]');
+    const retry = row?.querySelector('[aria-label^="Retry detection for Agent session 3"]');
+    return Boolean(row && retry)
+      && row.textContent.includes('Open in Codex')
+      && row.textContent.includes('Retry detection');
+  })()`), "an unavailable owner-routed row keeps its visible owner destination beside Retry");
   assert(await window.webContents.executeJavaScript(`Boolean(document.querySelector('[aria-label*="Managed by Agent Room"]'))`),
     "managed-session ownership is accessible on its row");
   const sourceActionLabel = await window.webContents.executeJavaScript(

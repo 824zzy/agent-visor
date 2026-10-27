@@ -9,6 +9,14 @@ import { startServer } from "../../server/dist/server.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const now = Date.parse("2026-09-09T08:00:00.000Z");
 const day = 86_400_000;
+const statusDotProbe = `
+    const findStatusDot = (action) => [...(action?.querySelectorAll('*') ?? [])].find((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return Math.round(rect.width) === 8 && Math.round(rect.height) === 8
+        && style.borderRadius === '4px' && style.backgroundColor !== 'rgba(0, 0, 0, 0)';
+    });
+`;
 const readyState = { conversation: "open", turn: "ready", route: "available" };
 const makeSession = (id, section, age) => ({
   id, title: id, subtitle: section === "ready" ? "Ready to continue" : "Agent is working",
@@ -109,10 +117,11 @@ try {
   await waitFor(`document.querySelector('[aria-label^="Unverified state, Status unavailable,"]')`);
   await waitFor(`document.querySelector('[aria-label^="Historical record, Historical,"]')`);
   const renderedStatuses = await evaluate(`(() => {
+    ${statusDotProbe}
     const read = (id) => {
       const row = document.getElementById(id);
       const action = row?.querySelector('[role="button"]');
-      const dot = action?.firstElementChild;
+      const dot = findStatusDot(action);
       return {
         label: action?.getAttribute('aria-label'),
         color: dot ? getComputedStyle(dot).backgroundColor : undefined,
@@ -181,7 +190,12 @@ try {
   await waitFor(`document.querySelector('[aria-label="1 search results"]')`);
   assert(await evaluate(`document.querySelector('[aria-label^="Expired completion, Ready,"]')`),
     "search keeps the same Ready status in History placement");
-  const color = await evaluate(`getComputedStyle(document.querySelector('[aria-label^="Expired completion, Ready,"]').firstElementChild).backgroundColor`);
+  const color = await evaluate(`(() => {
+    ${statusDotProbe}
+    const action = document.querySelector('[aria-label^="Expired completion, Ready,"]');
+    const dot = findStatusDot(action);
+    return dot ? getComputedStyle(dot).backgroundColor : undefined;
+  })()`);
   assert(neutral.includes(color), `aged reviewed Ready has an inactive gray status dot in History (${color})`);
   await evaluate(`document.querySelector('[aria-label="Open Chat for Expired completion"]').click()`);
   await waitFor(`document.querySelector('[aria-label="Conversation status: Ready"]')`);
@@ -213,11 +227,26 @@ try {
   for (const subscriber of subscribers) subscriber(snapshot);
   await evaluate(`window.dispatchEvent(new Event('focus'))`);
   await waitFor(`document.querySelector('[aria-label^="Modern idle, Ready,"]')`);
-  const modernReadyColor = await evaluate(`getComputedStyle(document.querySelector('[aria-label^="Modern idle, Ready,"]').firstElementChild).backgroundColor`);
+  const modernReadyColor = await evaluate(`(() => {
+    ${statusDotProbe}
+    const action = document.querySelector('[aria-label^="Modern idle, Ready,"]');
+    const dot = findStatusDot(action);
+    return dot ? getComputedStyle(dot).backgroundColor : undefined;
+  })()`);
   assert(green.includes(modernReadyColor), `recent explicit Ready stays green (${modernReadyColor})`);
   await evaluate(`window.fixtureNow = ${modernUpdatedAt + 30 * 60 * 1_000}; window.dispatchEvent(new Event('focus'))`);
-  await waitFor(`getComputedStyle(document.querySelector('[aria-label^="Modern idle, Ready,"]').firstElementChild).backgroundColor !== ${JSON.stringify(modernReadyColor)}`);
-  const modernInactiveColor = await evaluate(`getComputedStyle(document.querySelector('[aria-label^="Modern idle, Ready,"]').firstElementChild).backgroundColor`);
+  await waitFor(`(() => {
+    ${statusDotProbe}
+    const action = document.querySelector('[aria-label^="Modern idle, Ready,"]');
+    const dot = findStatusDot(action);
+    return dot && getComputedStyle(dot).backgroundColor !== ${JSON.stringify(modernReadyColor)};
+  })()`);
+  const modernInactiveColor = await evaluate(`(() => {
+    ${statusDotProbe}
+    const action = document.querySelector('[aria-label^="Modern idle, Ready,"]');
+    const dot = findStatusDot(action);
+    return dot ? getComputedStyle(dot).backgroundColor : undefined;
+  })()`);
   assert(neutral.includes(modernInactiveColor), `exactly-thirty-minute explicit Ready becomes gray (${modernInactiveColor})`);
   console.log("Session freshness PASS: consistent rows/search, time-only expiry, reading position, keyboard target, wake/focus and Chat draft/capabilities.");
 } catch (error) {
