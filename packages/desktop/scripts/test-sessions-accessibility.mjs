@@ -6,8 +6,9 @@ import { startServer } from "../../server/dist/server.js";
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const token = "sessions-accessibility-test-token-00000000000000000000";
 const now = Date.now();
+const baseSessionCount = 159;
 const sessions = [
-  ...Array.from({ length: 30 }, (_, index) => ({
+  ...Array.from({ length: baseSessionCount }, (_, index) => ({
     id: `session-${index}`,
     title: `Agent session ${index}`,
     subtitle: index === 0 ? "Managed by Agent Room · Agent is working" : "Accessibility test row",
@@ -33,6 +34,38 @@ const sessions = [
     canOpenOwner: true,
     canEnterChat: index !== 5 && index !== 29,
   })),
+  {
+    id: "saved-pi-owner",
+    title: "Saved Pi owner route",
+    subtitle: "Transcript preview from Pi",
+    source: "Pi",
+    project: "agent-visor",
+    owner: "Ghostty",
+    cwd: "/tmp/agent-visor",
+    section: "history",
+    presence: { state: "unknown", evidence: "catalog", observedAt: new Date(now).toISOString() },
+    sessionState: { conversation: "unknown", turn: "ready", route: "unavailable" },
+    updatedAt: new Date(now - 2 * 60_000).toISOString(),
+    canOpenOwner: true,
+    canEnterChat: true,
+    ambientEligible: false,
+  },
+  {
+    id: "saved-pi-chat",
+    title: "Saved Pi read-only Chat",
+    subtitle: "Saved transcript from Pi",
+    source: "Pi",
+    project: "agent-visor",
+    owner: "Pi",
+    cwd: "/tmp/agent-visor",
+    section: "history",
+    presence: { state: "unknown", evidence: "catalog", observedAt: new Date(now).toISOString() },
+    sessionState: { conversation: "unknown", turn: "unknown", route: "unavailable" },
+    updatedAt: new Date(now - 3 * 60_000).toISOString(),
+    canOpenOwner: false,
+    canEnterChat: true,
+    ambientEligible: false,
+  },
   {
     id: "unavailable-retry",
     title: "Agent retryable",
@@ -61,6 +94,9 @@ void app.whenReady()
 
 async function run() {
   nativeTheme.themeSource = "light";
+  const expectedReadyNames = Array.from({ length: baseSessionCount }, (_, index) => index)
+    .filter((index) => index % 4 === 1)
+    .map((index) => `Agent session ${index}`);
   let snapshot = { type: "session_snapshot", revision: 1, sessions };
   const subscribers = new Set();
   let focusActions = 0;
@@ -115,7 +151,7 @@ async function run() {
 
   try {
   await window.loadFile(path.resolve(directory, "../../app/dist/index.html"));
-  await waitFor(window, `document.querySelectorAll('[aria-label*="Open in"]').length >= 30`);
+  await waitFor(window, `document.querySelectorAll('[aria-label*="Open in"]').length >= ${baseSessionCount}`);
   const readyGroups = await window.webContents.executeJavaScript(`(() => ({
     headings: [...document.querySelectorAll('#sessions-canvas *')]
       .filter((element) => !element.children.length && element.textContent === 'Ready').length,
@@ -126,16 +162,16 @@ async function run() {
   }))()`);
   assert(readyGroups.headings === 1, "Ready completions share one visible section heading");
   assert(JSON.stringify(readyGroups.rows) === JSON.stringify(
-    [1, 5, 9, 13, 17, 21, 25, 29].map((index) => `Agent session ${index}`),
+    expectedReadyNames,
   ), "the merged Ready section lists all completions by recency regardless of acknowledgment");
   const sectionHeadings = await window.webContents.executeJavaScript(`[
     ...document.querySelectorAll('#sessions-canvas *')
   ].filter((element) => !element.children.length)
     .map((element) => element.textContent)
-    .filter((text) => ['Current', 'Needs you', 'In progress', 'Ready', 'Status unavailable', 'History'].includes(text))`);
+    .filter((text) => ['Current', 'Needs you', 'In progress', 'Ready', 'Status unavailable', 'Saved'].includes(text))`);
   assert(JSON.stringify(sectionHeadings.slice(0, 6)) === JSON.stringify(
-    ['Current', 'Needs you', 'In progress', 'Ready', 'Status unavailable', 'History'],
-  ), "presence sections expose Current, Status unavailable, and History in order");
+    ['Current', 'Needs you', 'In progress', 'Ready', 'Status unavailable', 'Saved'],
+  ), "presence sections expose Current, Status unavailable, and Saved in order");
   const readyLabels = `[...document.querySelectorAll('[aria-label*="Open in"]')]
     .map(element => element.getAttribute('aria-label')).filter(label => label.includes(', Ready,'))`;
   snapshot = {
@@ -148,7 +184,7 @@ async function run() {
   await waitFor(window, `${readyLabels}[0]?.startsWith('Agent session 29,')`);
   const refreshedReady = await window.webContents.executeJavaScript(`${readyLabels}.map(label => label.split(',')[0])`);
   assert(JSON.stringify(refreshedReady) === JSON.stringify(
-    [29, 1, 5, 9, 13, 17, 21, 25].map(index => `Agent session ${index}`),
+    [`Agent session 29`, ...expectedReadyNames.filter((name) => name !== "Agent session 29")],
   ), "same-phase activity updates move a seen completion ahead of older unseen work");
   snapshot = { ...snapshot, revision: snapshot.revision + 1, sessions };
   for (const subscriber of subscribers) subscriber(snapshot);
@@ -180,8 +216,8 @@ async function run() {
       disjoint: rows.every(({ disjoint }) => disjoint),
     };
   })()`);
-  assert(frames.primaryCount === 30, "all rows expose their primary owner action");
-  assert(frames.chatCount === 29, "Chat-capable rows, including unavailable read-only Chat, expose Open Chat");
+  assert(frames.primaryCount === baseSessionCount + 1, "all owner-routed rows expose their primary action");
+  assert(frames.chatCount === baseSessionCount, "Chat-capable rows, including Saved and unavailable read-only Chat, expose Open Chat");
   assert(new Set(frames.primaryWidths).size === 1, "owner rows keep one fixed frame");
   assert(new Set(frames.chatLefts).size === 1, "Chat actions keep one aligned column");
   assert(frames.disjoint, "owner and Chat actions do not overlap");
@@ -193,6 +229,24 @@ async function run() {
   assert((sourceActionLabel ?? "").includes("Pi · fixture-profile")
     && (sourceActionLabel ?? "").includes("Open in Ghostty"),
   "search rows expose the original source profile and available owner action");
+  const savedOwnerRow = await window.webContents.executeJavaScript(
+    `document.querySelector('[aria-label^="Saved Pi owner route,"]')?.getAttribute('aria-label')`,
+  );
+  const savedOwnerChat = await window.webContents.executeJavaScript(
+    `document.querySelector('[aria-label^="Open Chat for Saved Pi owner route"]')?.getAttribute('aria-label')`,
+  );
+  const savedChatRow = await window.webContents.executeJavaScript(
+    `document.querySelector('[aria-label^="Saved Pi read-only Chat,"]')?.getAttribute('aria-label')`,
+  );
+  assert((savedOwnerRow ?? "").includes("Saved") && (savedOwnerRow ?? "").includes("Open in Ghostty"),
+    "Saved catalog rows preserve an exact owner route");
+  assert(savedOwnerChat?.includes("(read-only)") === true,
+    "Saved catalog Chat remains explicitly read-only beside an exact owner route");
+  assert(savedChatRow?.includes("Open Chat (read-only)") === true,
+    "ownerless Saved catalog rows expose read-only Chat without Retry");
+  assert(!await window.webContents.executeJavaScript(
+    `Boolean(document.querySelector('[aria-label^="Retry detection for Saved Pi"]'))`,
+  ), "Saved catalog rows do not expose detection Retry");
 
   const retryRow = `[aria-label^="Agent retryable,"]`;
   const retryChat = `[aria-label^="Open Chat for Agent retryable"]`;
@@ -246,7 +300,7 @@ async function run() {
     setter.call(input, 'Agent');
     input.dispatchEvent(new Event('input', { bubbles: true }));
   })()`);
-  await waitFor(window, `Boolean(document.querySelector('[aria-label="31 search results"]'))`);
+  await waitFor(window, `Boolean(document.querySelector('[aria-label="${sessions.length} search results"]'))`);
   await window.webContents.executeJavaScript(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))`);
   await new Promise((resolve) => setTimeout(resolve, 100));
   const before = await window.webContents.executeJavaScript(`(() => {

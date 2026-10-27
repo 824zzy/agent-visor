@@ -127,10 +127,20 @@ export class PiProvider implements ProviderAdapter {
         canEnterChat: true,
         sessionClass: process ? "terminal" : "interactive",
         conversationState: process ? "open" : "unknown",
+        presence: process
+          ? {
+            state: "open" as const,
+            evidence: "runtime" as const,
+            observedAt: this.environment.now().toISOString(),
+          }
+          : {
+            state: "unknown" as const,
+            evidence: "catalog" as const,
+            observedAt: iso(file.modifiedAt),
+          },
         // A transcript with no matched Pi process is an explicit source
         // history record. Preserve unknown liveness and route facts while
-        // giving lifecycle presentation the stronger historical evidence.
-        ...(!process ? { lifecycleStatus: "historical" as const } : {}),
+        // distinguishing saved source history from a failed observation.
         ...(process && runtime
           ? {
             turnState: runtime.isIdle === true || runtime.status.trim().toLowerCase() === "idle"

@@ -596,14 +596,16 @@ function SessionRow({
     }
   }, [active]);
   const primary = sessionAction(session);
-  const unavailable = sessionPresencePresentation(session).group === "unavailable";
+  const presence = sessionPresencePresentation(session);
+  const unavailable = presence.group === "unavailable";
+  const readOnlyChat = session.presence !== undefined && session.presence.state !== "open";
   const hasSeparateChat = session.canEnterChat && (session.canOpenOwner || unavailable);
-  const chatLabel = unavailable ? "Open Chat (read-only)" : "Open Chat";
+  const chatLabel = readOnlyChat ? "Open Chat (read-only)" : "Open Chat";
   const actionLabel = primary === "owner"
     ? `Open in ${session.owner}`
     : primary === "retry"
     ? retryingDetection ? "Retrying detection…" : "Retry detection"
-    : "Open Chat";
+    : chatLabel;
   const resumeState = resumeStateOverride === "eligible"
     || resumeStateOverride === "uncertain" || resumeStateOverride === "reopening"
     ? resumeStateOverride : undefined;
@@ -667,7 +669,7 @@ function SessionRow({
                 ? `↗ ${compact ? session.owner : `Open in ${session.owner}`}`
                 : primary === "retry"
                 ? actionLabel
-                : "▢ Open Chat"}
+                : `▢ ${chatLabel}`}
             </Text>
           </View>
         </Pressable>
@@ -693,7 +695,7 @@ function SessionRow({
           ) : null}
           {hasSeparateChat ? (
             <Pressable
-              accessibilityLabel={`Open Chat for ${session.title}${unavailable ? " (read-only)" : ""}`}
+              accessibilityLabel={`Open Chat for ${session.title}${readOnlyChat ? " (read-only)" : ""}`}
               accessibilityRole="button"
               onHoverIn={() => setChatHovered(true)}
               onHoverOut={() => setChatHovered(false)}
@@ -705,7 +707,7 @@ function SessionRow({
               ]}
             >
               <Text style={[rowStyles.chatText, chatHovered && rowStyles.linkText]}>
-                ▢ {compact && !unavailable ? "Chat" : chatLabel}
+                ▢ {compact && !readOnlyChat ? "Chat" : chatLabel}
               </Text>
             </Pressable>
           ) : null}

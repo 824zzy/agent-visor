@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   sessionPresencePresentation,
@@ -138,6 +141,115 @@ describe("SessionRepository presence contract", () => {
       lifecycleStatus: "saved",
       inspector: { status: "Saved", detailRows: [] },
     });
+  });
+
+  it("reopens isolated retained state without reviving live proof or completion attention", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "agent-visor-saved-reopen-"));
+    const historyPath = path.join(root, "retained-history.json");
+    const observedAt = "2026-10-26T10:00:00.000Z";
+    const sessionID = "codex-reopen-fixture";
+    const canonicalID = "codex-canonical-fixture";
+    const live: DiscoveredProviderSession = {
+      id: sessionID,
+      provider: "codex",
+      title: "Reopened Codex fixture",
+      subtitle: "Ready to continue",
+      sourceProfile: "fixture-profile",
+      project: "fixture-project",
+      cwd: "/tmp/agent-visor/fixture-project",
+      owner: "Ghostty",
+      section: "ready",
+      updatedAt: observedAt,
+      canOpenOwner: true,
+      canEnterChat: true,
+      ambientEligible: true,
+      presence: { state: "open", evidence: "frontend", observedAt },
+      conversationState: "open",
+      turnState: "ready",
+      completionAt: observedAt,
+      completionUnseen: false,
+      historyIdentity: {
+        verified: true,
+        current: true,
+        canonicalId: canonicalID,
+        aliases: ["codex-public-alias"],
+        host: "Ghostty",
+        configHome: "/tmp/agent-visor/codex-config",
+      },
+    };
+    const first = new SessionRepository([{
+      id: "codex",
+      discover: async () => [structuredClone(live)],
+    }], { retainedHistoryPath: historyPath, now: () => new Date(observedAt) });
+    try {
+      await first.refresh();
+      let mode: "unavailable" | "saved" = "unavailable";
+      const savedCatalogRow: DiscoveredProviderSession = {
+        ...structuredClone(live),
+        id: "codex-public-alias",
+        subtitle: "Saved transcript preview",
+        section: "history",
+        canOpenOwner: false,
+        ambientEligible: false,
+        presence: { state: "unknown", evidence: "catalog", observedAt },
+        conversationState: "unknown",
+        turnState: "ready",
+        lifecycleStatus: "saved",
+        historyIdentity: {
+          ...live.historyIdentity!,
+          current: false,
+        },
+      };
+      const reopened = new SessionRepository([{
+        id: "codex",
+        discover: async () => mode === "unavailable" ? [] : [structuredClone(savedCatalogRow)],
+        discoveryAuthority: () => mode === "unavailable" ? "unavailable" as const : "authoritative" as const,
+      }], { retainedHistoryPath: historyPath, now: () => new Date(observedAt) });
+      const snapshot = await reopened.refresh();
+      const row = snapshot.sessions.find(({ id }) => id === sessionID);
+      expect(row).toMatchObject({
+        id: sessionID,
+        sourceProfile: "fixture-profile",
+        section: "ready",
+        lifecycleStatus: "unavailable",
+        ambientEligible: true,
+        canOpenOwner: false,
+        presence: { state: "unknown", evidence: "unavailable" },
+        sessionState: { conversation: "unknown", turn: "unknown", route: "unavailable" },
+      });
+      expect(row?.attentionTier).toBe("ready");
+      expect(row?.completionUnseen).not.toBe(true);
+      expect(reopened.historyPage().sessions[0]).toMatchObject({
+        sourceProfile: "fixture-profile",
+        presence: { state: "unknown", evidence: "unavailable" },
+      });
+      const reopenedPill = menuPresentation(snapshot, [], new Date(observedAt).valueOf()).pills
+        .find(({ id }) => id === sessionID);
+      expect(reopenedPill).toMatchObject({ id: sessionID, lifecycleStatus: "unavailable" });
+      expect(reopenedPill?.completionUnseen).not.toBe(true);
+
+      mode = "saved";
+      const healthy = await reopened.refresh();
+      const savedRow = healthy.sessions.find(({ id }) => id === "codex-public-alias");
+      expect(healthy.sessions.filter(({ source }) => source === "Codex")).toHaveLength(1);
+      expect(savedRow).toMatchObject({
+        id: "codex-public-alias",
+        sourceProfile: "fixture-profile",
+        section: "history",
+        lifecycleStatus: "saved",
+        presence: { state: "unknown", evidence: "catalog" },
+        ambientEligible: false,
+      });
+      expect(savedRow?.completionUnseen).not.toBe(true);
+      expect(menuPresentation(healthy, [], new Date(observedAt).valueOf()).pills)
+        .not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "codex-public-alias" })]));
+      expect(reopened.historyPage().sessions[0]).toMatchObject({
+        sourceProfile: "fixture-profile",
+        title: "Reopened Codex fixture",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("carries explicit Claude presence through the snapshot and native pill projection", async () => {

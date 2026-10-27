@@ -881,6 +881,7 @@ describe("live provider adapters", () => {
       title: "Active Pi name",
       provider: "pi",
       owner: "Ghostty",
+      presence: { state: "open", evidence: "runtime" },
       modelCatalog: {
         "gpt-5.6-sol": { displayName: "GPT-5.6 Sol", contextWindow: 114_688 },
       },
@@ -903,7 +904,7 @@ describe("live provider adapters", () => {
     expect((await provider.discover())[0]?.modelCatalog).toBeUndefined();
   });
 
-  it("presents a transcript-only Pi source record as Historical through the repository", async () => {
+  it("presents a transcript-only Pi source record as Saved through the repository", async () => {
     const environment = new FixtureEnvironment();
     const root = `${home}/.pi/agent/sessions`;
     const project = `${root}/--Users-me-Codes-agent-visor--`;
@@ -926,7 +927,8 @@ describe("live provider adapters", () => {
       id: "pi-history",
       source: "Pi",
       section: "history",
-      lifecycleStatus: "historical",
+      lifecycleStatus: "saved",
+      presence: { state: "unknown", evidence: "catalog" },
       canOpenOwner: false,
       canEnterChat: true,
       sessionState: { conversation: "unknown", turn: "unknown", route: "unavailable" },
@@ -936,11 +938,143 @@ describe("live provider adapters", () => {
     expect(presentation.navigatorPills).toEqual([
       expect.objectContaining({
         id: "pi-history",
-        lifecycleStatus: "historical",
-        inspector: expect.objectContaining({ status: "Historical" }),
-        accessibilityLabel: expect.stringContaining(", Historical,"),
+        lifecycleStatus: "saved",
+        inspector: expect.objectContaining({ status: "Saved" }),
+        accessibilityLabel: expect.stringContaining(", Saved,"),
       }),
     ]);
+    expect(presentation.pills.map(({ id }) => id)).not.toContain("pi-history");
+  });
+
+  it("keeps Pi history Saved when a mixed snapshot contains modern presence rows", async () => {
+    const environment = new FixtureEnvironment();
+    const root = `${home}/.pi/agent/sessions`;
+    const project = `${root}/--Users-me-Codes-agent-visor--`;
+    const transcript = `${project}/pi-mixed.jsonl`;
+    const body = [
+      { type: "session", id: "pi-mixed", cwd, timestamp: "2026-08-22T07:59:58.000Z" },
+      { type: "message", id: "mixed-message", parentId: "root", role: "user", content: "Review history" },
+    ].map((value) => JSON.stringify(value)).join("\n") + "\n";
+    const piHistoryIDs = ["pi-mixed", ...Array.from({ length: 7 }, (_, index) => `pi-saved-${index}`)];
+    environment.directories.set(root, ["--Users-me-Codes-agent-visor--"]);
+    environment.directories.set(project, piHistoryIDs.map((id) => `${id}.jsonl`));
+    environment.files.set(transcript, body);
+    environment.headTails.set(transcript, { head: body, tail: body });
+    environment.stamps.set(transcript, { modifiedAt: now, size: Buffer.byteLength(body) });
+    for (const id of piHistoryIDs.slice(1)) {
+      const historyBody = [
+        { type: "session", id, cwd, timestamp: "2026-08-22T07:59:58.000Z" },
+        { type: "message", id: `${id}-message`, parentId: "root", role: "user", content: "Saved fixture" },
+      ].map((value) => JSON.stringify(value)).join("\n") + "\n";
+      const historyPath = `${project}/${id}.jsonl`;
+      environment.files.set(historyPath, historyBody);
+      environment.headTails.set(historyPath, { head: historyBody, tail: historyBody });
+      environment.stamps.set(historyPath, { modifiedAt: now, size: Buffer.byteLength(historyBody) });
+    }
+    environment.processRows = [];
+
+    const modern: DiscoveredProviderSession = {
+      id: "modern-open",
+      provider: "claude_code",
+      title: "Modern live fixture",
+      subtitle: "Working",
+      cwd,
+      owner: "Ghostty",
+      section: "working",
+      updatedAt: now.toISOString(),
+      canOpenOwner: true,
+      canEnterChat: true,
+      presence: { state: "open", evidence: "frontend", observedAt: now.toISOString() },
+      conversationState: "open",
+      turnState: "working",
+    };
+
+    const mixedRows = (
+      provider: DiscoveredProviderSession["provider"],
+      count: number,
+      offset: number,
+      kind: "live" | "saved" | "closed" | "failed",
+    ): DiscoveredProviderSession[] => Array.from({ length: count }, (_, index) => ({
+      ...modern,
+      id: `${provider}-modern-${offset + index}`,
+      provider,
+      title: `${provider} catalog fixture ${offset + index}`,
+      subtitle: `${provider} fixture remains searchable`,
+      sourceProfile: `fixture-${provider}`,
+      project: `fixture-project-${offset + index}`,
+      cwd: `${home}/Codes/fixture-${offset + index}`,
+      owner: provider === "codex" ? "Codex" : provider === "paseo" ? "Paseo" : "Ghostty",
+      section: kind === "live" ? "working" : "history",
+      canOpenOwner: kind === "live",
+      ambientEligible: kind === "live" || kind === "failed",
+      lifecycleStatus: kind === "live" ? "working"
+        : kind === "closed" ? "closed" : kind === "failed" ? "unavailable" : "saved",
+      presence: {
+        state: kind === "live" ? "open" : kind === "closed" ? "closed" : "unknown",
+        evidence: kind === "live" ? (provider === "paseo" ? "runtime" : "frontend")
+          : kind === "closed" ? "authoritative_inventory" : kind === "failed" ? "unavailable" : "catalog",
+        observedAt: now.toISOString(),
+      },
+      sessionState: {
+        conversation: kind === "live" ? "open" : kind === "closed" ? "archived" : "unknown",
+        turn: kind === "live" ? "working" : kind === "saved" ? "ready" : "unknown",
+        route: kind === "live" ? "available" : "unavailable",
+      },
+      ...(kind === "failed" ? { failureAlert: true } : {}),
+    }));
+    // Keep the fixture close to the captured merged catalog size: eight real
+    // Pi transcripts plus 151 mixed modern rows. The rows intentionally include
+    // quiet catalog evidence, verified live evidence, confirmed closed records,
+    // and one genuine failed observation so the healthy/failure split is tested
+    // at realistic density instead of hiding in a tiny all-live sample.
+    const claudeRows = [
+      modern,
+      ...mixedRows("claude_code", 34, 0, "live"),
+      ...mixedRows("claude_code", 20, 34, "saved"),
+      ...mixedRows("claude_code", 5, 54, "closed"),
+    ];
+    const codexRows = [
+      ...mixedRows("codex", 26, 0, "live"),
+      ...mixedRows("codex", 18, 26, "saved"),
+      ...mixedRows("codex", 5, 44, "closed"),
+      ...mixedRows("codex", 1, 49, "failed"),
+    ];
+    const paseoRows = [
+      ...mixedRows("paseo", 20, 0, "live"),
+      ...mixedRows("paseo", 21, 20, "saved"),
+    ];
+    const repository = new SessionRepository([
+      new PiProvider(environment),
+      { id: "claude_code", discover: async () => claudeRows },
+      { id: "codex", discover: async () => codexRows },
+      { id: "paseo", discover: async () => paseoRows },
+    ], { now: () => now });
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions).toHaveLength(159);
+    expect(snapshot.sessions.filter(({ presence }) => presence?.state === "unknown"
+      && presence.evidence === "catalog")).toHaveLength(67);
+    expect(snapshot.sessions.filter(({ presence }) => presence?.state === "unknown"
+      && presence.evidence === "unavailable")).toHaveLength(1);
+    expect(snapshot.sessions.filter(({ presence }) => presence?.state === "closed")).toHaveLength(10);
+    const pi = snapshot.sessions.find(({ id }) => id === "pi-mixed");
+    expect(pi).toMatchObject({
+      presence: { state: "unknown", evidence: "catalog" },
+      lifecycleStatus: "saved",
+    });
+    expect(snapshot.sessions.find(({ id }) => id === "codex-modern-0")).toMatchObject({
+      sourceProfile: "fixture-codex",
+      presence: { state: "open", evidence: "frontend" },
+    });
+    const presentation = menuPresentation(snapshot, [], now.valueOf());
+    const saved = presentation.navigatorPills.filter(({ lifecycleStatus }) => lifecycleStatus === "saved");
+    expect(saved).toHaveLength(67);
+    expect(saved.every(({ inspector }) => !inspector.detailRows.some(({ label }) => label === "Presence"))).toBe(true);
+    expect(saved.every(({ id }) => !presentation.pills.some((pill) => pill.id === id))).toBe(true);
+    expect(presentation.navigatorPills.find(({ id }) => id === "pi-mixed"))
+      .toMatchObject({ lifecycleStatus: "saved", inspector: { status: "Saved" } });
+    expect(presentation.pills.map(({ id }) => id)).not.toContain("pi-mixed");
+    expect(presentation.navigatorPills.find(({ id }) => id === "codex-modern-49"))
+      .toMatchObject({ lifecycleStatus: "unavailable", inspector: { status: "Status unavailable" } });
   });
 
   it("uses Pi hook identity for a resumed session in its exact terminal", async () => {
