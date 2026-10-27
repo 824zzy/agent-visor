@@ -13,6 +13,7 @@ import {
 import {
   defaultChatVisibility,
   sessionLifecyclePresentation,
+  sessionPresencePresentation,
   type AppSettings,
   type HistoryRepairSelection,
   type SessionLifecycleTone,
@@ -595,7 +596,7 @@ function SessionRow({
     }
   }, [active]);
   const primary = sessionAction(session);
-  const unavailable = session.presence?.state === "unknown";
+  const unavailable = sessionPresencePresentation(session).group === "unavailable";
   const hasSeparateChat = session.canEnterChat && (session.canOpenOwner || unavailable);
   const chatLabel = unavailable ? "Open Chat (read-only)" : "Open Chat";
   const actionLabel = primary === "owner"

@@ -4,6 +4,7 @@ import {
   sessionIsInactive,
   sessionPresenceProjection,
   sessionPresencePresentation,
+  sessionSavedSubtitle,
   type NativeHelperUsageGlance,
   type SessionSnapshot,
 } from "@agent-visor/protocol";
@@ -204,6 +205,9 @@ function presentationPill(
   const presence = sessionPresencePresentation(session);
   const detailRows = [
     ...(session.sourceProfile ? [{ label: "Profile", value: session.sourceProfile }] : []),
+    ...(presence.group === "history" && session.completionUnseen
+      ? [{ label: "Review", value: "Unopened" }]
+      : []),
     ...(presence.group === "unavailable"
       ? [{ label: "Presence", value: unavailablePresenceNotice }]
       : []),
@@ -211,8 +215,8 @@ function presentationPill(
       ? [{ label: "Attention", value: presence.attention.label }]
       : []),
   ];
-  const subtitle = session.completionUnseen && session.section === "history"
-    ? "Unopened" : session.subtitle;
+  const subtitle = presence.group === "history"
+    ? sessionSavedSubtitle(session) : session.subtitle;
   return {
     id: session.id,
     title,
@@ -241,7 +245,7 @@ function presentationPill(
       ...(session.inactive ? ["Inactive"] : []),
       ...(presence.group === "unavailable" ? [unavailablePresenceNotice] : []),
       ...(presence.attention?.evidence === "last_known" ? [presence.attention.label] : []),
-      ...(session.completionUnseen && session.section === "history" ? ["Unopened"] : []),
+      ...(presence.group === "history" && session.completionUnseen ? ["Unopened"] : []),
       sourceLabel,
       session.project,
       ...(session.managedBy ? [`Managed by ${session.managedBy}`] : []),

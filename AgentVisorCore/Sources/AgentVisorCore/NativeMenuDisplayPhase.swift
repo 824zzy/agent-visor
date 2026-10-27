@@ -43,6 +43,7 @@ public enum NativeMenuStatusPresentation {
         case .needsYou: return "Needs you"
         case .ready: return "Ready"
         case .working: return "Working"
+        case .saved: return "Saved"
         case .closed: return "Closed"
         case .unavailable: return "Status unavailable"
         case .historical: return "Historical"
@@ -54,7 +55,7 @@ public enum NativeMenuStatusPresentation {
         case .needsYou: return .needsYou
         case .ready: return .ready
         case .working: return .working
-        case .closed, .unavailable, .historical: return .history
+        case .saved, .closed, .unavailable, .historical: return .history
         }
     }
 

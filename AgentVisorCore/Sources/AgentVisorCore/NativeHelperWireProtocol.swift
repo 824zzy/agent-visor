@@ -52,6 +52,7 @@ public enum NativeHelperLifecycleStatus: String, Codable, Equatable {
     case needsYou = "needs_you"
     case ready
     case working
+    case saved
     case closed
     case unavailable
     case historical

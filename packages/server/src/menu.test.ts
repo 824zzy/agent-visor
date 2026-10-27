@@ -272,6 +272,39 @@ describe("menu presentation", () => {
     });
   });
 
+  it("presents a successful catalog row as Saved without a failure notice or retry affordance", () => {
+    const catalog = {
+      ...snapshot.sessions[0]!,
+      id: "catalog-only",
+      source: "Codex",
+      section: "ready" as const,
+      subtitle: "Transcript preview",
+      presence: {
+        state: "unknown" as const,
+        evidence: "catalog" as const,
+        observedAt: "2026-08-22T21:59:00.000Z",
+      },
+      sessionState: {
+        conversation: "unknown" as const,
+        turn: "ready" as const,
+        route: "unavailable" as const,
+      },
+      canOpenOwner: false,
+      canEnterChat: true,
+      ambientEligible: false,
+    } satisfies SessionSnapshot["sessions"][number];
+
+    const pill = menuPresentation({ ...snapshot, sessions: [catalog] }, []).navigatorPills[0];
+    expect(pill).toMatchObject({
+      id: "catalog-only",
+      phase: "ready",
+      lifecycleStatus: "saved",
+      inspector: { status: "Saved", detailRows: [] },
+    });
+    expect(pill?.accessibilityLabel).toContain(", Saved,");
+    expect(pill?.accessibilityLabel).not.toContain("Status unavailable");
+  });
+
   it("explains unavailable presence and opens Sessions instead of focusing without a route", async () => {
     const unknown = {
       ...snapshot.sessions[0]!,

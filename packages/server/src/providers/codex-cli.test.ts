@@ -229,7 +229,7 @@ it("closes observed CLI history when the process exits while its catalog row rem
       ambientEligible: true,
     }));
     expect(menuPresentation(snapshot, [], now.valueOf()).pills)
-      .toContainEqual(expect.objectContaining({ id: first, lifecycleStatus: "unavailable" }));
+      .toContainEqual(expect.objectContaining({ id: first, lifecycleStatus: "saved" }));
     expect(menuPresentation(snapshot, [], now.valueOf()).pills)
       .not.toContainEqual(expect.objectContaining({ id: desktop }));
     expect(repository.historyPage()).toMatchObject({

@@ -63,6 +63,47 @@ describe("session lifecycle presentation", () => {
     });
   });
 
+  it("keeps successful catalog evidence in Saved without presenting it as a failed check", () => {
+    const catalog = session({
+      section: "ready",
+      presence: {
+        state: "unknown",
+        evidence: "catalog",
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: { conversation: "unknown", turn: "ready", route: "unavailable" },
+    });
+
+    expect(sessionLifecyclePresentation(catalog)).toEqual({
+      status: "saved", label: "Saved", tone: "neutral",
+    });
+    expect(sessionPresencePresentation(catalog)).toEqual({
+      group: "history", status: "saved", label: "Saved", tone: "neutral",
+    });
+  });
+
+  it("keeps current catalog attention yellow without presenting a detection failure", () => {
+    const catalogQuestion = session({
+      section: "working",
+      presence: {
+        state: "unknown",
+        evidence: "catalog",
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      attention: {
+        kind: "question",
+        evidence: "current",
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: { conversation: "unknown", turn: "needs_you", route: "unavailable" },
+    });
+
+    expect(sessionPresencePresentation(catalogQuestion)).toMatchObject({
+      group: "history", status: "needs_you", label: "Needs you", tone: "attention",
+      attention: { kind: "question", evidence: "current", tone: "attention" },
+    });
+  });
+
   it.each([
     ["working during compaction", "ready", "working", "Working", "working"],
     ["unanswered async question", "working", "needs_you", "Needs you", "attention"],
@@ -106,6 +147,7 @@ describe("session lifecycle presentation", () => {
   it.each([
     ["closed", "Closed", "neutral"],
     ["unavailable", "Status unavailable", "neutral"],
+    ["saved", "Saved", "neutral"],
     ["historical", "Historical", "neutral"],
   ] as const)("uses explicit %s lifecycle evidence over retained placement facts", (status, label, tone) => {
     const retained = Object.assign(session({

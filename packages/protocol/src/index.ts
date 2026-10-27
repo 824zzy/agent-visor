@@ -24,6 +24,7 @@ export const sessionLifecycleStatusSchema = z.enum([
   "needs_you",
   "ready",
   "working",
+  "saved",
   "closed",
   "unavailable",
   "historical",
@@ -1703,6 +1704,11 @@ export function sessionLifecyclePresentation(
   // here while keeping the underlying turn in sessionState.
   if (session.presence) {
     if (session.presence.state === "unknown") {
+      const savedEvidence = session.presence.evidence === "catalog"
+        || session.presence.evidence === "authoritative_inventory";
+      if (savedEvidence && attention?.evidence !== "current") {
+        return withAttention(lifecycle("saved", "Saved", "neutral"));
+      }
       return withAttention(attention?.evidence === "current"
         ? lifecycle("needs_you", "Needs you", "attention")
         : lifecycle("unavailable", "Status unavailable", "neutral"));
@@ -1738,6 +1744,7 @@ export function sessionLifecyclePresentation(
           : lifecycle("needs_you", "Needs you", "attention"));
       case "ready": return withAttention(lifecycle("ready", "Ready", "ready"));
       case "working": return withAttention(lifecycle("working", "Working", "working"));
+      case "saved": return withAttention(lifecycle("saved", "Saved", "neutral"));
       case "closed": return withAttention(lifecycle("closed", "Closed", "neutral"));
       case "unavailable": return withAttention(lifecycle("unavailable", "Status unavailable", "neutral"));
       case "historical": return withAttention(lifecycle("historical", "Historical", "neutral"));
@@ -1790,6 +1797,9 @@ export function sessionPresencePresentation(
   session: Pick<SessionSummary, "section" | "sessionState" | "lifecycleStatus" | "presence" | "attention">,
 ): SessionPresencePresentation {
   const lifecycle = sessionLifecyclePresentation(session);
+  const savedEvidence = session.presence?.state === "unknown"
+    && (session.presence.evidence === "catalog"
+      || session.presence.evidence === "authoritative_inventory");
   const turn = session.sessionState?.turn;
   const subgroup: SessionPresenceSubgroup | undefined = session.presence?.state === "closed"
     ? undefined : lifecycle.attention?.evidence === "current"
@@ -1818,6 +1828,15 @@ export function sessionPresencePresentation(
         ...(lifecycle.attention ? { attention: lifecycle.attention } : {}),
       };
     case "unknown":
+      if (savedEvidence) {
+        return {
+          group: "history",
+          status: lifecycle.status,
+          label: lifecycle.label,
+          tone: lifecycle.tone,
+          ...(lifecycle.attention ? { attention: lifecycle.attention } : {}),
+        };
+      }
       return {
         group: "unavailable",
         ...(subgroup ? { subgroup } : {}),
@@ -1838,6 +1857,24 @@ export function sessionPresencePresentation(
         ...(lifecycle.attention ? { attention: lifecycle.attention } : {}),
       };
   }
+}
+
+/**
+ * Return context that remains truthful for a Saved row. Provider turn labels
+ * describe the last observed turn, not current activity, once live presence
+ * is unknown; a project path is the safe fallback when no useful preview was
+ * retained.
+ */
+export function sessionSavedSubtitle(
+  session: Pick<SessionSummary, "subtitle" | "cwd">,
+): string {
+  const subtitle = session.subtitle.trim();
+  const turnCopy = subtitle.replace(/^Managed by [^·]+ · /i, "").trim();
+  const isUnqualifiedTurnCopy = /^(?:ready(?: to continue)?(?: in [^·]+)?|working(?: in [^·]+)?|in progress(?: in [^·]+)?|(?:agent|claude code) is working(?: in [^·]+)?)$/i.test(turnCopy);
+  if (subtitle && !isUnqualifiedTurnCopy) {
+    return subtitle;
+  }
+  return session.cwd;
 }
 
 function sessionAttentionPresentation(

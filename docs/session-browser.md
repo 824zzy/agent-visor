@@ -25,15 +25,15 @@ With an empty query, the browser shows the shared presence sections:
 2. `In progress` (`working`)
 3. `Ready` (`ready`)
 4. `Status unavailable` (`unavailable`)
-5. `History` (`history`)
+5. `Saved` (`history`)
 
-Current membership is evidence-based: an exact open frontend or confirmed live per-conversation runtime remains Current regardless of age. A saved catalog record or an old timestamp does not establish Current, and insufficient evidence belongs in `Status unavailable`. Confirmed closure with no surviving runtime belongs in `History`. Opening a Ready row marks its completion acknowledged without changing presence or lifecycle state. The menu-bar pill priority order remains independent of browser section grouping.
+Current membership is evidence-based: an exact open frontend or confirmed live per-conversation runtime remains Current regardless of age. A saved catalog or source-history record without live proof belongs in Saved and does not establish Current. Only a failed or temporarily unavailable observation belongs in `Status unavailable`. Confirmed closure with no surviving runtime is retained in Saved. Opening a Ready row marks its completion acknowledged without changing presence or lifecycle state. The menu-bar pill priority order remains independent of browser section grouping.
 
 Lifecycle status is derived separately from placement. A known open conversation whose latest turn is Ready remains Ready (green) in the row, inspector, accessibility label, and native overflow. A reviewed idle Ready conversation becomes inactive at exactly thirty minutes of semantic inactivity, while remaining Current; busy turns stay orange and verified unanswered questions or permissions stay yellow. This presentation never archives a conversation or changes its lifecycle evidence.
 
-Closed retained records are labeled `Closed` with a neutral gray mark; records whose current liveness is unknown are labeled `Status unavailable`; and retained source rows without stronger lifecycle evidence are labeled `Historical`. Grouping, row text, status color, and accessibility labels use the same browser presentation, including search results. Agent Room records retain their management label. Working turns and pending approvals do not become closed or historical merely because they are old.
+Saved rows use a neutral gray mark. A confirmed closed row may retain the qualified `Closed` lifecycle detail, while an ordinary catalog/source-history row is labeled `Saved`; neither label claims that an unverified conversation is closed or inactive. Failed observations remain `Status unavailable`. Grouping, row text, status color, and accessibility labels use the same browser presentation, including search results. Agent Room records retain their management label. Working turns and pending approvals do not become saved merely because they are old.
 
-Claude background jobs can remain in the catalog after their worker disappears. A retained `blocked` or `working` value remains unavailable until current evidence confirms liveness or closure; age alone never moves it to History. Its subtitle states the last reported state and safe actions remain available.
+Claude background jobs can remain in the catalog after their worker disappears. A retained `blocked` or `working` value remains unavailable until current evidence confirms liveness or closure; age alone never moves it to Saved. Its subtitle states the last reported state and safe actions remain available.
 
 Real unanswered questions and permissions remain `Needs you` regardless of the underlying job's age. Current Busy status, including matching live worker metadata when the catalog omits that field, keeps a turn `In progress`. These status rules do not make an agent overview into a conversation pill.
 
@@ -53,19 +53,19 @@ The browser merges:
 - current navigable sessions from all supported sources;
 - all saved, non-archived direct Codex tasks with real rollout evidence, including idle/unloaded tasks and tasks older than the observed-session window;
 - saved Pi sessions with a valid session header and renderable active-branch transcript evidence;
-- verified retained History metadata, including bounded metadata-only closed rows that no longer have a current provider catalog entry;
+- verified retained Saved metadata, including bounded metadata-only closed rows that no longer have a current provider catalog entry;
 - no fabricated provider source rows from an unverified title, path, transcript guess, or other metadata.
 
 Codex archival is the normal visibility boundary, not elapsed time. A successful empty catalog clears previous rows; a failed database read retains the last successful snapshot until recovery. The native menu shows only conversations with activity in the last seven days, including popover search, and keeps its existing bounds (64 physical candidates and 512 navigator rows); the full Sessions browser is not limited to those native batches.
 
-### Retained History and Ghostty Resume
+### Retained Saved records and Ghostty Resume
 
-Retained History is a durable, bounded record of verified provider metadata and validated launch references. It survives daemon and app restart and does not expire merely because time has passed; explicit removal is required. These metadata-only rows remain distinct from fabricated provider source records. Open Chat reads an existing conversation when its transcript is available, while Resume is a separate, explicit cold-creation action.
+Retained Saved records are a durable, bounded store of verified provider metadata and validated launch references. They survive daemon and app restart and do not expire merely because time has passed; explicit removal is required. These metadata-only rows remain distinct from fabricated provider source records. Open Chat reads an existing conversation when its transcript is available, while Resume is a separate, explicit cold-creation action.
 
 - The first release can create a closed Claude Code or Codex CLI conversation only in the already supported Ghostty route, after fresh provider, process, and surface checks prove the exact identity.
 - cmux, Herdr, iTerm2, Terminal.app, unsupported profiles or relocations, and ambiguous provider records remain searchable with an unavailable or repair explanation. Unknown liveness or failed identity evidence never launches a record.
 - A row shows `Reopening…` during its one active attempt. `Retry resume` reconciles an uncertain dispatch receipt without creating a second surface; a fresh explicit Resume is required for a safe pre-creation retry. App startup never launches or retries a retained row.
-- A repair changes only the selected row after explicit provider validation. It does not rewrite unrelated History or turn an unverified source record into provider history.
+- A repair changes only the selected row after explicit provider validation. It does not rewrite unrelated Saved records or turn an unverified source record into provider history.
 
 ## Interaction State
 
@@ -87,7 +87,7 @@ The keyboard cursor starts at the first visible row when the browser opens or th
 | --- | --- |
 | Hover row | Show hover styling only |
 | Click row | Open the canonical owner; if owner routing is unavailable, use the only supported Chat destination |
-| Resume on a closed History row | Revalidate the retained provider identity and launch only when the exact Ghostty resume contract is eligible; otherwise keep the row and show its unavailable or repair action |
+| Resume on a closed Saved row | Revalidate the retained provider identity and launch only when the exact Ghostty resume contract is eligible; otherwise keep the row and show its unavailable or repair action |
 | Reopening / Retry resume | Keep the row visible while the attempt is active; reconcile an uncertain receipt without a second launch, or report the unavailable/unknown reason |
 | Return | Apply the same source-first action to the keyboard-cursor row |
 | Shift+Return | Open Agent Visor Chat; if Chat is unavailable, use the only supported owner destination |
@@ -100,8 +100,8 @@ The keyboard cursor starts at the first visible row when the browser opens or th
 | Escape with a query | Clear the query and keep search focused |
 | `Open in <owner>` label | Names the row's canonical owner inside the primary row target; its hover and selection stop before Chat |
 | `Open Chat` action | Enter Agent Visor Chat through a separate, visually quieter target |
-| History pagination | Load the next retained page using its cursor without dropping earlier rows or resetting the current query |
-| Unavailable repair | Offer only the provider or working-directory references supported by that retained row; an invalid or unavailable repair leaves History unchanged |
+| Saved pagination | Load the next retained page using its cursor without dropping earlier rows or resetting the current query |
+| Unavailable repair | Offer only the provider or working-directory references supported by that retained row; an invalid or unavailable repair leaves Saved unchanged |
 | Details menu | Reveal optional source, owner, project, path, model, and last-tool metadata from the Chat header |
 | Context menu | Duplicate `Open in <owner>` and `Open Chat` when available, plus hide |
 

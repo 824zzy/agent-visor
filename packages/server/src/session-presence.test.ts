@@ -105,6 +105,41 @@ describe("SessionRepository presence contract", () => {
       .toEqual(["closed"]);
   });
 
+  it("keeps a successful catalog observation in Saved through the real repository and menu", async () => {
+    const catalog = discovered("catalog-only", {
+      state: "unknown",
+      evidence: "catalog",
+      observedAt: "2026-10-26T10:00:00.000Z",
+    }, "ready");
+    catalog.subtitle = "Catalog transcript preview";
+    catalog.canOpenOwner = false;
+    catalog.canEnterChat = true;
+    catalog.ambientEligible = false;
+    catalog.conversationState = "unknown";
+    const repository = new SessionRepository([{
+      id: "claude_code" as const,
+      discover: async () => [catalog],
+    }]);
+
+    const snapshot = await repository.refresh();
+    expect(selectSessions(snapshot.sessions, "").groups).toEqual([expect.objectContaining({
+      id: "history",
+      title: "Saved",
+      sessions: [expect.objectContaining({ id: "catalog-only" })],
+    })]);
+    expect(sessionPresencePresentation(snapshot.sessions[0]!)).toEqual({
+      group: "history",
+      status: "saved",
+      label: "Saved",
+      tone: "neutral",
+    });
+    expect(menuPresentation(snapshot, []).navigatorPills[0]).toMatchObject({
+      id: "catalog-only",
+      lifecycleStatus: "saved",
+      inspector: { status: "Saved", detailRows: [] },
+    });
+  });
+
   it("carries explicit Claude presence through the snapshot and native pill projection", async () => {
     const rows = [
       discovered("open", {
