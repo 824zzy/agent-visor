@@ -226,10 +226,10 @@ it("closes observed CLI history when the process exits while its catalog row rem
       canOpenOwner: false,
       sessionClass: "terminal",
       presence: expect.objectContaining({ state: "unknown", evidence: "catalog" }),
-      ambientEligible: true,
+      ambientEligible: false,
     }));
     expect(menuPresentation(snapshot, [], now.valueOf()).pills)
-      .toContainEqual(expect.objectContaining({ id: first, lifecycleStatus: "saved" }));
+      .not.toContainEqual(expect.objectContaining({ id: first, lifecycleStatus: "saved" }));
     expect(menuPresentation(snapshot, [], now.valueOf()).pills)
       .not.toContainEqual(expect.objectContaining({ id: desktop }));
     expect(repository.historyPage()).toMatchObject({
@@ -273,7 +273,7 @@ it("reconstructs durable CLI provenance without restoring a Desktop route", asyn
     expect(repository.chatRecord(first)?.controlTarget).toBeUndefined();
     expect(menuPresentation(snapshot, [], now.valueOf()).pills).not.toContainEqual(expect.objectContaining({ id: first }));
     expect(nativeActionFor({ version: 1, type: "event", event: "activate_pill", sessionId: first }, snapshot))
-      .toEqual({ type: "native_action", action: "open_sessions" });
+      .toEqual({ type: "native_action", action: "open_chat", sessionId: first });
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

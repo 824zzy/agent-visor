@@ -271,6 +271,23 @@ describe("groupSessions", () => {
     ]);
   });
 
+  it("does not let stale ready attention outrank a known unopened completion", () => {
+    const unopened = {
+      ...session("unopened-first", "ready", "2026-08-22T09:00:00.000Z"),
+      attentionTier: "ready" as const,
+      completionUnseen: true,
+    };
+    const staleReviewed = {
+      ...session("stale-reviewed", "ready", "2026-08-22T09:59:00.000Z"),
+      attentionTier: "ready" as const,
+      completionUnseen: false,
+    };
+
+    expect(groupSessions([staleReviewed, unopened])[0]?.sessions.map(({ id }) => id)).toEqual([
+      "unopened-first", "stale-reviewed",
+    ]);
+  });
+
   it("preserves a Ready automation's History attention placement", () => {
     const automation = {
       ...session("scheduled", "ready", "2026-08-22T12:00:00.000Z"),

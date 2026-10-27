@@ -94,10 +94,12 @@ export function nativeActionFor(event: NativeHelperEvent, snapshot: SessionSnaps
       ? { type: "native_action", action: "open_chat", sessionId: session.id } as const
       : undefined;
   }
-  // An unavailable row without an exact owner route must stay on the safe
-  // Sessions surface, where the user can explicitly retry detection. Never
-  // turn a cached owner label into a focus request or guessed destination.
-  if (session.presence?.state === "unknown" && !session.canOpenOwner) {
+  // A genuinely unavailable row without an exact owner route must stay on the
+  // safe Sessions surface, where the user can explicitly retry detection.
+  // Successful Saved evidence still has its supported read-only Chat route.
+  if (session.presence?.state === "unknown"
+    && sessionPresencePresentation(session).group === "unavailable"
+    && !session.canOpenOwner) {
     return { type: "native_action", action: "open_sessions" } as const;
   }
   // Owner-first remains the normal path for source-backed sessions: bin.ts
@@ -184,6 +186,12 @@ function historyLifecycleOrder(
 }
 
 function isAmbientSession(session: SessionSnapshot["sessions"][number]): boolean {
+  // Saved is a shared presentation of retained evidence, not ambient proof.
+  // Ignore stale explicit eligibility when a catalog/inventory row is now
+  // presented as Saved; genuine unavailable observations retain their prior
+  // bounded pill behavior below.
+  if (session.presence?.state === "unknown"
+    && sessionPresencePresentation(session).group === "history") return false;
   if (session.presence?.state === "unknown" && session.ambientEligible !== true) return false;
   return session.sessionClass !== "automation" && !session.managedBy
     && session.presence?.state !== "closed"

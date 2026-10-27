@@ -989,39 +989,111 @@ describe("live provider adapters", () => {
       turnState: "working",
     };
 
+    type MixedProvider = "claude_code" | "codex" | "paseo";
+    type MixedKind = "live" | "saved" | "closed" | "failed";
+    type MixedRowProfile = {
+      section: DiscoveredProviderSession["section"];
+      canOpenOwner: boolean;
+      ambientEligible: boolean;
+      lifecycleStatus: NonNullable<DiscoveredProviderSession["lifecycleStatus"]>;
+      presenceState: NonNullable<DiscoveredProviderSession["presence"]>["state"];
+      presenceEvidence: NonNullable<DiscoveredProviderSession["presence"]>["evidence"];
+      conversationState: NonNullable<DiscoveredProviderSession["conversationState"]>;
+      turnState: NonNullable<DiscoveredProviderSession["turnState"]>;
+      routeState: NonNullable<DiscoveredProviderSession["routeState"]>;
+      failureAlert?: boolean;
+    };
+    const mixedProfiles: Record<MixedKind, MixedRowProfile> = {
+      live: {
+        section: "working",
+        canOpenOwner: true,
+        ambientEligible: true,
+        lifecycleStatus: "working",
+        presenceState: "open",
+        presenceEvidence: "frontend",
+        conversationState: "open",
+        turnState: "working",
+        routeState: "available",
+      },
+      saved: {
+        section: "history",
+        canOpenOwner: false,
+        ambientEligible: false,
+        lifecycleStatus: "saved",
+        presenceState: "unknown",
+        presenceEvidence: "catalog",
+        conversationState: "unknown",
+        turnState: "ready",
+        routeState: "unavailable",
+      },
+      closed: {
+        section: "history",
+        canOpenOwner: false,
+        ambientEligible: false,
+        lifecycleStatus: "closed",
+        presenceState: "closed",
+        presenceEvidence: "authoritative_inventory",
+        conversationState: "archived",
+        turnState: "unknown",
+        routeState: "unavailable",
+      },
+      failed: {
+        section: "history",
+        canOpenOwner: false,
+        ambientEligible: true,
+        lifecycleStatus: "unavailable",
+        presenceState: "unknown",
+        presenceEvidence: "unavailable",
+        conversationState: "unknown",
+        turnState: "unknown",
+        routeState: "unavailable",
+        failureAlert: true,
+      },
+    };
+    const mixedOwners: Record<MixedProvider, string> = {
+      claude_code: "Ghostty",
+      codex: "Codex",
+      paseo: "Paseo",
+    };
+    const livePresenceEvidence: Record<MixedProvider, "frontend" | "runtime"> = {
+      claude_code: "frontend",
+      codex: "frontend",
+      paseo: "runtime",
+    };
     const mixedRows = (
-      provider: DiscoveredProviderSession["provider"],
+      provider: MixedProvider,
       count: number,
       offset: number,
-      kind: "live" | "saved" | "closed" | "failed",
-    ): DiscoveredProviderSession[] => Array.from({ length: count }, (_, index) => ({
-      ...modern,
-      id: `${provider}-modern-${offset + index}`,
-      provider,
-      title: `${provider} catalog fixture ${offset + index}`,
-      subtitle: `${provider} fixture remains searchable`,
-      sourceProfile: `fixture-${provider}`,
-      project: `fixture-project-${offset + index}`,
-      cwd: `${home}/Codes/fixture-${offset + index}`,
-      owner: provider === "codex" ? "Codex" : provider === "paseo" ? "Paseo" : "Ghostty",
-      section: kind === "live" ? "working" : "history",
-      canOpenOwner: kind === "live",
-      ambientEligible: kind === "live" || kind === "failed",
-      lifecycleStatus: kind === "live" ? "working"
-        : kind === "closed" ? "closed" : kind === "failed" ? "unavailable" : "saved",
-      presence: {
-        state: kind === "live" ? "open" : kind === "closed" ? "closed" : "unknown",
-        evidence: kind === "live" ? (provider === "paseo" ? "runtime" : "frontend")
-          : kind === "closed" ? "authoritative_inventory" : kind === "failed" ? "unavailable" : "catalog",
-        observedAt: now.toISOString(),
-      },
-      sessionState: {
-        conversation: kind === "live" ? "open" : kind === "closed" ? "archived" : "unknown",
-        turn: kind === "live" ? "working" : kind === "saved" ? "ready" : "unknown",
-        route: kind === "live" ? "available" : "unavailable",
-      },
-      ...(kind === "failed" ? { failureAlert: true } : {}),
-    }));
+      kind: MixedKind,
+    ): DiscoveredProviderSession[] => {
+      const profile = mixedProfiles[kind];
+      return Array.from({ length: count }, (_, index) => ({
+        ...modern,
+        id: `${provider}-modern-${offset + index}`,
+        provider,
+        title: `${provider} catalog fixture ${offset + index}`,
+        subtitle: `${provider} fixture remains searchable`,
+        sourceProfile: `fixture-${provider}`,
+        project: `fixture-project-${offset + index}`,
+        cwd: `${home}/Codes/fixture-${offset + index}`,
+        owner: mixedOwners[provider],
+        section: profile.section,
+        canOpenOwner: profile.canOpenOwner,
+        ambientEligible: profile.ambientEligible,
+        lifecycleStatus: profile.lifecycleStatus,
+        presence: {
+          state: profile.presenceState,
+          evidence: kind === "live" ? livePresenceEvidence[provider] : profile.presenceEvidence,
+          observedAt: now.toISOString(),
+        },
+        sessionState: {
+          conversation: profile.conversationState,
+          turn: profile.turnState,
+          route: profile.routeState,
+        },
+        ...(profile.failureAlert ? { failureAlert: true } : {}),
+      }));
+    };
     // Keep the fixture close to the captured merged catalog size: eight real
     // Pi transcripts plus 151 mixed modern rows. The rows intentionally include
     // quiet catalog evidence, verified live evidence, confirmed closed records,

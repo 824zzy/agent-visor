@@ -171,6 +171,7 @@ The fixed Chat accessory prevents rows from moving when Cmd shortcuts appear or 
 | In progress | `ChatTheme.statusRunning` | State mark |
 | Closed | `ChatTheme.tertiary` | Neutral state mark |
 | Status unavailable | `ChatTheme.tertiary` | Neutral state mark |
+| Saved | `ChatTheme.tertiary` | Neutral state mark |
 | Historical | `ChatTheme.tertiary` | Neutral state mark |
 
 Color never carries state alone. Section placement and accessibility text provide the same meaning. Chips use brand or metadata tints only as quiet identification, not status.

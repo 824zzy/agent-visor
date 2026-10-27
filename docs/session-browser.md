@@ -33,7 +33,7 @@ Lifecycle status is derived separately from placement. A known open conversation
 
 Saved rows use a neutral gray mark. A confirmed closed row may retain the qualified `Closed` lifecycle detail, while an ordinary catalog/source-history row is labeled `Saved`; neither label claims that an unverified conversation is closed or inactive. Failed observations remain `Status unavailable`. Grouping, row text, status color, and accessibility labels use the same browser presentation, including search results. Agent Room records retain their management label. Working turns and pending approvals do not become saved merely because they are old.
 
-Claude background jobs can remain in the catalog after their worker disappears. A retained `blocked` or `working` value remains unavailable until current evidence confirms liveness or closure; age alone never moves it to Saved. Its subtitle states the last reported state and safe actions remain available.
+Claude background jobs can remain in the catalog after their worker disappears. A successful authoritative inventory read without live presence is ordinary Saved evidence; it does not claim that the conversation is closed or inactive. A failed or ambiguous inventory observation remains `Status unavailable` until observation recovers or independently confirms closure. Age alone never supplies either proof. Its subtitle states the last reported state and safe actions remain available.
 
 Real unanswered questions and permissions remain `Needs you` regardless of the underlying job's age. Current Busy status, including matching live worker metadata when the catalog omits that field, keeps a turn `In progress`. These status rules do not make an agent overview into a conversation pill.
 
@@ -184,7 +184,7 @@ Pointer hover and the keyboard cursor are deliberately separate. Source audits r
 
 ## Implementation Boundaries
 
-- In the Electron browser, `session-groups.ts` owns presentation, filtering, ordering, and cursor decisions. Provider summaries remain unchanged.
+- In the Electron browser, `session-groups.ts` owns presentation, filtering, ordering, and cursor decisions. Provider adapters own provider facts; browser presentation does not rewrite them. The Pi adapter may add explicit presence provenance to distinguish an exactly matched runtime from transcript-only Saved history, and that adapter-owned evidence is consumed by the shared presentation policy.
 - `App.tsx` owns browser state and renders the shared presentation; `SessionViewport` captures the reading anchor before list mutations and restores it afterward. Query changes retain their explicit reveal behavior.
 - Native menu policy remains in the daemon and `AgentVisorCore`, independent of browser freshness.
 - `SessionNavigator` and agent providers own original-app routing.

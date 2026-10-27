@@ -255,7 +255,8 @@ function compareSessions(left: SessionSummary, right: SessionSummary, now: Date)
 function readyOrderingTier(session: SessionSummary, now: Date): number {
   const section = sessionPresentation(session, now).section;
   if (section !== "ready" && section !== "history") return 0;
-  if (session.completionUnseen === true || session.attentionTier === "ready") return 0;
+  if (session.completionUnseen === true
+    || (session.completionUnseen !== false && session.attentionTier === "ready")) return 0;
   if (section === "ready" && sessionIsInactive(session, now)) return 2;
   return 1;
 }
