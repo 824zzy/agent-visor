@@ -4881,13 +4881,6 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
  * shared normalization boundary. A provider failure is marked unavailable by
  * presenceUnavailable before this compatibility projection runs.
  */
-function isKnownSourceHistorySession(
-  session: Pick<DiscoveredProviderSession, "provider" | "owner" | "section" | "controlTarget">,
-): boolean {
-  return isKnownLegacyHistorySession(session)
-    && !(session.provider === "cursor" && session.controlTarget?.kind === "terminal");
-}
-
 function isKnownLegacyHistorySession(
   session: Pick<DiscoveredProviderSession, "provider" | "owner" | "section" | "controlTarget">,
 ): boolean {
@@ -4896,33 +4889,14 @@ function isKnownLegacyHistorySession(
       || (session.owner === "Zed" && session.controlTarget?.kind === "application"));
 }
 
-function cursorRuntimeSession(
-  session: DiscoveredProviderSession,
-): DiscoveredProviderSession {
-  if (session.presence || session.provider !== "cursor"
-    || session.section !== "history" || session.controlTarget?.kind !== "terminal") {
-    return session;
-  }
-  return {
-    ...session,
-    section: "working",
-    lifecycleStatus: "working",
-    conversationState: "open",
-    turnState: "working",
-    presence: {
-      state: "open",
-      evidence: "runtime",
-      observedAt: session.updatedAt,
-    },
-  };
-}
-
 function savedSourceHistorySession(
   session: DiscoveredProviderSession,
 ): DiscoveredProviderSession {
-  if (session.presence || !isKnownSourceHistorySession(session)) return session;
+  if (session.presence || !isKnownLegacyHistorySession(session)) return session;
   return {
     ...session,
+    conversationState: session.conversationState ?? "unknown",
+    turnState: session.turnState ?? "unknown",
     presence: {
       state: "unknown",
       evidence: "catalog",
@@ -4934,7 +4908,7 @@ function savedSourceHistorySession(
 function projectLegacySourceEvidence(
   session: DiscoveredProviderSession,
 ): DiscoveredProviderSession {
-  return savedSourceHistorySession(cursorRuntimeSession(session));
+  return savedSourceHistorySession(session);
 }
 
 /**
