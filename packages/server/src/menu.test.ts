@@ -305,6 +305,42 @@ describe("menu presentation", () => {
     expect(pill?.accessibilityLabel).not.toContain("Status unavailable");
   });
 
+  it.each([
+    ["Check Claude for current status", "unknown", "catalog", "/repo"],
+    ["From Cursor history", undefined, undefined, "/repo"],
+    ["From Pi history", "unknown", "catalog", "/repo"],
+    ["Closed terminal conversation", "closed", "authoritative_inventory", "/repo"],
+    ["Historical provider record", undefined, undefined, "/repo"],
+    ["Saved transcript preview", "unknown", "catalog", "Saved transcript preview"],
+  ] as const)("uses a useful Saved subtitle for %s", (subtitle, presenceState, presenceEvidence, expectedSubtitle) => {
+    const session = {
+      ...snapshot.sessions[2]!,
+      id: `saved-subtitle-${subtitle.replaceAll(" ", "-").toLowerCase()}`,
+      subtitle,
+      section: "history" as const,
+      presence: presenceState ? {
+        state: presenceState,
+        evidence: presenceEvidence,
+        observedAt: "2026-08-22T21:59:00.000Z",
+      } : undefined,
+      sessionState: presenceState === "closed" ? {
+        conversation: "archived" as const,
+        turn: "unknown" as const,
+        route: "unavailable" as const,
+      } : presenceState ? {
+        conversation: "unknown" as const,
+        turn: "unknown" as const,
+        route: "unavailable" as const,
+      } : undefined,
+      canOpenOwner: false,
+      canEnterChat: true,
+      ambientEligible: false,
+    } satisfies SessionSnapshot["sessions"][number];
+
+    expect(menuPresentation({ ...snapshot, sessions: [session] }, []).navigatorPills[0]?.subtitle)
+      .toBe(expectedSubtitle);
+  });
+
   it("explains unavailable presence and opens Sessions instead of focusing without a route", async () => {
     const unknown = {
       ...snapshot.sessions[0]!,

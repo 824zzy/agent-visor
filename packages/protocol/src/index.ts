@@ -1862,6 +1862,14 @@ export function sessionPresencePresentation(
   }
 }
 
+const savedSubtitleBoilerplate = new Set([
+  "check claude for current status",
+  "closed terminal conversation",
+  "from cursor history",
+  "from pi history",
+  "historical provider record",
+]);
+
 /**
  * Return context that remains truthful for a Saved row. Provider turn labels
  * describe the last observed turn, not current activity, once live presence
@@ -1873,7 +1881,8 @@ export function sessionSavedSubtitle(
 ): string {
   const subtitle = session.subtitle.trim();
   const turnCopy = subtitle.replace(/^Managed by [^·]+ · /i, "").trim();
-  const isUnqualifiedTurnCopy = /^(?:ready(?: to continue)?(?: in [^·]+)?|working(?: in [^·]+)?|in progress(?: in [^·]+)?|(?:agent|claude code) is working(?: in [^·]+)?)$/i.test(turnCopy);
+  const isUnqualifiedTurnCopy = /^(?:ready(?: to continue)?(?: in [^·]+)?|working(?: in [^·]+)?|in progress(?: in [^·]+)?|(?:agent|claude code) is working(?: in [^·]+)?)$/i.test(turnCopy)
+    || savedSubtitleBoilerplate.has(turnCopy.toLowerCase());
   if (subtitle && !isUnqualifiedTurnCopy) {
     return subtitle;
   }
