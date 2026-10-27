@@ -472,12 +472,16 @@ export class ClaudeProvider implements ProviderAdapter {
           const evidence = presenceByJob.get(row.id!);
           if (evidence && (evidence.reason === "read_failed"
             || evidence.reason === "reader_unavailable"
-            || evidence.reason === "process_changed")
+            || evidence.reason === "process_changed"
+            || evidence.reason === "unrecognized_title"
+            || evidence.reason === "ambiguous_title")
             && session.presence?.state === "unknown") {
-            // A failed/changed terminal observation is an unavailable
+            // A failed/ambiguous terminal observation is an unavailable
             // presence read, not authoritative closure. Keep any separately
             // discovered runtime evidence intact; only annotate the unknown
-            // projection with the stronger failure reason.
+            // projection with the stronger failure reason. A catalog row is
+            // Saved only when the frontend observation itself succeeded or
+            // was not required.
             session.presence = {
               ...session.presence,
               evidence: "unavailable",

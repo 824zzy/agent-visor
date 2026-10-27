@@ -20,9 +20,9 @@ _Avoid_: Unread message, pending question
 A conversation confirmed to remain open in an application or terminal, or to have a live agent runtime, whether working or idle. A visible frontend is not required, and a saved catalog entry alone does not establish that it is open.
 _Avoid_: Recent conversation, foreground conversation
 
-**History**:
-Saved conversations confirmed to be no longer open. An old conversation that remains open, or one whose current state cannot be verified, is not closed merely because of its age.
-_Avoid_: Old sessions, inactive sessions
+**Saved**:
+Retained conversations without verified current live presence. A saved conversation may be confirmed closed or have unknown current presence; it does not imply that the conversation is closed or inactive.
+_Avoid_: Closed sessions, inactive sessions, unavailable sessions
 
 **Current**:
 Conversations confirmed to remain open, including working, idle, and live background conversations. Inactivity or closing one frontend alone does not remove a still-open conversation from Current.
@@ -33,8 +33,8 @@ An idle conversation without recent agent activity whose latest completion has a
 _Avoid_: Closed, stopped
 
 **Status unavailable**:
-Conversations whose current open or closed state cannot be verified. Missing evidence does not establish closure, resolve an unanswered question, or erase review attention.
-_Avoid_: Closed, deleted
+Conversations whose current state cannot be checked because observation failed or is temporarily unavailable. A saved record without live-presence evidence alone does not indicate a detection failure.
+_Avoid_: Saved, closed, deleted
 
 **Closed terminal conversation**:
 A saved terminal conversation confirmed to be no longer open in a frontend or live agent runtime. Completing a turn or closing one frontend while the conversation continues elsewhere does not establish closure.

@@ -3,6 +3,7 @@ import {
   sessionIsInactive,
   sessionPresenceProjection,
   sessionPresencePresentation,
+  sessionSavedSubtitle,
   type SessionSection,
   type SessionSummary,
 } from "@agent-visor/protocol";
@@ -16,7 +17,7 @@ const legacySections: ReadonlyArray<{
   { id: "needs_you", title: "Needs you" },
   { id: "ready", title: "Ready to continue" },
   { id: "working", title: "In progress" },
-  { id: "history", title: "History" },
+  { id: "history", title: "Saved" },
 ];
 
 const presenceSections: ReadonlyArray<{
@@ -31,7 +32,7 @@ const presenceSections: ReadonlyArray<{
   // reserved for unknown open/closed presence rather than unknown turn.
   { id: "current_unknown", title: "" },
   { id: "unavailable", title: "Status unavailable" },
-  { id: "history", title: "History" },
+  { id: "history", title: "Saved" },
 ];
 
 export type SessionGroup = {
@@ -69,9 +70,11 @@ export function sessionPresentation(session: SessionSummary, now = new Date()) {
       : undefined;
     const lastKnownNotice = resolved.attention?.evidence === "last_known"
       ? resolved.attention.label : undefined;
-    const pillNotice = [unavailableNotice, lastKnownNotice].filter(Boolean).join(" · ") || undefined;
-    const subtitle = resolved.group === "history" && session.completionUnseen === true
-      ? "Unopened" : session.subtitle;
+    const unopenedNotice = resolved.group === "history" && session.completionUnseen === true
+      ? "Unopened" : undefined;
+    const pillNotice = [unavailableNotice, lastKnownNotice, unopenedNotice].filter(Boolean).join(" · ") || undefined;
+    const subtitle = resolved.group === "history"
+      ? sessionSavedSubtitle(session) : session.subtitle;
     return {
       section,
       title,
@@ -94,14 +97,16 @@ export function sessionPresentation(session: SessionSummary, now = new Date()) {
     && Date.parse(session.updatedAt) < now.valueOf() - 7 * 24 * 60 * 60 * 1_000) {
     section = "history";
   }
-  const subtitle = section === "history" && session.completionUnseen === true
-    ? "Unopened"
+  const unopened = section === "history" && session.completionUnseen === true;
+  const subtitle = unopened
+    ? sessionSavedSubtitle(session)
     : section === "history" && (completed || knownOpenReady)
     ? `${session.managedBy ? `Managed by ${session.managedBy} · ` : ""}${knownOpenReady ? "Ready" : "Completed"}`
     : session.subtitle;
   const legacyNotices = [
     session.claudePresence ? pillNotices[session.claudePresence] : undefined,
     lifecycle.attention?.evidence === "last_known" ? lifecycle.attention.label : undefined,
+    unopened ? "Unopened" : undefined,
   ].filter(Boolean);
   const pillNotice = legacyNotices.length ? legacyNotices.join(" · ") : undefined;
   return { section, title: legacySections.find(({ id }) => id === section)!.title, subtitle,
@@ -192,11 +197,13 @@ export function sessionAction(
   session: SessionSummary,
   alternate = false,
 ): "owner" | "chat" | "retry" | undefined {
-  // Unavailable presence never implies a live owner route. Keep an existing
+  // A failed observation never implies a live owner route. Keep an existing
   // exact owner action when one is still advertised; otherwise make the
   // primary action an explicit detection retry and leave supported Chat as
-  // the clearly labelled alternate.
-  if (session.presence?.state === "unknown") {
+  // the clearly labelled alternate. Successful catalog evidence is Saved,
+  // however, so it keeps the ordinary Chat/owner actions without Retry.
+  const detectionFailed = sessionPresencePresentation(session).group === "unavailable";
+  if (detectionFailed) {
     if (alternate) {
       if (session.canEnterChat) return "chat";
       return session.canOpenOwner ? "owner" : "retry";

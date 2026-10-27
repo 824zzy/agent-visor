@@ -126,7 +126,7 @@ describe("groupSessions", () => {
       attentionTier: "acknowledged_ready" as const,
     };
     expect(sessionPresentation(old)).toEqual({
-      section: "history", title: "History", subtitle: "Managed by Agent Room · Completed", inactive: true,
+      section: "history", title: "Saved", subtitle: "Managed by Agent Room · Completed", inactive: true,
     });
     expect(selectSessions([old], "completed").orderedSessions).toEqual([old]);
     expect(selectSessions([old], "ready to continue").orderedSessions).toEqual([old]);
@@ -180,7 +180,7 @@ describe("groupSessions", () => {
     };
 
     expect(sessionPresentation(old)).toEqual({
-      section: "history", title: "History", subtitle: "Ready", inactive: true,
+      section: "history", title: "Saved", subtitle: "Ready", inactive: true,
     });
   });
 
@@ -197,7 +197,7 @@ describe("groupSessions", () => {
       "Needs you",
       "Ready to continue",
       "In progress",
-      "History",
+      "Saved",
     ]);
     expect(groups[3]?.sessions.map(({ id }) => id)).toEqual([
       "newer-history",
@@ -278,7 +278,7 @@ describe("groupSessions", () => {
     };
     const groups = groupSessions([automation]);
     expect(groups.map(({ id }) => id)).toEqual(["history"]);
-    expect(sessionPresentation(automation)).toEqual({ section: "history", title: "History", subtitle: "Completed" });
+    expect(sessionPresentation(automation)).toEqual({ section: "history", title: "Saved", subtitle: "Completed" });
   });
 
   it("uses source-first actions with capability-safe fallbacks", () => {
@@ -380,7 +380,7 @@ describe("groupSessions", () => {
       section: "ready", title: "Ready", subtitle: "", inactive: true,
     });
     expect(sessionPresentation(closed)).toEqual({
-      section: "history", title: "History", subtitle: "",
+      section: "history", title: "Saved", subtitle: "/tmp/agent-visor",
     });
     expect(sessionPresentation(unavailable)).toEqual({
       section: "unavailable", title: "Status unavailable", subtitle: "",
@@ -389,7 +389,7 @@ describe("groupSessions", () => {
     expect(groupSessions([closed, open, unavailable]).map(({ id, title }) => ({ id, title }))).toEqual([
       { id: "ready", title: "Ready" },
       { id: "unavailable", title: "Status unavailable" },
-      { id: "history", title: "History" },
+      { id: "history", title: "Saved" },
     ]);
   });
 
@@ -412,6 +412,65 @@ describe("groupSessions", () => {
 
     expect(sessionAction(unavailable)).toBe("retry");
     expect(sessionAction(unavailable, true)).toBe("chat");
+  });
+
+  it("keeps catalog-only rows quiet in Saved while preserving their useful route", () => {
+    const catalog = {
+      ...session("catalog-only", "ready", "2026-08-22T09:58:00.000Z"),
+      subtitle: "Transcript preview",
+      presence: {
+        state: "unknown" as const,
+        evidence: "catalog" as const,
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: {
+        conversation: "unknown" as const,
+        turn: "ready" as const,
+        route: "unavailable" as const,
+      },
+      canOpenOwner: false,
+      canEnterChat: true,
+    };
+
+    expect(sessionPresentation(catalog)).toEqual({
+      section: "history",
+      title: "Saved",
+      subtitle: "Transcript preview",
+    });
+    expect(sessionAction(catalog)).toBe("chat");
+    expect(sessionAction(catalog, true)).toBe("chat");
+  });
+
+  it("keeps Saved context useful when stored turn text is stale or unopened", () => {
+    const catalog = {
+      ...session("catalog-stale", "ready", "2026-08-22T09:58:00.000Z"),
+      subtitle: "Ready to continue",
+      completionUnseen: true,
+      presence: {
+        state: "unknown" as const,
+        evidence: "catalog" as const,
+        observedAt: "2026-08-22T10:00:00.000Z",
+      },
+      sessionState: {
+        conversation: "unknown" as const,
+        turn: "ready" as const,
+        route: "unavailable" as const,
+      },
+    };
+
+    expect(sessionPresentation(catalog)).toEqual({
+      section: "history",
+      title: "Saved",
+      subtitle: "/tmp/agent-visor",
+      pillNotice: "Unopened",
+    });
+
+    expect(sessionPresentation({
+      ...catalog,
+      id: "paseo-catalog",
+      subtitle: "Managed by Agent Room · Ready to continue in Paseo",
+      completionUnseen: false,
+    })).toMatchObject({ subtitle: "/tmp/agent-visor" });
   });
 
   it("keeps a retained-only unavailable row out of History and exposes Retry", () => {

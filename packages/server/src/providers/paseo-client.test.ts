@@ -86,7 +86,6 @@ it("shows the confirmed Claude profile in hover details without changing the Pas
       runtimeItems: ["Claude Code · Paseo"],
       detailRows: [
         { label: "Profile", value: "claude-copilot" },
-        { label: "Presence", value: "Status unavailable: Agent Visor could not verify whether this conversation is open." },
       ],
     },
   });

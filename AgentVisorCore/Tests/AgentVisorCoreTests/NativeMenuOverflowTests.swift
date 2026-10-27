@@ -94,6 +94,20 @@ final class NativeMenuOverflowTests: XCTestCase {
         XCTAssertEqual(NativeMenuStatusPresentation.tone(for: closed), .history)
     }
 
+    func testSavedLifecycleStatusUsesNeutralSavedLabel() {
+        let saved = NativeHelperPill(
+            id: "saved",
+            title: "Catalog record",
+            phase: .history,
+            lifecycleStatus: .saved,
+            priority: 0,
+            accessibilityLabel: "Catalog record, Saved"
+        )
+
+        XCTAssertEqual(NativeMenuStatusPresentation.status(for: saved), "Saved")
+        XCTAssertEqual(NativeMenuStatusPresentation.tone(for: saved), .history)
+    }
+
     func testLegacyInspectorLabelsUseSharedLifecycleCopyAndTone() {
         let cases: [(String, String, NativeHelperPillPhase)] = [
             ("Needs attention", "Needs you", .needsYou),

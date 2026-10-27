@@ -101,9 +101,9 @@ use 8 KiB prefixes; oversized user replies use a 64 KiB prefix of the new transc
 delta. Content beyond that bound cannot claim acknowledgment. The usual menu age
 cap and managed-session visibility rules still apply.
 
-Needs you items come first, then unopened Ready completions, In progress, opened Ready completions, and source-backed recent History shortcuts. Each group sorts by authoritative activity (`updatedAt`) newest first, then stable session ID. Opening a completion moves it behind running work. The acknowledgment belongs to the latest provider turn, with authoritative activity as the fallback for providers without turn IDs. A later completion becomes unopened even if polling did not observe its Working phase. The daemon assigns priority and the helper adopts it without a second ordering policy.
+Needs you items come first, then unopened Ready completions, In progress, opened Ready completions, and source-backed recent Saved shortcuts. Each group sorts by authoritative activity (`updatedAt`) newest first, then stable session ID. Opening a completion moves it behind running work. The acknowledgment belongs to the latest provider turn, with authoritative activity as the fallback for providers without turn IDs. A later completion becomes unopened even if polling did not observe its Working phase. The daemon assigns priority and the helper adopts it without a second ordering policy.
 
-Codex completion freshness uses the recorded completion time. Running freshness uses start and actual turn-progress records, including bounded headers of large answer/tool rows. File modification times, settings, client metadata, and context records do not refresh either claim. Opening an old conversation cannot turn History into unopened Ready or revive a dormant start marker. Transcript revisions still track file changes so Chat refreshes normally.
+Codex completion freshness uses the recorded completion time. Running freshness uses start and actual turn-progress records, including bounded headers of large answer/tool rows. File modification times, settings, client metadata, and context records do not refresh either claim. Opening an old conversation cannot turn Saved into unopened Ready or revive a dormant start marker. Transcript revisions still track file changes so Chat refreshes normally.
 
 Claude Code rows that remain Ready without semantic agent activity become inactive at the shared 30-minute boundary. They keep their Ready wire phase and true turn/route state, but receive the muted gray inactive treatment after newer green Ready work. This is presentation only: a verified open conversation remains Current and its lifecycle is unchanged. Busy turns and verified unanswered questions or permissions retain their orange or yellow treatment.
 
@@ -111,9 +111,9 @@ Claude Code rows that remain Ready without semantic agent activity become inacti
 
 Codex direct conversations remain in the full Sessions browser until archived, including idle and unloaded conversations. Discovery pages through the unarchived catalog and requires an existing rollout; age never removes a direct conversation. Cursor, Zed, and Codex automation still use the configured observed-agent window, which defaults to 42 hours. Native pill and More Sessions packing may retain bounded seven-day visibility for responsiveness, but that bound never reclassifies a conversation as closed or changes its lifecycle status. Older conversations remain in the full Sessions browser and re-enter the bounded menu after fresh activity. A minute timer rechecks the visibility cutoff even when the catalog is unchanged.
 
-Needs you, Ready, and Working rows with ambient presence are active pill candidates. A History row with an available source action is a recent-shortcut candidate. A History row that has only Chat remains navigator-only because it has no safe physical-pill action.
+Needs you, Ready, and Working rows with ambient presence are active pill candidates. A Saved row with an available source action is a recent-shortcut candidate. A Saved row that has only Chat remains navigator-only because it has no safe physical-pill action.
 
-The daemon sends active candidates first and recent shortcuts second. The helper renders recent shortcuts with the muted History treatment and packs the complete ordered physical list into the available menu-bar space.
+The daemon sends active candidates first and recent shortcuts second. The helper renders recent Saved shortcuts with the muted gray treatment and packs the complete ordered physical list into the available menu-bar space.
 
 Claude Code's retained background inventory is a resumable catalog, not evidence of an open conversation. Background jobs receive physical pills and default overflow membership when current live interactive metadata identifies a displayed conversation, or a current Ghostty conversation title uniquely matches the canonical job name and directory. A terminal in the agent overview contributes no pill: its `parkedJobId` marks the host conversation as parked, not the background job as displayed. The parked marker can remain while the host displays an attached job. A fresh Ghostty title read distinguishes that job from the overview; failed reads, unknown titles, and ambiguous matches do not restore background pills. Ambient title reads do not prompt for Automation permission or write terminal input. Other retained jobs stay in Sessions and navigator search regardless of their Working, blocked, completed, or failed state. A worker PID, attach command launch arguments, fresh transcript activity, or a lifecycle hook alone does not establish ambient presence. Entering a conversation establishes presence; returning to the overview, closing, or switching the interactive UI removes that terminal's contribution at the next refresh without deleting history or attach actions. A conversation independently displayed in another terminal remains eligible.
 
@@ -137,7 +137,7 @@ The Sessions window shows a separate, searchable explanation for uncertain prese
 
 `+N` counts every bounded, default-overflow-eligible navigator row that is not visible. This includes physical candidates that do not fit and eligible navigator-only rows; searchable-only automation, app-managed sessions, and retained Claude jobs without ambient presence are excluded. The helper reserves space for that total before it places physical pills, so a complete navigator remains reachable even when all physical candidates fit.
 
-Ponytail: a change to the observed window, History eligibility, or overflow count must update the provider, menu-presentation, packer, and overflow-snapshot tests together. Do not restore a source-specific History exclusion at the presentation seam.
+Ponytail: a change to the observed window, Saved eligibility, or overflow count must update the provider, menu-presentation, packer, and overflow-snapshot tests together. Do not restore a source-specific Saved exclusion at the presentation seam.
 
 A normal click immediately requests the selected task. Successful focus marks that Ready completion seen; a failed focus or a focus that finishes after a newer completion does not. Opening Chat marks it seen after a valid page is sent for the current chat reference. The helper waits for the daemon's acknowledgment before stopping the pulse. Layout changes from acknowledgment, activity, phase, or membership updates are deferred while the pointer remains over either pill strip, a press begun there remains held, session shortcut modifiers are held, or a native popover is open. Gaps between pills count as part of the strip; the notch does not.
 
@@ -193,7 +193,7 @@ Visible items retain their normal labels, up to 20 characters plus an ellipsis. 
 
 Clicking `+N` opens a nonactivating More Sessions popover. Its count and initial rows are the exact default-overflow-eligible navigator sessions omitted by the current pill layout.
 
-The popover freezes that layout while open. The placeholder reads “Search N recent sessions”. Search covers the bounded seven-day navigator catalog, including visible items, Chat-only History, and searchable-only automation that do not enter menu packing.
+The popover freezes that layout while open. The placeholder reads “Search N recent sessions”. Search covers the bounded seven-day navigator catalog, including visible items, Chat-only Saved rows, and searchable-only automation that do not enter menu packing.
 
 Rows open the exact source session when one is available. An ownerless Chat-capable row opens Chat as its primary normal-click/Return action. Footer actions open Sessions or Settings, and a second `+N` activation closes the popover.
 
@@ -204,7 +204,7 @@ The status colors match the released sRGB roles:
 - `#f4c114` means Needs you.
 - `#a6e3a1` means recently active Ready. Reviewed Ready conversations become the muted gray inactive role at exactly thirty minutes of semantic inactivity while remaining Current and Ready; unopened completion attention remains green.
 - `#d97857` means In progress.
-- Recent History uses the muted `#7f849c` role and lighter capsule treatment.
+- Saved uses the muted `#7f849c` role and lighter capsule treatment.
 
 ## Shortcuts
 

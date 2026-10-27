@@ -68,15 +68,15 @@ describe("Codex Desktop instances", () => {
           runtimeItems: ["Codex Desktop"],
           detailRows: [
             { label: "Profile", value: "Copilot" },
-            { label: "Presence", value: "Status unavailable: Agent Visor could not verify whether this conversation is open." },
+            { label: "Review", value: "Unopened" },
           ],
         },
       });
       expect(presentation.navigatorPills.find(pill => pill.title === "Native task")?.inspector).toMatchObject({
         runtimeItems: ["Codex Desktop"],
         detailRows: [{
-          label: "Presence",
-          value: "Status unavailable: Agent Visor could not verify whether this conversation is open.",
+          label: "Review",
+          value: "Unopened",
         }],
       });
     } finally {

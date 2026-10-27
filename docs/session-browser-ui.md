@@ -94,7 +94,7 @@ With an empty query, show no aggregate state counts. They duplicate the section 
   2. `In progress` for processing or compacting.
   3. `Ready` for a completed turn that remains Current.
   4. `Status unavailable` when current presence cannot be verified.
-  5. `History` for conversations confirmed closed.
+  5. `Saved` for retained conversations without verified current live presence.
 - Label: 12-point semibold secondary text.
 - Count: 10-point semibold rounded text in a quiet capsule.
 - Horizontal inset relative to the result column: 10 points.
@@ -179,7 +179,7 @@ A freshly completed, unacknowledged `Ready` turn may pulse for at most seven min
 
 Reviewed idle conversations become inactive at exactly thirty minutes of semantic agent inactivity. Inactive is a presentation treatment, not closure: a verified open conversation remains Current and Ready, with a gray inactive mark after the boundary. Busy turns stay orange and verified unanswered questions or permissions stay yellow regardless of age.
 
-History placement has the same separation in the Sessions browser. Closed retained records say `Closed`, records with unverified current liveness say `Status unavailable`, and source records without stronger lifecycle evidence say `Historical`; all three use the neutral state mark. Age alone never changes Current into History.
+Saved placement has the same separation in the Sessions browser. Closed retained records may say `Closed` in qualified lifecycle details, ordinary catalog/source-history records say `Saved`, and failed observations say `Status unavailable`; all use the neutral state mark. Age alone never changes Current into Saved.
 
 ## Row States
 
