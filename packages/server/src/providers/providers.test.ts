@@ -19,6 +19,7 @@ import { activateMenuPill, activateSessionNotification, menuPresentation } from 
 import { NativeSessionControls } from "../session-controls.js";
 import { FakeNativeHelper } from "../native-helper.js";
 import { ClaudeDesktopSessions } from "./claude-desktop.js";
+import { groupSessions, sessionAction } from "../../../app/src/session-groups.js";
 
 const home = "/Users/me";
 const cwd = `${home}/Codes/agent-visor`;
@@ -1551,7 +1552,10 @@ describe("live provider adapters", () => {
       await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId: "cursor-history" }, repository, effects);
       expect(opened).toHaveBeenCalledWith(cwd);
       expect(effects).not.toHaveBeenCalled();
-      expect(presentation.pills[0]).toMatchObject({ owner: "Cursor", subtitle: "Cursor history · Opens workspace" });
+      expect(presentation.pills).toEqual([]);
+      expect(presentation.navigatorPills[0]).toMatchObject({
+        owner: "Cursor", lifecycleStatus: "saved", subtitle: cwd,
+      });
     } else {
       expect(presentation.pills).toEqual([]);
       expect(presentation.navigatorPills).toHaveLength(1);
@@ -1559,6 +1563,153 @@ describe("live provider adapters", () => {
       expect(effects).toHaveBeenCalledWith({ type: "native_action", action: "open_chat", sessionId: "cursor-history" });
       expect(opened).not.toHaveBeenCalled();
     }
+  });
+
+  it("projects successful Cursor source history as Saved in mixed and standalone views", async () => {
+    const environment = new FixtureEnvironment();
+    const projectKey = "Users-me-Codes-agent-visor";
+    const sessionsRoot = `${home}/.cursor/projects/${projectKey}/agent-transcripts`;
+    const transcript = `${sessionsRoot}/cursor-history/cursor-history.jsonl`;
+    environment.directories.set(`${home}/.cursor/projects`, [projectKey]);
+    environment.directories.set(sessionsRoot, ["cursor-history"]);
+    environment.stamps.set(transcript, { modifiedAt: now, size: 100 });
+    environment.headTails.set(transcript, { head: "", tail: "" });
+    const modern: DiscoveredProviderSession = {
+      id: "modern-open",
+      provider: "claude_code",
+      title: "Modern session",
+      subtitle: "Working",
+      cwd,
+      owner: "Ghostty",
+      section: "working",
+      updatedAt: now.toISOString(),
+      canOpenOwner: true,
+      canEnterChat: true,
+      presence: { state: "open", evidence: "frontend", observedAt: now.toISOString() },
+      conversationState: "open",
+      turnState: "working",
+    };
+
+    const mixedRepository = new SessionRepository([
+      new CursorProvider(environment),
+      { id: "claude_code", discover: async () => [structuredClone(modern)] },
+    ], { now: () => now });
+    const mixed = await mixedRepository.refresh();
+    const mixedCursor = mixed.sessions.find(({ source }) => source === "Cursor")!;
+    expect(mixedCursor).toMatchObject({
+      owner: "Cursor",
+      canOpenOwner: false,
+      canEnterChat: true,
+      lifecycleStatus: "saved",
+      presence: { state: "unknown", evidence: "catalog" },
+    });
+    expect(groupSessions(mixed.sessions).map(({ id }) => id)).toEqual(["working", "history"]);
+    expect(groupSessions(mixed.sessions).find(({ id }) => id === "history")?.sessions)
+      .toEqual([expect.objectContaining({ id: mixedCursor.id, lifecycleStatus: "saved" })]);
+    expect(sessionAction(mixedCursor)).toBe("chat");
+    const mixedMenu = menuPresentation(mixed, [], now.valueOf());
+    expect(mixedMenu.pills.map(({ id }) => id)).not.toContain(mixedCursor.id);
+    expect(mixedMenu.navigatorPills.find(({ id }) => id === mixedCursor.id)).toMatchObject({
+      id: mixedCursor.id,
+      lifecycleStatus: "saved",
+      inspector: { status: "Saved", detailRows: [] },
+    });
+
+    const standaloneRepository = new SessionRepository([new CursorProvider(environment)], { now: () => now });
+    const standalone = await standaloneRepository.refresh();
+    const standaloneCursor = standalone.sessions.find(({ source }) => source === "Cursor")!;
+    expect(standaloneCursor).toMatchObject({
+      lifecycleStatus: "saved",
+      presence: { state: "unknown", evidence: "catalog" },
+    });
+    expect(groupSessions(standalone.sessions).map(({ id }) => id)).toEqual(["history"]);
+    expect(menuPresentation(standalone, [], now.valueOf()).navigatorPills[0]).toMatchObject({
+      id: standaloneCursor.id,
+      lifecycleStatus: "saved",
+      inspector: { status: "Saved" },
+    });
+  });
+
+  it("keeps an observed Cursor CLI row Current beside transcript-only Saved history", async () => {
+    const environment = new FixtureEnvironment();
+    const projectKey = "Users-me-Codes-agent-visor";
+    const sessionsRoot = `${home}/.cursor/projects/${projectKey}/agent-transcripts`;
+    const activeTranscript = `${sessionsRoot}/cursor-live/cursor-live.jsonl`;
+    const savedTranscript = `${sessionsRoot}/cursor-history/cursor-history.jsonl`;
+    environment.directories.set(`${home}/.cursor/projects`, [projectKey]);
+    environment.directories.set(home, ["Codes"]);
+    environment.directories.set(`${home}/Codes`, ["agent-visor"]);
+    environment.directories.set(cwd, []);
+    environment.directories.set(sessionsRoot, ["cursor-live", "cursor-history"]);
+    environment.stamps.set(activeTranscript, { modifiedAt: now, size: 100 });
+    environment.stamps.set(savedTranscript, {
+      modifiedAt: new Date(now.valueOf() - 1_000), size: 100,
+    });
+    environment.headTails.set(activeTranscript, { head: "", tail: "" });
+    environment.headTails.set(savedTranscript, { head: "", tail: "" });
+    environment.processRows = [
+      {
+        pid: 51,
+        parentPID: 7,
+        tty: "ttys001",
+        command: "/usr/bin/node",
+        arguments: `${home}/.local/share/cursor-agent/current/bin/cursor-agent`,
+      },
+      terminalProcesses[1]!,
+    ];
+    environment.cwdByPID.set(51, cwd);
+    environment.starts.set(51, new Date("2026-08-22T07:59:00.000Z"));
+
+    const repository = new SessionRepository([new CursorProvider(environment)], { now: () => now });
+    const snapshot = await repository.refresh();
+    const active = snapshot.sessions.find(({ id }) => id === "cursor-live")!;
+    const saved = snapshot.sessions.find(({ id }) => id === "cursor-history")!;
+    expect(active).toMatchObject({
+      section: "working",
+      lifecycleStatus: "working",
+      owner: "Ghostty",
+      presence: { state: "open", evidence: "runtime" },
+      sessionState: { conversation: "open", turn: "working" },
+    });
+    expect(saved).toMatchObject({
+      section: "history",
+      lifecycleStatus: "saved",
+      owner: "Cursor",
+      presence: { state: "unknown", evidence: "catalog" },
+    });
+    expect(groupSessions(snapshot.sessions).map(({ id }) => id)).toEqual(["working", "history"]);
+    const menu = menuPresentation(snapshot, [], now.valueOf());
+    expect(menu.pills).toContainEqual(expect.objectContaining({
+      id: active.id, phase: "working", lifecycleStatus: "working",
+    }));
+    expect(menu.pills.map(({ id }) => id)).not.toContain(saved.id);
+  });
+
+  it("keeps a failed Cursor source-history read unavailable after a saved observation", async () => {
+    const environment = new FixtureEnvironment();
+    const projectKey = "Users-me-Codes-agent-visor";
+    const sessionsRoot = `${home}/.cursor/projects/${projectKey}/agent-transcripts`;
+    const transcript = `${sessionsRoot}/cursor-history/cursor-history.jsonl`;
+    environment.directories.set(`${home}/.cursor/projects`, [projectKey]);
+    environment.directories.set(sessionsRoot, ["cursor-history"]);
+    environment.stamps.set(transcript, { modifiedAt: now, size: 100 });
+    environment.headTails.set(transcript, { head: "", tail: "" });
+    const provider = new CursorProvider(environment);
+    const repository = new SessionRepository([provider], { now: () => now });
+    const saved = await repository.refresh();
+    const savedID = saved.sessions[0]!.id;
+    environment.directory = async () => { throw new Error("Cursor history read failed"); };
+
+    const failed = await repository.refresh();
+    const row = failed.sessions.find(({ id }) => id === savedID)!;
+    expect(row).toMatchObject({
+      lifecycleStatus: "unavailable",
+      presence: { state: "unknown", evidence: "unavailable" },
+    });
+    expect(groupSessions(failed.sessions).map(({ id }) => id)).toEqual(["unavailable"]);
+    const pill = menuPresentation(failed, [], now.valueOf()).navigatorPills[0]!;
+    expect(pill).toMatchObject({ lifecycleStatus: "unavailable", inspector: { status: "Status unavailable" } });
+    expect(sessionAction(row)).toBe("retry");
   });
 
   it("uses Cursor transcript content without sharing another provider parser", async () => {
@@ -1636,6 +1787,122 @@ describe("live provider adapters", () => {
         target: { pid: 52, bundleIdentifier: "dev.zed.Zed" },
       },
     });
+  });
+
+  it("projects successful Zed source history as Saved in mixed and standalone views", async () => {
+    const environment = new FixtureEnvironment();
+    const database = `${home}/Library/Application Support/Zed/db/0-stable/db.sqlite`;
+    environment.stamps.set(database, { modifiedAt: now, size: 100 });
+    environment.sqliteRows.set(database, [{
+      thread_id: "ABCD",
+      session_id: "zed-pi-1",
+      agent_id: "pi-acp",
+      title: "Zed history",
+      title_override: "Zed history",
+      updated_at: now.toISOString(),
+      interacted_at: now.toISOString(),
+      main_worktree_paths: cwd,
+      archived: 0,
+    }]);
+    environment.processRows = [{
+      pid: 52,
+      parentPID: 1,
+      command: "/Applications/Zed.app/Contents/MacOS/zed",
+      arguments: "/Applications/Zed.app/Contents/MacOS/zed",
+    }];
+    const modern: DiscoveredProviderSession = {
+      id: "modern-open-zed",
+      provider: "claude_code",
+      title: "Modern session",
+      subtitle: "Working",
+      cwd,
+      owner: "Ghostty",
+      section: "working",
+      updatedAt: now.toISOString(),
+      canOpenOwner: true,
+      canEnterChat: true,
+      presence: { state: "open", evidence: "frontend", observedAt: now.toISOString() },
+      conversationState: "open",
+      turnState: "working",
+    };
+
+    const mixedRepository = new SessionRepository([
+      new ZedProvider(environment),
+      { id: "claude_code", discover: async () => [structuredClone(modern)] },
+    ], { now: () => now });
+    const mixed = await mixedRepository.refresh();
+    const mixedZed = mixed.sessions.find(({ owner }) => owner === "Zed")!;
+    expect(mixedZed).toMatchObject({
+      canOpenOwner: true,
+      canEnterChat: true,
+      lifecycleStatus: "saved",
+      presence: { state: "unknown", evidence: "catalog" },
+    });
+    expect(groupSessions(mixed.sessions).map(({ id }) => id)).toEqual(["working", "history"]);
+    expect(groupSessions(mixed.sessions).find(({ id }) => id === "history")?.sessions)
+      .toEqual([expect.objectContaining({ id: mixedZed.id, lifecycleStatus: "saved" })]);
+    const mixedMenu = menuPresentation(mixed, [], now.valueOf());
+    expect(mixedMenu.pills.map(({ id }) => id)).not.toContain(mixedZed.id);
+    expect(mixedMenu.navigatorPills.find(({ id }) => id === mixedZed.id)).toMatchObject({
+      id: mixedZed.id,
+      lifecycleStatus: "saved",
+      subtitle: cwd,
+      inspector: { status: "Saved", detailRows: [] },
+    });
+
+    const standaloneRepository = new SessionRepository([new ZedProvider(environment)], { now: () => now });
+    const standalone = await standaloneRepository.refresh();
+    const standaloneZed = standalone.sessions.find(({ owner }) => owner === "Zed")!;
+    expect(standaloneZed).toMatchObject({
+      lifecycleStatus: "saved",
+      presence: { state: "unknown", evidence: "catalog" },
+    });
+    expect(groupSessions(standalone.sessions).map(({ id }) => id)).toEqual(["history"]);
+    expect(menuPresentation(standalone, [], now.valueOf()).navigatorPills[0]).toMatchObject({
+      id: standaloneZed.id,
+      lifecycleStatus: "saved",
+      subtitle: cwd,
+      inspector: { status: "Saved" },
+    });
+  });
+
+  it("keeps a failed Zed source-history read unavailable after a saved observation", async () => {
+    const environment = new FixtureEnvironment();
+    const database = `${home}/Library/Application Support/Zed/db/0-stable/db.sqlite`;
+    environment.stamps.set(database, { modifiedAt: now, size: 100 });
+    environment.sqliteRows.set(database, [{
+      thread_id: "ABCD",
+      session_id: "zed-pi-1",
+      agent_id: "pi-acp",
+      title: "Zed history",
+      title_override: "Zed history",
+      updated_at: now.toISOString(),
+      interacted_at: now.toISOString(),
+      main_worktree_paths: cwd,
+      archived: 0,
+    }]);
+    environment.processRows = [{
+      pid: 52,
+      parentPID: 1,
+      command: "/Applications/Zed.app/Contents/MacOS/zed",
+      arguments: "/Applications/Zed.app/Contents/MacOS/zed",
+    }];
+    const provider = new ZedProvider(environment);
+    const repository = new SessionRepository([provider], { now: () => now });
+    const saved = await repository.refresh();
+    const savedID = saved.sessions[0]!.id;
+    environment.sqlite = async () => { throw new Error("Zed history read failed"); };
+
+    const failed = await repository.refresh();
+    const row = failed.sessions.find(({ id }) => id === savedID)!;
+    expect(row).toMatchObject({
+      lifecycleStatus: "unavailable",
+      presence: { state: "unknown", evidence: "unavailable" },
+    });
+    expect(groupSessions(failed.sessions).map(({ id }) => id)).toEqual(["unavailable"]);
+    const pill = menuPresentation(failed, [], now.valueOf()).navigatorPills[0]!;
+    expect(pill).toMatchObject({ lifecycleStatus: "unavailable", inspector: { status: "Status unavailable" } });
+    expect(sessionAction(row)).toBe("owner");
   });
 
   it("keeps Auggie observe-only until its documented hook reports a session", async () => {

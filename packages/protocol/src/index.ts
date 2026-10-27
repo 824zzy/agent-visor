@@ -1865,9 +1865,15 @@ export function sessionPresencePresentation(
 const savedSubtitleBoilerplate = new Set([
   "check claude for current status",
   "closed terminal conversation",
+  "cursor history · opens workspace",
   "from cursor history",
   "from pi history",
   "historical provider record",
+  "auggie session hosted by zed",
+  "claude code session hosted by zed",
+  "codex session hosted by zed",
+  "cursor session hosted by zed",
+  "pi session hosted by zed",
 ]);
 
 /**

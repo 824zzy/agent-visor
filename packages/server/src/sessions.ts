@@ -3717,6 +3717,7 @@ export class SessionRepository {
     const suppressedSource = (session: DiscoveredProviderSession) => historicalPaseoIDs.has(session.id)
       || paseoOwners.some(owner => !historicalPaseoIDs.has(owner.id) && matchesPaseoAlias(owner, session));
     const effectiveDiscovered = discovered.filter(session => !suppressedSource(session))
+      .map((session) => projectLegacySourceEvidence(session))
       .map((session) => this.projectAmbientEligibility(this.projectAcknowledgedFailure(session)));
     this.reconcileTerminalNextTurns(effectiveDiscovered);
     const canonicalDiscovered = deduplicateSessions(effectiveDiscovered);
@@ -4776,7 +4777,11 @@ function presenceUnavailable(
   session: DiscoveredProviderSession,
   observedAt: string,
 ): DiscoveredProviderSession {
-  if (!session.presence) return session;
+  // Cursor and Zed expose successful source-history rows through the legacy
+  // adapter shape. Once that same inventory read fails, keep the row on the
+  // unavailable path instead of allowing the compatibility Saved projection
+  // to treat the stale record as a successful catalog observation.
+  if (!session.presence && !isKnownLegacyHistorySession(session)) return session;
   return {
     ...session,
     presence: {
@@ -4789,7 +4794,8 @@ function presenceUnavailable(
 
 function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
   const byID = new Map<string, DiscoveredProviderSession>();
-  for (const session of deduplicateSessions(discovered)) {
+  for (const discoveredSession of deduplicateSessions(discovered)) {
+    const session = projectLegacySourceEvidence(discoveredSession);
     // Preserve the historical cross-provider authority rule for ordinary
     // IDs, while verified canonical identities deduplicate within a provider.
     const identity = session.historyIdentity?.verified === true
@@ -4866,6 +4872,69 @@ function normalize(discovered: DiscoveredProviderSession[]): SessionSummary[] {
     }))
     .sort((left, right) =>
       right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id));
+}
+
+/**
+ * Cursor's transcript list and Zed's sidebar database are successful source
+ * history observations, not live-presence checks. These adapters intentionally
+ * retain the legacy shape, so classify their known provenance once at the
+ * shared normalization boundary. A provider failure is marked unavailable by
+ * presenceUnavailable before this compatibility projection runs.
+ */
+function isKnownSourceHistorySession(
+  session: Pick<DiscoveredProviderSession, "provider" | "owner" | "section" | "controlTarget">,
+): boolean {
+  return isKnownLegacyHistorySession(session)
+    && !(session.provider === "cursor" && session.controlTarget?.kind === "terminal");
+}
+
+function isKnownLegacyHistorySession(
+  session: Pick<DiscoveredProviderSession, "provider" | "owner" | "section" | "controlTarget">,
+): boolean {
+  return session.section === "history"
+    && (session.provider === "cursor"
+      || (session.owner === "Zed" && session.controlTarget?.kind === "application"));
+}
+
+function cursorRuntimeSession(
+  session: DiscoveredProviderSession,
+): DiscoveredProviderSession {
+  if (session.presence || session.provider !== "cursor"
+    || session.section !== "history" || session.controlTarget?.kind !== "terminal") {
+    return session;
+  }
+  return {
+    ...session,
+    section: "working",
+    lifecycleStatus: "working",
+    conversationState: "open",
+    turnState: "working",
+    presence: {
+      state: "open",
+      evidence: "runtime",
+      observedAt: session.updatedAt,
+    },
+  };
+}
+
+function savedSourceHistorySession(
+  session: DiscoveredProviderSession,
+): DiscoveredProviderSession {
+  if (session.presence || !isKnownSourceHistorySession(session)) return session;
+  return {
+    ...session,
+    presence: {
+      state: "unknown",
+      evidence: "catalog",
+      observedAt: session.updatedAt,
+    },
+  };
+}
+
+function projectLegacySourceEvidence(
+  session: DiscoveredProviderSession,
+): DiscoveredProviderSession {
+  return savedSourceHistorySession(cursorRuntimeSession(session));
 }
 
 /**
