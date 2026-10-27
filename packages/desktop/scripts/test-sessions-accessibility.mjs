@@ -240,6 +240,7 @@ async function run() {
       const moreRect = moreButton?.getBoundingClientRect();
       return {
         primaryWidth: primaryRect ? Math.round(primaryRect.width) : undefined,
+        retrySource: Boolean(row.querySelector('[aria-label^="Retry detection for"]')),
         chatLeft: chatRect ? Math.round(chatRect.left) : undefined,
         moreLeft: moreRect ? Math.round(moreRect.left) : undefined,
         disjoint: !chatRect || !primaryRect || primaryRect.right <= chatRect.left,
@@ -249,6 +250,9 @@ async function run() {
       primaryCount: primary.length,
       chatCount: chat.length,
       primaryWidths: rows.map(({ primaryWidth }) => primaryWidth),
+      ownerPrimaryWidths: rows
+        .filter(({ primaryWidth, retrySource }) => primaryWidth !== undefined && !retrySource)
+        .map(({ primaryWidth }) => primaryWidth),
       chatLefts: rows.flatMap(({ chatLeft }) => chatLeft === undefined ? [] : [chatLeft]),
       moreLefts: rows.flatMap(({ moreLeft }) => moreLeft === undefined ? [] : [moreLeft]),
       disjoint: rows.every(({ disjoint }) => disjoint),
@@ -256,18 +260,31 @@ async function run() {
   })()`);
   assert(frames.primaryCount === baseSessionCount + 1, "all owner-routed rows expose their primary action");
   assert(frames.chatCount === baseSessionCount + 1, "all Chat-capable rows, including Chat-only Saved rows, expose a fixed Chat action");
-  assert(new Set(frames.primaryWidths.filter(Boolean)).size === 1, "owner rows keep one fixed frame");
+  assert(new Set(frames.ownerPrimaryWidths).size === 1, "ordinary owner rows keep one fixed frame");
   assert(new Set(frames.chatLefts).size === 1, "Chat actions keep one aligned column");
   assert(frames.moreLefts.length === 0, "rows without secondary actions reserve an empty More slot");
   assert(frames.disjoint, "owner and Chat actions do not overlap");
+  assert(!await window.webContents.executeJavaScript(
+    `Boolean(document.querySelector('[aria-hidden="true"][tabindex="0"]'))`,
+  ), "the source slot has no hidden focusable duplicate control");
+  assert(await window.webContents.executeJavaScript(`(() => {
+    const row = document.querySelector('[aria-label^="Saved Pi no action,"]')?.closest('[id^="session-row-"]');
+    return Boolean(row) && !row.querySelector('[aria-label*="Open in"], [aria-label^="Retry detection"], [aria-label^="Resume"]');
+  })()`), "a blank source slot has no invisible action control");
+  assert(await window.webContents.executeJavaScript(`(() => {
+    const retry = document.querySelector('[aria-label^="Retry detection for Agent retryable"]');
+    const chat = retry?.closest('[id^="session-row-"]')?.querySelector('[aria-label^="Read chat for"]');
+    return Boolean(retry && chat) && retry.getBoundingClientRect().right <= chat.getBoundingClientRect().left;
+  })()`), "Retry detection occupies the source slot before fixed Chat");
   assert(await window.webContents.executeJavaScript(`Boolean(document.querySelector('[aria-label*="Managed by Agent Room"]'))`),
     "managed-session ownership is accessible on its row");
   const sourceActionLabel = await window.webContents.executeJavaScript(
     `document.querySelector('[aria-label^="Agent session 0,"]')?.getAttribute('aria-label')`,
   );
   assert((sourceActionLabel ?? "").includes("Pi · fixture-profile")
-    && (sourceActionLabel ?? "").includes("Open in Ghostty"),
-  "search rows expose the original source profile and available owner action");
+    && (sourceActionLabel ?? "").includes("Open in Ghostty")
+    && (sourceActionLabel ?? "").includes("/tmp/agent-visor"),
+  "search rows expose the original source profile, full path and available owner action");
   const savedOwnerRow = await window.webContents.executeJavaScript(
     `document.querySelector('[aria-label^="Saved Pi owner route,"]')?.getAttribute('aria-label')`,
   );
@@ -292,15 +309,16 @@ async function run() {
 
   const retryRow = `[aria-label^="Agent retryable,"]`;
   const retryChat = `[aria-label^="Read chat for Agent retryable"]`;
+  const retrySourceAction = `[aria-label^="Retry detection for Agent retryable"]`;
   assert(await window.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(retryRow)})?.getAttribute('aria-label')
-    .includes('Retry detection')`),
-  "unavailable no-route rows expose an explicit Retry detection action");
+    .includes('Retry detection') && Boolean(document.querySelector(${JSON.stringify(retrySourceAction)}))`),
+  "unavailable no-route rows expose an explicit source-slot Retry detection action");
   assert(await window.webContents.executeJavaScript(
     `document.querySelector(${JSON.stringify(retryChat)})?.getAttribute('aria-label')
       .includes('(read-only transcript')`,
   ), "unavailable Chat access is clearly labelled read-only");
   await window.webContents.executeJavaScript(`window.alert = () => {};
-    document.querySelector(${JSON.stringify(retryRow)})?.click()`);
+    document.querySelector(${JSON.stringify(retrySourceAction)})?.click()`);
   await waitFor(window, `document.querySelector(${JSON.stringify(retryRow)})?.getAttribute('aria-label').includes(', Ready,')`);
   const recoveredRetry = await window.webContents.executeJavaScript(`(() => {
     const element = document.querySelector(${JSON.stringify(retryRow)});

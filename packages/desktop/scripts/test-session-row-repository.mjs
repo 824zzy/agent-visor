@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, nativeTheme } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 import { RetainedHistoryStore } from "../../server/dist/retained-history.js";
 import { SessionRepository } from "../../server/dist/sessions.js";
 import { startServer } from "../../server/dist/server.js";
@@ -21,11 +21,17 @@ const historyPath = path.join(fixtureRoot, "retained-history.json");
 const herdrTranscript = path.join(fixtureRoot, "herdr.jsonl");
 const ghosttyTranscript = path.join(fixtureRoot, "ghostty.jsonl");
 const repairTranscript = path.join(fixtureRoot, "repair.jsonl");
+let repairPickerCalls = 0;
 mkdirSync(screenshotRoot, { recursive: true });
 writeFileSync(herdrTranscript, "{\"kind\":\"assistant\",\"text\":\"Herdr transcript fixture\"}\n");
 writeFileSync(ghosttyTranscript, "{\"kind\":\"assistant\",\"text\":\"Ghostty transcript fixture\"}\n");
 writeFileSync(repairTranscript, "{\"kind\":\"assistant\",\"text\":\"Repair transcript fixture\"}\n");
 app.setPath("userData", profileRoot);
+ipcMain.handle("history:pick-repair-path", async (_event, kind) => {
+  if (kind !== "workingDirectory") return undefined;
+  repairPickerCalls += 1;
+  return fixtureRoot;
+});
 
 void app.whenReady()
   .then(run)
@@ -99,13 +105,14 @@ async function run() {
   ]);
   history.closeMissing(new Set(), "codex");
 
+  let currentOwnerTitle = "Current owner";
   const provider = {
     id: "codex",
     discover: async () => [
       {
         id: "current-owner",
         provider: "codex",
-        title: "Current owner",
+        title: currentOwnerTitle,
         subtitle: "Provider is ready",
         project: "row-ui",
         cwd: fixtureRoot,
@@ -137,6 +144,8 @@ async function run() {
         routeState: "available",
       },
     ],
+    historyLifetime: async () => "open",
+    validateWorkingDirectory: async (_record, cwd) => ({ state: "valid", cwd }),
   };
   const repository = new SessionRepository([provider], {
     retainedHistoryPath: historyPath,
@@ -160,6 +169,8 @@ async function run() {
 
   try {
     await window.loadFile(path.resolve(directory, "../../app/dist/index.html"));
+    window.show();
+    window.focus();
     await waitFor(window, `Boolean(document.querySelector('[aria-label^="Current owner,"]'))`);
     await waitFor(window, `Boolean(document.querySelector('[aria-label^="Read chat for Saved Herdr read-only"]'))`);
 
@@ -191,12 +202,37 @@ async function run() {
       "real retained Ghostty rows keep explicit Resume in the source slot and Read chat in Chat");
     assert(initial.repairMore && initial.ownerChat?.startsWith("Open Chat for"),
       "real repository rows reserve More only for secondary work while Current keeps Open Chat");
-    assert(initial.ownerSource?.includes("Open in Codex") && initial.moreCount === 3,
-      "real repository rows preserve source identity and expose More for eligible retained actions");
+    assert(initial.ownerSource?.includes("Open in Codex") && initial.ownerSource?.includes(fixtureRoot)
+      && initial.moreCount === 3,
+      "real repository rows preserve source identity, full cwd context and More for eligible retained actions");
+
+    await window.webContents.executeJavaScript(`(() => {
+      const input = document.querySelector('[aria-label="Search sessions"]');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, 'Saved');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label^="Saved Herdr read-only,"]'))`);
+    await sendKeyGesture(window, "ARROWDOWN");
+    window.setSize(1_040, 400);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const beforeMore = await browserState(window);
 
     await window.webContents.executeJavaScript(
-      `document.querySelector('[aria-label="More actions for Saved Herdr read-only"]')?.click()`,
+      `document.querySelector('[aria-label="More actions for Saved Herdr read-only"]')?.focus()`,
     );
+    await sendKeyGesture(window, "ENTER");
+    await waitFor(window, `Boolean(document.querySelector('[role="menu"]'))`);
+    assert(await window.webContents.executeJavaScript(
+      `document.querySelector('[aria-label="More actions for Saved Herdr read-only"]')?.getAttribute('aria-expanded') === 'true'`,
+    ), "a real Enter keydown/keyup gesture opens More exactly once");
+    await sendKeyGesture(window, "ARROWDOWN");
+    const afterArrow = await browserState(window);
+    assert(afterArrow.cursor === beforeMore.cursor
+      && afterArrow.query === beforeMore.query
+      && afterArrow.scrollTop === beforeMore.scrollTop
+      && afterArrow.rowLabel === beforeMore.rowLabel,
+    `More interaction keys do not move the browser state (${JSON.stringify({ beforeMore, afterArrow })})`);
     await waitFor(window, `document.body.textContent.includes('Automatic resume for Herdr isn’t supported yet. Resume this session manually in Herdr.')`);
     const herdrMenu = await window.webContents.executeJavaScript(`(() => {
       const row = document.querySelector('[aria-label^="Saved Herdr read-only,"]')?.closest('[id^="session-row-"]');
@@ -210,17 +246,46 @@ async function run() {
     })()`);
     assert(herdrMenu.reason && herdrMenu.remove && herdrMenu.source && herdrMenu.readOnly,
       "real retained More keeps the complete neutral resume reason and exact eligible Remove action");
-    await window.webContents.executeJavaScript(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    currentOwnerTitle = "Current owner updated";
+    await repository.refresh();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const afterBackground = await window.webContents.executeJavaScript(`(() => {
+      const row = document.querySelector('[aria-label^="Saved Herdr read-only,"]')?.closest('[id^="session-row-"]');
+      return {
+        rowID: row?.id,
+        menu: row?.querySelector('[role="menu"]')?.getAttribute('aria-label'),
+      };
+    })()`);
+    assert(afterBackground.rowID === "session-row-saved-herdr"
+      && afterBackground.menu === "More actions for Saved Herdr read-only menu"
+      && repository.current().sessions.some(({ id, title }) => id === "current-owner" && title === "Current owner updated"),
+    "background refresh preserves the open More identity and does not retarget its conversation");
+    await sendKeyGesture(window, "ESCAPE");
     await waitFor(window, `!document.querySelector('[role="menu"]')`);
+    const afterMore = await browserState(window);
+    assert(afterMore.query === beforeMore.query
+      && afterMore.cursor === beforeMore.cursor
+      && afterMore.scrollTop === beforeMore.scrollTop
+      && afterMore.rowLabel === beforeMore.rowLabel,
+    `opening and dismissing More preserves query, cursor, viewport and attention identity (${JSON.stringify({ beforeMore, afterMore })})`);
+    window.setSize(1_040, 760);
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     await window.webContents.executeJavaScript(
-      `document.querySelector('[aria-label="More actions for Saved Locate folder"]')?.click()`,
+      `document.querySelector('[aria-label="More actions for Saved Locate folder"]')?.focus()`,
     );
+    await sendKeyGesture(window, "ENTER");
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Locate folder for Saved Locate folder"]'))`);
-    assert(await window.webContents.executeJavaScript(
-      `Boolean(document.querySelector('[aria-label="Locate folder for Saved Locate folder"]'))`,
-    ), "real repairable retained rows keep their existing Locate folder action in More");
-    await window.webContents.executeJavaScript(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await window.webContents.executeJavaScript(
+      `document.querySelector('[aria-label="Locate folder for Saved Locate folder"]')?.focus()`,
+    );
+    await sendKeyGesture(window, "ENTER");
+    await waitUntil(() => repairPickerCalls >= 1);
+    assert(repairPickerCalls === 1, "a real Enter keydown/keyup gesture launches Repair exactly once");
+    await waitUntil(() => repository.historyPage().sessions.find(({ id }) => id === "saved-repair")?.cwd === fixtureRoot);
+    assert(repository.historyPage().sessions.find(({ id }) => id === "saved-repair")?.cwd === fixtureRoot,
+      "Repair applies the exact selected working directory to retained history");
+    await sendKeyGesture(window, "ESCAPE");
     await waitFor(window, `!document.querySelector('[role="menu"]')`);
 
     await captureScreenshot("session-row-default-light.png", window);
@@ -264,15 +329,20 @@ async function run() {
     }`);
     await new Promise((resolve) => setTimeout(resolve, 100));
     await window.webContents.executeJavaScript(
-      `document.querySelector('[aria-label="More actions for Saved Herdr read-only"]')?.click()`,
+      `document.querySelector('[aria-label="More actions for Saved Herdr read-only"]')?.focus()`,
     );
+    await sendKeyGesture(window, "ENTER");
     await waitFor(window, `Boolean(document.querySelector('[aria-label="Remove Saved Herdr read-only from Agent Visor"]'))`);
     await window.webContents.executeJavaScript(
-      `document.querySelector('[aria-label="Remove Saved Herdr read-only from Agent Visor"]')?.click()`,
+      `document.querySelector('[aria-label="Remove Saved Herdr read-only from Agent Visor"]')?.focus()`,
     );
+    await sendKeyGesture(window, "ENTER");
     await waitFor(window, `!document.querySelector('[aria-label^="Saved Herdr read-only,"]')`);
     assert(!repository.historyPage().sessions.some(({ id }) => id === "saved-herdr"),
       "real repository readback confirms More Remove affects only Agent Visor retained history");
+    assert(repository.historyPage().sessions.some(({ id }) => id === "saved-ghostty")
+      && repository.historyPage().sessions.some(({ id }) => id === "saved-repair"),
+    "More Remove changes only the exact retained history row");
 
     console.log("Session-row repository PASS: real repository projection, fixed slots, More effects, and high-scale geometry.");
   } finally {
@@ -292,6 +362,36 @@ function assert(value, message) {
 async function captureScreenshot(name, window) {
   const image = await window.webContents.capturePage();
   writeFileSync(path.join(screenshotRoot, name), image.toPNG());
+}
+
+async function sendKeyGesture(window, keyCode) {
+  window.webContents.sendInputEvent({ type: "keyDown", keyCode });
+  window.webContents.sendInputEvent({ type: "keyUp", keyCode });
+  await new Promise((resolve) => setTimeout(resolve, 75));
+}
+
+async function waitUntil(predicate, timeout = 10_000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("Timed out waiting for the fixture state.");
+}
+
+async function browserState(window) {
+  return window.webContents.executeJavaScript(`(() => {
+    const scroller = [...document.querySelectorAll('*')].find((item) => {
+      const style = getComputedStyle(item);
+      return style.overflowY === 'auto' || style.overflowY === 'scroll';
+    });
+    return {
+      query: document.querySelector('[aria-label="Search sessions"]')?.value,
+      cursor: document.querySelector('[aria-selected="true"]')?.getAttribute('aria-label'),
+      scrollTop: scroller?.scrollTop ?? 0,
+      rowLabel: document.querySelector('[aria-label^="Saved Herdr read-only,"]')?.getAttribute('aria-label'),
+    };
+  })()`);
 }
 
 async function waitFor(window, expression, timeout = 10_000) {
