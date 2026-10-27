@@ -270,6 +270,35 @@ async function run() {
     })()`);
     assert(herdrMenu.reason && herdrMenu.remove && herdrMenu.source && herdrMenu.readOnly,
       "real retained More keeps the complete neutral resume reason and exact eligible Remove action");
+    const defaultMenuGeometry = await window.webContents.executeJavaScript(`(() => {
+      const menu = document.querySelector('[aria-label="More actions for Saved Herdr read-only menu"]');
+      const button = document.querySelector('[aria-label="More actions for Saved Herdr read-only"]');
+      const scroller = [...document.querySelectorAll('*')].find((item) => {
+        const style = getComputedStyle(item);
+        return style.overflowY === 'auto' || style.overflowY === 'scroll';
+      });
+      const menuRect = menu?.getBoundingClientRect();
+      const menuStyle = menu ? getComputedStyle(menu) : undefined;
+      const buttonRect = button?.getBoundingClientRect();
+      const clipRect = scroller?.getBoundingClientRect();
+      return {
+        menuTop: menuRect?.top,
+        menuBottom: menuRect?.bottom,
+        clipTop: clipRect?.top,
+        clipBottom: clipRect?.bottom,
+        buttonTop: buttonRect?.top,
+        buttonBottom: buttonRect?.bottom,
+        cssTop: menuStyle?.top,
+        cssBottom: menuStyle?.bottom,
+        cssPosition: menuStyle?.position,
+        cssMaxHeight: menuStyle?.maxHeight,
+        remove: Boolean(menu?.querySelector('[aria-label="Remove Saved Herdr read-only from Agent Visor"]')),
+      };
+    })()`);
+    assert(defaultMenuGeometry.remove
+      && defaultMenuGeometry.menuTop >= defaultMenuGeometry.clipTop - 1
+      && defaultMenuGeometry.menuBottom <= defaultMenuGeometry.clipBottom + 1,
+    `default More placement stays within the Sessions viewport (${JSON.stringify(defaultMenuGeometry)})`);
     currentOwnerTitle = "Current owner updated";
     await repository.refresh();
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -345,6 +374,87 @@ async function run() {
     );
     await new Promise((resolve) => setTimeout(resolve, 100));
     await captureScreenshot("session-row-high-scale-dark.png", window);
+
+    await window.webContents.executeJavaScript(
+      `document.querySelector('[aria-label^="Saved Locate folder,"]')?.closest('[id^="session-row-"]')?.scrollIntoView({ block: "end" })`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const beforeBottomMore = await browserState(window);
+    await window.webContents.executeJavaScript(
+      `document.querySelector('[aria-label="More actions for Saved Locate folder"]')?.focus()`,
+    );
+    await sendKeyGesture(window, "ENTER");
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="Locate folder for Saved Locate folder"]'))`);
+    const bottomMenuGeometry = await window.webContents.executeJavaScript(`(() => {
+      const menu = document.querySelector('[aria-label="More actions for Saved Locate folder menu"]');
+      const button = document.querySelector('[aria-label="More actions for Saved Locate folder"]');
+      const row = button?.closest('[id^="session-row-"]');
+      const scroller = [...document.querySelectorAll('*')].find((item) => {
+        const style = getComputedStyle(item);
+        return style.overflowY === 'auto' || style.overflowY === 'scroll';
+      });
+      const menuRect = menu?.getBoundingClientRect();
+      const menuStyle = menu ? getComputedStyle(menu) : undefined;
+      const repairAction = menu?.querySelector('[aria-label="Locate folder for Saved Locate folder"]');
+      const repairRect = repairAction?.getBoundingClientRect();
+      const buttonRect = button?.getBoundingClientRect();
+      const rowRect = row?.getBoundingClientRect();
+      const clipRect = scroller?.getBoundingClientRect();
+      return {
+        menuTop: menuRect?.top,
+        menuBottom: menuRect?.bottom,
+        menuHeight: menuRect?.height,
+        buttonTop: buttonRect?.top,
+        buttonBottom: buttonRect?.bottom,
+        rowTop: rowRect?.top,
+        rowBottom: rowRect?.bottom,
+        clipTop: clipRect?.top,
+        clipBottom: clipRect?.bottom,
+        scrollHeight: menu?.scrollHeight,
+        clientHeight: menu?.clientHeight,
+        cssTop: menuStyle?.top,
+        cssBottom: menuStyle?.bottom,
+        cssPosition: menuStyle?.position,
+        repairTop: repairRect?.top,
+        repairBottom: repairRect?.bottom,
+        reason: menu?.textContent.includes('Automatic resume') === true,
+        repair: Boolean(menu?.querySelector('[aria-label="Locate folder for Saved Locate folder"]')),
+      };
+    })()`);
+    assert(bottomMenuGeometry.reason && bottomMenuGeometry.repair
+      && bottomMenuGeometry.menuTop >= bottomMenuGeometry.clipTop - 1
+      && bottomMenuGeometry.menuBottom <= bottomMenuGeometry.clipBottom + 1,
+    `high-scale bottom More placement stays within the Sessions viewport (${JSON.stringify(bottomMenuGeometry)})`);
+    if (bottomMenuGeometry.repairBottom > bottomMenuGeometry.menuBottom + 1) {
+      await window.webContents.executeJavaScript(
+        `document.querySelector('[aria-label="More actions for Saved Locate folder menu"]')?.scrollTo({ top: 9999 })`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const visibleBottomRepair = await window.webContents.executeJavaScript(`(() => {
+      const menu = document.querySelector('[aria-label="More actions for Saved Locate folder menu"]');
+      const repair = menu?.querySelector('[aria-label="Locate folder for Saved Locate folder"]');
+      const menuRect = menu?.getBoundingClientRect();
+      const repairRect = repair?.getBoundingClientRect();
+      return {
+        menuTop: menuRect?.top,
+        menuBottom: menuRect?.bottom,
+        repairTop: repairRect?.top,
+        repairBottom: repairRect?.bottom,
+      };
+    })()`);
+    assert(visibleBottomRepair.repairTop >= visibleBottomRepair.menuTop - 1
+      && visibleBottomRepair.repairBottom <= visibleBottomRepair.menuBottom + 1,
+    `high-scale bottom More keeps the eligible Repair action reachable by menu scroll (${JSON.stringify(visibleBottomRepair)})`);
+    const afterBottomMore = await browserState(window);
+    assert(afterBottomMore.query === beforeBottomMore.query
+      && afterBottomMore.cursor === beforeBottomMore.cursor
+      && afterBottomMore.scrollTop === beforeBottomMore.scrollTop
+      && afterBottomMore.rowLabel === beforeBottomMore.rowLabel,
+    `opening bottom More preserves query, cursor, viewport and attention identity (${JSON.stringify({ beforeBottomMore, afterBottomMore })})`);
+    await captureScreenshot("session-row-bottom-menu-high-scale-dark.png", window);
+    await sendKeyGesture(window, "ESCAPE");
+    await waitFor(window, `!document.querySelector('[aria-label="More actions for Saved Locate folder menu"]')`);
 
     await window.webContents.executeJavaScript(`{
       for (let index = 0; index < 15; index += 1) {
