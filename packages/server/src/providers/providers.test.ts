@@ -1630,7 +1630,7 @@ describe("live provider adapters", () => {
     });
   });
 
-  it("keeps an observed Cursor CLI row Current beside transcript-only Saved history", async () => {
+  it("does not treat an observed Cursor CLI process as exact Current presence", async () => {
     const environment = new FixtureEnvironment();
     const projectKey = "Users-me-Codes-agent-visor";
     const sessionsRoot = `${home}/.cursor/projects/${projectKey}/agent-transcripts`;
@@ -1665,23 +1665,22 @@ describe("live provider adapters", () => {
     const active = snapshot.sessions.find(({ id }) => id === "cursor-live")!;
     const saved = snapshot.sessions.find(({ id }) => id === "cursor-history")!;
     expect(active).toMatchObject({
-      section: "working",
-      lifecycleStatus: "working",
+      section: "history",
+      lifecycleStatus: "saved",
       owner: "Ghostty",
-      presence: { state: "open", evidence: "runtime" },
-      sessionState: { conversation: "open", turn: "working" },
+      presence: { state: "unknown", evidence: "catalog" },
+      sessionState: { conversation: "unknown", turn: "unknown" },
     });
     expect(saved).toMatchObject({
       section: "history",
       lifecycleStatus: "saved",
       owner: "Cursor",
       presence: { state: "unknown", evidence: "catalog" },
+      sessionState: { conversation: "unknown", turn: "unknown" },
     });
-    expect(groupSessions(snapshot.sessions).map(({ id }) => id)).toEqual(["working", "history"]);
+    expect(groupSessions(snapshot.sessions).map(({ id }) => id)).toEqual(["history"]);
     const menu = menuPresentation(snapshot, [], now.valueOf());
-    expect(menu.pills).toContainEqual(expect.objectContaining({
-      id: active.id, phase: "working", lifecycleStatus: "working",
-    }));
+    expect(menu.pills).toEqual([]);
     expect(menu.pills.map(({ id }) => id)).not.toContain(saved.id);
   });
 
