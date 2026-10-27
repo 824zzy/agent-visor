@@ -3967,7 +3967,9 @@ export class SessionRepository {
         this.previouslyAmbientEligible.delete(oldest);
       }
     }
-    if (session.presence?.state === "unknown" && this.previouslyAmbientEligible.has(key)) {
+    if (session.presence?.state === "unknown"
+      && session.presence.evidence === "unavailable"
+      && this.previouslyAmbientEligible.has(key)) {
       return { ...session, ambientEligible: true };
     }
     return session;

@@ -1683,6 +1683,13 @@ export function sessionIsInactive(
     && nowMs - activityAt >= TRANSCRIPT_STALE_CEILING_MS;
 }
 
+function isSavedPresenceEvidence(
+  presence: SessionPresence | undefined,
+): boolean {
+  return presence?.state === "unknown"
+    && (presence.evidence === "catalog" || presence.evidence === "authoritative_inventory");
+}
+
 /**
  * Resolve lifecycle meaning once for every presentation surface.
  *
@@ -1704,9 +1711,7 @@ export function sessionLifecyclePresentation(
   // here while keeping the underlying turn in sessionState.
   if (session.presence) {
     if (session.presence.state === "unknown") {
-      const savedEvidence = session.presence.evidence === "catalog"
-        || session.presence.evidence === "authoritative_inventory";
-      if (savedEvidence && attention?.evidence !== "current") {
+      if (isSavedPresenceEvidence(session.presence) && attention?.evidence !== "current") {
         return withAttention(lifecycle("saved", "Saved", "neutral"));
       }
       return withAttention(attention?.evidence === "current"
@@ -1797,9 +1802,7 @@ export function sessionPresencePresentation(
   session: Pick<SessionSummary, "section" | "sessionState" | "lifecycleStatus" | "presence" | "attention">,
 ): SessionPresencePresentation {
   const lifecycle = sessionLifecyclePresentation(session);
-  const savedEvidence = session.presence?.state === "unknown"
-    && (session.presence.evidence === "catalog"
-      || session.presence.evidence === "authoritative_inventory");
+  const savedEvidence = isSavedPresenceEvidence(session.presence);
   const turn = session.sessionState?.turn;
   const subgroup: SessionPresenceSubgroup | undefined = session.presence?.state === "closed"
     ? undefined : lifecycle.attention?.evidence === "current"

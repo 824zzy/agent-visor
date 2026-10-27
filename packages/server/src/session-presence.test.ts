@@ -143,6 +143,73 @@ describe("SessionRepository presence contract", () => {
     });
   });
 
+  it("keeps a live-to-Saved downgrade out of ambient pills while preserving failure recovery", async () => {
+    let phase: "live" | "saved" | "unavailable" = "live";
+    const observedAt = "2026-10-26T10:00:00.000Z";
+    const provider = {
+      id: "claude_code" as const,
+      discover: async () => {
+        const live = phase === "live";
+        const unavailable = phase === "unavailable";
+        return [{
+          ...discovered("downgrade-fixture", {
+            state: live ? "open" : "unknown",
+            evidence: live ? "frontend" : unavailable ? "unavailable" : "catalog",
+            observedAt,
+          }, "ready"),
+          section: live ? "ready" as const : "history" as const,
+          subtitle: live ? "Ready to continue" : "Saved transcript preview",
+          canOpenOwner: live,
+          ambientEligible: live,
+          conversationState: live ? "open" as const : "unknown" as const,
+          turnState: live ? "ready" as const : "unknown" as const,
+          completionUnseen: true,
+        } satisfies DiscoveredProviderSession];
+      },
+      discoveryAuthority: () => "authoritative" as const,
+    };
+    const repository = new SessionRepository([provider]);
+    const atObserved = new Date(observedAt).valueOf();
+
+    const live = await repository.refresh();
+    expect(menuPresentation(live, [], atObserved).pills.map(({ id }) => id))
+      .toContain("downgrade-fixture");
+
+    phase = "saved";
+    const saved = await repository.refresh();
+    expect(saved.sessions[0]).toMatchObject({
+      presence: { state: "unknown", evidence: "catalog" },
+      ambientEligible: false,
+      completionUnseen: true,
+    });
+    expect(selectSessions(saved.sessions, "").groups).toEqual([expect.objectContaining({
+      id: "history",
+      sessions: [expect.objectContaining({ id: "downgrade-fixture" })],
+    })]);
+    expect(menuPresentation(saved, [], atObserved).pills.map(({ id }) => id))
+      .not.toContain("downgrade-fixture");
+
+    phase = "unavailable";
+    const unavailable = await repository.refresh();
+    expect(unavailable.sessions[0]).toMatchObject({
+      presence: { state: "unknown", evidence: "unavailable" },
+      ambientEligible: true,
+      completionUnseen: true,
+    });
+    expect(menuPresentation(unavailable, [], atObserved).pills.map(({ id }) => id))
+      .toContain("downgrade-fixture");
+
+    phase = "live";
+    const recovered = await repository.refresh();
+    expect(recovered.sessions[0]).toMatchObject({
+      presence: { state: "open", evidence: "frontend" },
+      ambientEligible: true,
+      completionUnseen: true,
+    });
+    expect(menuPresentation(recovered, [], atObserved).pills.map(({ id }) => id))
+      .toContain("downgrade-fixture");
+  });
+
   it("reopens isolated retained state without reviving live proof or completion attention", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "agent-visor-saved-reopen-"));
     const historyPath = path.join(root, "retained-history.json");

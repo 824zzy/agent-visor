@@ -1018,6 +1018,33 @@ describe("menu presentation", () => {
     }, snapshot)).toEqual({ type: "native_action", action: "open_settings" });
   });
 
+  it("routes ownerless Saved catalog rows to read-only Chat", () => {
+    const saved = {
+      ...snapshot.sessions[0]!,
+      id: "saved-catalog-chat",
+      section: "history" as const,
+      presence: {
+        state: "unknown" as const,
+        evidence: "catalog" as const,
+        observedAt: "2026-08-22T21:59:00.000Z",
+      },
+      canOpenOwner: false,
+      canEnterChat: true,
+      ambientEligible: false,
+    } satisfies SessionSnapshot["sessions"][number];
+
+    expect(nativeActionFor({
+      version: 1,
+      type: "event",
+      event: "activate_pill",
+      sessionId: saved.id,
+    }, { ...snapshot, sessions: [saved] })).toEqual({
+      type: "native_action",
+      action: "open_chat",
+      sessionId: saved.id,
+    });
+  });
+
   it("opens Chat on a normal click when the session has no owner route", () => {
     const chatOnly = {
       ...snapshot,

@@ -67,6 +67,22 @@ const sessions = [
     ambientEligible: false,
   },
   {
+    id: "saved-pi-no-action",
+    title: "Saved Pi no action",
+    subtitle: "Saved transcript without a supported action",
+    source: "Pi",
+    project: "agent-visor",
+    owner: "Pi",
+    cwd: "/tmp/agent-visor",
+    section: "history",
+    presence: { state: "unknown", evidence: "catalog", observedAt: new Date(now).toISOString() },
+    sessionState: { conversation: "unknown", turn: "unknown", route: "unavailable" },
+    updatedAt: new Date(now - 4 * 60_000).toISOString(),
+    canOpenOwner: false,
+    canEnterChat: false,
+    ambientEligible: false,
+  },
+  {
     id: "unavailable-retry",
     title: "Agent retryable",
     subtitle: "Detection could not be verified",
@@ -112,6 +128,12 @@ async function run() {
       return "Exact session focus is unavailable.";
     },
     acknowledgeReady: () => { acknowledgements += 1; },
+    historyPage: () => ({
+      type: "session_history_page",
+      sessions: [],
+      total: 0,
+      nextCursor: "saved-next",
+    }),
     retryDetection: async (sessionId) => {
       if (sessionId !== "unavailable-retry") return "Unknown fixture session.";
       const observedAt = new Date().toISOString();
@@ -152,6 +174,17 @@ async function run() {
   try {
   await window.loadFile(path.resolve(directory, "../../app/dist/index.html"));
   await waitFor(window, `document.querySelectorAll('[aria-label*="Open in"]').length >= ${baseSessionCount}`);
+  const savedNoActionRow = await window.webContents.executeJavaScript(
+    `document.querySelector('[aria-label^="Saved Pi no action,"]')?.getAttribute('aria-label')`,
+  );
+  assert(savedNoActionRow !== undefined
+    && !savedNoActionRow.includes("Open Chat")
+    && !savedNoActionRow.includes("Open in"),
+  "Saved rows without supported actions do not advertise a disabled Chat or owner route");
+  await waitFor(window, `Boolean(document.querySelector('[aria-label="Load more Saved"]'))`);
+  assert(!await window.webContents.executeJavaScript(
+    `Boolean(document.querySelector('[aria-label="Load more History"]'))`,
+  ), "Saved pagination uses the Saved label");
   const readyGroups = await window.webContents.executeJavaScript(`(() => ({
     headings: [...document.querySelectorAll('#sessions-canvas *')]
       .filter((element) => !element.children.length && element.textContent === 'Ready').length,

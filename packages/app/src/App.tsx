@@ -508,12 +508,12 @@ function SessionBrowser({
           {!visibleIds.length ? <EmptyState query={query} styles={browserStyles} /> : null}
           {historyState.page?.nextCursor ? (
             <Pressable
-              accessibilityLabel="Load more History"
+              accessibilityLabel="Load more Saved"
               accessibilityRole="button"
               onPress={onLoadMoreHistory}
               style={browserStyles.loadMore}
             >
-              <Text style={browserStyles.loadMoreText}>Load more History</Text>
+              <Text style={browserStyles.loadMoreText}>Load more Saved</Text>
             </Pressable>
           ) : null}
         </View>
@@ -605,7 +605,7 @@ function SessionRow({
     ? `Open in ${session.owner}`
     : primary === "retry"
     ? retryingDetection ? "Retrying detection…" : "Retry detection"
-    : chatLabel;
+    : primary === "chat" ? chatLabel : undefined;
   const resumeState = resumeStateOverride === "eligible"
     || resumeStateOverride === "uncertain" || resumeStateOverride === "reopening"
     ? resumeStateOverride : undefined;
@@ -628,7 +628,7 @@ function SessionRow({
     <View nativeID={rowId(session.id)} style={rowStyles.row}>
       <View style={rowStyles.rowMain}>
         <Pressable
-          accessibilityLabel={`${session.title}, ${statusLabel}${presentation.inactive ? ", Inactive" : ""}, ${sourceLabel}, ${session.project}, ${session.managedBy ? `Managed by ${session.managedBy}, ` : ""}${actionLabel}${presentationNotice ? `, ${presentationNotice}` : ""}`}
+          accessibilityLabel={`${session.title}, ${statusLabel}${presentation.inactive ? ", Inactive" : ""}, ${sourceLabel}, ${session.project}${session.managedBy ? `, Managed by ${session.managedBy}` : ""}${actionLabel ? `, ${actionLabel}` : ""}${presentationNotice ? `, ${presentationNotice}` : ""}`}
           accessibilityRole="button"
           accessibilityState={{ selected: cursor }}
           disabled={!primary || (primary === "retry" && retryingDetection)}
@@ -669,7 +669,7 @@ function SessionRow({
                 ? `↗ ${compact ? session.owner : `Open in ${session.owner}`}`
                 : primary === "retry"
                 ? actionLabel
-                : `▢ ${chatLabel}`}
+                : primary === "chat" ? `▢ ${chatLabel}` : null}
             </Text>
           </View>
         </Pressable>
