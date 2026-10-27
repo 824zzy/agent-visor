@@ -40,6 +40,10 @@ _Avoid_: Saved, closed, deleted
 A saved terminal conversation confirmed to be no longer open in a frontend or live agent runtime. Completing a turn or closing one frontend while the conversation continues elsewhere does not establish closure.
 _Avoid_: Finished session, deleted conversation
 
+**Read chat**:
+Read-only access to a conversation's transcript. Reading a chat does not allow sending messages or controlling the agent.
+_Avoid_: Resume chat, continue the session, interactive Chat
+
 **Retained history record**:
 A searchable record of a previously observed conversation that remains available after its terminal closes and Agent Visor restarts. Retaining the record does not mean the conversation is running.
 _Avoid_: Live session, active pill

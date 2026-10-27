@@ -87,7 +87,7 @@ The keyboard cursor starts at the first visible row when the browser opens or th
 | --- | --- |
 | Hover row | Show hover styling only |
 | Click row | Open the canonical owner; if owner routing is unavailable, use the only supported Chat destination |
-| Resume on a closed Saved row | Revalidate the retained provider identity and launch only when the exact Ghostty resume contract is eligible; otherwise keep the row and show its unavailable or repair action |
+| Resume on a closed Saved row | Revalidate the retained provider identity and launch only when the exact Ghostty resume contract is eligible; otherwise keep the row and expose the unavailable explanation or repair action from More |
 | Reopening / Retry resume | Keep the row visible while the attempt is active; reconcile an uncertain receipt without a second launch, or report the unavailable/unknown reason |
 | Return | Apply the same source-first action to the keyboard-cursor row |
 | Shift+Return | Open Agent Visor Chat; if Chat is unavailable, use the only supported owner destination |
@@ -98,12 +98,13 @@ The keyboard cursor starts at the first visible row when the browser opens or th
 | Cmd+- | Decrease the shared Sessions-and-Chat content font scale by 10% |
 | Cmd+0 | Reset the shared Sessions-and-Chat content font scale to 100% |
 | Escape with a query | Clear the query and keep search focused |
-| `Open in <owner>` label | Names the row's canonical owner inside the primary row target; its hover and selection stop before Chat |
-| `Open Chat` action | Enter Agent Visor Chat through a separate, visually quieter target |
+| `Open in <owner>` label | Names the row's canonical owner in the stable source slot and primary row target; its hover and selection stop before Chat |
+| `Read chat` / `Open Chat` action | Enter Agent Visor Chat through a separate, visually quieter target; `Read chat` is reserved for confirmed read-only transcripts and does not enable sending or control |
+| More actions | Open one keyboard-accessible menu for eligible Remove/Repair actions and the neutral unsupported-resume explanation; opening, reading, hover and focus do not navigate, launch, remove, repair or acknowledge |
 | Saved pagination | Load the next retained page using its cursor without dropping earlier rows or resetting the current query |
 | Unavailable repair | Offer only the provider or working-directory references supported by that retained row; an invalid or unavailable repair leaves Saved unchanged |
 | Details menu | Reveal optional source, owner, project, path, model, and last-tool metadata from the Chat header |
-| Context menu | Duplicate `Open in <owner>` and `Open Chat` when available, plus hide |
+| Source slot unavailable | Leave the source slot blank; do not advertise a disabled or guessed destination |
 
 Hotkey numbering follows the exact visible row order, including state groups and search ranking.
 
@@ -191,4 +192,4 @@ Pointer hover and the keyboard cursor are deliberately separate. Source audits r
 - Pi-specific discovery and active-branch behavior follows [Pi Integration](pi-integration.md).
 - Chat remains explicit and lazy so opening the browser never parses a large conversation.
 - `WindowChatView` is source-agnostic: Claude Code and Pi share the same conversation UI while providers retain parsing and transport ownership.
-- User-facing actions say `Enter Chat`, `Chat history`, or `Details`; `transcript` remains an internal data-format term.
+- User-facing actions say `Read chat`, `Open Chat`, `Enter Chat`, `Chat history`, or `Details`; `transcript` remains an internal data-format term except in the explicit read-only accessibility explanation.
