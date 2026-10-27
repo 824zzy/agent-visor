@@ -221,6 +221,23 @@ describe("Claude agent-view integration", () => {
     expect(menuPresentation(closed, [], fixture.environment.clock.valueOf()).pills).toEqual([]);
   });
 
+  it("falls back to the Claude project path for an unrecognized Saved inventory state", async () => {
+    const environment = new FixtureEnvironment();
+    environment.inventory = inventorySuccess([
+      backgroundRow("64b38993", blockedID, "future", { name: "cc-unrecognized-state" }),
+    ]);
+
+    const snapshot = await repository(environment).refresh();
+    expect(snapshot.sessions[0]).toMatchObject({
+      id: blockedID,
+      presence: { state: "unknown", evidence: "authoritative_inventory" },
+      subtitle: "Check Claude for current status",
+      cwd,
+    });
+    const pill = menuPresentation(snapshot, [], nowMs).navigatorPills[0];
+    expect(pill).toMatchObject({ id: blockedID, lifecycleStatus: "saved", subtitle: cwd });
+  });
+
   it("keeps a retained unavailable row when real Claude discovery returns empty during an inventory outage", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-claude-inventory-outage-"));
     const historyPath = path.join(directory, "retained-history.json");

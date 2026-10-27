@@ -143,6 +143,64 @@ describe("SessionRepository presence contract", () => {
     });
   });
 
+  it("puts known unopened Saved rows before newer reviewed Saved rows in the navigator", async () => {
+    const observedAt = "2026-10-26T10:00:00.000Z";
+    const saved = (
+      id: string,
+      presenceState: "closed" | "unknown",
+      presenceEvidence: "authoritative_inventory" | "catalog",
+      section: "history" | "ready",
+      updatedAt: string,
+      completionUnseen: boolean,
+    ): DiscoveredProviderSession => ({
+      ...discovered(id, {
+        state: presenceState,
+        evidence: presenceEvidence,
+        observedAt,
+      }, "ready"),
+      section,
+      updatedAt,
+      subtitle: "Saved transcript preview",
+      canOpenOwner: false,
+      canEnterChat: true,
+      ambientEligible: false,
+      conversationState: presenceState === "closed" ? "archived" : "unknown",
+      turnState: "unknown",
+      completionUnseen,
+    });
+    const repository = new SessionRepository([{
+      id: "claude_code" as const,
+      discover: async () => [
+        saved("old-closed-unopened", "closed", "authoritative_inventory", "history", "2026-10-25T10:00:00.000Z", true),
+        saved("old-catalog-unopened", "unknown", "catalog", "history", "2026-10-25T09:00:00.000Z", true),
+        saved("new-reviewed", "unknown", "catalog", "ready", "2026-10-26T09:00:00.000Z", false),
+      ],
+    }]);
+
+    const snapshot = await repository.refresh();
+    expect(snapshot.sessions.find(({ id }) => id === "new-reviewed")).toMatchObject({
+      section: "ready",
+      attentionTier: "ready",
+      presence: { state: "unknown", evidence: "catalog" },
+    });
+    expect(snapshot.sessions.find(({ id }) => id === "old-closed-unopened")).toMatchObject({
+      section: "history",
+      presence: { state: "closed", evidence: "authoritative_inventory" },
+      completionUnseen: true,
+    });
+    const menu = menuPresentation(snapshot, [], new Date(observedAt).valueOf());
+    expect(menu.navigatorPills.map(({ id }) => id)).toEqual([
+      "old-closed-unopened", "old-catalog-unopened", "new-reviewed",
+    ]);
+    expect(menu.navigatorPills[0]).toMatchObject({
+      id: "old-closed-unopened",
+      completionUnseen: true,
+      inspector: { detailRows: [{ label: "Review", value: "Unopened" }] },
+    });
+    expect(menu.navigatorPills[1]).toMatchObject({ id: "old-catalog-unopened", completionUnseen: true });
+    expect(menu.pills).toEqual([]);
+  });
+
   it("keeps a live-to-Saved downgrade out of ambient pills while preserving failure recovery", async () => {
     let phase: "live" | "saved" | "unavailable" = "live";
     const observedAt = "2026-10-26T10:00:00.000Z";

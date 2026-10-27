@@ -125,8 +125,14 @@ export function menuPresentation(
     .filter((session) => session.canOpenOwner || session.canEnterChat
       || (session.presence?.state === "unknown" && session.ambientEligible === true))
     .sort((left, right) => {
-      const leftTier = left.attentionTier ?? left.section;
-      const rightTier = right.attentionTier ?? right.section;
+      // Saved presentation rows never enter the physical bar. Normalize their
+      // stale attention tier only for this shared ordering so known Unopened
+      // rows can lead reviewed rows, including confirmed-closed records,
+      // without changing Current/unavailable attention or bar packing.
+      const leftTier = isSavedNavigatorSession(left)
+        ? "history" : left.attentionTier ?? left.section;
+      const rightTier = isSavedNavigatorSession(right)
+        ? "history" : right.attentionTier ?? right.section;
       const attentionDifference = attentionOrder[leftTier] - attentionOrder[rightTier];
       if (attentionDifference !== 0) return attentionDifference;
       const lifecycleDifference = historyLifecycleOrder(left, leftTier)
@@ -182,7 +188,17 @@ function historyLifecycleOrder(
   attentionTier: keyof typeof attentionOrder,
 ): number {
   if (attentionTier !== "history") return 0;
+  if (isSavedNavigatorSession(session)) {
+    return session.completionUnseen === true ? 0 : 1;
+  }
   return sessionLifecyclePresentation(session).tone === "ready" && !session.inactive ? 0 : 1;
+}
+
+function isSavedNavigatorSession(session: MenuSession): boolean {
+  const presence = sessionPresencePresentation(session);
+  if (presence.group !== "history") return false;
+  const status = sessionLifecyclePresentation(session).status;
+  return status === "saved" || status === "closed" || status === "historical";
 }
 
 function isAmbientSession(session: SessionSnapshot["sessions"][number]): boolean {
