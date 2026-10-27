@@ -587,20 +587,22 @@ function SessionRow({
 }) {
   const [primaryHovered, setPrimaryHovered] = useState(false);
   const [chatHovered, setChatHovered] = useState(false);
-  const [removeHovered, setRemoveHovered] = useState(false);
+  const [moreHovered, setMoreHovered] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   useEffect(() => {
     if (!active) {
       setPrimaryHovered(false);
       setChatHovered(false);
-      setRemoveHovered(false);
+      setMoreHovered(false);
+      setMoreOpen(false);
     }
   }, [active]);
   const primary = sessionAction(session);
   const presence = sessionPresencePresentation(session);
   const unavailable = presence.group === "unavailable";
   const readOnlyChat = session.presence !== undefined && session.presence.state !== "open";
-  const hasSeparateChat = session.canEnterChat && (session.canOpenOwner || unavailable);
-  const chatLabel = readOnlyChat ? "Open Chat (read-only)" : "Open Chat";
+  const hasSeparateChat = session.canEnterChat;
+  const chatLabel = readOnlyChat ? "Read chat" : "Open Chat";
   const actionLabel = primary === "owner"
     ? `Open in ${session.owner}`
     : primary === "retry"
@@ -611,6 +613,19 @@ function SessionRow({
     ? resumeStateOverride : undefined;
   const canResume = onResume !== undefined;
   const resumeReason = !canResume && session.resumeState === "unavailable" ? session.resumeReason : undefined;
+  const resumeInSourceSlot = canResume && !session.canOpenOwner && primary !== "retry";
+  const hasMoreActions = Boolean(resumeReason || onRemoveHistory || onRepair);
+  useEffect(() => {
+    if (!hasMoreActions) setMoreOpen(false);
+  }, [hasMoreActions]);
+  useEffect(() => {
+    if (!moreOpen || typeof window === "undefined") return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMoreOpen(false);
+    };
+    window.addEventListener("keydown", dismiss);
+    return () => window.removeEventListener("keydown", dismiss);
+  }, [moreOpen]);
   const presentation = sessionPresentation(session, now);
   const lifecycle = sessionLifecyclePresentation(session);
   const statusLabel = lifecycle.label;
@@ -654,8 +669,9 @@ function SessionRow({
               <Chip label={sourceLabel} styles={rowStyles} />
               {!compact ? <Chip label={session.project} styles={rowStyles} /> : null}
             </View>
-            <Text numberOfLines={1} style={rowStyles.subtitle}>{presentation.subtitle || session.cwd}</Text>
-            {presentationNotice ? <Text style={rowStyles.pillNotice}>{presentationNotice}</Text> : null}
+            <Text numberOfLines={1} style={rowStyles.subtitle}>
+              {[presentation.subtitle || session.cwd, presentationNotice].filter(Boolean).join(" · ")}
+            </Text>
           </View>
           <Text style={rowStyles.age}>{relativeSessionAge(session.updatedAt, now)}</Text>
           <View style={rowStyles.hotkeySlot}>
@@ -663,39 +679,56 @@ function SessionRow({
               <Text style={rowStyles.hotkey}>⌘{hotkeyPosition + 1}</Text>
             ) : null}
           </View>
-          <View style={rowStyles.ownerColumn}>
-            <Text numberOfLines={1} style={[rowStyles.actionText, primaryHovered && rowStyles.linkText]}>
-              {primary === "owner"
-                ? `↗ ${compact ? session.owner : `Open in ${session.owner}`}`
-                : primary === "retry"
-                ? actionLabel
-                : primary === "chat" ? `▢ ${chatLabel}` : null}
-            </Text>
-          </View>
         </Pressable>
-        <View style={rowStyles.chatColumn}>
-          {canResume ? (
+        <View style={rowStyles.sourceColumn}>
+          {resumeInSourceSlot ? (
             <Pressable
               accessibilityLabel={resumeState === "uncertain"
                 ? `Retry resume for ${session.title}`
                 : resumeState === "eligible" ? `Resume ${session.title} in Ghostty` : `Reopening ${session.title} in Ghostty`}
               accessibilityRole="button"
               disabled={resumeState === "reopening"}
+              onHoverIn={() => setPrimaryHovered(true)}
+              onHoverOut={() => setPrimaryHovered(false)}
               onPress={() => void onResume?.()}
               style={({ pressed }) => [
-                rowStyles.chatAction,
-                resumeState !== "reopening" && rowStyles.chatHovered,
+                rowStyles.sourceAction,
+                resumeState !== "reopening" && rowStyles.sourceHovered,
                 pressed && rowStyles.pressed,
               ]}
             >
-              <Text style={[rowStyles.chatText, rowStyles.linkText]}>
-                {resumeState === "uncertain" ? "Retry resume" : resumeState === "reopening" ? "Reopening…" : "Resume in Ghostty"}
+              <Text numberOfLines={compact ? 2 : 1} style={[rowStyles.actionText, rowStyles.linkText]}>
+                {resumeState === "uncertain"
+                  ? "Retry resume"
+                  : resumeState === "reopening" ? "Reopening…" : compact ? "Resume Ghostty" : "Resume in Ghostty"}
               </Text>
             </Pressable>
-          ) : null}
+          ) : (
+            <Pressable
+              accessibilityElementsHidden
+              aria-hidden
+              disabled={!primary || (primary === "retry" && retryingDetection)}
+              onHoverIn={() => setPrimaryHovered(true)}
+              onHoverOut={() => setPrimaryHovered(false)}
+              onPress={() => onActivate(false)}
+              style={({ pressed }) => [
+                rowStyles.sourceAction,
+                primaryHovered && rowStyles.sourceHovered,
+                pressed && rowStyles.pressed,
+              ]}
+            >
+              <Text numberOfLines={compact ? 2 : 1} style={[rowStyles.actionText, primaryHovered && rowStyles.linkText]}>
+                {primary === "owner"
+                  ? `↗ ${compact ? session.owner : `Open in ${session.owner}`}`
+                  : primary === "retry" ? actionLabel : null}
+              </Text>
+            </Pressable>
+          )}
+        </View>
+        <View style={rowStyles.chatColumn}>
           {hasSeparateChat ? (
             <Pressable
-              accessibilityLabel={`Open Chat for ${session.title}${readOnlyChat ? " (read-only)" : ""}`}
+              accessibilityLabel={`${chatLabel} for ${session.title}${readOnlyChat ? " (read-only transcript; sending and agent control are unavailable)" : ""}`}
               accessibilityRole="button"
               onHoverIn={() => setChatHovered(true)}
               onHoverOut={() => setChatHovered(false)}
@@ -730,58 +763,107 @@ function SessionRow({
               </Text>
             </Pressable>
           ) : null}
-          {onRemoveHistory ? (
+        </View>
+        <View style={rowStyles.moreColumn}>
+          {hasMoreActions ? (
             <Pressable
-              accessibilityLabel={removing
-                ? `Removing ${session.title} from Agent Visor`
-                : `Remove ${session.title} from Agent Visor`}
+              accessibilityLabel={`More actions for ${session.title}`}
               accessibilityRole="button"
-              disabled={removing}
-              onHoverIn={() => setRemoveHovered(true)}
-              onHoverOut={() => setRemoveHovered(false)}
-              onPress={onRemoveHistory}
+              aria-expanded={moreOpen}
+              {...({
+                onKeyDown: (event: KeyboardEvent) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  setMoreOpen((open) => !open);
+                },
+              } as unknown as { onKeyDown: (event: KeyboardEvent) => void })}
+              onHoverIn={() => setMoreHovered(true)}
+              onHoverOut={() => setMoreHovered(false)}
+              onPress={() => setMoreOpen((open) => !open)}
               style={({ pressed }) => [
-                rowStyles.chatAction,
-                removeHovered && rowStyles.chatHovered,
+                rowStyles.moreButton,
+                moreHovered && rowStyles.moreHovered,
+                moreOpen && rowStyles.moreOpen,
                 pressed && rowStyles.pressed,
               ]}
             >
-              <Text style={[rowStyles.chatText, removeHovered && rowStyles.linkText]}>
-                {removing ? "Removing from Agent Visor…" : "Remove from Agent Visor"}
-              </Text>
+              <Text style={rowStyles.moreButtonText}>⋯</Text>
             </Pressable>
           ) : null}
-          {onRepair ? (
-            <Pressable
-              accessibilityLabel={repairing
-                ? "Repairing " + session.title
-                : session.repairKind === "working_directory"
-                  ? "Locate folder for " + session.title
-                  : "Repair provider references for " + session.title}
-              accessibilityRole="button"
-              disabled={repairing}
-              onPress={onRepair}
-              style={({ pressed }) => [
-                rowStyles.chatAction,
-                !repairing && rowStyles.chatHovered,
-                pressed && rowStyles.pressed,
-              ]}
-            >
-              <Text style={[rowStyles.chatText, rowStyles.linkText]}>
-                {repairing
-                  ? "Repairing…"
-                  : session.repairKind === "working_directory" ? "Locate folder" : "Repair provider references"}
-              </Text>
-            </Pressable>
+          {moreOpen ? (
+            <View accessibilityLabel={`More actions for ${session.title} menu`} accessibilityRole="menu" style={rowStyles.moreMenu}>
+              {resumeReason ? (
+                <View style={rowStyles.moreExplanation}>
+                  <Text style={rowStyles.moreHeading}>Automatic resume unavailable</Text>
+                  <Text style={rowStyles.moreReason}>{resumeReason}</Text>
+                </View>
+              ) : null}
+              {onRemoveHistory ? (
+                <Pressable
+                  accessibilityLabel={removing
+                    ? `Removing ${session.title} from Agent Visor`
+                    : `Remove ${session.title} from Agent Visor`}
+                  accessibilityRole="button"
+                  disabled={removing}
+                  {...({
+                    onKeyDown: (event: KeyboardEvent) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      setMoreOpen(false);
+                      onRemoveHistory();
+                    },
+                  } as unknown as { onKeyDown: (event: KeyboardEvent) => void })}
+                  onPress={() => {
+                    setMoreOpen(false);
+                    onRemoveHistory();
+                  }}
+                  style={({ pressed }) => [
+                    rowStyles.moreItem,
+                    pressed && rowStyles.pressed,
+                  ]}
+                >
+                  <Text style={rowStyles.moreItemText}>
+                    {removing ? "Removing from Agent Visor…" : "Remove from Agent Visor"}
+                  </Text>
+                </Pressable>
+              ) : null}
+              {onRepair ? (
+                <Pressable
+                  accessibilityLabel={repairing
+                    ? "Repairing " + session.title
+                    : session.repairKind === "working_directory"
+                      ? "Locate folder for " + session.title
+                      : "Repair provider references for " + session.title}
+                  accessibilityRole="button"
+                  disabled={repairing}
+                  {...({
+                    onKeyDown: (event: KeyboardEvent) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      setMoreOpen(false);
+                      onRepair();
+                    },
+                  } as unknown as { onKeyDown: (event: KeyboardEvent) => void })}
+                  onPress={() => {
+                    setMoreOpen(false);
+                    onRepair();
+                  }}
+                  style={({ pressed }) => [
+                    rowStyles.moreItem,
+                    pressed && rowStyles.pressed,
+                  ]}
+                >
+                  <Text style={rowStyles.moreItemText}>
+                    {repairing
+                      ? "Repairing…"
+                      : session.repairKind === "working_directory" ? "Locate folder" : "Repair provider references"}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
           ) : null}
         </View>
       </View>
-      {resumeReason ? (
-        <View accessibilityLabel={`Can’t reopen automatically for ${session.title}: ${resumeReason}`} style={rowStyles.resumeNotice}>
-          <Text style={rowStyles.resumeNoticeHeading}>Can’t reopen automatically</Text>
-          <Text style={rowStyles.resumeNoticeReason}>{resumeReason}</Text>
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -880,11 +962,8 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
     sectionHeader: { alignItems: "center", flexDirection: "row", gap: 7, paddingBottom: 5, paddingHorizontal: 10, paddingTop: 11 },
     sectionTitle: { color: palette.muted, fontSize: font(12), fontWeight: "600" },
     count: { backgroundColor: palette.border, borderRadius: 10, color: palette.tertiary, fontSize: font(10), fontWeight: "600", overflow: "hidden", paddingHorizontal: 6, paddingVertical: 2 },
-    row: { alignItems: "stretch", flexDirection: "column" },
+    row: { alignItems: "stretch", flexDirection: "column", position: "relative" },
     rowMain: { alignItems: "stretch", flexDirection: "row", minHeight: Math.max(58, 40 + font(18)) },
-    resumeNotice: { gap: 4, paddingBottom: 12, paddingHorizontal: 12 },
-    resumeNoticeHeading: { color: palette.muted, fontSize: font(11), fontWeight: "600" },
-    resumeNoticeReason: { color: palette.muted, fontSize: font(11), lineHeight: font(16) },
     primaryAction: { alignItems: "center", borderColor: "transparent", borderRadius: 10, borderWidth: 1, flex: 1, flexDirection: "row", gap: 13, minWidth: 0, paddingLeft: 12, paddingRight: 8 },
     primarySelected: { backgroundColor: palette.card, borderColor: palette.accent },
     primaryHovered: { backgroundColor: palette.card },
@@ -897,18 +976,30 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
     titleLine: { alignItems: "center", flexDirection: "row", gap: 7, minWidth: 0 },
     title: { color: palette.foreground, flexShrink: 1, fontSize: font(14), fontWeight: "600" },
     subtitle: { color: palette.muted, fontSize: font(12) },
-    pillNotice: { color: palette.muted, fontSize: font(11) },
     chip: { backgroundColor: palette.card, borderRadius: 9, color: palette.muted, flexShrink: 0, fontSize: font(10), fontWeight: "600", overflow: "hidden", paddingHorizontal: 6, paddingVertical: 2 },
     age: { color: palette.tertiary, fontSize: font(11), fontWeight: "500", minWidth: 28, textAlign: "right" },
     hotkeySlot: { alignItems: "center", justifyContent: "center", minHeight: 24, width: 35 },
     hotkey: { backgroundColor: palette.border, borderRadius: 10, color: palette.muted, fontSize: font(10), fontWeight: "600", overflow: "hidden", paddingHorizontal: 5, paddingVertical: 3 },
-    ownerColumn: { alignItems: "flex-start", justifyContent: "center", minHeight: 32, width: 120 },
+    sourceColumn: { alignItems: "flex-start", justifyContent: "center", minHeight: 32, paddingHorizontal: 6, width: 144 },
+    sourceAction: { borderRadius: 8, minHeight: 32, justifyContent: "center", maxWidth: "100%", paddingHorizontal: 6, paddingVertical: 8, width: "100%" },
+    sourceHovered: { backgroundColor: palette.accentWash },
     actionText: { color: palette.muted, fontSize: font(11), fontWeight: "600" },
     linkText: { color: palette.accent },
-    chatColumn: { alignItems: "flex-start", justifyContent: "center", paddingRight: 8, width: 190 },
+    chatColumn: { alignItems: "flex-start", justifyContent: "center", paddingRight: 8, width: 144 },
     chatAction: { borderRadius: 8, minHeight: 32, paddingHorizontal: 6, paddingVertical: 8, width: "100%" },
     chatHovered: { backgroundColor: palette.accentWash },
     chatText: { color: palette.tertiary, fontSize: font(11), fontWeight: "600" },
+    moreColumn: { alignItems: "center", justifyContent: "center", minHeight: 32, paddingHorizontal: 2, position: "relative", width: 44 },
+    moreButton: { alignItems: "center", borderRadius: 8, height: 32, justifyContent: "center", width: 36 },
+    moreHovered: { backgroundColor: palette.accentWash },
+    moreOpen: { backgroundColor: palette.card },
+    moreButtonText: { color: palette.muted, fontSize: font(18), fontWeight: "700", lineHeight: font(18) },
+    moreMenu: { backgroundColor: palette.card, borderColor: palette.border, borderRadius: 10, borderWidth: 1, gap: 3, minWidth: 280, padding: 8, position: "absolute", right: 0, top: 36, zIndex: 20 },
+    moreExplanation: { gap: 4, paddingHorizontal: 7, paddingVertical: 5 },
+    moreHeading: { color: palette.muted, fontSize: font(11), fontWeight: "600" },
+    moreReason: { color: palette.muted, fontSize: font(11), lineHeight: font(16), maxWidth: 320 },
+    moreItem: { borderRadius: 8, minHeight: 32, justifyContent: "center", paddingHorizontal: 7, paddingVertical: 8, width: "100%" },
+    moreItemText: { color: palette.accent, fontSize: font(11), fontWeight: "600" },
     loadMore: { alignItems: "center", alignSelf: "stretch", backgroundColor: palette.card, borderRadius: 8, marginHorizontal: 12, marginTop: 8, paddingVertical: 10 },
     loadMoreText: { color: palette.accent, fontSize: font(11), fontWeight: "600" },
     empty: { alignItems: "center", justifyContent: "center", minHeight: 330, padding: 24 },

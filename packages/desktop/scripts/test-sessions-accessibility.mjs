@@ -230,15 +230,19 @@ async function run() {
 
   const frames = await window.webContents.executeJavaScript(`(() => {
     const primary = [...document.querySelectorAll('[aria-label*="Open in"]')];
-    const chat = [...document.querySelectorAll('[aria-label^="Open Chat for"]')];
-    const rows = primary.map((button) => {
-      const primaryRect = button.getBoundingClientRect();
-      const chatButton = button.parentElement.querySelector('[aria-label^="Open Chat for"]');
+    const chat = [...document.querySelectorAll('[aria-label^="Open Chat for"], [aria-label^="Read chat for"]')];
+    const rows = [...document.querySelectorAll('[id^="session-row-"]')].map((row) => {
+      const primaryButton = row.querySelector('[aria-label*="Open in"]');
+      const chatButton = row.querySelector('[aria-label^="Open Chat for"], [aria-label^="Read chat for"]');
+      const moreButton = row.querySelector('[aria-label^="More actions for"]');
+      const primaryRect = primaryButton?.getBoundingClientRect();
       const chatRect = chatButton?.getBoundingClientRect();
+      const moreRect = moreButton?.getBoundingClientRect();
       return {
-        primaryWidth: Math.round(primaryRect.width),
+        primaryWidth: primaryRect ? Math.round(primaryRect.width) : undefined,
         chatLeft: chatRect ? Math.round(chatRect.left) : undefined,
-        disjoint: !chatRect || primaryRect.right <= chatRect.left,
+        moreLeft: moreRect ? Math.round(moreRect.left) : undefined,
+        disjoint: !chatRect || !primaryRect || primaryRect.right <= chatRect.left,
       };
     });
     return {
@@ -246,13 +250,15 @@ async function run() {
       chatCount: chat.length,
       primaryWidths: rows.map(({ primaryWidth }) => primaryWidth),
       chatLefts: rows.flatMap(({ chatLeft }) => chatLeft === undefined ? [] : [chatLeft]),
+      moreLefts: rows.flatMap(({ moreLeft }) => moreLeft === undefined ? [] : [moreLeft]),
       disjoint: rows.every(({ disjoint }) => disjoint),
     };
   })()`);
   assert(frames.primaryCount === baseSessionCount + 1, "all owner-routed rows expose their primary action");
-  assert(frames.chatCount === baseSessionCount, "Chat-capable rows, including Saved and unavailable read-only Chat, expose Open Chat");
-  assert(new Set(frames.primaryWidths).size === 1, "owner rows keep one fixed frame");
+  assert(frames.chatCount === baseSessionCount + 1, "all Chat-capable rows, including Chat-only Saved rows, expose a fixed Chat action");
+  assert(new Set(frames.primaryWidths.filter(Boolean)).size === 1, "owner rows keep one fixed frame");
   assert(new Set(frames.chatLefts).size === 1, "Chat actions keep one aligned column");
+  assert(frames.moreLefts.length === 0, "rows without secondary actions reserve an empty More slot");
   assert(frames.disjoint, "owner and Chat actions do not overlap");
   assert(await window.webContents.executeJavaScript(`Boolean(document.querySelector('[aria-label*="Managed by Agent Room"]'))`),
     "managed-session ownership is accessible on its row");
@@ -266,29 +272,32 @@ async function run() {
     `document.querySelector('[aria-label^="Saved Pi owner route,"]')?.getAttribute('aria-label')`,
   );
   const savedOwnerChat = await window.webContents.executeJavaScript(
-    `document.querySelector('[aria-label^="Open Chat for Saved Pi owner route"]')?.getAttribute('aria-label')`,
+    `document.querySelector('[aria-label^="Read chat for Saved Pi owner route"]')?.getAttribute('aria-label')`,
   );
   const savedChatRow = await window.webContents.executeJavaScript(
     `document.querySelector('[aria-label^="Saved Pi read-only Chat,"]')?.getAttribute('aria-label')`,
   );
   assert((savedOwnerRow ?? "").includes("Saved") && (savedOwnerRow ?? "").includes("Open in Ghostty"),
     "Saved catalog rows preserve an exact owner route");
-  assert(savedOwnerChat?.includes("(read-only)") === true,
+  assert(savedOwnerChat?.includes("(read-only transcript") === true,
     "Saved catalog Chat remains explicitly read-only beside an exact owner route");
-  assert(savedChatRow?.includes("Open Chat (read-only)") === true,
-    "ownerless Saved catalog rows expose read-only Chat without Retry");
+  const savedChatButton = await window.webContents.executeJavaScript(
+    `document.querySelector('[aria-label^="Read chat for Saved Pi read-only Chat"]')?.getAttribute('aria-label')`,
+  );
+  assert(savedChatButton?.includes("Read chat") === true && savedChatRow?.includes("Saved") === true,
+    "ownerless Saved catalog rows expose Read chat without Retry");
   assert(!await window.webContents.executeJavaScript(
     `Boolean(document.querySelector('[aria-label^="Retry detection for Saved Pi"]'))`,
   ), "Saved catalog rows do not expose detection Retry");
 
   const retryRow = `[aria-label^="Agent retryable,"]`;
-  const retryChat = `[aria-label^="Open Chat for Agent retryable"]`;
+  const retryChat = `[aria-label^="Read chat for Agent retryable"]`;
   assert(await window.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(retryRow)})?.getAttribute('aria-label')
     .includes('Retry detection')`),
   "unavailable no-route rows expose an explicit Retry detection action");
   assert(await window.webContents.executeJavaScript(
     `document.querySelector(${JSON.stringify(retryChat)})?.getAttribute('aria-label')
-      .includes('(read-only)')`,
+      .includes('(read-only transcript')`,
   ), "unavailable Chat access is clearly labelled read-only");
   await window.webContents.executeJavaScript(`window.alert = () => {};
     document.querySelector(${JSON.stringify(retryRow)})?.click()`);
@@ -318,7 +327,7 @@ async function run() {
   await waitFor(window, `window.__focusError === 'Exact session focus is unavailable.'`);
   assert(ownerActions === 0, "keyboard owner activation also stays exact on focus failure");
 
-  await window.webContents.executeJavaScript(`document.querySelector('[aria-label^="Open Chat for"]')?.click()`);
+  await window.webContents.executeJavaScript(`document.querySelector('[aria-label^="Open Chat for"], [aria-label^="Read chat for"]')?.click()`);
   await waitFor(window, `Boolean(document.querySelector('[aria-label="Back to Sessions"]'))`);
   await window.webContents.executeJavaScript(`window.__focusError = null;
     document.querySelector('[aria-label*="Open in Ghostty"]')?.click()`);
@@ -376,7 +385,7 @@ async function run() {
   const lightSessionsCanvas = await window.webContents.executeJavaScript(
     `getComputedStyle(document.getElementById('sessions-canvas')).backgroundColor`,
   );
-  await window.webContents.executeJavaScript(`document.querySelectorAll('[aria-label^="Open Chat for"]')[27]?.click()`);
+  await window.webContents.executeJavaScript(`document.querySelectorAll('[aria-label^="Open Chat for"], [aria-label^="Read chat for"]')[27]?.click()`);
   await waitFor(window, `Boolean(document.querySelector('[aria-label="Back to Sessions"]'))`);
   const lightChatCanvas = await window.webContents.executeJavaScript(
     `getComputedStyle(document.getElementById('chat-canvas')).backgroundColor`,
@@ -424,7 +433,7 @@ async function run() {
   const scaled = await window.webContents.executeJavaScript(`(() => {
     const search = document.querySelector('[aria-label="Search sessions"]');
     const row = document.querySelector('[aria-label*="Open in"]');
-    const chat = document.querySelector('[aria-label^="Open Chat for"]');
+    const chat = document.querySelector('[aria-label^="Open Chat for"], [aria-label^="Read chat for"]');
     return {
       cursor: document.querySelector('[aria-selected="true"]')?.getAttribute('aria-label'),
       horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth,
@@ -451,7 +460,7 @@ async function run() {
     `getComputedStyle(document.getElementById('sessions-canvas')).backgroundColor`,
   );
   await window.webContents.executeJavaScript(
-    `document.querySelector('[aria-label^="Open Chat for"]')?.click()`,
+    `document.querySelector('[aria-label^="Open Chat for"], [aria-label^="Read chat for"]')?.click()`,
   );
   await waitFor(window, `Boolean(document.getElementById('chat-canvas'))`);
   const darkChatCanvas = await window.webContents.executeJavaScript(
@@ -490,31 +499,54 @@ async function run() {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '');
     input.dispatchEvent(new Event('input', { bubbles: true }));
   })()`);
-  await waitFor(window, `document.body.textContent.includes('Can’t reopen automatically')`);
-  const resumeNotice = await window.webContents.executeJavaScript(`(() => {
-    const notice = document.querySelector('[aria-label^="Can’t reopen automatically for Agent unavailable resume:"]');
-    const reason = [...notice.querySelectorAll('*')].find(element => !element.children.length
+  const restingResume = await window.webContents.executeJavaScript(`(() => ({
+    reasonVisible: document.body.textContent.includes('Automatic resume for Herdr isn’t supported yet. Resume this session manually in Herdr.'),
+    more: Boolean(document.querySelector('[aria-label="More actions for Agent unavailable resume"]')),
+    rowHeight: document.querySelector('[aria-label^="Agent unavailable resume,"]')?.getBoundingClientRect().height,
+  }))()`);
+  assert(!restingResume.reasonVisible && restingResume.more, "known unsupported resume stays out of the resting row but advertises More");
+  await window.webContents.executeJavaScript(
+    `document.querySelector('[aria-label="More actions for Agent unavailable resume"]')?.click()`,
+  );
+  await waitFor(window, `document.body.textContent.includes('Automatic resume for Herdr isn’t supported yet. Resume this session manually in Herdr.')`);
+  const resumeMenu = await window.webContents.executeJavaScript(`(() => {
+    const menu = document.querySelector('[aria-label="More actions for Agent unavailable resume"] + [role="menu"]')
+      || document.querySelector('[aria-label="More actions for Agent unavailable resume"]')?.parentElement.querySelector('[role="menu"]');
+    const reason = [...(menu?.querySelectorAll('*') ?? [])].find(element => !element.children.length
       && element.textContent === 'Automatic resume for Herdr isn’t supported yet. Resume this session manually in Herdr.');
-    const primary = document.querySelector('[aria-label^="Agent unavailable resume,"]');
-    const remove = document.querySelector('[aria-label="Remove Agent unavailable resume from Agent Visor"]');
-    const textStyle = getComputedStyle(reason);
+    const remove = menu?.querySelector('[aria-label="Remove Agent unavailable resume from Agent Visor"]');
+    const textStyle = reason ? getComputedStyle(reason) : undefined;
     return {
-      headingCount: notice.textContent.split('Can’t reopen automatically').length - 1,
-      duplicatePrefix: notice.textContent.includes('Resume unavailable'),
-      belowPrimary: notice.getBoundingClientRect().top >= primary.getBoundingClientRect().bottom,
-      fillsRow: notice.getBoundingClientRect().width > primary.getBoundingClientRect().width,
-      completeText: reason.scrollHeight <= reason.clientHeight + 1
+      menu: Boolean(menu),
+      reason: Boolean(reason),
+      heading: menu?.textContent.includes('Automatic resume unavailable') === true,
+      completeText: Boolean(reason && textStyle
+        && reason.scrollHeight <= reason.clientHeight + 1
         && reason.scrollWidth <= reason.clientWidth + 1
         && textStyle.textOverflow !== 'ellipsis'
-        && (!textStyle.webkitLineClamp || textStyle.webkitLineClamp === 'none'),
-      separateRemoval: !notice.contains(remove),
+        && (!textStyle.webkitLineClamp || textStyle.webkitLineClamp === 'none')),
+      removalInMenu: Boolean(remove && menu?.contains(remove)),
       horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth,
     };
   })()`);
-  assert(resumeNotice.headingCount === 1 && !resumeNotice.duplicatePrefix, "resume limitation has one clear heading without a duplicated prefix");
-  assert(resumeNotice.belowPrimary && resumeNotice.fillsRow, "resume explanation wraps beneath the row rather than in its narrow action column");
-  assert(resumeNotice.completeText && !resumeNotice.horizontalOverflow, "the entire resume reason remains visible at 250% content scaling");
-  assert(resumeNotice.separateRemoval, "removal remains a separate secondary action");
+  assert(resumeMenu.menu && resumeMenu.reason && resumeMenu.heading,
+    "More exposes one neutral unsupported-resume explanation on demand");
+  assert(resumeMenu.completeText && !resumeMenu.horizontalOverflow,
+    "the entire resume reason remains visible without horizontal overflow");
+  assert(resumeMenu.removalInMenu, "eligible removal is grouped into More without deleting source history");
+  await window.webContents.executeJavaScript(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  await waitFor(window, `!document.querySelector('[role="menu"]')`);
+  await window.webContents.executeJavaScript(`(() => {
+    const button = document.querySelector('[aria-label="More actions for Agent unavailable resume"]');
+    button?.focus();
+    button?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  })()`);
+  await waitFor(window, `Boolean(document.querySelector('[role="menu"]'))`);
+  const moreKeyboard = await window.webContents.executeJavaScript(`document.activeElement?.getAttribute('aria-label')`);
+  assert(moreKeyboard === "More actions for Agent unavailable resume",
+    "More opens from its keyboard-accessible button without moving row focus");
+  await window.webContents.executeJavaScript(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  await waitFor(window, `!document.querySelector('[role="menu"]')`);
 
   console.log("Sessions accessibility PASS: action labels, disjoint frames, aligned columns, shared canvas, and retained browser state.");
   } finally {

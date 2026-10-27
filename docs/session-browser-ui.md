@@ -113,10 +113,11 @@ Left to right:
 3. Text and metadata column.
 4. Relative age in a fixed trailing slot.
 5. Keyboard shortcut slot with stable geometry.
-6. An `Open in <owner>` label with an external-open symbol inside the primary row target.
-7. A fixed 138-point trailing `Open Chat` accessory when both destinations are supported.
+6. A stable source-action slot for `Open in <owner>`, an explicit eligible `Resume`, or a genuine `Retry detection` action. The slot is blank when no safe source action is available.
+7. A fixed trailing Chat slot whenever the transcript is readable, labeled `Read chat` for confirmed read-only access and `Open Chat` otherwise.
+8. A small reserved More slot when the row has an eligible maintenance action or an on-demand resume explanation.
 
-The main content uses 13 points between the logo/status area and text. Activating an owner-routable row opens its canonical owner, exactly like Return. The owner label communicates that destination but is not a second button. Its selection and hover surface ends before the disjoint `Open Chat` action. Chat-only rows use Chat as their capability-safe row fallback.
+The main content uses 13 points between the logo/status area and text. Activating an owner-routable row opens its canonical owner, exactly like Return. The source slot communicates that destination while the primary row target remains one action. Chat-only rows keep the same fixed Chat slot and use Chat as their capability-safe row fallback; Chat does not move into the source slot. Eligible Resume remains an explicit source-slot action and never launches from ordinary row activation.
 
 ### First Line
 
@@ -140,7 +141,7 @@ Hide the optional owner chip first, then the project chip. Do not squeeze the ti
 
 ### Second Line
 
-The second line is 12-point secondary text and remains one line.
+The second line is 12-point secondary text and remains one line. Any compact attention marker, such as `Unopened`, is appended inline rather than creating a third resting row line.
 
 - Current sessions show the latest useful activity preview.
 - Rows without a preview show a shortened path.
@@ -152,13 +153,14 @@ The preview must not render raw markdown structure, tool payloads, or multiline 
 
 - Relative age: 11-point medium rounded text, minimum 28-point slot, tertiary color.
 - Shortcut badge: fixed 35 x 24 point slot whether visible or hidden.
-- Owner destination: `Open in <owner>` plus an external-open symbol inside the primary row button. It uses secondary text and may compact to the owner name or icon.
-- Chat accessory: fixed 138-point slot when both destinations exist, disjoint from the row button and its selection surface.
+- Source action: `Open in <owner>` plus an external-open symbol, explicit `Resume`, or genuine `Retry detection` in the stable source slot. An unsupported source action remains blank rather than a disabled placeholder.
+- Chat accessory: fixed trailing slot whenever Chat is readable, disjoint from the row button and its selection surface. Confirmed read-only transcripts say `Read chat`; the label does not grant send or control permission.
 - The Chat label aligns to the slot's leading edge. Unused width remains after the label, not between the two destinations.
 - Chat action: 32 points high, 11-point semibold tertiary text, and transparent at rest. Only its own hover or press adds a quiet link surface.
 - At constrained widths, `Open Chat` may compact to `Chat` and then to its chat icon. Its accessibility label always keeps the full action name.
-- Owner-only rows omit the unavailable Chat accessory rather than inserting a disabled placeholder.
-- Chat-only rows name Chat inside the primary row and omit the unavailable owner destination.
+- Owner-only rows omit the unavailable Chat action while retaining the reserved slot.
+- Chat-only rows keep Chat in its fixed slot and leave the source slot blank.
+- More reserves one small slot on neighboring rows. When opened, it contains only eligible Remove/Repair actions and the neutral full resume explanation; opening or reading it does not navigate or acknowledge a result. Escape dismisses it.
 
 The fixed Chat accessory prevents rows from moving when Cmd shortcuts appear or timestamps change width. Capability changes may add or remove the whole secondary destination rather than leave a control whose label and action disagree.
 
@@ -250,7 +252,7 @@ the nine-phase implementation order are tracked in [Chat feature parity](chat-fe
 - Pi uses the same view. Its provider owns active-branch parsing. A live exactly routed Pi terminal accepts the shared image composer: Agent Visor saves each image locally, shows the existing thumbnail, and submits one ordered path-plus-text prompt through Pi's provider-aware terminal route. Historical or owner-only Pi rows remain read-only, and image submission never mutates the system clipboard or changes the bundled lifecycle extension.
 - Technical metadata lives in the optional overflow `Details` menu and never becomes an intermediate destination.
 - Historical or ended content that cannot accept input is titled `Chat history` and carries a visible `Read only` label.
-- Metadata-only rows open their owner and omit the unavailable Chat accessory rather than exposing disabled or fabricated Chat.
+- Metadata-only rows open their owner and keep the reserved Chat slot empty rather than exposing disabled or fabricated Chat.
 - Opening the browser does not parse conversation content; parsing begins only after an explicit Chat request.
 
 ### TDD Implementation Record — Provider-Isolated Bottom Bar Modes
@@ -269,7 +271,7 @@ Status: Implemented, signed-deployed, and included in the regenerated local v2.5
 - Small text and status tokens target at least 4.5:1 contrast against the browser canvas in light mode.
 - Brand logos use the shared high-resolution source policy at all rendered sizes.
 - Every row accessibility label includes title, state, source, project, and the stable action its activation will perform.
-- An owner-routable row exposes `Open in <owner>` through its primary accessibility label. The decorative owner label is hidden from accessibility, while `Open Chat` has its own specific label and remains visible without hover.
+- An owner-routable row exposes `Open in <owner>` through its primary accessibility label. The decorative source label is hidden from accessibility, while `Open Chat` or `Read chat` has its own specific label and remains visible without hover. The More button names its conversation and exposes only the row's eligible actions and explanation.
 - Keyboard focus and pointer hover remain independently perceivable.
 - Reduced Motion disables optional fades. Core navigation never depends on animation.
 
