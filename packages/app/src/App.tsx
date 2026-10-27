@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Image,
   Pressable,
@@ -27,6 +27,7 @@ import {
 import { Chat } from "./Chat";
 import { chatSessionFor, reduceChatSelection, type ChatSelection } from "./chat-selection";
 import { CONTENT_RAIL_INSET, contentRailStyle } from "./content-rail";
+import { chatSettingMenuLayout } from "./chat-setting-menu-layout";
 import { Settings } from "./Settings";
 import { SessionViewport } from "./SessionViewport";
 import {
@@ -600,6 +601,9 @@ function SessionRow({
   const [chatHovered, setChatHovered] = useState(false);
   const [moreHovered, setMoreHovered] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [moreLayout, setMoreLayout] = useState<{ maxHeight: number; top: number }>();
+  const moreTriggerID = `${rowId(session.id)}-more`;
+  const moreMenuID = `${moreTriggerID}-menu`;
   useEffect(() => {
     if (!active) {
       setPrimaryHovered(false);
@@ -647,6 +651,56 @@ function SessionRow({
     window.addEventListener("keydown", dismiss, true);
     return () => window.removeEventListener("keydown", dismiss, true);
   }, [moreOpen]);
+  useLayoutEffect(() => {
+    if (!moreOpen || typeof document === "undefined" || typeof window === "undefined") {
+      setMoreLayout(undefined);
+      return;
+    }
+    const trigger = document.getElementById(moreTriggerID);
+    if (!trigger) return;
+    const menu = document.getElementById(moreMenuID);
+    const anchorParent = trigger.parentElement;
+    if (!menu || !anchorParent) return;
+    let parent: HTMLElement | null = trigger.parentElement;
+    while (parent) {
+      const style = getComputedStyle(parent);
+      if (style.overflowY === "auto" || style.overflowY === "scroll") break;
+      parent = parent.parentElement;
+    }
+    if (!parent) return;
+    const reposition = () => {
+      const triggerRect = trigger.getBoundingClientRect();
+      const viewportRect = parent.getBoundingClientRect();
+      const layout = chatSettingMenuLayout(
+        {
+          left: triggerRect.left,
+          right: triggerRect.right,
+          top: triggerRect.top - viewportRect.top,
+          bottom: triggerRect.bottom - viewportRect.top,
+        },
+        { width: window.innerWidth, height: viewportRect.height },
+        "right",
+      );
+      const menuHeight = Math.min(menu.getBoundingClientRect().height, layout.maxHeight);
+      const targetTop = layout.top !== undefined
+        ? viewportRect.top + layout.top
+        : viewportRect.bottom - (layout.bottom ?? 0) - menuHeight;
+      const parentRect = anchorParent.getBoundingClientRect();
+      setMoreLayout({
+        maxHeight: layout.maxHeight,
+        top: targetTop - parentRect.top,
+      });
+    };
+    reposition();
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(reposition);
+    observer?.observe(trigger);
+    observer?.observe(parent);
+    window.addEventListener("resize", reposition);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", reposition);
+    };
+  }, [moreMenuID, moreOpen, moreTriggerID]);
   const presentation = sessionPresentation(session, now);
   const lifecycle = sessionLifecyclePresentation(session);
   const statusLabel = lifecycle.label;
@@ -821,6 +875,7 @@ function SessionRow({
               accessibilityLabel={`More actions for ${session.title}`}
               accessibilityRole="button"
               aria-expanded={moreOpen}
+              nativeID={moreTriggerID}
               {...({
                 onKeyDown: (event: KeyboardEvent) => {
                   if (event.repeat || (event.key !== "Enter" && event.key !== " ")) return;
@@ -845,7 +900,17 @@ function SessionRow({
             </Pressable>
           ) : null}
           {moreOpen ? (
-            <View accessibilityLabel={`More actions for ${session.title} menu`} accessibilityRole="menu" style={rowStyles.moreMenu}>
+            <View
+              accessibilityLabel={`More actions for ${session.title} menu`}
+              accessibilityRole="menu"
+              nativeID={moreMenuID}
+              style={[
+                rowStyles.moreMenu,
+                moreLayout
+                  ? moreLayout as unknown as ViewStyle
+                  : { top: 36 },
+              ]}
+            >
               {resumeReason ? (
                 <View style={rowStyles.moreExplanation}>
                   <Text style={rowStyles.moreHeading}>Automatic resume unavailable</Text>
@@ -1060,7 +1125,7 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
     moreHovered: { backgroundColor: palette.accentWash },
     moreOpen: { backgroundColor: palette.card },
     moreButtonText: { color: palette.muted, fontSize: font(18), fontWeight: "700", lineHeight: font(18) },
-    moreMenu: { backgroundColor: palette.card, borderColor: palette.border, borderRadius: 10, borderWidth: 1, gap: 3, minWidth: 280, padding: 8, position: "absolute", right: 0, top: 36, zIndex: 20 },
+    moreMenu: { backgroundColor: palette.card, borderColor: palette.border, borderRadius: 10, borderWidth: 1, gap: 3, minWidth: 280, overflowY: "auto", padding: 8, position: "absolute", right: 0, zIndex: 20 } as unknown as ViewStyle,
     moreExplanation: { gap: 4, paddingHorizontal: 7, paddingVertical: 5 },
     moreHeading: { color: palette.muted, fontSize: font(11), fontWeight: "600" },
     moreReason: { color: palette.muted, fontSize: font(11), lineHeight: font(16), maxWidth: 320 },
