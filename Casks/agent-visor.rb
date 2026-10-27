@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 cask "agent-visor" do
-  version "2.8.0"
-  sha256 "d261f9f9ae75d0e2bb422dba807244809d4e3ed2f2d44972bad72c6f40bf3407"
+  version "2.9.0"
+  sha256 "ed7872ca094284a62f8963cf32e1d295fc51feb4c874e298d31e706a7ecce164"
 
   url "https://github.com/824zzy/agent-visor/releases/download/v#{version}/AgentVisor-v#{version}.zip"
   name "Agent Visor"
@@ -14,18 +14,17 @@ cask "agent-visor" do
     strategy :github_latest
   end
 
-  auto_updates true
-  depends_on macos: :sonoma
   depends_on arch: :arm64
+  depends_on macos: :sonoma
 
   app "Agent Visor.app"
 
   # Public releases use the pinned AgentVisor Release certificate. Remove
   # quarantine while preserving the distributed signature so macOS keeps the
   # same Accessibility identity across ordinary updates.
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/Agent Visor.app"]
+  postflight_steps do
+    run "/usr/bin/xattr",
+        args: ["-dr", "com.apple.quarantine", "{{appdir}}/Agent Visor.app"]
   end
 
   # The hook file at ~/.claude/hooks/agent-visor-state.py is deliberately

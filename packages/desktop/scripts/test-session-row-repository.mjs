@@ -233,13 +233,11 @@ async function run() {
     await window.webContents.executeJavaScript(`(() => {
       const input = document.querySelector('[aria-label="Search sessions"]');
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-      setter.call(input, 'Saved');
+      setter.call(input, 'row-ui');
       input.dispatchEvent(new Event('input', { bubbles: true }));
     })()`);
-    await waitFor(window, `Boolean(document.querySelector('[aria-label^="Saved Herdr read-only,"]'))`);
+    await waitFor(window, `Boolean(document.querySelector('[aria-label="5 search results"]'))`);
     await sendKeyGesture(window, "ARROWDOWN");
-    window.setSize(1_040, 400);
-    await new Promise((resolve) => setTimeout(resolve, 100));
     const beforeMore = await browserState(window);
 
     await window.webContents.executeJavaScript(
@@ -301,7 +299,7 @@ async function run() {
     `default More placement stays within the Sessions viewport (${JSON.stringify(defaultMenuGeometry)})`);
     currentOwnerTitle = "Current owner updated";
     await repository.refresh();
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await waitFor(window, `Boolean(document.querySelector('[aria-label^="Current owner updated,"]'))`);
     const afterBackground = await window.webContents.executeJavaScript(`(() => {
       const row = document.querySelector('[aria-label^="Saved Herdr read-only,"]')?.closest('[id^="session-row-"]');
       return {
