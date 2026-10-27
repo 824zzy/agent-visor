@@ -596,12 +596,14 @@ function SessionRow({
   styles: BrowserStyles;
 }) {
   const [primaryHovered, setPrimaryHovered] = useState(false);
+  const [sourceHovered, setSourceHovered] = useState(false);
   const [chatHovered, setChatHovered] = useState(false);
   const [moreHovered, setMoreHovered] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   useEffect(() => {
     if (!active) {
       setPrimaryHovered(false);
+      setSourceHovered(false);
       setChatHovered(false);
       setMoreHovered(false);
       setMoreOpen(false);
@@ -660,6 +662,39 @@ function SessionRow({
   const sourceActionText = primary === "owner"
     ? `↗ ${compact ? session.owner : `Open in ${session.owner}`}`
     : primary === "retry" ? actionLabel : undefined;
+  const ownerSourceText = primary === "owner" && retryInSourceSlot ? sourceActionText : undefined;
+  const retrySourceAction = retryInSourceSlot ? (
+    <Pressable
+      accessibilityLabel={retryingDetection
+        ? `Retrying detection for ${session.title}`
+        : `Retry detection for ${session.title}`}
+      accessibilityRole="button"
+      disabled={retryingDetection}
+      {...({
+        onKeyDown: (event: KeyboardEvent) => {
+          if (event.repeat || (event.key !== "Enter" && event.key !== " ")) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onRetryDetection();
+        },
+      } as unknown as { onKeyDown: (event: KeyboardEvent) => void })}
+      onHoverIn={() => setSourceHovered(true)}
+      onHoverOut={() => setSourceHovered(false)}
+      onPress={(event) => {
+        if (isKeyboardActivationEvent(event)) return;
+        onRetryDetection();
+      }}
+      style={({ pressed }) => [
+        rowStyles.sourceAction,
+        !retryingDetection && sourceHovered && rowStyles.sourceHovered,
+        pressed && rowStyles.pressed,
+      ]}
+    >
+      <Text numberOfLines={compact ? 2 : 1} style={[rowStyles.actionText, rowStyles.linkText]}>
+        {retryingDetection ? "Retrying detection…" : "Retry detection"}
+      </Text>
+    </Pressable>
+  ) : null;
 
   return (
     <View nativeID={rowId(session.id)} style={rowStyles.row}>
@@ -715,35 +750,15 @@ function SessionRow({
         </Pressable>
         {hasExternalSourceAction ? (
           <View style={rowStyles.sourceColumn}>
-            {retryInSourceSlot ? (
-              <Pressable
-                accessibilityLabel={retryingDetection
-                  ? `Retrying detection for ${session.title}`
-                  : `Retry detection for ${session.title}`}
-                accessibilityRole="button"
-                disabled={retryingDetection}
-                {...({
-                  onKeyDown: (event: KeyboardEvent) => {
-                    if (event.repeat || (event.key !== "Enter" && event.key !== " ")) return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onRetryDetection();
-                  },
-                } as unknown as { onKeyDown: (event: KeyboardEvent) => void })}
-                onPress={(event) => {
-                  if (isKeyboardActivationEvent(event)) return;
-                  onRetryDetection();
-                }}
-                style={({ pressed }) => [
-                  rowStyles.sourceAction,
-                  !retryingDetection && rowStyles.sourceHovered,
-                  pressed && rowStyles.pressed,
-                ]}
-              >
+            {ownerSourceText ? (
+              <View style={rowStyles.sourceStack}>
                 <Text numberOfLines={compact ? 2 : 1} style={[rowStyles.actionText, rowStyles.linkText]}>
-                  {retryingDetection ? "Retrying detection…" : "Retry detection"}
+                  {ownerSourceText}
                 </Text>
-              </Pressable>
+                {retrySourceAction}
+              </View>
+            ) : retrySourceAction ? (
+              retrySourceAction
             ) : (
               <Pressable
                 accessibilityLabel={resumeState === "uncertain"
@@ -751,8 +766,8 @@ function SessionRow({
                   : resumeState === "eligible" ? `Resume ${session.title} in Ghostty` : `Reopening ${session.title} in Ghostty`}
                 accessibilityRole="button"
                 disabled={resumeState === "reopening"}
-                onHoverIn={() => setPrimaryHovered(true)}
-                onHoverOut={() => setPrimaryHovered(false)}
+                onHoverIn={() => setSourceHovered(true)}
+                onHoverOut={() => setSourceHovered(false)}
                 {...({
                   onKeyDown: (event: KeyboardEvent) => {
                     if (event.repeat || (event.key !== "Enter" && event.key !== " ")) return;
@@ -767,7 +782,7 @@ function SessionRow({
                 }}
                 style={({ pressed }) => [
                   rowStyles.sourceAction,
-                  resumeState !== "reopening" && rowStyles.sourceHovered,
+                  resumeState !== "reopening" && sourceHovered && rowStyles.sourceHovered,
                   pressed && rowStyles.pressed,
                 ]}
               >
@@ -1031,6 +1046,7 @@ function createStyles(palette: Palette, scale: number, compact: boolean) {
     hotkeySlot: { alignItems: "center", justifyContent: "center", minHeight: 24, width: 35 },
     hotkey: { backgroundColor: palette.border, borderRadius: 10, color: palette.muted, fontSize: font(10), fontWeight: "600", overflow: "hidden", paddingHorizontal: 5, paddingVertical: 3 },
     sourceColumn: { alignItems: "flex-start", justifyContent: "center", minHeight: 32, paddingHorizontal: 6, width: ROW_ACTION_SLOT_WIDTH },
+    sourceStack: { alignSelf: "stretch", gap: 1, justifyContent: "center" },
     sourceAction: { borderRadius: 8, minHeight: 32, justifyContent: "center", maxWidth: "100%", paddingHorizontal: 6, paddingVertical: 8, width: "100%" },
     sourceHovered: { backgroundColor: palette.accentWash },
     actionText: { color: palette.muted, fontSize: font(11), fontWeight: "600" },

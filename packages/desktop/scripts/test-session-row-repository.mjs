@@ -206,6 +206,30 @@ async function run() {
       && initial.moreCount === 3,
       "real repository rows preserve source identity, full cwd context and More for eligible retained actions");
 
+    await window.webContents.sendInputEvent({ type: "mouseMove", x: 2, y: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const resumeBounds = await window.webContents.executeJavaScript(`(() => {
+      const row = document.querySelector('[aria-label^="Saved Ghostty resume,"]')?.closest('[id^="session-row-"]');
+      const resume = row?.querySelector('[aria-label^="Resume Saved Ghostty resume in Ghostty"]');
+      const rect = resume?.getBoundingClientRect();
+      return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : undefined;
+    })()`);
+    const resumeBefore = await window.webContents.executeJavaScript(`(() => {
+      const primary = document.querySelector('[aria-label^="Saved Ghostty resume,"]');
+      return primary ? getComputedStyle(primary).backgroundColor : undefined;
+    })()`);
+    if (resumeBounds) {
+      await window.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(resumeBounds.x), y: Math.round(resumeBounds.y) });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const resumeAfter = await window.webContents.executeJavaScript(`(() => {
+      const primary = document.querySelector('[aria-label^="Saved Ghostty resume,"]');
+      return primary ? getComputedStyle(primary).backgroundColor : undefined;
+    })()`);
+    const resumeHover = { before: resumeBefore, after: resumeAfter };
+    assert(resumeHover.before === resumeHover.after,
+      `Resume hover stays source-local instead of highlighting the primary target (${JSON.stringify(resumeHover)})`);
+
     await window.webContents.executeJavaScript(`(() => {
       const input = document.querySelector('[aria-label="Search sessions"]');
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
