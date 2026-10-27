@@ -132,10 +132,10 @@ async function run() {
     ...document.querySelectorAll('#sessions-canvas *')
   ].filter((element) => !element.children.length)
     .map((element) => element.textContent)
-    .filter((text) => ['Current', 'Needs you', 'In progress', 'Ready', 'Status unavailable', 'History'].includes(text))`);
+    .filter((text) => ['Current', 'Needs you', 'In progress', 'Ready', 'Status unavailable', 'Saved'].includes(text))`);
   assert(JSON.stringify(sectionHeadings.slice(0, 6)) === JSON.stringify(
-    ['Current', 'Needs you', 'In progress', 'Ready', 'Status unavailable', 'History'],
-  ), "presence sections expose Current, Status unavailable, and History in order");
+    ['Current', 'Needs you', 'In progress', 'Ready', 'Status unavailable', 'Saved'],
+  ), "presence sections expose Current, Status unavailable, and Saved in order");
   const readyLabels = `[...document.querySelectorAll('[aria-label*="Open in"]')]
     .map(element => element.getAttribute('aria-label')).filter(label => label.includes(', Ready,'))`;
   snapshot = {

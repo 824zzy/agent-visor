@@ -881,6 +881,7 @@ describe("live provider adapters", () => {
       title: "Active Pi name",
       provider: "pi",
       owner: "Ghostty",
+      presence: { state: "open", evidence: "runtime" },
       modelCatalog: {
         "gpt-5.6-sol": { displayName: "GPT-5.6 Sol", contextWindow: 114_688 },
       },
@@ -903,7 +904,7 @@ describe("live provider adapters", () => {
     expect((await provider.discover())[0]?.modelCatalog).toBeUndefined();
   });
 
-  it("presents a transcript-only Pi source record as Historical through the repository", async () => {
+  it("presents a transcript-only Pi source record as Saved through the repository", async () => {
     const environment = new FixtureEnvironment();
     const root = `${home}/.pi/agent/sessions`;
     const project = `${root}/--Users-me-Codes-agent-visor--`;
@@ -926,7 +927,8 @@ describe("live provider adapters", () => {
       id: "pi-history",
       source: "Pi",
       section: "history",
-      lifecycleStatus: "historical",
+      lifecycleStatus: "saved",
+      presence: { state: "unknown", evidence: "catalog" },
       canOpenOwner: false,
       canEnterChat: true,
       sessionState: { conversation: "unknown", turn: "unknown", route: "unavailable" },
@@ -936,11 +938,58 @@ describe("live provider adapters", () => {
     expect(presentation.navigatorPills).toEqual([
       expect.objectContaining({
         id: "pi-history",
-        lifecycleStatus: "historical",
-        inspector: expect.objectContaining({ status: "Historical" }),
-        accessibilityLabel: expect.stringContaining(", Historical,"),
+        lifecycleStatus: "saved",
+        inspector: expect.objectContaining({ status: "Saved" }),
+        accessibilityLabel: expect.stringContaining(", Saved,"),
       }),
     ]);
+    expect(presentation.pills.map(({ id }) => id)).not.toContain("pi-history");
+  });
+
+  it("keeps Pi history Saved when a mixed snapshot contains modern presence rows", async () => {
+    const environment = new FixtureEnvironment();
+    const root = `${home}/.pi/agent/sessions`;
+    const project = `${root}/--Users-me-Codes-agent-visor--`;
+    const transcript = `${project}/pi-mixed.jsonl`;
+    const body = [
+      { type: "session", id: "pi-mixed", cwd, timestamp: "2026-08-22T07:59:58.000Z" },
+      { type: "message", id: "mixed-message", parentId: "root", role: "user", content: "Review history" },
+    ].map((value) => JSON.stringify(value)).join("\n") + "\n";
+    environment.directories.set(root, ["--Users-me-Codes-agent-visor--"]);
+    environment.directories.set(project, ["pi-mixed.jsonl"]);
+    environment.files.set(transcript, body);
+    environment.headTails.set(transcript, { head: body, tail: body });
+    environment.stamps.set(transcript, { modifiedAt: now, size: Buffer.byteLength(body) });
+    environment.processRows = [];
+
+    const modern: DiscoveredProviderSession = {
+      id: "modern-open",
+      provider: "claude_code",
+      title: "Modern live fixture",
+      subtitle: "Working",
+      cwd,
+      owner: "Ghostty",
+      section: "working",
+      updatedAt: now.toISOString(),
+      canOpenOwner: true,
+      canEnterChat: true,
+      presence: { state: "open", evidence: "frontend", observedAt: now.toISOString() },
+      conversationState: "open",
+      turnState: "working",
+    };
+    const repository = new SessionRepository([
+      new PiProvider(environment),
+      { id: "claude_code", discover: async () => [modern] },
+    ], { now: () => now });
+    const snapshot = await repository.refresh();
+    const pi = snapshot.sessions.find(({ id }) => id === "pi-mixed");
+    expect(pi).toMatchObject({
+      presence: { state: "unknown", evidence: "catalog" },
+      lifecycleStatus: "saved",
+    });
+    expect(menuPresentation(snapshot, [], now.valueOf()).navigatorPills.find(({ id }) => id === "pi-mixed"))
+      .toMatchObject({ lifecycleStatus: "saved", inspector: { status: "Saved" } });
+    expect(menuPresentation(snapshot, [], now.valueOf()).pills.map(({ id }) => id)).not.toContain("pi-mixed");
   });
 
   it("uses Pi hook identity for a resumed session in its exact terminal", async () => {
