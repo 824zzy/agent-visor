@@ -7,24 +7,24 @@ source "$SCRIPT_DIR/lib/release-version.sh"
 
 EXPECTED_VERSION="$(release_product_version "$PROJECT_DIR")"
 EXPECTED_BUILD="$(release_product_build "$PROJECT_DIR")"
-if [[ "$EXPECTED_VERSION" != "2.9.1" ]]; then
+if [[ "$EXPECTED_VERSION" != "2.9.2" ]]; then
     echo "ERROR: canonical release version drifted: $EXPECTED_VERSION" >&2
     exit 1
 fi
-if [[ "$EXPECTED_BUILD" != "58" ]]; then
+if [[ "$EXPECTED_BUILD" != "59" ]]; then
     echo "ERROR: canonical release build drifted: $EXPECTED_BUILD" >&2
     exit 1
 fi
 
-if [[ "$(release_assert_coordinates "$PROJECT_DIR" 2.9.1 58)" != $'2.9.1\t58' ]]; then
+if [[ "$(release_assert_coordinates "$PROJECT_DIR" 2.9.2 59)" != $'2.9.2\t59' ]]; then
     echo "ERROR: canonical release coordinates were not resolved" >&2
     exit 1
 fi
-if release_assert_coordinates "$PROJECT_DIR" 2.9.2 58 >/dev/null 2>&1; then
+if release_assert_coordinates "$PROJECT_DIR" 2.9.3 59 >/dev/null 2>&1; then
     echo "ERROR: a mismatched release version was accepted" >&2
     exit 1
 fi
-if release_assert_coordinates "$PROJECT_DIR" 2.9.1 59 >/dev/null 2>&1; then
+if release_assert_coordinates "$PROJECT_DIR" 2.9.2 60 >/dev/null 2>&1; then
     echo "ERROR: a mismatched release build was accepted" >&2
     exit 1
 fi
@@ -51,13 +51,13 @@ if PATH="$FALLBACK_PATH" release_product_version "$INVALID_PROJECT" >/dev/null 2
     exit 1
 fi
 
-if ! grep -Fq '"version": "2.9.1"' "$PROJECT_DIR/package.json"; then
+if ! grep -Fq '"version": "2.9.2"' "$PROJECT_DIR/package.json"; then
     echo "ERROR: package.json does not declare the canonical release version" >&2
     exit 1
 fi
-if ! grep -Fq '"version": "2.9.1"' "$PROJECT_DIR/package-lock.json"; then
+if ! grep -Fq '"version": "2.9.2"' "$PROJECT_DIR/package-lock.json"; then
     echo "ERROR: package-lock.json does not declare the canonical release version" >&2
     exit 1
 fi
 
-echo "Release version policy PASS: 2.9.1/build 58"
+echo "Release version policy PASS: 2.9.2/build 59"
