@@ -4,6 +4,20 @@ import XCTest
 import Foundation
 
 final class NativeTerminalControllerTests: XCTestCase {
+    func testNavigationIdentityDoesNotBypassTerminalInputProcessGuards() {
+        let target = NativeHelperTerminalTarget(application: .ghostty, pid: 42,
+            processStartToken: "reused-process", tty: "ttys001", cwd: "/project",
+            claudeSessionId: "11111111-2222-4333-8444-555555555555")
+        let controller = NativeTerminalController(
+            keyPoster: { _ in XCTFail("No key event may be posted"); return true },
+            focusOverride: { _ in XCTFail("No terminal may be focused"); return true },
+            targetVerifier: { _ in false },
+            permissionModePoster: { _ in XCTFail("No permission mode may change"); return true })
+        XCTAssertFalse(controller.send("fixture", to: target, submit: true))
+        XCTAssertFalse(controller.cancel(target))
+        XCTAssertFalse(controller.cyclePermissionMode(target))
+    }
+
     private let target = NativeHelperTerminalTarget(
         application: .terminal,
         pid: 42,

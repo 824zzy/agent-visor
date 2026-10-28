@@ -6,6 +6,29 @@ import {
   nativeHelperUsageGlanceSchema,
 } from "./index.js";
 
+it("retains a bounded Claude conversation identity across terminal navigation requests", () => {
+  for (const method of ["focus_terminal", "prepare_terminal"]) {
+    const target = { application: "Ghostty", pid: 42, processStartToken: "start-a", tty: "ttys001",
+      cwd: "/project", claudeSessionId: "11111111-2222-4333-8444-555555555555" };
+    const request = { version: 1, id: "identity", method, params: { target, conversationOnly: true } };
+    expect(nativeHelperRequestSchema.parse(request)).toEqual(request);
+    for (const invalid of ["", "not-a-session", null, "../session.json"]) {
+      expect(nativeHelperRequestSchema.safeParse({ ...request,
+        params: { ...request.params, target: { ...target, claudeSessionId: invalid } } }).success).toBe(false);
+    }
+  }
+});
+
+it("preserves terminal input payloads when the shared target carries navigation identity", () => {
+  const target = { application: "Ghostty", pid: 42, processStartToken: "start-a", tty: "ttys001",
+    cwd: "/project", claudeSessionId: "11111111-2222-4333-8444-555555555555" };
+  for (const method of ["send_terminal", "cancel_terminal", "cycle_permission_mode"]) {
+    const params = { target, ...(method === "send_terminal" ? { text: "fixture", submit: true } : {}) };
+    const request = { version: 1, id: "input", method, params };
+    expect(nativeHelperRequestSchema.parse(request)).toEqual(request);
+  }
+});
+
 it("accepts the bounded native pill activation timestamp", () => {
   const event = { version: 1, type: "event", event: "activate_pill", sessionId: "session", activatedAt: 1_792_518_000_123 };
   expect(nativeHelperResponseSchema.safeParse(event).success).toBe(true);

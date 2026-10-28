@@ -192,6 +192,32 @@ function cachedResumeFixture() {
 }
 
 describe("Claude agent-view integration", () => {
+  it.each([ccID, ccID.toUpperCase()])("opens a direct Ghostty pill with exact Claude identity when its footer is unavailable (%s)", async sessionId => {
+    const environment = new FixtureEnvironment();
+    addProcess(environment, 900, executable);
+    addMetadata(environment, 900, { sessionId, cwd, kind: "interactive", status: "idle", name: "Hidden conversation" });
+    const helper = new FakeNativeHelper();
+    helper.focusTerminal = async (target, policy) => {
+      // Native boundary fixture: hidden-tab navigation needs the same current
+      // Claude identity verified by the native filesystem/AppleEvent tests.
+      if (target.claudeSessionId !== ccID) throw new Error("The requested terminal could not be focused.");
+      await FakeNativeHelper.prototype.focusTerminal.call(helper, target, policy);
+    };
+    const source = repository(environment);
+    source.setControls(new NativeSessionControls(helper));
+    const snapshot = await source.refresh();
+    expect(menuPresentation(snapshot, [], nowMs).pills).toMatchObject([{ id: sessionId }]);
+    const effects: unknown[] = [];
+    await activateMenuPill({ version: 1, type: "event", event: "activate_pill", sessionId }, source,
+      effect => effects.push(effect));
+    expect(effects).toEqual([]);
+    expect(helper.terminalFocusRequests).toMatchObject([{
+      pid: 900, processStartToken: processInstanceToken(900, now), tty: "ttys001", cwd, claudeSessionId: ccID,
+    }]);
+    expect(helper.terminalPreparationRequests).toMatchObject([{ claudeSessionId: ccID }]);
+    expect(helper.ghosttyTerminalFocusRequests).toEqual([]);
+  });
+
   it("publishes frontend presence for a uniquely matched Claude terminal and closed presence for an authoritative stop", async () => {
     const fixture = completedIdleFixture();
     const source = repository(fixture.environment);

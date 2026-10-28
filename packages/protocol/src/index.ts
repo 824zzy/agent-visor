@@ -1237,6 +1237,8 @@ export const nativeHelperTerminalTargetSchema = z.object({
   processStartToken: z.string().min(1).max(256).optional(),
   tty: z.string().regex(/^(?:\/dev\/)?ttys\d+$/).max(32),
   cwd: z.string().startsWith("/").max(4_096),
+  /** Navigation identity, revalidated against the live Claude process record. */
+  claudeSessionId: z.string().uuid().optional(),
 }).strict();
 
 export const nativeHelperNotificationPermissionSchema = z.enum([

@@ -238,18 +238,24 @@ public struct NativeHelperTerminalTarget: Codable, Equatable {
     public let tty: String
     public let cwd: String
 
+    /// Exact interactive Claude identity for navigation without a visible TUI.
+    /// The helper re-reads this process's session record at the focus boundary.
+    public let claudeSessionId: String?
+
     public init(
         application: NativeHelperTerminalApplication,
         pid: Int32? = nil,
         processStartToken: String? = nil,
         tty: String,
-        cwd: String
+        cwd: String,
+        claudeSessionId: String? = nil
     ) {
         self.application = application
         self.pid = pid
         self.processStartToken = processStartToken
         self.tty = tty
         self.cwd = cwd
+        self.claudeSessionId = claudeSessionId
     }
 }
 
@@ -883,7 +889,8 @@ public enum NativeHelperRequest: Equatable {
                   target.isValid, params.conversationOnly == nil || target.application == .ghostty else {
                 throw NativeHelperWireError.invalidRequest
             }
-            return .focusTerminal(id: wire.id, target: target, conversationOnly: params.conversationOnly)
+            return .focusTerminal(id: wire.id, target: target,
+                conversationOnly: params.conversationOnly ?? (target.claudeSessionId != nil ? true : nil))
         case "prepare_terminal":
             guard let params = wire.params, Set(params.keys).isSubset(of: ["target", "conversationOnly"]),
                   let target = params.terminalTarget, target.isValid,
@@ -1320,6 +1327,8 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         return keys == ["application", "tty", "cwd"]
             || keys == ["application", "pid", "tty", "cwd"]
             || keys == ["application", "pid", "processStartToken", "tty", "cwd"]
+            || (keys == ["application", "pid", "processStartToken", "tty", "cwd", "claudeSessionId"]
+                && target["claudeSessionId"] is String)
     case "send_terminal":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys) == ["target", "text", "submit"],
@@ -1328,6 +1337,8 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         return keys == ["application", "tty", "cwd"]
             || keys == ["application", "pid", "tty", "cwd"]
             || keys == ["application", "pid", "processStartToken", "tty", "cwd"]
+            || (keys == ["application", "pid", "processStartToken", "tty", "cwd", "claudeSessionId"]
+                && target["claudeSessionId"] is String)
     case "cancel_terminal":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys) == ["target"],
@@ -1336,6 +1347,8 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         return keys == ["application", "tty", "cwd"]
             || keys == ["application", "pid", "tty", "cwd"]
             || keys == ["application", "pid", "processStartToken", "tty", "cwd"]
+            || (keys == ["application", "pid", "processStartToken", "tty", "cwd", "claudeSessionId"]
+                && target["claudeSessionId"] is String)
     case "cycle_permission_mode":
         guard let params = object["params"] as? [String: Any],
               Set(params.keys) == ["target"],
@@ -1344,6 +1357,8 @@ private func hasStrictNestedFields(method: String, object: [String: Any]) -> Boo
         return keys == ["application", "tty", "cwd"]
             || keys == ["application", "pid", "tty", "cwd"]
             || keys == ["application", "pid", "processStartToken", "tty", "cwd"]
+            || (keys == ["application", "pid", "processStartToken", "tty", "cwd", "claudeSessionId"]
+                && target["claudeSessionId"] is String)
     default:
         return true
     }
@@ -1534,6 +1549,7 @@ private extension NativeHelperTerminalTarget {
             && tty.count <= 32
             && cwd.hasPrefix("/") && cwd.count <= 4_096
             && !cwd.contains("\0")
+            && (claudeSessionId.map { $0.count == 36 && UUID(uuidString: $0) != nil } ?? true)
     }
 }
 

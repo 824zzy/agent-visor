@@ -300,6 +300,12 @@ export class ClaudeProvider implements ProviderAdapter {
         processes,
         processStartToken,
       ) : undefined;
+      // Direct Ghostty navigation rechecks this exact process's Claude record.
+      // A hidden/custom-titled tab need not expose an Accessibility footer.
+      const canonicalSessionId = fullSessionID(sessionID);
+      if (terminalTarget?.application === "Ghostty" && canonicalSessionId) {
+        terminalTarget.claudeSessionId = canonicalSessionId;
+      }
       const applicationTarget = applicationTargetForProcess(process.pid, processes);
       const desktopProfile = !terminalTarget && applicationTarget?.bundleIdentifier === "com.anthropic.claudefordesktop"
         ? entrypoint === "claude-desktop-3p" ? "Claude-3p"

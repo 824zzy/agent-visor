@@ -16,13 +16,16 @@ public final class NativeGhosttyPreparedRoutes {
         public var viewMode: (Application, String) -> NativeHelperGhosttyViewMode?
         public var writeMetadata: (String, NativeHelperTerminalTarget) -> Bool
         public var pause: () -> Void
+        public var verifyClaudeSession: (NativeHelperTerminalTarget) -> Bool
         public init(application: @escaping () -> Application?, verify: @escaping (NativeHelperTerminalTarget) -> Bool,
                     surfaces: @escaping () -> [Surface]?, surface: @escaping (String) -> Surface?,
                     focus: @escaping (String, String?, String?) -> Bool,
                     viewMode: @escaping (Application, String) -> NativeHelperGhosttyViewMode?,
-                    writeMetadata: @escaping (String, NativeHelperTerminalTarget) -> Bool, pause: @escaping () -> Void) {
+                    writeMetadata: @escaping (String, NativeHelperTerminalTarget) -> Bool, pause: @escaping () -> Void,
+                    verifyClaudeSession: @escaping (NativeHelperTerminalTarget) -> Bool = { _ in false }) {
             self.application = application; self.verify = verify; self.surfaces = surfaces; self.surface = surface
             self.focus = focus; self.viewMode = viewMode; self.writeMetadata = writeMetadata; self.pause = pause
+            self.verifyClaudeSession = verifyClaudeSession
         }
     }
     private struct Entry {
@@ -45,7 +48,7 @@ public final class NativeGhosttyPreparedRoutes {
            entry.application == application,
            let current = environment.surface(entry.surface.id), current.cwd == target.cwd,
            sameTitle(current.title, entry.surface.title),
-           !conversationOnly || environment.viewMode(application, current.title) == .conversation {
+           isConversation(target, application: application, title: current.title, required: conversationOnly) {
             return true
         }
         entries.removeValue(forKey: target.tty)
@@ -64,7 +67,7 @@ public final class NativeGhosttyPreparedRoutes {
             if let view = matches.first { match = view; break }
             environment.pause()
         }
-        guard let match, !conversationOnly || environment.viewMode(application, match.title) == .conversation,
+        guard let match, isConversation(target, application: application, title: match.title, required: conversationOnly),
               environment.verify(target), environment.application() == application,
               environment.writeMetadata(target.cwd, target) else { return false }
         let restoredTitle = match.title.replacingOccurrences(of: marker, with: target.cwd)
@@ -92,13 +95,13 @@ public final class NativeGhosttyPreparedRoutes {
               environment.verify(target), environment.application() == entry.application,
               let surface = environment.surface(entry.surface.id), surface.cwd == target.cwd,
               sameTitle(surface.title, entry.surface.title),
-              !conversationOnly || environment.viewMode(entry.application, surface.title) == .conversation else {
+              isConversation(target, application: entry.application, title: surface.title, required: conversationOnly) else {
             entries.removeValue(forKey: target.tty)
             return false
         }
         guard environment.focus(surface.id, surface.title, target.cwd), environment.verify(target),
               environment.application() == entry.application,
-              !conversationOnly || environment.viewMode(entry.application, surface.title) == .conversation else {
+              isConversation(target, application: entry.application, title: surface.title, required: conversationOnly) else {
             entries.removeValue(forKey: target.tty)
             return false
         }
@@ -120,6 +123,18 @@ public final class NativeGhosttyPreparedRoutes {
         return normalize(lhs) == normalize(rhs)
     }
 
+    private func isConversation(_ target: NativeHelperTerminalTarget, application: Application, title: String, required: Bool) -> Bool {
+        // An explicit expected session must match the live frontend record.
+        // Missing/changed records never fall back to a retained TUI caption.
+        if target.claudeSessionId != nil {
+            // Unavailable TUI evidence is allowed with an exact live identity;
+            // a positively observed overview still rejects navigation.
+            guard environment.viewMode(application, title) != .overview else { return false }
+            return environment.verifyClaudeSession(target)
+        }
+        return !required || environment.viewMode(application, title) == .conversation
+    }
+
     private static func liveEnvironment() -> Environment {
         func sdk() -> NativeGhosttyAppleEvents? {
             guard let app = NativeGhosttyTerminalController.liveApplication() else { return nil }
@@ -138,6 +153,7 @@ public final class NativeGhosttyPreparedRoutes {
                 defer { try? handle.close() }
                 do { try handle.write(contentsOf: Data(GhosttyMarkerLocator.osc7Sequence(cwd: cwd).utf8)); return true }
                 catch { return false }
-            }, pause: { Thread.sleep(forTimeInterval: 0.005) })
+            }, pause: { Thread.sleep(forTimeInterval: 0.005) },
+            verifyClaudeSession: NativeClaudeSessionVerifier().verify)
     }
 }
