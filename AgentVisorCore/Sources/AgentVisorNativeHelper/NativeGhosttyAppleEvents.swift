@@ -8,6 +8,8 @@ public final class NativeGhosttyAppleEvents {
     public struct Surface: Equatable {
         public let id: String
         public let title: String
+        /// Ghostty reports an empty string when directory metadata is unknown.
+        /// Routes that use a directory as identity evidence must still match it.
         public let cwd: String
         public init(id: String, title: String, cwd: String) {
             self.id = id; self.title = title; self.cwd = cwd
@@ -81,7 +83,8 @@ public final class NativeGhosttyAppleEvents {
         guard let terminal = terminal(id),
               let title = property("pnam", of: terminal)?.stringValue,
               let cwd = property("Gwdr", of: terminal)?.stringValue,
-              !title.isEmpty, title.utf16.count <= 512, cwd.hasPrefix("/"), cwd.utf16.count <= 4096 else { return nil }
+              !title.isEmpty, title.utf16.count <= 512,
+              (cwd.isEmpty || cwd.hasPrefix("/")), cwd.utf16.count <= 4096 else { return nil }
         return Surface(id: id, title: title, cwd: cwd)
     }
 
