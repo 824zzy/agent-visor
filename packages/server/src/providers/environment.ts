@@ -6,6 +6,8 @@ import type { NativeHelperGhosttyTerminalView } from "@agent-visor/protocol";
 import { machineWork, runProcess, summaryWork } from "../machine.js";
 import { readCodexSettingsCatalog, type CodexSettingsCatalog } from "../codex-turn.js";
 import { readCodexCliObservation, type CodexCliObservation } from "./codex-cli-observer.js";
+import { readCodexDesktopRollouts } from "./codex-desktop.js";
+import { processInstanceToken } from "./shared.js";
 import type { CodexTuiBinding, CodexTuiTransportCapability } from "./codex-tui-client.js";
 export type { CodexTuiTransportCapability } from "./codex-tui-client.js";
 import { CmuxClient, type CmuxSurfaceTarget } from "./cmux.js";
@@ -23,7 +25,7 @@ import {
 export type ProcessRecord = {
   pid: number;
   parentPID: number;
-  /** Stable helper-derived process instance token, when available. */
+  /** Stable process instance token, when available. */
   processStartToken?: string;
   tty?: string;
   command: string;
@@ -39,6 +41,8 @@ export type FileStamp = {
   size: number;
 };
 
+const processMetadataLine = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\w+\s+\w+\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+(.+)$/;
+
 export interface ProviderEnvironment {
   readonly home: string;
   readonly observedWindowMs: number;
@@ -53,6 +57,8 @@ export interface ProviderEnvironment {
   cwd(pid: number): Promise<string | undefined>;
   processStartedAt(pid: number): Promise<Date | undefined>;
   codexDesktopCommand?(pid: number): Promise<string | undefined>;
+  /** Exact writable rollouts owned by this Desktop runtime, observed without navigation. */
+  codexDesktopRollouts?(pid: number, home: string, processes: ProcessRecord[]): Promise<string[]>;
   codexProcessHome?(pid: number): Promise<string | undefined>;
   /** Owned, bounded observer record; generic JSON is not navigation authority. */
   codexCliObservation?(pid: number, home: string): Promise<CodexCliObservation | undefined>;
@@ -168,10 +174,10 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
     // Put each variable-width field last and join by PID; executable paths
     // can contain spaces and must never be reconstructed from argv text.
     this.processSnapshot ??= Promise.all([
-      "pid=,ppid=,tty=,comm=", "pid=,args=",
+      "pid=,ppid=,tty=,lstart=,comm=", "pid=,args=",
     ].map(fields => machineWork.run(() => runProcess(
       "/bin/ps", ["-axww", "-o", fields],
-      { deadlineMs: 1_000, maxOutputBytes: 4 * 1_048_576 },
+      { deadlineMs: 1_000, maxOutputBytes: 4 * 1_048_576, env: { ...process.env, LC_ALL: "C" } },
     )))).then(([commands, args]) => {
       if (commands?.status !== "success" || args?.status !== "success") return [];
       const argumentsByPID = new Map(args.stdout.split("\n").flatMap(line => {
@@ -179,7 +185,7 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
         return match ? [[Number(match[1]), match[2] ?? ""] as const] : [];
       }));
       return commands.stdout.split("\n").flatMap((line) => {
-        const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/.exec(line);
+        const match = processMetadataLine.exec(line);
         if (!match) return [];
         const pid = Number(match[1]);
         const args = argumentsByPID.get(pid);
@@ -189,7 +195,8 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
           pid,
           parentPID: Number(match[2]),
           tty: rawTTY && !["?", "??", "-"].includes(rawTTY) ? rawTTY : undefined,
-          command: match[4] ?? "",
+          processStartToken: processInstanceToken(pid, match[4]),
+          command: match[5] ?? "",
           arguments: args,
         }];
       });
@@ -209,10 +216,10 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
     this.cwdByPID.clear();
     this.startedAtByPID.clear();
     const result = await Promise.all([
-      "pid=,ppid=,tty=,comm=", "pid=,args=",
+      "pid=,ppid=,tty=,lstart=,comm=", "pid=,args=",
     ].map(fields => machineWork.run(() => runProcess(
       "/bin/ps", ["-axww", "-o", fields],
-      { deadlineMs: 1_000, maxOutputBytes: 4 * 1_048_576 },
+      { deadlineMs: 1_000, maxOutputBytes: 4 * 1_048_576, env: { ...process.env, LC_ALL: "C" } },
     ))));
     const observedAt = this.now().toISOString();
     if (result.some((value) => value.status === "timed_out")) {
@@ -232,7 +239,7 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
     }));
     const processes: ProcessRecord[] = [];
     for (const line of commands.stdout.split("\n")) {
-      const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/.exec(line);
+      const match = processMetadataLine.exec(line);
       if (!match) {
         if (line.trim()) return { state: "unknown", observedAt, reason: "malformed" };
         continue;
@@ -245,7 +252,8 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
         pid,
         parentPID: Number(match[2]),
         tty: rawTTY && !["?", "??", "-"].includes(rawTTY) ? rawTTY : undefined,
-        command: match[4] ?? "",
+        processStartToken: processInstanceToken(pid, match[4]),
+        command: match[5] ?? "",
         arguments: commandLine,
       });
     }
@@ -281,7 +289,7 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
         const result = await runProcess(
           "/bin/ps",
           ["-p", String(pid), "-o", "lstart="],
-          { deadlineMs: 1_000 },
+          { deadlineMs: 1_000, env: { ...process.env, LC_ALL: "C" } },
         );
         if (result.status !== "success") return undefined;
         const value = new Date(result.stdout.trim());
@@ -298,6 +306,10 @@ export class LiveProviderEnvironment implements ProviderEnvironment {
       { deadlineMs: 1_000, maxOutputBytes: 64 * 1_024 },
     ));
     return result.status === "success" ? result.stdout : undefined;
+  }
+
+  codexDesktopRollouts(pid: number, home: string, processes: ProcessRecord[]): Promise<string[]> {
+    return readCodexDesktopRollouts(pid, home, processes);
   }
 
   async codexProcessHome(pid: number): Promise<string | undefined> {

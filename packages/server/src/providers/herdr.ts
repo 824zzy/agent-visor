@@ -30,7 +30,7 @@ export type HerdrSurfaceTarget = HerdrProcessContext & {
   codexTuiBinding?: CodexTuiBinding;
   clientProcess: ProcessInstance; viewRevision: number; projectionRevision: number;
 };
-const unavailable = () => new Error("Exact Herdr navigation is unavailable. The Herdr server and client may need the navigation update.");
+const unavailable = () => new Error("Exact Herdr navigation is unavailable. Agent Visor could not verify the existing session window.");
 const bounded = (value: unknown): value is string => typeof value === "string"
   && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f]/.test(value);
 const positive = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) > 0;
@@ -183,15 +183,34 @@ export class HerdrClient {
         if (expected.codexTuiBinding?.inventory) {
           // Rebuild in the background, never turn a rejected fast check into
           // a click-time transcript scan or a weaker navigation capability.
-          void this.prepare(expected, native).catch(() => {});
+          void this.prepare(expected, native, isCurrent).catch(() => {});
           throw unavailable();
         }
         // A helper restart or changed route gets one fully guarded recovery.
       }
     }
     if (expected.codexTuiBinding?.inventory) {
-      void this.prepare(expected, native).catch(() => {});
+      void this.prepare(expected, native, isCurrent).catch(() => {});
       throw unavailable();
+    }
+    // Only cold navigation mints a title lease. Share background preparation's
+    // lane so another session cannot acquire an overlapping client binding.
+    return this.queuePreparation(() => this.recoverFocus(expected, native, isCurrent));
+  }
+
+  private async recoverFocus(expected: HerdrSurfaceTarget, native: NativeBindingHost,
+    isCurrent: () => boolean): Promise<void> {
+    if (!isCurrent()) throw unavailable();
+    // Background preparation may have completed while this click was queued.
+    const prepared = this.prepared.get(expected.sessionId);
+    if (prepared && sameRoute(prepared.route, expected)) {
+      navigationStep("route_prepared", { targetKind: "herdr_surface" });
+      try { return await this.focusPrepared(expected, prepared.binding, native, isCurrent, prepared.processes); }
+      catch {
+        this.prepared.delete(expected.sessionId);
+        if (!isCurrent()) throw unavailable();
+        // Preserve the same fully guarded recovery as an initially warm click.
+      }
     }
     navigationStep("route_recovery", { targetKind: "herdr_surface" });
     if (!native.ghosttyBindingStatus || !native.resolveGhosttyBinding || !native.focusGhosttyBinding
@@ -275,21 +294,30 @@ export class HerdrClient {
 
   /** Background-only title lease: prove the native client once, then restore
    * its title before publishing the capability. Never selects a pane. */
-  prepare(expected: HerdrSurfaceTarget, native: NativeBindingHost): Promise<void> {
+  prepare(expected: HerdrSurfaceTarget, native: NativeBindingHost, isCurrent = () => true): Promise<void> {
+    return this.queuePreparation(() => this.prepareRoute(expected, native, isCurrent));
+  }
+
+  private queuePreparation(action: () => Promise<void>): Promise<void> {
     if (this.pendingPreparation >= 32) return Promise.reject(unavailable());
     this.pendingPreparation++;
-    const operation = this.preparation.then(() => this.prepareRoute(expected, native))
+    const operation = this.preparation.then(action)
       .finally(() => { this.pendingPreparation--; });
     this.preparation = operation.catch(() => {});
     return operation;
   }
 
-  private async prepareRoute(expected: HerdrSurfaceTarget, native: NativeBindingHost): Promise<void> {
+  private async prepareRoute(expected: HerdrSurfaceTarget, native: NativeBindingHost,
+    isCurrent: () => boolean): Promise<void> {
+    const check = () => { if (!isCurrent()) throw unavailable(); };
+    check();
     if (this.prepared.get(expected.sessionId)?.route
       && sameRoute(this.prepared.get(expected.sessionId)!.route, expected)) return;
     if (!native.prepareGhosttyBinding || !native.resolveGhosttyBinding || !await native.ghosttyBindingStatus?.()) throw unavailable();
+    check();
     const fresh = await this.resolve(expected.pid, expected.sessionId, expected.cwd);
     if (!fresh || !sameRoute(fresh, expected)) throw unavailable();
+    check();
     const nonce = randomBytes(16).toString("hex");
     const request = (method: string, params: object) => this.rpc(fresh.socketPath, fresh.socketIdentity, method, params);
     const leaseKey = fresh.socketPath + "\u0000" + fresh.socketIdentity;
@@ -297,7 +325,9 @@ export class HerdrClient {
     preparationLeases.set(leaseKey, { nonce, client: fresh.client });
     const waitBinding = async (state: string) => {
       for (let attempt = 0; attempt < 12; attempt++) {
+        check();
         const row = (await request("client.get", { client: fresh.client })).client;
+        check();
         if (!isRecord(row) || !same(row.client, fresh.client) || !same(row.local_process, fresh.clientProcess)
           || row.surface_active !== true) throw unavailable();
         if (isRecord(row.binding) && row.binding.nonce === nonce && row.binding.state === state) return;
@@ -310,14 +340,18 @@ export class HerdrClient {
       await request("client.bind_begin", { client: fresh.client, nonce, ttl_ms: 5000 });
       await waitBinding("applied");
       const binding = await native.resolveGhosttyBinding(nonce);
+      check();
       if (binding.nonce !== nonce) throw unavailable();
       const current = await this.resolve(expected.pid, expected.sessionId, expected.cwd, nonce);
       if (!current || !sameRoute(current, fresh)) throw unavailable();
+      check();
       const processes = bindingProcesses(fresh);
       await native.prepareGhosttyBinding(binding, processes);
+      check();
       await request("client.bind_end", { client: fresh.client, nonce });
       await waitBinding("released");
       released = true;
+      check();
       this.remember(fresh, binding, processes);
     } finally {
       if (!released) await request("client.bind_end", { client: fresh.client, nonce }).catch(() => {});
@@ -545,5 +579,5 @@ async function readLiveContext(pid: number, sessionId: string, cwd: string, syst
 const liveHerdrNavigation = new HerdrClient();
 export const focusHerdrSurface = (target: HerdrSurfaceTarget, native: NativeBindingHost, isCurrent: () => boolean) =>
   liveHerdrNavigation.focus(target, native, isCurrent);
-export const prepareHerdrSurface = (target: HerdrSurfaceTarget, native: NativeBindingHost) =>
-  liveHerdrNavigation.prepare(target, native);
+export const prepareHerdrSurface = (target: HerdrSurfaceTarget, native: NativeBindingHost, isCurrent = () => true) =>
+  liveHerdrNavigation.prepare(target, native, isCurrent);

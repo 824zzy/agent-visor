@@ -141,8 +141,8 @@ export class NativeSessionControls implements SessionControls {
     private readonly openCmux: (target: CmuxSurfaceTarget, isCurrent: () => boolean) => Promise<void> = focusCmuxSurface,
     private readonly openHerdr: (target: HerdrSurfaceTarget, isCurrent: () => boolean) => Promise<void>
       = (target, isCurrent) => focusHerdrSurface(target, this.helper, isCurrent),
-    private readonly prepareHerdr: (target: HerdrSurfaceTarget) => Promise<void>
-      = target => prepareHerdrSurface(target, this.helper),
+    private readonly prepareHerdr: (target: HerdrSurfaceTarget, isCurrent: () => boolean) => Promise<void>
+      = (target, isCurrent) => prepareHerdrSurface(target, this.helper, isCurrent),
   ) {
     this.imageLeases = new ChatImageLeaseStore({ root: imageRoot });
   }
@@ -409,10 +409,13 @@ export class NativeSessionControls implements SessionControls {
       if (this.preparedHerdrBySession.get(session.id) !== fingerprint) {
         if (this.preparedHerdrBySession.size >= 512) this.preparedHerdrBySession.clear();
         this.preparedHerdrBySession.set(session.id, fingerprint);
-        const preparation = this.queueAction(session.id, () => this.prepareHerdr(herdr));
+        const preparation = this.queueAction(session.id, (epoch, reservation) => this.prepareHerdr(herdr,
+          () => this.isActionCurrent(session.id, epoch, reservation)
+            && this.preparedHerdrBySession.get(session.id) === fingerprint));
         this.pendingHerdrPreparationBySession.set(session.id, preparation);
         void preparation.catch(() => {
-          if (this.preparedHerdrBySession.get(session.id) === fingerprint) this.preparedHerdrBySession.delete(session.id);
+          if (this.pendingHerdrPreparationBySession.get(session.id) === preparation
+            && this.preparedHerdrBySession.get(session.id) === fingerprint) this.preparedHerdrBySession.delete(session.id);
         }).finally(() => {
           if (this.pendingHerdrPreparationBySession.get(session.id) === preparation) {
             this.pendingHerdrPreparationBySession.delete(session.id);

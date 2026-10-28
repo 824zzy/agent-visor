@@ -8,7 +8,7 @@ export type ProcessResult =
 export async function runProcess(
   executable: string,
   arguments_: string[],
-  options: { deadlineMs: number; maxOutputBytes?: number },
+  options: { deadlineMs: number; maxOutputBytes?: number; env?: NodeJS.ProcessEnv },
 ): Promise<ProcessResult> {
   const maxOutputBytes = options.maxOutputBytes ?? 1_048_576;
 
@@ -16,6 +16,7 @@ export async function runProcess(
     const child = spawn(executable, arguments_, {
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
+      env: options.env,
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];

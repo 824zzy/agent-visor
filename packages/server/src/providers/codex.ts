@@ -5,6 +5,7 @@ import {
   type SessionPresence,
 } from "@agent-visor/protocol";
 import path from "node:path";
+import { BoundedWork } from "../machine.js";
 import type {
   DiscoveredProviderSession,
   HookSessionEvent,
@@ -34,6 +35,10 @@ import {
 import {
   isRecord, iso, ownerForProcess, processInstanceToken, terminalTargetForProcess,
 } from "./shared.js";
+
+type DesktopEvidence = {
+  pid: number | undefined; ownerToken: string | undefined; rollouts: Set<string>; observedAt: string;
+};
 
 type ModelCatalogCache = {
   signature?: string;
@@ -67,11 +72,14 @@ from threads
 where id = '${id.replaceAll("'", "''")}'
 limit 1`;
 
+// Bound background presence proof without adding discovery to user actions.
+const desktopPresenceMaxAgeMs = 30_000;
 const codexSettingsCatalogTtlMs = 60_000;
 const maxSettingsCatalogCWDs = 64;
 type CliBinding = { cwd: string; owner: string; terminal?: NativeHelperTerminalTarget;
   herdr?: HerdrSurfaceTarget; sessionFile?: string; observed?: boolean; proven?: boolean;
-  resume?: RetainedHistoryResumeCapability };
+  resume?: RetainedHistoryResumeCapability;
+  runtime?: { pid: number; processStartToken: string }; runtimeUncertain?: boolean };
 
 export class CodexProvider implements ProviderAdapter {
   readonly id = "codex" as const;
@@ -81,10 +89,13 @@ export class CodexProvider implements ProviderAdapter {
     value: Promise<NonNullable<DiscoveredProviderSession["chatSettingsCatalog"]> | undefined>;
   }>();
   private readonly transcriptReader = new CodexTranscriptReader();
+  private readonly discoveryWork = new BoundedWork(1);
   private readonly lastSessionsByInstance = new Map<string, DiscoveredProviderSession[]>();
+  private readonly desktopEvidenceByInstance = new Map<string, DesktopEvidence>();
   private readonly cliHookByPID = new Map<number, HookSessionEvent>();
+  private readonly endedCliInstances = new Set<string>();
   /** Explicit observer/host identity only; never a cached control capability. */
-  private readonly cliOrigins = new Map<string, { cwd: string; sessionFile?: string }>();
+  private readonly cliOrigins = new Map<string, Pick<CliBinding, "cwd" | "sessionFile" | "runtime">>();
   private retainedHistoryOriginLookup?: RetainedHistoryOriginLookup;
   private lastDiscoveryAuthority: "authoritative" | "unavailable" = "authoritative";
   private readonly resumeAdapter: CodexResumeAdapter;
@@ -103,14 +114,16 @@ export class CodexProvider implements ProviderAdapter {
   }
 
   private async discoverFreshForResume(): Promise<DiscoveredProviderSession[] | undefined> {
-    const inventory = this.environment.processesFreshInventory
-      ? await this.environment.processesFreshInventory()
-      : undefined;
-    if (!inventory || inventory.state !== "authoritative") {
-      this.lastDiscoveryAuthority = "unavailable";
-      return undefined;
-    }
-    return this.discover(inventory.processes);
+    return this.discoveryWork.run(async () => {
+      const inventory = this.environment.processesFreshInventory
+        ? await this.environment.processesFreshInventory() : undefined;
+      if (!inventory || inventory.state !== "authoritative") {
+        this.lastDiscoveryAuthority = "unavailable";
+        this.desktopEvidenceByInstance.clear();
+        return undefined;
+      }
+      return this.discoverOnce(inventory.processes);
+    });
   }
 
   discoveryAuthority(): ProviderDiscoveryAuthority {
@@ -159,6 +172,7 @@ export class CodexProvider implements ProviderAdapter {
 
   private async cliBindings(instance: CodexInstance, processes: ProcessRecord[]): Promise<Map<string, CliBinding[]>> {
     const bindings = new Map<string, CliBinding[]>();
+    const originPrefix = instance.path + "\u0000";
     const observations = new Map<number, CodexCliObservation>();
     const directory = path.join(instance.path, "agent-visor", "cli");
     for (const file of (await this.environment.directory(directory)).filter(file => /^\d+\.json$/.test(file)).slice(0, 512)) {
@@ -171,7 +185,16 @@ export class CodexProvider implements ProviderAdapter {
     const live = processes.filter(process => process.tty && path.basename(process.command) === "codex"
       && !/(?:app|mcp|exec)-server/.test(process.arguments));
     for (const pid of this.cliHookByPID.keys()) if (!live.some(process => process.pid === pid)) this.cliHookByPID.delete(pid);
-    const add = (id: string, binding: CliBinding) => bindings.set(id, [...(bindings.get(id) ?? []), binding]);
+    const liveTokens = new Map(live.map(value => [value.pid, value.processStartToken]));
+    const verifiedThreads = new Map<number, string>();
+    const add = (id: string, binding: CliBinding, frontend?: ProcessRecord) => {
+      if (frontend?.processStartToken) {
+        this.endedCliInstances.delete(frontend.processStartToken);
+        binding = { ...binding, runtime: { pid: frontend.pid, processStartToken: frontend.processStartToken } };
+        verifiedThreads.set(frontend.pid, id);
+      }
+      bindings.set(id, [...(bindings.get(id) ?? []), binding]);
+    };
     for (const process of live) {
       const cwd = await this.environment.cwd(process.pid);
       if (!cwd) continue;
@@ -179,11 +202,12 @@ export class CodexProvider implements ProviderAdapter {
       const processStartToken = process.processStartToken
         ?? (started ? processInstanceToken(process.pid, started) : undefined);
       const processWithToken = processStartToken ? { ...process, processStartToken } : process;
+      liveTokens.set(process.pid, processStartToken);
       const resume = await this.codexResumeCapability(processWithToken, instance.path);
       const herdr = await this.environment.herdrCodexSurface?.(process.pid, cwd, instance.path);
       if (herdr?.provider === "codex" && herdr.pid === process.pid && herdr.cwd === cwd) {
         add(herdr.sessionId, { cwd, owner: "Herdr", herdr, observed: true, proven: true,
-          ...(resume ? { resume } : {}) }); continue;
+          ...(resume ? { resume } : {}) }, processWithToken); continue;
       }
       // A modern Codex server is its own identity boundary. If its exact
       // thread/client inventory is unavailable or ambiguous, do not downgrade
@@ -193,7 +217,7 @@ export class CodexProvider implements ProviderAdapter {
         if (modern?.sessionIds.length === 1 && modern.inventory) {
           add(modern.sessionIds[0]!, { cwd, owner: "Codex CLI", observed: true, proven: true,
             ...(resume ? { resume } : {}),
-            terminal: terminalTargetForProcess(processWithToken, cwd, processes, processStartToken) });
+            terminal: terminalTargetForProcess(processWithToken, cwd, processes, processStartToken) }, processWithToken);
           continue;
         }
         const capability = await this.environment.codexTuiTransportCapability?.(process.pid, instance.path)
@@ -218,7 +242,7 @@ export class CodexProvider implements ProviderAdapter {
       add(identity.sessionId, { cwd, owner, sessionFile: identity.sessionFile, observed: true, proven: true,
         ...(exactHerdr ? { herdr: exactHerdr } : {}),
         ...(resume ? { resume } : {}),
-        terminal: terminalTargetForProcess(processWithToken, cwd, processes, processStartToken) });
+        terminal: terminalTargetForProcess(processWithToken, cwd, processes, processStartToken) }, processWithToken);
     }
     // Remember explicit CLI provenance even when its process/host route is now
     // unavailable. An old Desktop transcript must not silently take it over.
@@ -227,18 +251,29 @@ export class CodexProvider implements ProviderAdapter {
         cwd: observation.cwd,
         owner: "Codex CLI",
         sessionFile: observation.sessionFile,
+        runtime: { pid: observation.pid, processStartToken: observation.processStartToken },
         observed: false,
         proven: true,
       });
     }
     for (const [id, candidates] of bindings) {
-      if (!this.cliOrigins.has(id) && this.cliOrigins.size >= 512) this.cliOrigins.delete(this.cliOrigins.keys().next().value!);
-      this.cliOrigins.set(id, { cwd: candidates[0]!.cwd, sessionFile: candidates[0]!.sessionFile });
+      if (!this.cliOrigins.has(originPrefix + id) && this.cliOrigins.size >= 512) this.cliOrigins.delete(this.cliOrigins.keys().next().value!);
+      this.cliOrigins.set(originPrefix + id, { cwd: candidates[0]!.cwd, sessionFile: candidates[0]!.sessionFile,
+        runtime: candidates[0]!.runtime ?? this.cliOrigins.get(originPrefix + id)?.runtime });
     }
-    for (const [id, origin] of this.cliOrigins) if (!bindings.has(id)) {
+    for (const [key, origin] of this.cliOrigins) {
+      if (!key.startsWith(originPrefix)) continue;
+      const id = key.slice(originPrefix.length);
+      if (bindings.has(id)) continue;
       // A transient observer read failure may remove navigation authority,
       // but cannot turn a proven CLI conversation into a Desktop route.
       add(id, { ...origin, owner: "Codex CLI", observed: false, proven: true });
+    }
+    for (const [id, candidates] of bindings) for (const binding of candidates) {
+      const runtime = binding.runtime;
+      binding.runtimeUncertain = Boolean(runtime && !this.endedCliInstances.has(runtime.processStartToken)
+        && (!liveTokens.has(runtime.pid) || !liveTokens.get(runtime.pid) || liveTokens.get(runtime.pid) === runtime.processStartToken)
+        && (!verifiedThreads.has(runtime.pid) || verifiedThreads.get(runtime.pid) === id));
     }
     return bindings;
   }
@@ -275,7 +310,8 @@ export class CodexProvider implements ProviderAdapter {
   }
 
   private boundSession(instance: CodexInstance, thread: CodexRow, titles: Map<string, string>,
-    modelCatalog: DiscoveredProviderSession["modelCatalog"], bindings: Map<string, CliBinding[]>) {
+    modelCatalog: DiscoveredProviderSession["modelCatalog"], bindings: Map<string, CliBinding[]>,
+    desktopEvidence?: DesktopEvidence) {
     // A resumed thread keeps its workspace cwd; the frontend may have been
     // launched elsewhere. UUID, home and process identity establish ownership.
     const candidates = bindings.get(thread.id) ?? [];
@@ -284,7 +320,16 @@ export class CodexProvider implements ProviderAdapter {
     const binding = matches.length === 1 ? matches[0] : undefined;
     return this.session(instance, thread, titles,
       binding?.owner ?? (candidates.length ? "Codex CLI" : instance.label), modelCatalog, binding?.terminal, binding?.herdr,
-      binding?.observed === true, binding?.proven === true, instance.path, binding?.resume);
+      binding?.observed === true, binding?.proven === true, instance.path, binding?.resume,
+      desktopEvidence?.rollouts.has(path.resolve(thread.rolloutPath))
+        && path.basename(thread.rolloutPath).endsWith(`-${thread.id}.jsonl`)
+        && !candidates.some(value => value.observed || value.runtimeUncertain) ? desktopEvidence.observedAt : undefined);
+  }
+
+  private async desktopRollouts(instance: CodexInstance, processes: ProcessRecord[]): Promise<Set<string>> {
+    const files = instance.pid
+      ? await this.environment.codexDesktopRollouts?.(instance.pid, instance.path, processes).catch(() => []) : [];
+    return new Set(files?.map(file => path.resolve(file)));
   }
 
   private async instances(): Promise<CodexInstance[]> {
@@ -318,9 +363,16 @@ export class CodexProvider implements ProviderAdapter {
     return homes;
   }
 
-  async discover(processOverride?: ProcessRecord[]): Promise<DiscoveredProviderSession[]> {
+  discover(processOverride?: ProcessRecord[]): Promise<DiscoveredProviderSession[]> {
+    return this.discoveryWork.run(() => this.discoverOnce(processOverride));
+  }
+
+  private async discoverOnce(processOverride?: ProcessRecord[]): Promise<DiscoveredProviderSession[]> {
     let authority: "authoritative" | "unavailable" = "authoritative";
     const instances = await this.instances();
+    for (const id of this.desktopEvidenceByInstance.keys()) {
+      if (!instances.some(instance => instance.id === id)) this.desktopEvidenceByInstance.delete(id);
+    }
     const results: DiscoveredProviderSession[] = [];
     const retained: string[] = [];
     const automationCutoff = Math.floor(
@@ -332,6 +384,7 @@ export class CodexProvider implements ProviderAdapter {
       try {
         const database = await codexDatabase(this.environment, instance.path);
         if (!database) {
+          this.desktopEvidenceByInstance.delete(instance.id);
           authority = "unavailable";
           found = this.lastSessionsByInstance.get(instance.id) ?? [];
           retained.push(...found.map((session) => session.id));
@@ -345,11 +398,33 @@ export class CodexProvider implements ProviderAdapter {
             if (page.length < catalogPageSize) break;
           }
           const bindings = await this.cliBindings(instance, processes);
+          const desktopRollouts = await this.desktopRollouts(instance, processes);
+          // Ambient scans can omit rows. Only an authoritative background scan
+          // may prove a remembered CLI instance ended and permit Desktop takeover.
+          const uncertain = [...bindings.values()].flat().filter(binding => binding.runtimeUncertain
+            && binding.runtime && !processes.some(value => value.pid === binding.runtime!.pid));
+          if (desktopRollouts.size && uncertain.length) {
+            const inventory = await this.environment.processesFreshInventory?.().catch(() => undefined);
+            if (inventory?.state === "authoritative") for (const binding of uncertain) {
+              const runtime = binding.runtime!;
+              const process = inventory.processes.find(value => value.pid === runtime.pid);
+              if (!process || (process.processStartToken && process.processStartToken !== runtime.processStartToken)) {
+                if (this.endedCliInstances.size >= 512) this.endedCliInstances.delete(this.endedCliInstances.values().next().value!);
+                this.endedCliInstances.add(runtime.processStartToken);
+                binding.runtimeUncertain = false;
+              }
+            }
+          }
+          const desktopEvidence: DesktopEvidence = { pid: instance.pid,
+            ownerToken: processes.find(value => value.pid === instance.pid)?.processStartToken,
+            rollouts: desktopRollouts, observedAt: this.environment.now().toISOString() };
+          this.desktopEvidenceByInstance.set(instance.id, desktopEvidence);
           const candidateIDs = new Set(candidates.map((thread) => thread.id));
           const liveBindingOmitted = [...bindings.entries()].some(([id, values]) =>
             values.some(binding => binding.observed === true && binding.proven === true)
               && !candidateIDs.has(id));
           if (liveBindingOmitted) {
+            this.desktopEvidenceByInstance.delete(instance.id);
             authority = "unavailable";
             found = this.lastSessionsByInstance.get(instance.id) ?? [];
             retained.push(...found.map((session) => session.id));
@@ -366,12 +441,13 @@ export class CodexProvider implements ProviderAdapter {
               const rollout = await this.environment.stamp(thread.rolloutPath);
               if (!rollout) continue;
               if (thread.source === "exec" && thread.updatedAt < automationCutoff) continue;
-              found.push(await this.boundSession(instance, thread, indexTitles, modelCatalog, bindings));
+              found.push(await this.boundSession(instance, thread, indexTitles, modelCatalog, bindings, desktopEvidence));
             }
             this.lastSessionsByInstance.set(instance.id, found);
           }
         }
       } catch {
+        this.desktopEvidenceByInstance.delete(instance.id);
         authority = "unavailable";
         // One unreadable home must not hide the others. Keep its last good
         // read, the same way the repository keeps a failed provider's.
@@ -407,7 +483,22 @@ export class CodexProvider implements ProviderAdapter {
     this.modelCatalogCache.set(instance.id, cache);
     const modelCatalog = await codexModelCatalog(this.environment, instance.path, cache);
     const processes = await (this.environment.processesFresh?.() ?? this.environment.processes());
-    return this.boundSession(instance, thread, indexTitles, modelCatalog, await this.cliBindings(instance, processes));
+    const bindings = await this.cliBindings(instance, processes);
+    const desktopEvidence = this.desktopEvidenceByInstance.get(instance.id);
+    const evidenceAge = this.environment.now().valueOf() - Date.parse(desktopEvidence?.observedAt ?? "");
+    const sameDesktop = evidenceAge >= 0 && evidenceAge <= desktopPresenceMaxAgeMs
+      && desktopEvidence?.ownerToken && desktopEvidence.pid === instance.pid
+      && desktopEvidence.ownerToken === processes.find(value => value.pid === instance.pid)?.processStartToken;
+    const session = await this.boundSession(instance, thread, indexTitles, modelCatalog, bindings,
+      sameDesktop ? desktopEvidence : undefined);
+    // Transcript reads can overlap a failed/newer discovery. Do not publish
+    // runtime proof that was invalidated while the read was in flight.
+    if (session.presence?.evidence === "runtime" && desktopEvidence
+      && (this.desktopEvidenceByInstance.get(instance.id) !== desktopEvidence
+        || this.environment.now().valueOf() - Date.parse(desktopEvidence.observedAt) > desktopPresenceMaxAgeMs)) {
+      return this.boundSession(instance, thread, indexTitles, modelCatalog, bindings);
+    }
+    return session;
   }
 
   /**
@@ -444,18 +535,23 @@ export class CodexProvider implements ProviderAdapter {
     cliProven = false,
     configHome?: string,
     resume?: RetainedHistoryResumeCapability,
+    desktopObservedAt?: string,
   ): Promise<DiscoveredProviderSession> {
     const sessionID = codexSessionID(instance.id, thread.id);
+    const desktopObserved = desktopObservedAt !== undefined;
     const presence: SessionPresence = cliObserved && cliProven
       ? { state: "open", evidence: "frontend", observedAt: this.environment.now().toISOString() }
-      : { state: "unknown", evidence: "catalog", observedAt: this.environment.now().toISOString() };
+      : desktopObserved
+        ? { state: "open", evidence: "runtime", observedAt: desktopObservedAt! }
+        : { state: "unknown", evidence: "catalog", observedAt: this.environment.now().toISOString() };
     // Keep the public native UUID separate from the durable home-qualified
     // identity. Custom homes already carry their hash in `sessionID`; native
     // history retains the explicit `native` home discriminator for old rows.
     const canonicalSessionID = `codex:${instance.id}:${thread.id}`;
     const retainedOrigin = this.retainedHistoryOriginLookup?.("codex", sessionID);
     const durableCliOrigin = retainedOrigin?.provider === "codex";
-    const provenCli = cliProven || durableCliOrigin;
+    const provenCli = !desktopObserved && (cliProven || durableCliOrigin);
+    if (desktopObserved) owner = instance.label;
     const storedTitle = indexTitles.get(thread.id) || thread.title;
     const title = storedTitle || await codexRolloutTitle(this.environment, thread.rolloutPath);
     const rolloutStamp = await this.environment.stamp(thread.rolloutPath);
@@ -464,14 +560,14 @@ export class CodexProvider implements ProviderAdapter {
     const latestTranscript = verifiedCli || !unverifiedHost
       ? await this.transcriptReader.read(this.environment, sessionID, thread.rolloutPath, thread.id)
       : undefined;
-    const movedToDesktop = latestTranscript?.originator === "Codex Desktop";
+    const movedToDesktop = desktopObserved || latestTranscript?.originator === "Codex Desktop";
     // CLI lifecycle remains hook-owned unless a later client record proves
     // Desktop ownership or an exact live CLI binding restores transcript state.
     // Catalog source alone does not track client switches.
     const transcript = verifiedCli || thread.source !== "cli" || movedToDesktop ? latestTranscript : undefined;
     // The latest client metadata is provenance, not a process binding. It may
     // forbid a wrong Desktop fallback, but never identifies a terminal by cwd.
-    const cliWithoutBinding = !terminalTarget && !herdrTarget
+    const cliWithoutBinding = !desktopObserved && !terminalTarget && !herdrTarget
       && ((thread.source === "cli" && !movedToDesktop) || owner === "Codex CLI"
         || ["codex-tui", "codex_cli_rs"].includes(transcript?.originator ?? "")
         || durableCliOrigin);

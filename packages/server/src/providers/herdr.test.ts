@@ -754,3 +754,31 @@ it.each(["switched", "ambiguous", "disconnected", "unavailable"])("rejects prepa
   expect(native.focused).toEqual([]);
   expect(f.requests.slice(before).some(request => request.method === "client.focus_exclusive")).toBe(false);
 });
+
+it("aborts click-triggered modern preparation after the requesting action is cancelled", async () => {
+  const f = await fixture();
+  Object.assign(f.context, { provider: "codex", codexHome: "/fixture/.codex" });
+  const binding = { sessionIds: [sessionId], origin: "http://127.0.0.1:60119",
+    socketPath: "/fixture/codex.sock", socketIdentity: "fixture",
+    inventory: { loaded: [sessionId], roots: [{ id: sessionId, path: "/fixture/.codex/sessions/root.jsonl" }] } };
+  const herdr = new HerdrClient(async () => structuredClone(f.context), 400, {
+    readCodexTuiBinding: async () => structuredClone(binding), verifyCodexTuiBinding: async () => true,
+  } as unknown as HerdrSystem);
+  const target = (await herdr.resolveCodex(42, "/fixture/Codes", "/fixture/.codex"))!;
+  let release!: () => void, enter!: () => void, current = true, prepared = 0;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const base = nativeHost();
+  const native = { ...base, prepareGhosttyBinding: async () => { prepared++; },
+    resolveGhosttyBinding: async (nonce: string) => {
+      enter(); await gate; return base.resolveGhosttyBinding(nonce);
+    } };
+  await expect(herdr.focus(target, native, () => current)).rejects.toThrow("Exact Herdr navigation");
+  await entered;
+  current = false; release();
+  // A cancelled public preparation is a barrier behind the click's queued work.
+  await expect(herdr.prepare(target, native, () => false)).rejects.toThrow("Exact Herdr navigation");
+  expect(prepared).toBe(0);
+  expect(base.focused).toEqual([]);
+  expect(f.client.binding?.state).toBe("released");
+});

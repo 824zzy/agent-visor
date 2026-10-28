@@ -5,8 +5,23 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { LiveProviderEnvironment } from "./environment.js";
+import { processInstanceToken } from "./shared.js";
 
 describe("macOS process discovery", () => {
+  it.skipIf(process.platform !== "darwin")("discovers process identities under a non-English inherited locale", async () => {
+    const previous = process.env.LC_ALL;
+    process.env.LC_ALL = "de_DE.UTF-8";
+    try {
+      const environment = new LiveProviderEnvironment("/fixture");
+      const record = (await environment.processesFresh()).find(value => value.pid === process.pid);
+      expect(record?.processStartToken).toBeTypeOf("string");
+      expect(process.env.LC_ALL).toBe("de_DE.UTF-8");
+    } finally {
+      if (previous === undefined) delete process.env.LC_ALL;
+      else process.env.LC_ALL = previous;
+    }
+  });
+
   it.skipIf(process.platform !== "darwin")("preserves long executable paths with spaces and their arguments", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "agent-visor-process-"));
     try {
@@ -31,7 +46,12 @@ describe("macOS process discovery", () => {
         const record = (await environment.processes()).find(p => p.pid === child.pid);
         expect(record).toMatchObject({ command: executable, parentPID: process.pid });
         expect(record?.arguments).toBe(`${executable} fixture-argument`);
-        expect(await environment.processes()).toContain(record);
+        const startedAt = await environment.processStartedAt(child.pid!);
+        expect(record?.processStartToken).toBeTypeOf("string");
+        expect(record?.processStartToken).toBe(processInstanceToken(child.pid!, startedAt));
+        const fresh = (await environment.processesFresh()).find(value => value.pid === child.pid);
+        expect(fresh?.processStartToken).toBe(record?.processStartToken);
+        expect(await environment.processes()).toContainEqual(record);
       } finally {
         child.stdin.end();
         const timeout = setTimeout(() => child.kill("SIGKILL"), 2_000);
