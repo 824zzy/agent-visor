@@ -24,7 +24,9 @@ public final class NativeGhosttyAppleEvents {
             // Permission is checked without prompting before sending any event.
             let target = NSAppleEventDescriptor(processIdentifier: pid)
             guard AEDeterminePermissionToAutomateTarget(target.aeDesc, typeWildCard, typeWildCard, false) == noErr else { return nil }
-            guard let reply = try? event.sendEvent(options: [.waitForReply], timeout: 0.1),
+            // A cold macOS scripting reply can exceed 100ms. This is a failure
+            // deadline, not a delay: fast replies still return immediately.
+            guard let reply = try? event.sendEvent(options: [.waitForReply], timeout: 0.5),
                   reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber))?.int32Value ?? 0 == 0 else { return nil }
             return reply.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)) ?? .null()
         }
@@ -84,7 +86,11 @@ public final class NativeGhosttyAppleEvents {
     }
 
     public func surfaces() -> [Surface]? {
-        guard let all = Self.object("Gtrm", form: UInt32(formAbsolutePosition), value: .init(enumCode: OSType(kAEAll))),
+        // "all" is an absolute ordinal; an enum descriptor causes errAECoercionFail.
+        let ordinal = NSAppleEventDescriptor(descriptorType: typeAbsoluteOrdinal,
+            data: NSAppleEventDescriptor(enumCode: OSType(kAEAll)).data)
+        guard let ordinal,
+              let all = Self.object("Gtrm", form: UInt32(formAbsolutePosition), value: ordinal),
               let terminals = request("core", "getd", direct: all), terminals.descriptorType == typeAEList,
               terminals.numberOfItems <= 128 else { return nil }
         var result: [Surface] = []
@@ -110,7 +116,7 @@ public final class NativeGhosttyAppleEvents {
                 && (expectedCWD.map { $0 == surface.cwd } ?? true)
         }
         guard let target = terminal(terminalID), matches(),
-              request("Ghst", "Fcus", direct: target) != nil, activate(),
+              activate(), request("Ghst", "Fcus", direct: target) != nil,
               focusedTerminalID() == terminalID,
               property("pisf")?.booleanValue == true, matches() else { return false }
         return true

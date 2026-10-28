@@ -67,10 +67,13 @@ public final class NativeGhosttyPreparedRoutes {
         guard let match, !conversationOnly || environment.viewMode(application, match.title) == .conversation,
               environment.verify(target), environment.application() == application,
               environment.writeMetadata(target.cwd, target) else { return false }
+        let restoredTitle = match.title.replacingOccurrences(of: marker, with: target.cwd)
         for _ in 0..<12 {
             guard environment.verify(target), environment.application() == application,
-                  let surface = environment.surface(match.id), sameTitle(surface.title, match.title) else { return false }
-            if surface.cwd == target.cwd {
+                  let surface = environment.surface(match.id) else { return false }
+            // OSC7 also changes directory-based titles. Wait for both fields
+            // to restore before caching a title that the next focus rechecks.
+            if surface.cwd == target.cwd, sameTitle(surface.title, restoredTitle) {
                 restored = true
                 if entries.count >= 128 { entries.removeAll() }
                 entries[target.tty] = Entry(target: target, application: application, surface: surface, conversationOnly: conversationOnly)

@@ -4,6 +4,72 @@ import Foundation
 import XCTest
 
 final class NativeGhosttyAppleEventsTests: XCTestCase {
+    func testFocusSelectsExactTerminalAfterActivationRestoresPreviousWindow() {
+        var selected = "previous"
+        var active = false
+        let sdk = NativeGhosttyAppleEvents(pid: 42, transmit: { event in
+            if event.attributeDescriptor(forKeyword: AEKeyword(keyEventIDAttr))?.typeCodeValue == NativeGhosttyAppleEvents.code("Fcus") {
+                selected = "exact"
+                return .null()
+            }
+            let direct = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))!
+            switch direct.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue {
+            case NativeGhosttyAppleEvents.code("ID  "):
+                let container = direct.forKeyword(AEKeyword(keyAEContainer))!
+                return .init(string: container.forKeyword(AEKeyword(keyAEDesiredClass))?.typeCodeValue
+                    == NativeGhosttyAppleEvents.code("Gtrm") ? "exact" : selected)
+            case NativeGhosttyAppleEvents.code("pisf"): return .init(boolean: active)
+            default: return nil
+            }
+        }, activate: {
+            // macOS may restore the previously active window when the app activates.
+            active = true
+            selected = "previous"
+            return true
+        })
+
+        XCTAssertTrue(sdk.focus(terminalID: "exact", expectedTitle: nil, expectedCWD: nil))
+        XCTAssertEqual(selected, "exact")
+    }
+
+    func testDiscoversEveryTerminalForPreparingExactFocus() {
+        let surfaces = [
+            NativeGhosttyAppleEvents.Surface(id: "terminal-a", title: "First conversation", cwd: "/project/a"),
+            NativeGhosttyAppleEvents.Surface(id: "terminal-b", title: "Second conversation", cwd: "/project/b"),
+        ]
+        let sdk = NativeGhosttyAppleEvents(pid: 42, transmit: { event in
+            guard let direct = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)) else { return nil }
+            if direct.forKeyword(AEKeyword(keyAEDesiredClass))?.typeCodeValue == NativeGhosttyAppleEvents.code("Gtrm") {
+                // Cocoa requires an absolute ordinal for "every terminal".
+                // An enumeration with the same four bytes is rejected by Ghostty.
+                guard direct.forKeyword(AEKeyword(keyAEKeyForm))?.enumCodeValue == UInt32(formAbsolutePosition),
+                      let selector = direct.forKeyword(AEKeyword(keyAEKeyData)),
+                      selector.descriptorType == typeAbsoluteOrdinal,
+                      selector.typeCodeValue == OSType(kAEAll) else { return nil }
+                let list = NSAppleEventDescriptor.list()
+                for (index, surface) in surfaces.enumerated() {
+                    let reference = NSAppleEventDescriptor.record()
+                    reference.setDescriptor(.init(typeCode: NativeGhosttyAppleEvents.code("Gtrm")), forKeyword: AEKeyword(keyAEDesiredClass))
+                    reference.setDescriptor(.init(enumCode: UInt32(formUniqueID)), forKeyword: AEKeyword(keyAEKeyForm))
+                    reference.setDescriptor(.init(string: surface.id), forKeyword: AEKeyword(keyAEKeyData))
+                    reference.setDescriptor(.null(), forKeyword: AEKeyword(keyAEContainer))
+                    list.insert(reference.coerce(toDescriptorType: typeObjectSpecifier)!, at: index + 1)
+                }
+                return list
+            }
+            guard let id = direct.forKeyword(AEKeyword(keyAEContainer))?.forKeyword(AEKeyword(keyAEKeyData))?.stringValue,
+                  let surface = surfaces.first(where: { $0.id == id }) else { return nil }
+            switch direct.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue {
+            case NativeGhosttyAppleEvents.code("ID  "): return .init(string: surface.id)
+            case NativeGhosttyAppleEvents.code("pnam"): return .init(string: surface.title)
+            case NativeGhosttyAppleEvents.code("Gwdr"): return .init(string: surface.cwd)
+            default: return nil
+            }
+        })
+
+        XCTAssertEqual(sdk.surfaces(), surfaces)
+    }
+
     func testPreparedFocusReadsTheExactSelectionWithoutWalkingWindowProperties() {
         var selected = false
         var events = 0

@@ -3,6 +3,40 @@ import AgentVisorNativeHelper
 import XCTest
 
 final class NativeGhosttyPreparedRoutesTests: XCTestCase {
+    func testFocusesExactTerminalWhenDirectoryBasedTitleRestoresAsynchronously() {
+        let target = NativeHelperTerminalTarget(application: .ghostty, pid: 42,
+            processStartToken: "process-one", tty: "ttys001", cwd: "/project")
+        let app = NativeGhosttyTerminalController.ApplicationIdentity(pid: 7, token: "ghostty-one")
+        var cwd = target.cwd
+        var title = target.cwd
+        var restoring = false
+        var restorationReads = 0
+        var focused: String?
+        let routes = NativeGhosttyPreparedRoutes(environment: .init(application: { app }, verify: { $0 == target },
+            surfaces: { [.init(id: "exact", title: title, cwd: cwd)] },
+            surface: { _ in
+                if restoring {
+                    restorationReads += 1
+                    if restorationReads > 1 { title = target.cwd }
+                }
+                return .init(id: "exact", title: title, cwd: cwd)
+            }, focus: { id, expectedTitle, expectedCWD in
+                guard expectedTitle == target.cwd, expectedCWD == target.cwd else { return false }
+                focused = id
+                return true
+            }, viewMode: { _, _ in XCTFail("Generic terminal must not read a Claude footer"); return nil },
+            writeMetadata: { value, _ in
+                cwd = value
+                if value == target.cwd { restoring = true }
+                else { title = value }
+                return true
+            }, pause: {}))
+
+        XCTAssertTrue(routes.focusOrPrepare(target, conversationOnly: false))
+        XCTAssertEqual(focused, "exact")
+        XCTAssertEqual(cwd, target.cwd)
+    }
+
     func testGenericTerminalPreparationDoesNotRequireAClaudeFooter() {
         let target = NativeHelperTerminalTarget(application: .ghostty, pid: 42,
             processStartToken: "process-one", tty: "ttys001", cwd: "/project")
