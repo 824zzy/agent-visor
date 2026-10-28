@@ -6,6 +6,29 @@
     <description>Agent Visor updates</description>
     <language>en</language>
     <item>
+      <title>v2.9.1</title>
+      <pubDate>Wed, 28 Oct 2026 15:54:42 +0000</pubDate>
+      <sparkle:version>58</sparkle:version>
+      <sparkle:shortVersionString>2.9.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumUpdateVersion>48</sparkle:minimumUpdateVersion>
+      <description><![CDATA[<h2>v2.9.1</h2>
+<ul>
+<li>Fixes the “The terminal cannot be focused” error when opening an existing Ghostty conversation after upgrading.</li>
+<li>Selects the exact terminal after bringing Ghostty forward, including windows whose titles follow the working directory.</li>
+<li>Restores exact Herdr-in-Ghostty navigation when Ghostty reports an unknown working directory.</li>
+</ul>
+<p>Requires macOS 14 or newer and Apple Silicon. Herdr navigation still requires a compatible Herdr installation.</p>
+<p>For Homebrew upgrades, run <code>brew update</code> followed by <code>brew upgrade --cask 824zzy/agent-visor/agent-visor</code>. Existing application data is preserved.</p>
+]]></description>
+      <enclosure
+        url="https://github.com/824zzy/agent-visor/releases/download/v2.9.1/AgentVisor-v2.9.1.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="r4mY1ewv/8dGkp/o0OvRBtLU9PaKfGtZyHLvvqX7fgCaLQ7+kgkcgoRZqF9xvSqouwMACkCJuh8uXBNAKOxPDA=="
+        length="123126672"
+      />
+    </item>
+    <item>
       <title>v2.9.0</title>
       <pubDate>Tue, 27 Oct 2026 17:55:19 +0000</pubDate>
       <sparkle:version>57</sparkle:version>
